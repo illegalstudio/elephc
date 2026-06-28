@@ -7,8 +7,14 @@
 //! - Filesystem builtins that need direct `file_get_contents()` / `file_put_contents()` handling.
 //!
 //! Key details:
-//! - Network wrappers are deliberately not implemented here; callers receive
-//!   `None` for unsupported schemes and surface ordinary PHP false paths.
+//! - Plain `http://` uses a small blocking HTTP/1.0 client. TLS-backed
+//!   `https://` remains outside magician's implemented wrapper paths for now.
+
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::time::Duration;
+
+const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Returns true when the path names a `php://memory` or `php://temp` stream.
 pub(crate) fn is_php_memory_stream(path: &str) -> bool {
@@ -23,6 +29,11 @@ pub(crate) fn is_data_stream(path: &str) -> bool {
 /// Returns true when the path names a `phar://` stream.
 pub(crate) fn is_phar_stream(path: &str) -> bool {
     path.starts_with("phar://")
+}
+
+/// Returns true when the path names a plain `http://` stream.
+pub(crate) fn is_http_stream(path: &str) -> bool {
+    path.starts_with("http://")
 }
 
 /// Maps plain local paths and `file://` URLs onto host filesystem paths.
@@ -48,6 +59,125 @@ pub(crate) fn decode_data_uri(path: &str) -> Option<Vec<u8>> {
     } else {
         Some(percent_decode(payload))
     }
+}
+
+/// Reads a plain HTTP URL into response-body bytes.
+pub(crate) fn read_http_url(path: &str) -> Option<Vec<u8>> {
+    let request = parse_http_url(path)?;
+    let mut stream = TcpStream::connect((request.host.as_str(), request.port)).ok()?;
+    let _ = stream.set_read_timeout(Some(HTTP_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(HTTP_TIMEOUT));
+    let wire_request = format!(
+        "GET {} HTTP/1.0\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        request.path_and_query,
+        request.host_header()
+    );
+    stream.write_all(wire_request.as_bytes()).ok()?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).ok()?;
+    parse_http_response_body(&response)
+}
+
+/// Parsed `http://` URL pieces needed for a minimal HTTP request.
+struct EvalHttpRequest {
+    host: String,
+    port: u16,
+    path_and_query: String,
+}
+
+impl EvalHttpRequest {
+    /// Returns the Host header value, preserving non-default ports.
+    fn host_header(&self) -> String {
+        if self.port == 80 {
+            self.host.clone()
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+}
+
+/// Parses a plain `http://host[:port][/path][?query]` URL.
+fn parse_http_url(path: &str) -> Option<EvalHttpRequest> {
+    let rest = path.strip_prefix("http://")?;
+    let (authority, suffix) = match rest.find(['/', '?', '#']) {
+        Some(index) => (&rest[..index], &rest[index..]),
+        None => (rest, "/"),
+    };
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    let (host, port) = parse_http_authority(authority)?;
+    let mut path_and_query = match suffix.chars().next() {
+        Some('/') => suffix.to_string(),
+        Some('?') => format!("/{suffix}"),
+        Some('#') | None => "/".to_string(),
+        _ => return None,
+    };
+    if let Some(fragment) = path_and_query.find('#') {
+        path_and_query.truncate(fragment);
+    }
+    if path_and_query.is_empty() {
+        path_and_query.push('/');
+    }
+    Some(EvalHttpRequest {
+        host,
+        port,
+        path_and_query,
+    })
+}
+
+/// Parses the authority portion of an HTTP URL.
+fn parse_http_authority(authority: &str) -> Option<(String, u16)> {
+    if let Some(rest) = authority.strip_prefix('[') {
+        let end = rest.find(']')?;
+        let host = rest[..end].to_string();
+        let after = &rest[end + 1..];
+        let port = if let Some(port) = after.strip_prefix(':') {
+            port.parse::<u16>().ok()?
+        } else if after.is_empty() {
+            80
+        } else {
+            return None;
+        };
+        return Some((host, port));
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()) => {
+            (host, port.parse::<u16>().ok()?)
+        }
+        _ => (authority, 80),
+    };
+    if host.is_empty() {
+        None
+    } else {
+        Some((host.to_string(), port))
+    }
+}
+
+/// Extracts the body from an HTTP response with a successful status code.
+fn parse_http_response_body(response: &[u8]) -> Option<Vec<u8>> {
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4)
+        .or_else(|| {
+            response
+                .windows(2)
+                .position(|window| window == b"\n\n")
+                .map(|index| index + 2)
+        })?;
+    let status_line_end = response
+        .windows(2)
+        .position(|window| window == b"\r\n")
+        .or_else(|| response.iter().position(|byte| *byte == b'\n'))?;
+    let status_line = std::str::from_utf8(&response[..status_line_end]).ok()?;
+    let mut pieces = status_line.split_whitespace();
+    let _version = pieces.next()?;
+    let status = pieces.next()?.parse::<u16>().ok()?;
+    if !(200..300).contains(&status) {
+        return None;
+    }
+    Some(response[header_end..].to_vec())
 }
 
 /// Converts the part after `file://` into a path understood by the host OS.

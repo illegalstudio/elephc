@@ -466,6 +466,9 @@ fn eval_read_path_or_wrapper_bytes(path: &str) -> Result<Vec<u8>, ()> {
     if stream_wrappers::is_phar_stream(path) {
         return elephc_phar::extract_url_bytes(path.as_bytes()).ok_or(());
     }
+    if stream_wrappers::is_http_stream(path) {
+        return stream_wrappers::read_http_url(path).ok_or(());
+    }
     let Some(path) = stream_wrappers::local_filesystem_path(path) else {
         return Err(());
     };
