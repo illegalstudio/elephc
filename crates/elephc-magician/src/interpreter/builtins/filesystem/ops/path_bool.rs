@@ -13,6 +13,7 @@ use std::ffi::CString;
 use super::super::super::super::*;
 use super::super::super::*;
 use super::super::*;
+use crate::stream_wrappers;
 
 /// Evaluates a one-path filesystem operation that returns a PHP boolean.
 pub(in crate::interpreter) fn eval_builtin_unary_path_bool(
@@ -36,6 +37,9 @@ pub(in crate::interpreter) fn eval_unary_path_bool_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(path, values)?;
+    let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
+        return values.bool_value(false);
+    };
     let ok = match name {
         "chdir" => std::env::set_current_dir(path).is_ok(),
         "mkdir" => std::fs::create_dir(path).is_ok(),
@@ -70,6 +74,12 @@ pub(in crate::interpreter) fn eval_binary_path_bool_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let from = eval_path_string(from, values)?;
     let to = eval_path_string(to, values)?;
+    let Some(from) = stream_wrappers::local_filesystem_path(&from) else {
+        return values.bool_value(false);
+    };
+    let Some(to) = stream_wrappers::local_filesystem_path(&to) else {
+        return values.bool_value(false);
+    };
     let ok = match name {
         "copy" => std::fs::copy(from, to).is_ok(),
         "link" => std::fs::hard_link(from, to).is_ok(),
@@ -102,6 +112,9 @@ pub(in crate::interpreter) fn eval_chmod_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
+        return values.bool_value(false);
+    };
     let mode = eval_int_value(permissions, values)? as u32;
     let permissions = std::fs::Permissions::from_mode(mode);
     values.bool_value(std::fs::set_permissions(path, permissions).is_ok())
@@ -131,6 +144,9 @@ pub(in crate::interpreter) fn eval_chown_like_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
+        return values.bool_value(false);
+    };
     let Some(path) = eval_c_string(&path) else {
         return values.bool_value(false);
     };

@@ -26,19 +26,19 @@ pub(in crate::interpreter) fn eval_builtin_stream_wrapper_registry(
         "stream_wrapper_unregister" | "stream_wrapper_restore" if args.len() == 1 => {}
         _ => return Err(EvalStatus::RuntimeFatal),
     }
+    let mut evaluated_args = Vec::with_capacity(args.len());
     for arg in args {
         let value = eval_expr(arg, context, scope, values)?;
-        if matches!(name, "stream_wrapper_register" | "stream_wrapper_unregister" | "stream_wrapper_restore") {
-            let _ = values.string_bytes(value).ok();
-        }
+        evaluated_args.push(value);
     }
-    values.bool_value(true)
+    eval_stream_wrapper_registry_result(name, &evaluated_args, context, values)
 }
 
 /// Evaluates stream wrapper registration builtins from materialized arguments.
 pub(in crate::interpreter) fn eval_stream_wrapper_registry_result(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
@@ -46,10 +46,32 @@ pub(in crate::interpreter) fn eval_stream_wrapper_registry_result(
         "stream_wrapper_unregister" | "stream_wrapper_restore" if evaluated_args.len() == 1 => {}
         _ => return Err(EvalStatus::RuntimeFatal),
     }
-    for value in evaluated_args {
-        let _ = values.string_bytes(*value).ok();
-    }
-    values.bool_value(true)
+    let protocol = eval_stream_wrapper_protocol(evaluated_args[0], values)?;
+    let ok = match name {
+        "stream_wrapper_register" => {
+            let _ = values.string_bytes(evaluated_args[1])?;
+            context
+                .stream_resources_mut()
+                .register_stream_wrapper(&protocol, EVAL_STREAM_WRAPPERS)
+        }
+        "stream_wrapper_unregister" => context
+            .stream_resources_mut()
+            .unregister_stream_wrapper(&protocol, EVAL_STREAM_WRAPPERS),
+        "stream_wrapper_restore" => context
+            .stream_resources_mut()
+            .restore_stream_wrapper(&protocol, EVAL_STREAM_WRAPPERS),
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    values.bool_value(ok)
+}
+
+/// Coerces one stream wrapper protocol argument into an owned string.
+fn eval_stream_wrapper_protocol(
+    protocol: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let bytes = values.string_bytes(protocol)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Evaluates `stream_filter_register(filter_name, class)`.

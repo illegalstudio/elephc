@@ -22,6 +22,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
+use crate::stream_wrappers;
 use crate::value::RuntimeCellHandle;
 
 /// Eval-owned table of local file streams keyed by runtime resource payload.
@@ -29,6 +30,7 @@ use crate::value::RuntimeCellHandle;
 pub(crate) struct EvalStreamResources {
     chunk_sizes: HashMap<i64, i64>,
     default_stream_context: Option<i64>,
+    disabled_builtin_stream_wrappers: HashSet<String>,
     next_id: i64,
     directories: HashMap<i64, EvalDirectoryStream>,
     filter_resources: HashSet<i64>,
@@ -38,14 +40,26 @@ pub(crate) struct EvalStreamResources {
     socket_names: HashMap<i64, EvalSocketNames>,
     stream_contexts: HashMap<i64, EvalStreamContext>,
     streams: HashMap<i64, EvalFileStream>,
+    user_stream_wrappers: Vec<String>,
 }
 
 impl EvalStreamResources {
     /// Opens a local path using PHP's common `fopen()` mode strings.
     pub(crate) fn open_path(&mut self, path: &str, mode: &str) -> Option<i64> {
         let mode = EvalOpenMode::parse(mode)?;
-        let file = mode.open(path).ok()?;
-        Some(self.insert(EvalFileStream::new(file, path.to_string(), mode.label)))
+        if stream_wrappers::is_php_memory_stream(path) {
+            return self.open_ephemeral_stream(path, &mode, &[], None, false);
+        }
+        if stream_wrappers::is_data_stream(path) {
+            let bytes = stream_wrappers::decode_data_uri(path)?;
+            return self.open_ephemeral_stream(path, &mode, &bytes, None, false);
+        }
+        if stream_wrappers::is_phar_stream(path) {
+            return self.open_phar_stream(path, &mode);
+        }
+        let path = stream_wrappers::local_filesystem_path(path)?;
+        let file = mode.open(&path).ok()?;
+        Some(self.insert(EvalFileStream::new(file, path, mode.label)))
     }
 
     /// Opens an anonymous temporary file and returns its resource id.
@@ -220,6 +234,69 @@ impl EvalStreamResources {
         self.insert_stream_context(EvalStreamContext { options })
     }
 
+    /// Registers a user stream wrapper protocol in eval-local state.
+    pub(crate) fn register_stream_wrapper(&mut self, protocol: &str, builtins: &[&str]) -> bool {
+        let Some(protocol) = eval_normalize_stream_wrapper_protocol(protocol) else {
+            return false;
+        };
+        if self
+            .user_stream_wrappers
+            .iter()
+            .any(|current| current.eq_ignore_ascii_case(&protocol))
+        {
+            return false;
+        }
+        if eval_builtin_stream_wrapper_exists(builtins, &protocol)
+            && !self.disabled_builtin_stream_wrappers.contains(&protocol)
+        {
+            return false;
+        }
+        self.user_stream_wrappers.push(protocol);
+        true
+    }
+
+    /// Unregisters a user or built-in stream wrapper protocol.
+    pub(crate) fn unregister_stream_wrapper(&mut self, protocol: &str, builtins: &[&str]) -> bool {
+        let Some(protocol) = eval_normalize_stream_wrapper_protocol(protocol) else {
+            return false;
+        };
+        if let Some(index) = self
+            .user_stream_wrappers
+            .iter()
+            .position(|current| current.eq_ignore_ascii_case(&protocol))
+        {
+            self.user_stream_wrappers.remove(index);
+            return true;
+        }
+        if eval_builtin_stream_wrapper_exists(builtins, &protocol) {
+            return self.disabled_builtin_stream_wrappers.insert(protocol);
+        }
+        false
+    }
+
+    /// Restores a built-in stream wrapper protocol or accepts no-op user restores.
+    pub(crate) fn restore_stream_wrapper(&mut self, protocol: &str, builtins: &[&str]) -> bool {
+        let Some(protocol) = eval_normalize_stream_wrapper_protocol(protocol) else {
+            return false;
+        };
+        if eval_builtin_stream_wrapper_exists(builtins, &protocol) {
+            self.disabled_builtin_stream_wrappers.remove(&protocol);
+        }
+        true
+    }
+
+    /// Returns the currently visible stream wrapper protocol list.
+    pub(crate) fn stream_wrappers(&self, builtins: &[&str]) -> Vec<String> {
+        let mut wrappers = Vec::with_capacity(builtins.len() + self.user_stream_wrappers.len());
+        for builtin in builtins {
+            if !self.disabled_builtin_stream_wrappers.contains(*builtin) {
+                wrappers.push((*builtin).to_string());
+            }
+        }
+        wrappers.extend(self.user_stream_wrappers.iter().cloned());
+        wrappers
+    }
+
     /// Returns the default stream context resource id, creating it if needed.
     pub(crate) fn default_stream_context(&mut self) -> i64 {
         if let Some(id) = self.default_stream_context {
@@ -232,14 +309,18 @@ impl EvalStreamResources {
 
     /// Removes a stream resource from the table, closing its file handle.
     pub(crate) fn close(&mut self, id: i64) -> bool {
-        let closed = self.streams.remove(&id).is_some()
-            || self.filter_resources.remove(&id)
-            || self.socket_listeners.remove(&id).is_some();
+        let mut closed = false;
+        let mut ok = true;
+        if let Some(stream) = self.streams.remove(&id) {
+            closed = true;
+            ok = stream.finalize_on_close();
+        }
+        closed = closed || self.filter_resources.remove(&id) || self.socket_listeners.remove(&id).is_some();
         self.socket_names.remove(&id);
         if let Some(mut child) = self.process_children.remove(&id) {
             let _ = child.wait();
         }
-        closed
+        closed && ok
     }
 
     /// Returns whether a file-like stream resource exists.
@@ -602,6 +683,62 @@ impl EvalStreamResources {
         id
     }
 
+    /// Opens one unlinked temporary file as the backing storage for wrapper streams.
+    fn open_ephemeral_stream(
+        &mut self,
+        uri: &str,
+        mode: &EvalOpenMode,
+        initial: &[u8],
+        flush_target: Option<EvalStreamFlushTarget>,
+        append: bool,
+    ) -> Option<i64> {
+        let path = eval_tmpfile_path();
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .ok()?;
+        let _ = std::fs::remove_file(&path);
+        file.write_all(initial).ok()?;
+        if append {
+            file.seek(SeekFrom::End(0)).ok()?;
+        } else {
+            file.seek(SeekFrom::Start(0)).ok()?;
+        }
+        Some(self.insert(EvalFileStream::new_with_flush_target(
+            file,
+            uri.to_string(),
+            mode.label.clone(),
+            flush_target,
+        )))
+    }
+
+    /// Opens a `phar://` entry for reading or buffered write-back on close.
+    fn open_phar_stream(&mut self, path: &str, mode: &EvalOpenMode) -> Option<i64> {
+        let url = path.as_bytes();
+        if mode.write {
+            let initial = if mode.truncate {
+                Vec::new()
+            } else {
+                match elephc_phar::extract_url_bytes(url) {
+                    Some(bytes) => bytes,
+                    None if mode.create => Vec::new(),
+                    None => return None,
+                }
+            };
+            return self.open_ephemeral_stream(
+                path,
+                mode,
+                &initial,
+                Some(EvalStreamFlushTarget::PharUrl(url.to_vec())),
+                mode.append,
+            );
+        }
+        let bytes = elephc_phar::extract_url_bytes(url)?;
+        self.open_ephemeral_stream(path, mode, &bytes, None, false)
+    }
+
     /// Inserts a TCP stream as a File-backed eval stream and records endpoint names.
     fn insert_tcp_stream(&mut self, stream: TcpStream) -> Option<i64> {
         let local = stream.local_addr().ok()?.to_string();
@@ -712,22 +849,79 @@ fn eval_hash_digest_bytes(len: isize, output: &[u8; 64]) -> Option<Vec<u8>> {
     Some(output[..len].to_vec())
 }
 
+/// Normalizes a PHP stream wrapper protocol name for eval registry storage.
+fn eval_normalize_stream_wrapper_protocol(protocol: &str) -> Option<String> {
+    let protocol = protocol.trim().trim_end_matches("://");
+    if protocol.is_empty() {
+        return None;
+    }
+    Some(protocol.to_ascii_lowercase())
+}
+
+/// Returns whether the protocol is one of elephc's built-in stream wrappers.
+fn eval_builtin_stream_wrapper_exists(builtins: &[&str], protocol: &str) -> bool {
+    builtins
+        .iter()
+        .any(|builtin| builtin.eq_ignore_ascii_case(protocol))
+}
+
 /// File stream stored behind one eval resource id.
 struct EvalFileStream {
     file: File,
     uri: String,
     mode: String,
     eof: bool,
+    flush_target: Option<EvalStreamFlushTarget>,
 }
 
 impl EvalFileStream {
     /// Creates a tracked stream around a host file handle.
     fn new(file: File, uri: String, mode: String) -> Self {
+        Self::new_with_flush_target(file, uri, mode, None)
+    }
+
+    /// Creates a tracked stream that may write back to a wrapper target on close.
+    fn new_with_flush_target(
+        file: File,
+        uri: String,
+        mode: String,
+        flush_target: Option<EvalStreamFlushTarget>,
+    ) -> Self {
         Self {
             file,
             uri,
             mode,
             eof: false,
+            flush_target,
+        }
+    }
+
+    /// Flushes any buffered wrapper target before the stream resource disappears.
+    fn finalize_on_close(mut self) -> bool {
+        let Some(flush_target) = self.flush_target.take() else {
+            return true;
+        };
+        let mut bytes = Vec::new();
+        if self.file.flush().is_err() || self.file.seek(SeekFrom::Start(0)).is_err() {
+            return false;
+        }
+        if self.file.read_to_end(&mut bytes).is_err() {
+            return false;
+        }
+        flush_target.write_back(&bytes)
+    }
+}
+
+/// Wrapper targets that need a write-back step when their stream closes.
+enum EvalStreamFlushTarget {
+    PharUrl(Vec<u8>),
+}
+
+impl EvalStreamFlushTarget {
+    /// Writes buffered stream bytes back to the target URL.
+    fn write_back(&self, bytes: &[u8]) -> bool {
+        match self {
+            Self::PharUrl(url) => elephc_phar::put_url_bytes(url, bytes).is_some(),
         }
     }
 }

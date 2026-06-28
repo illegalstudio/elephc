@@ -1239,7 +1239,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_stream_bool_predicate(name, args, context, scope, values)
         }
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => {
-            eval_builtin_stream_introspection(name, args, values)
+            eval_builtin_stream_introspection(name, args, context, values)
         }
         "stream_resolve_include_path" => {
             eval_builtin_stream_resolve_include_path(args, context, scope, values)

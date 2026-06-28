@@ -382,7 +382,7 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             values.bool_value(true)?
         }
         "stream_wrapper_register" | "stream_wrapper_unregister" | "stream_wrapper_restore" => {
-            eval_stream_wrapper_registry_result(name, evaluated_args, values)?
+            eval_stream_wrapper_registry_result(name, evaluated_args, context, values)?
         }
         "stream_filter_register" => {
             let [filter_name, class] = evaluated_args else {

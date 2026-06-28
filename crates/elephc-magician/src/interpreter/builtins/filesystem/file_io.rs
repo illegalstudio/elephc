@@ -9,6 +9,7 @@
 
 use super::super::super::*;
 use super::*;
+use crate::stream_wrappers;
 
 /// Evaluates PHP `getcwd()` with no arguments.
 pub(in crate::interpreter) fn eval_builtin_getcwd(
@@ -51,6 +52,14 @@ pub(in crate::interpreter) fn eval_file_probe_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    if stream_wrappers::is_phar_stream(&path) {
+        let exists = elephc_phar::extract_url_bytes(path.as_bytes()).is_some();
+        let supported = matches!(name, "file_exists" | "is_file" | "is_readable");
+        return values.bool_value(supported && exists);
+    }
+    let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
+        return values.bool_value(false);
+    };
     let path = std::path::Path::new(&path);
     let result = match name {
         "file_exists" => path.exists(),
@@ -89,6 +98,12 @@ pub(in crate::interpreter) fn eval_file_stat_scalar_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
+        return match name {
+            "filemtime" => values.int(0),
+            _ => values.bool_value(false),
+        };
+    };
     let metadata = match std::fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(_) if name == "filemtime" => return values.int(0),
@@ -122,13 +137,13 @@ pub(in crate::interpreter) fn eval_builtin_file_get_contents(
     eval_file_get_contents_result(filename, values)
 }
 
-/// Reads a local file into a PHP string, or returns false when it cannot be opened.
+/// Reads a local file or supported wrapper into a PHP string, or returns false on failure.
 pub(in crate::interpreter) fn eval_file_get_contents_result(
     filename: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
-    match std::fs::read(path) {
+    match eval_read_path_or_wrapper_bytes(&path) {
         Ok(bytes) => values.string_bytes_value(&bytes),
         Err(_) => {
             values.warning("Warning: file_get_contents(): Failed to open stream\n")?;
@@ -151,13 +166,13 @@ pub(in crate::interpreter) fn eval_builtin_file(
     eval_file_result(filename, values)
 }
 
-/// Reads one local file and returns an indexed array of line byte strings.
+/// Reads one local file or supported wrapper and returns indexed line byte strings.
 pub(in crate::interpreter) fn eval_file_result(
     filename: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
-    let bytes = match std::fs::read(path) {
+    let bytes = match eval_read_path_or_wrapper_bytes(&path) {
         Ok(bytes) => bytes,
         Err(_) => {
             values.warning("Warning: file_get_contents(): Failed to open stream\n")?;
@@ -204,17 +219,19 @@ pub(in crate::interpreter) fn eval_builtin_readfile(
     eval_readfile_result(filename, values)
 }
 
-/// Streams one local file to eval output and returns a byte count, false, or -1.
+/// Streams one local file or supported wrapper to eval output.
 pub(in crate::interpreter) fn eval_readfile_result(
     filename: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
-    let path = std::path::Path::new(&path);
-    if path.is_dir() {
-        return values.int(-1);
+    if let Some(local_path) = stream_wrappers::local_filesystem_path(&path) {
+        let path = std::path::Path::new(&local_path);
+        if path.is_dir() {
+            return values.int(-1);
+        }
     }
-    let bytes = match std::fs::read(path) {
+    let bytes = match eval_read_path_or_wrapper_bytes(&path) {
         Ok(bytes) => bytes,
         Err(_) => return values.bool_value(false),
     };
@@ -238,7 +255,7 @@ pub(in crate::interpreter) fn eval_builtin_file_put_contents(
     eval_file_put_contents_result(filename, data, values)
 }
 
-/// Writes a PHP string to a local file and returns the written byte count or false.
+/// Writes a PHP string to a local file or supported wrapper and returns a byte count.
 pub(in crate::interpreter) fn eval_file_put_contents_result(
     filename: RuntimeCellHandle,
     data: RuntimeCellHandle,
@@ -246,6 +263,15 @@ pub(in crate::interpreter) fn eval_file_put_contents_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
     let data = values.string_bytes(data)?;
+    if stream_wrappers::is_phar_stream(&path) {
+        return match elephc_phar::put_url_bytes(path.as_bytes(), &data) {
+            Some(len) => values.int(i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?),
+            None => values.bool_value(false),
+        };
+    }
+    let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
+        return values.bool_value(false);
+    };
     match std::fs::write(path, &data) {
         Ok(()) => values.int(i64::try_from(data.len()).map_err(|_| EvalStatus::RuntimeFatal)?),
         Err(_) => values.bool_value(false),
@@ -266,12 +292,18 @@ pub(in crate::interpreter) fn eval_builtin_filesize(
     eval_filesize_result(filename, values)
 }
 
-/// Returns one local file size in bytes, or zero when stat fails.
+/// Returns one local file or supported wrapper size in bytes, or zero on failure.
 pub(in crate::interpreter) fn eval_filesize_result(
     filename: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    if let Ok(bytes) = eval_read_path_or_wrapper_bytes(&path) {
+        return values.int(i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?);
+    }
+    let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
+        return values.int(0);
+    };
     let len = std::fs::metadata(path)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
@@ -298,6 +330,16 @@ pub(in crate::interpreter) fn eval_filetype_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    if stream_wrappers::is_phar_stream(&path) {
+        return if elephc_phar::extract_url_bytes(path.as_bytes()).is_some() {
+            values.string("file")
+        } else {
+            values.bool_value(false)
+        };
+    }
+    let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
+        return values.bool_value(false);
+    };
     let file_type = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata.file_type(),
         Err(_) => return values.bool_value(false),
@@ -344,6 +386,9 @@ pub(in crate::interpreter) fn eval_stat_array_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
+        return values.bool_value(false);
+    };
     let metadata = match name {
         "stat" => std::fs::metadata(path),
         "lstat" => std::fs::symlink_metadata(path),
@@ -411,4 +456,18 @@ pub(in crate::interpreter) fn eval_stat_array_set_string_key(
 /// Converts unsigned stat metadata into the signed integer payload used by PHP cells.
 pub(in crate::interpreter) fn eval_u64_to_i64(value: u64) -> Result<i64, EvalStatus> {
     i64::try_from(value).map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Reads bytes from supported direct path or stream-wrapper URLs.
+fn eval_read_path_or_wrapper_bytes(path: &str) -> Result<Vec<u8>, ()> {
+    if stream_wrappers::is_data_stream(path) {
+        return stream_wrappers::decode_data_uri(path).ok_or(());
+    }
+    if stream_wrappers::is_phar_stream(path) {
+        return elephc_phar::extract_url_bytes(path.as_bytes()).ok_or(());
+    }
+    let Some(path) = stream_wrappers::local_filesystem_path(path) else {
+        return Err(());
+    };
+    std::fs::read(path).map_err(|_| ())
 }

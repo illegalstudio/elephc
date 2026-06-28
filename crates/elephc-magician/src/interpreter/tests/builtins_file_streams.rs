@@ -87,6 +87,40 @@ return true;"#
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval `fstat()` returns PHP's complete numeric and string-keyed array.
+#[test]
+fn execute_program_dispatches_complete_fstat_array() {
+    let pid = std::process::id();
+    let file = format!("elephc_magician_complete_fstat_{pid}.txt");
+    let source = format!(
+        r#"file_put_contents("{file}", "abcdef");
+$h = fopen("{file}", "r");
+$stat = fstat($h);
+echo count($stat) === 26 ? "count" : "bad"; echo ":";
+echo $stat[0] === $stat["dev"] && $stat[1] === $stat["ino"] && $stat[2] === $stat["mode"] ? "head" : "bad"; echo ":";
+echo $stat[3] === $stat["nlink"] && $stat[4] === $stat["uid"] && $stat[5] === $stat["gid"] ? "owner" : "bad"; echo ":";
+echo $stat[6] === $stat["rdev"] && $stat[7] === $stat["size"] && $stat["size"] === 6 ? "size" : "bad"; echo ":";
+echo $stat[8] === $stat["atime"] && $stat[9] === $stat["mtime"] && $stat[10] === $stat["ctime"] ? "time" : "bad"; echo ":";
+echo $stat[11] === $stat["blksize"] && $stat[12] === $stat["blocks"] ? "blocks" : "bad"; echo ":";
+fclose($h);
+echo unlink("{file}") ? "cleanup" : "bad";
+return true;"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let _ = std::fs::remove_file(&file);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    let _ = std::fs::remove_file(&file);
+    assert_eq!(
+        values.output,
+        "count:head:owner:size:time:blocks:cleanup"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval `flock()` applies advisory locks to local file stream resources.
 #[test]
 fn execute_program_dispatches_file_stream_flock_builtin() {
