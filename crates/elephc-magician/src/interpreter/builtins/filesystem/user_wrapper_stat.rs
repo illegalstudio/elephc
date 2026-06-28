@@ -1,15 +1,43 @@
 //! Purpose:
-//! Interprets userspace stream-wrapper `url_stat()` arrays for path builtins.
+//! Interprets userspace stream-wrapper stat results for path and stream builtins.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::filesystem::file_io` when a path belongs
 //!   to a registered eval userspace stream wrapper.
+//! - `crate::interpreter::builtins::filesystem::streams` when `fstat()` sees a
+//!   userspace-wrapper stream resource.
 //!
 //! Key details:
 //! - The wrapper owns the stat array shape. These helpers read the PHP-standard
 //!   string keys used by file probes, scalar stat builtins, and `filetype()`.
 
 use super::super::super::*;
+
+/// Dispatches `fstat()` to a wrapper object's `stream_stat()`.
+pub(in crate::interpreter) fn eval_user_wrapper_fstat_result(
+    id: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(info) = context.stream_resources().user_wrapper_stream_info(id) else {
+        return Ok(None);
+    };
+    let Some((declaring_class, stream_stat)) =
+        eval_user_wrapper_method(&info.class_name, "stream_stat", context)
+    else {
+        return values.bool_value(false).map(Some);
+    };
+    let result = eval_dynamic_method_with_values(
+        &declaring_class,
+        &info.class_name,
+        &stream_stat,
+        info.object,
+        Vec::new(),
+        context,
+        values,
+    )?;
+    Ok(Some(result))
+}
 
 /// Computes one filesystem predicate from a userspace wrapper `url_stat()` result.
 pub(in crate::interpreter) fn eval_user_wrapper_file_probe_from_stat(

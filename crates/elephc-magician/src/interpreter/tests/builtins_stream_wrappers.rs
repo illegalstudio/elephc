@@ -300,6 +300,12 @@ fn execute_program_dispatches_user_stream_wrapper_url_stat() {
             "ino" => 9
         ];
     }
+    public function stream_open($path, $mode, $options, &$opened_path): bool {
+        return true;
+    }
+    public function stream_stat() {
+        return ["mode" => 33188, "size" => 321];
+    }
 }
 stream_wrapper_register("ustat", "EvalUrlStatWrapperW");
 echo file_exists("ustat://file") ? "exists" : "bad"; echo ":";
@@ -311,6 +317,9 @@ echo filemtime("ustat://file") === 77 ? "mtime" : "bad"; echo ":";
 echo fileowner("ustat://file") === 501 ? "owner" : "bad"; echo ":";
 $stat = stat("ustat://file");
 echo $stat["size"] === 123 && $stat["mode"] === 33188 ? "stat" : "bad"; echo ":";
+$h = fopen("ustat://file", "r");
+$fstat = fstat($h);
+echo $fstat["size"] === 321 && $fstat["mode"] === 33188 ? "fstat" : "bad"; echo ":";
 echo call_user_func("filesize", "ustat://file") === 123 ? "callsize" : "bad"; echo ":";
 echo file_exists("ustat://missing") ? "bad" : "missing"; echo ":";
 echo filetype("ustat://dir") === "dir" ? "dirtype" : "bad";
@@ -324,7 +333,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "exists:file:notdir:type:size:mtime:owner:stat:callsize:missing:dirtype"
+        "exists:file:notdir:type:size:mtime:owner:stat:fstat:callsize:missing:dirtype"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
