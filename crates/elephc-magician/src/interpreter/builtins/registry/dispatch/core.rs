@@ -20,18 +20,8 @@ pub(in crate::interpreter) fn eval_core_builtin_with_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
-        "print_r" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_print_r_result(*value, values)?
-        }
-        "var_dump" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_var_dump_result(*value, context, values)?
-        }
+        "print_r" => eval_print_r_result(evaluated_args, context, values)?,
+        "var_dump" => eval_var_dump_result(evaluated_args, context, values)?,
         "call_user_func" => {
             return eval_call_user_func_with_values(evaluated_args.to_vec(), context, values)
                 .map(Some);
