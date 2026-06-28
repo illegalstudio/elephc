@@ -126,3 +126,26 @@ fn eval_only_reflection_builtins_remain_visible_until_static_catalog_catches_up(
         );
     }
 }
+
+/// Verifies magician does not expose unexpected builtin names outside the static catalog.
+#[test]
+fn eval_php_visible_builtins_are_static_or_documented_eval_only() {
+    let static_names = elephc::builtin_metadata::php_visible_builtin_names()
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let eval_only = EVAL_ONLY_REFLECTION_BUILTINS
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let unexpected = elephc_magician::builtin_metadata::php_visible_builtin_names()
+        .iter()
+        .copied()
+        .filter(|name| !static_names.contains(name) && !eval_only.contains(name))
+        .collect::<Vec<_>>();
+
+    assert!(
+        unexpected.is_empty(),
+        "eval exposes builtins outside the static catalog and eval-only allowlist: {unexpected:?}"
+    );
+}
