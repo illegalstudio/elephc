@@ -102,20 +102,31 @@ pub(in crate::interpreter) fn eval_builtin_chmod(
     };
     let filename = eval_expr(filename, context, scope, values)?;
     let permissions = eval_expr(permissions, context, scope, values)?;
-    eval_chmod_result(filename, permissions, values)
+    eval_chmod_result(filename, permissions, context, values)
 }
 
 /// Changes one local file's mode and returns whether the operation succeeded.
 pub(in crate::interpreter) fn eval_chmod_result(
     filename: RuntimeCellHandle,
     permissions: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    let mode = eval_int_value(permissions, values)? as u32;
+    let metadata_value = values.int(i64::from(mode))?;
+    if let Some(result) = eval_user_wrapper_stream_metadata_result(
+        &path,
+        EVAL_STREAM_META_ACCESS,
+        metadata_value,
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
         return values.bool_value(false);
     };
-    let mode = eval_int_value(permissions, values)? as u32;
     let permissions = std::fs::Permissions::from_mode(mode);
     values.bool_value(std::fs::set_permissions(path, permissions).is_ok())
 }
@@ -133,7 +144,7 @@ pub(in crate::interpreter) fn eval_builtin_chown_like(
     };
     let filename = eval_expr(filename, context, scope, values)?;
     let principal = eval_expr(principal, context, scope, values)?;
-    eval_chown_like_result(name, filename, principal, values)
+    eval_chown_like_result(name, filename, principal, context, values)
 }
 
 /// Changes one local path owner or group and returns whether the operation succeeded.
@@ -141,9 +152,19 @@ pub(in crate::interpreter) fn eval_chown_like_result(
     name: &str,
     filename: RuntimeCellHandle,
     principal: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    if matches!(name, "chown" | "chgrp") {
+        let (option, metadata_value) =
+            eval_chown_metadata_arg(name, principal, values)?;
+        if let Some(result) =
+            eval_user_wrapper_stream_metadata_result(&path, option, metadata_value, context, values)?
+        {
+            return Ok(result);
+        }
+    }
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
         return values.bool_value(false);
     };
@@ -161,6 +182,28 @@ pub(in crate::interpreter) fn eval_chown_like_result(
         }
     };
     values.bool_value(status == 0)
+}
+
+/// Builds the wrapper metadata option and value for `chown()` or `chgrp()`.
+fn eval_chown_metadata_arg(
+    name: &str,
+    principal: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(i64, RuntimeCellHandle), EvalStatus> {
+    match (name, values.type_tag(principal)?) {
+        ("chown", EVAL_TAG_INT) => {
+            let principal = eval_int_value(principal, values)?;
+            Ok((EVAL_STREAM_META_OWNER, values.int(principal)?))
+        }
+        ("chgrp", EVAL_TAG_INT) => {
+            let principal = eval_int_value(principal, values)?;
+            Ok((EVAL_STREAM_META_GROUP, values.int(principal)?))
+        }
+        ("chown", EVAL_TAG_STRING) => Ok((EVAL_STREAM_META_OWNER_NAME, principal)),
+        ("chgrp", EVAL_TAG_STRING) => Ok((EVAL_STREAM_META_GROUP_NAME, principal)),
+        ("chown" | "chgrp", _) => Err(EvalStatus::RuntimeFatal),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Resolves one PHP owner/group argument into libc uid/gid slots.

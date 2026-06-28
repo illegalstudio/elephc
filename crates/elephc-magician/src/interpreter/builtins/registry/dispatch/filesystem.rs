@@ -29,13 +29,13 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             let [filename, permissions] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_chmod_result(*filename, *permissions, values)?
+            eval_chmod_result(*filename, *permissions, context, values)?
         }
         "chown" | "chgrp" | "lchown" | "lchgrp" => {
             let [filename, principal] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_chown_like_result(name, *filename, *principal, values)?
+            eval_chown_like_result(name, *filename, *principal, context, values)?
         }
         "closedir" | "readdir" | "rewinddir" => {
             let [dir_handle] = evaluated_args else {
@@ -582,10 +582,12 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             eval_vfprintf_result(*stream, *format, *array, context, values)?
         }
         "touch" => match evaluated_args {
-            [filename] => eval_touch_result(*filename, None, None, values)?,
-            [filename, mtime] => eval_touch_result(*filename, Some(*mtime), None, values)?,
+            [filename] => eval_touch_result(*filename, None, None, context, values)?,
+            [filename, mtime] => {
+                eval_touch_result(*filename, Some(*mtime), None, context, values)?
+            }
             [filename, mtime, atime] => {
-                eval_touch_result(*filename, Some(*mtime), Some(*atime), values)?
+                eval_touch_result(*filename, Some(*mtime), Some(*atime), context, values)?
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
