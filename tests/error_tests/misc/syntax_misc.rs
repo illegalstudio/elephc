@@ -19,6 +19,15 @@ fn test_error_bitwise_compound_assignment_requires_ints() {
     );
 }
 
+/// Tests that `declare()` with no directive is rejected with a clear diagnostic.
+#[test]
+fn test_error_declare_requires_directive_name() {
+    expect_error(
+        "<?php declare();",
+        "Expected a directive name in 'declare(...)'",
+    );
+}
+
 /// Tests that direct reference assignment rejects a non-variable source.
 #[test]
 fn test_error_reference_assignment_requires_variable_source() {

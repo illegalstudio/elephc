@@ -378,6 +378,26 @@ fn test_static_keyword() {
     );
 }
 
+/// Verifies `declare(strict_types=1);` token sequence includes `Declare`.
+#[test]
+fn test_declare_keyword() {
+    let t = tokens("<?php declare(strict_types=1);");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Declare,
+            Token::LParen,
+            Token::Identifier("strict_types".into()),
+            Token::Assign,
+            Token::IntLiteral(1),
+            Token::RParen,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
 // --- Reference parameter ---
 
 /// Verifies `extern` compiler extension keyword tokenizes alongside `function`.

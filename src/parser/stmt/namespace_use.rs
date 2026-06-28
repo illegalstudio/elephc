@@ -12,6 +12,7 @@ use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{Stmt, StmtKind, UseItem, UseKind};
+use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
 use super::{expect_semicolon, expect_token, parse_name, parse_stmt, recover_to_statement_boundary};
@@ -74,6 +75,92 @@ pub(super) fn parse_namespace_stmt(
         return Err(CompileError::from_many(errors));
     }
     Ok(Stmt::new(StmtKind::NamespaceBlock { name, body }, span))
+}
+
+/// Parses a PHP `declare(directive=value, ...)` statement or block.
+///
+/// elephc is strict by construction, so the directives (`strict_types`, `ticks`,
+/// `encoding`) are parsed for syntactic validity and then discarded. The statement
+/// form `declare(strict_types=1);` lowers to an empty `Synthetic` block (a no-op);
+/// the block form `declare(ticks=1) { ... }` lowers to a `Synthetic` wrapper around
+/// its body, which executes in the enclosing scope.
+pub(super) fn parse_declare(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume declare
+
+    expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'declare'")?;
+
+    // Parse one or more `directive = value` pairs. Directive names are accepted for
+    // syntactic validity; their values do not affect an always-strict AOT compiler.
+    loop {
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(_)) => *pos += 1,
+            _ => {
+                return Err(CompileError::new(
+                    span,
+                    "Expected a directive name in 'declare(...)'",
+                ))
+            }
+        }
+        expect_token(
+            tokens,
+            pos,
+            &Token::Assign,
+            "Expected '=' after declare directive name",
+        )?;
+        let _ = parse_expr(tokens, pos)?; // discard the directive value
+
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+            *pos += 1;
+            continue;
+        }
+        break;
+    }
+
+    expect_token(
+        tokens,
+        pos,
+        &Token::RParen,
+        "Expected ')' after declare directives",
+    )?;
+
+    // Statement form `declare(...);` is a no-op: lower to an empty Synthetic block.
+    if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
+        *pos += 1;
+        return Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span));
+    }
+
+    // Block form `declare(...) { ... }`: wrap the body in a scope-preserving Synthetic.
+    expect_token(
+        tokens,
+        pos,
+        &Token::LBrace,
+        "Expected ';' or '{' after declare(...)",
+    )?;
+    let mut body = Vec::new();
+    let mut errors = Vec::new();
+    while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        match parse_stmt(tokens, pos) {
+            Ok(stmt) => body.push(stmt),
+            Err(error) => {
+                errors.extend(error.flatten());
+                recover_to_statement_boundary(tokens, pos);
+            }
+        }
+    }
+    expect_token(
+        tokens,
+        pos,
+        &Token::RBrace,
+        "Expected '}' after declare block",
+    )?;
+    if !errors.is_empty() {
+        return Err(CompileError::from_many(errors));
+    }
+    Ok(Stmt::new(StmtKind::Synthetic(body), span))
 }
 
 /// Parses a `use` import statement.

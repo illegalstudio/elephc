@@ -23,6 +23,30 @@ fn test_const_decl_int() {
     }
 }
 
+/// Verifies `declare(strict_types=1);` (statement form) parses to an empty
+/// `Synthetic` block — a no-op, since elephc is always strict.
+#[test]
+fn test_declare_strict_types_parses_to_empty_synthetic() {
+    let stmts = parse_source("<?php declare(strict_types=1);");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Synthetic(body) => assert!(body.is_empty()),
+        other => panic!("Expected empty Synthetic, got {:?}", other),
+    }
+}
+
+/// Verifies `declare(ticks=1) { ... }` (block form) parses to a `Synthetic`
+/// wrapper around its body statements.
+#[test]
+fn test_declare_block_parses_to_synthetic_body() {
+    let stmts = parse_source("<?php declare(ticks=1) { echo 1; }");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Synthetic(body) => assert_eq!(body.len(), 1),
+        other => panic!("Expected Synthetic body, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php const NAME = "hello";` parses to a `ConstDecl` with name "NAME" and a `StringLiteral` value.
 #[test]
 fn test_const_decl_string() {

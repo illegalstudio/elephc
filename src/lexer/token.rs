@@ -86,6 +86,7 @@ pub enum Token {
     Namespace,      // namespace
     Const,          // const
     Global,         // global
+    Declare,        // declare (strict_types/ticks/encoding directive)
     Static,         // static
     Self_,          // self
     Trait,          // trait
