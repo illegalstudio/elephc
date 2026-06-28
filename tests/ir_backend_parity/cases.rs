@@ -328,24 +328,17 @@ echo abs_val(-5) . " " . abs_val(3);
     );
 }
 
-/// Verifies generator construction, iterator protocol calls, and shadowed receiver foreach match the legacy backend.
-#[test]
-fn parity_generator_foreach_protocol() {
-    assert_backend_parity(
-        "generator_foreach_protocol",
-        r#"<?php
-function gen() {
-    yield 10;
-    yield 20;
-}
-$g = gen();
-foreach ($g as $g) {
-    echo $g . ",";
-}
-"#,
-        &[],
-    );
-}
+// NOTE: there is intentionally no generator parity test.
+//
+// Generators were reimplemented on the EIR backend as stackful fiber coroutines
+// (issue #329). That reimplementation replaced the shared `__rt_gen_*` runtime
+// helpers and the `Generator` object layout with the fiber-coroutine versions.
+// The frozen legacy `--ast-backend` still emits the old `GeneratorFrame`-based
+// generator, which is no longer runtime-compatible with those shared helpers, so
+// a legacy-compiled generator can no longer iterate or be freed correctly. The
+// two backends therefore cannot be compared for generators, and the legacy path
+// is slated for removal in v0.26.0. EIR generator behavior is covered directly by
+// `tests/codegen/generators/`.
 
 /// Verifies recursive regex child iterators keep their boxed child object alive.
 #[test]

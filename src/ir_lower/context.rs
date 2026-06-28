@@ -937,6 +937,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::CallableArrayNew
                     | Op::BufferNew
                     | Op::GeneratorNew
+                    // `yield`/`yield from` return owned Mixed cells (the sent
+                    // value from `__rt_gen_suspend`, the delegated return from
+                    // `__rt_gen_delegate`); a discarded result must be released.
+                    | Op::GeneratorYield
+                    | Op::GeneratorYieldFrom
                     | Op::Call
                     | Op::FunctionVariantCall
                     | Op::RuntimeCall

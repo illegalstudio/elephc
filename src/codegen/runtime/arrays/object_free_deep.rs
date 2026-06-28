@@ -10,7 +10,6 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
-use crate::codegen::runtime::generators::frame as gen_frame;
 use crate::codegen::abi;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
@@ -129,19 +128,16 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b __rt_object_free_deep_struct");                      // skip the property-tag walk and free the Fiber struct itself
     emitter.label("__rt_object_free_deep_not_fiber");
 
-    // -- Generator special case: GeneratorFrame has a custom payload layout, not PHP property slots --
+    // -- Generator special case: a fiber-shaped coroutine object whose payload is
+    // runtime-managed (coroutine stack + boxed Mixed fields), not PHP property
+    // slots. Release the stack and every owned field, then free the struct. --
     emitter.instruction("ldr x10, [x0]");                                       // x10 = receiver class_id
     crate::codegen::abi::emit_load_symbol_to_reg(emitter, "x11", "_generator_class_id", 0); // x11 = compile-time class id of the built-in Generator class
-    emitter.instruction("cmp x10, x11");                                        // is the receiver a Generator frame?
-    emitter.instruction("b.ne __rt_object_free_deep_not_generator");            // skip generator-frame cleanup for ordinary PHP objects
-    emit_generator_mixed_field_release_aarch64(emitter, gen_frame::OFF_LAST_KEY, "last_key");
-    emit_generator_mixed_field_release_aarch64(emitter, gen_frame::OFF_LAST_VALUE, "last_value");
-    emit_generator_mixed_field_release_aarch64(emitter, gen_frame::OFF_RETURN_VALUE, "return_value");
-    emit_generator_mixed_field_release_aarch64(emitter, gen_frame::OFF_SENT_VALUE, "sent_value");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Generator frame pointer before delegated-iterator cleanup
-    emitter.instruction(&format!("ldr x0, [x0, #{}]", gen_frame::OFF_DELEGATED_ITER)); // load the delegated inner iterator pointer from the frame
-    emitter.instruction("bl __rt_decref_any");                                  // release a suspended inner generator/iterator if yield-from left one attached
-    emitter.instruction("b __rt_object_free_deep_no_dyn_props");                // free the custom frame storage without walking property descriptors
+    emitter.instruction("cmp x10, x11");                                        // is the receiver a Generator coroutine?
+    emitter.instruction("b.ne __rt_object_free_deep_not_generator");            // skip generator cleanup for ordinary PHP objects
+    emit_generator_coroutine_release_aarch64(emitter);
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Generator pointer before the struct free
+    emitter.instruction("b __rt_object_free_deep_struct");                      // free the coroutine struct without walking property descriptors
     emitter.label("__rt_object_free_deep_not_generator");
 
     // -- SPL doubly-linked-list family: release custom internal storage, not PHP property slots --
@@ -354,19 +350,16 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_object_free_deep_struct");                    // skip property-tag walking for runtime-managed Fiber payloads
     emitter.label("__rt_object_free_deep_not_fiber");
 
-    // -- Generator special case: GeneratorFrame has a custom payload layout, not PHP property slots --
+    // -- Generator special case: a fiber-shaped coroutine object whose payload is
+    // runtime-managed (coroutine stack + boxed Mixed fields), not PHP property
+    // slots. Release the stack and every owned field, then free the struct. --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // r10 = receiver class_id
     crate::codegen::abi::emit_load_symbol_to_reg(emitter, "r11", "_generator_class_id", 0); // r11 = compile-time class id of the built-in Generator class
-    emitter.instruction("cmp r10, r11");                                        // is the receiver a Generator frame?
-    emitter.instruction("jne __rt_object_free_deep_not_generator");             // skip generator-frame cleanup for ordinary PHP objects
-    emit_generator_mixed_field_release_x86_64(emitter, gen_frame::OFF_LAST_KEY, "last_key");
-    emit_generator_mixed_field_release_x86_64(emitter, gen_frame::OFF_LAST_VALUE, "last_value");
-    emit_generator_mixed_field_release_x86_64(emitter, gen_frame::OFF_RETURN_VALUE, "return_value");
-    emit_generator_mixed_field_release_x86_64(emitter, gen_frame::OFF_SENT_VALUE, "sent_value");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Generator frame pointer before delegated-iterator cleanup
-    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", gen_frame::OFF_DELEGATED_ITER)); // load the delegated inner iterator pointer from the frame
-    emitter.instruction("call __rt_decref_any");                                // release a suspended inner generator/iterator if yield-from left one attached
-    emitter.instruction("jmp __rt_object_free_deep_no_dyn_props");              // free the custom frame storage without walking property descriptors
+    emitter.instruction("cmp r10, r11");                                        // is the receiver a Generator coroutine?
+    emitter.instruction("jne __rt_object_free_deep_not_generator");             // skip generator cleanup for ordinary PHP objects
+    emit_generator_coroutine_release_x86_64(emitter);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Generator pointer before the struct free
+    emitter.instruction("jmp __rt_object_free_deep_struct");                    // free the coroutine struct without walking property descriptors
     emitter.label("__rt_object_free_deep_not_generator");
 
     // -- SPL doubly-linked-list family: release custom internal storage, not PHP property slots --
@@ -500,4 +493,106 @@ fn emit_generator_mixed_field_release_x86_64(emitter: &mut Emitter, offset: usiz
     emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", offset));     // load the Generator frame's boxed Mixed field for release
     emitter.instruction("call __rt_decref_mixed");                              // release the Generator frame's boxed Mixed field if present
     emitter.comment(&format!("released Generator::{}", name));
+}
+
+/// Releases all runtime-owned storage of a fiber-shaped Generator on AArch64:
+/// the coroutine stack (munmap), the boxed `transfer_value`, the pending
+/// Throwable, every boxed `start_args` cell, and the persistent
+/// `last_key`/`last_value`/`return_value` cells.
+///
+/// Input: the Generator pointer is saved at `[sp, #0]` (reloaded per step,
+/// because nested decref helpers clobber `x0`).
+fn emit_generator_coroutine_release_aarch64(emitter: &mut Emitter) {
+    use crate::codegen::runtime::generators::coro;
+    let stack_base = crate::codegen::runtime::FIBER_STACK_BASE_OFFSET;
+    let stack_size = crate::codegen::runtime::FIBER_STACK_SIZE_OFFSET;
+    let transfer = crate::codegen::runtime::FIBER_TRANSFER_VALUE_OFFSET;
+    let pending = crate::codegen::runtime::FIBER_PENDING_THROW_OFFSET;
+    let start_args = crate::codegen::runtime::FIBER_START_ARGS_OFFSET as usize;
+
+    // -- return the coroutine stack to the kernel --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Generator pointer for stack release
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", stack_base));             // x9 = coroutine stack base (mmap start)
+    emitter.instruction("cbz x9, __rt_object_free_deep_gen_no_stack");          // skip when the stack was already released
+    emitter.instruction(&format!("ldr x10, [x0, #{}]", stack_size));            // x10 = mapped length for munmap
+    emitter.instruction("mov x0, x9");                                          // pass the stack base as the mapping start
+    emitter.instruction("mov x1, x10");                                         // pass the mapped length to unmap
+    emitter.instruction("bl __rt_fiber_free_stack");                            // munmap the coroutine stack
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Generator pointer after the munmap
+    emitter.instruction(&format!("str xzr, [x0, #{}]", stack_base));            // null stack_base so a double-free is a clean no-op
+    emitter.instruction(&format!("str xzr, [x0, #{}]", stack_size));            // null stack_size to mirror the cleared base
+    emitter.label("__rt_object_free_deep_gen_no_stack");
+
+    // -- release the boxed transfer value and any pending Throwable --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Generator pointer before transfer cleanup
+    emitter.instruction(&format!("ldr x0, [x0, #{}]", transfer));               // x0 = boxed Mixed transfer_value
+    emitter.instruction("bl __rt_decref_mixed");                                // release the transfer value if present
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Generator pointer after transfer cleanup
+    emitter.instruction(&format!("str xzr, [x0, #{}]", transfer));              // clear transfer_value after releasing it
+    emitter.instruction(&format!("ldr x0, [x0, #{}]", pending));                // x0 = pending Throwable object, if any
+    emitter.instruction("bl __rt_decref_any");                                  // release a pending Throwable if still attached
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Generator pointer after pending cleanup
+    emitter.instruction(&format!("str xzr, [x0, #{}]", pending));               // clear pending_throw after releasing it
+
+    // -- release the owned boxed start arguments forwarded into the body --
+    for i in 0..crate::codegen::runtime::FIBER_START_ARGS_MAX as usize {
+        emit_generator_mixed_field_release_aarch64(
+            emitter,
+            start_args + i * 8,
+            &format!("start_args[{}]", i),
+        );
+    }
+
+    // -- release the generator's persistent key/value/return cells --
+    emit_generator_mixed_field_release_aarch64(emitter, coro::GEN_LAST_KEY_OFFSET as usize, "last_key");
+    emit_generator_mixed_field_release_aarch64(emitter, coro::GEN_LAST_VALUE_OFFSET as usize, "last_value");
+    emit_generator_mixed_field_release_aarch64(emitter, coro::GEN_RETURN_VALUE_OFFSET as usize, "return_value");
+}
+
+/// x86_64 counterpart of `emit_generator_coroutine_release_aarch64`. The
+/// Generator pointer is saved at `[rbp - 8]` (reloaded per step).
+fn emit_generator_coroutine_release_x86_64(emitter: &mut Emitter) {
+    use crate::codegen::runtime::generators::coro;
+    let stack_base = crate::codegen::runtime::FIBER_STACK_BASE_OFFSET;
+    let stack_size = crate::codegen::runtime::FIBER_STACK_SIZE_OFFSET;
+    let transfer = crate::codegen::runtime::FIBER_TRANSFER_VALUE_OFFSET;
+    let pending = crate::codegen::runtime::FIBER_PENDING_THROW_OFFSET;
+    let start_args = crate::codegen::runtime::FIBER_START_ARGS_OFFSET as usize;
+
+    // -- return the coroutine stack to the kernel --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the Generator pointer for stack release
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rax + {}]", stack_base)); // rdi = coroutine stack base (mmap start)
+    emitter.instruction("test rdi, rdi");                                       // does the Generator still own a mapped stack?
+    emitter.instruction("je __rt_object_free_deep_gen_no_stack");               // skip when the stack was already released
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rax + {}]", stack_size)); // rsi = mapped length for munmap
+    emitter.instruction("call __rt_fiber_free_stack");                          // munmap the coroutine stack
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the Generator pointer after the munmap
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", stack_base));   // null stack_base for double-free safety
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", stack_size));   // null stack_size to mirror the cleared base
+    emitter.label("__rt_object_free_deep_gen_no_stack");
+
+    // -- release the boxed transfer value and any pending Throwable --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the Generator pointer before transfer cleanup
+    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", transfer));   // rax = boxed Mixed transfer_value
+    emitter.instruction("call __rt_decref_mixed");                              // release the transfer value if present
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the Generator pointer after transfer cleanup
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", transfer));     // clear transfer_value after releasing it
+    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", pending));    // rax = pending Throwable object, if any
+    emitter.instruction("call __rt_decref_any");                                // release a pending Throwable if still attached
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the Generator pointer after pending cleanup
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", pending));      // clear pending_throw after releasing it
+
+    // -- release the owned boxed start arguments forwarded into the body --
+    for i in 0..crate::codegen::runtime::FIBER_START_ARGS_MAX as usize {
+        emit_generator_mixed_field_release_x86_64(
+            emitter,
+            start_args + i * 8,
+            &format!("start_args[{}]", i),
+        );
+    }
+
+    // -- release the generator's persistent key/value/return cells --
+    emit_generator_mixed_field_release_x86_64(emitter, coro::GEN_LAST_KEY_OFFSET as usize, "last_key");
+    emit_generator_mixed_field_release_x86_64(emitter, coro::GEN_LAST_VALUE_OFFSET as usize, "last_value");
+    emit_generator_mixed_field_release_x86_64(emitter, coro::GEN_RETURN_VALUE_OFFSET as usize, "return_value");
 }

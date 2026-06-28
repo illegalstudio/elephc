@@ -49,3 +49,23 @@ echo " ";
 $r->next();
 echo $r->getReturn();
 echo "\n";
+
+// Generator::throw() raises the exception at the suspended `yield`, so a
+// try/catch *inside* the generator body handles it and execution resumes.
+function worker() {
+    while (true) {
+        try {
+            $job = yield "ready";
+            echo "did:" . $job . " ";
+        } catch (Exception $e) {
+            echo "recovered:" . $e->getMessage() . " ";
+        }
+    }
+}
+
+$w = worker();
+echo $w->current();                          // ready
+echo " ";
+echo $w->send("a");                          // did:a ready
+echo $w->throw(new Exception("oops"));       // recovered:oops ready
+echo "\n";

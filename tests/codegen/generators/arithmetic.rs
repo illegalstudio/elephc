@@ -13,15 +13,16 @@ use crate::support::*;
 
 /// Verifies that integer division in a yield expression is evaluated correctly.
 ///
-/// `$i / 2 * 2 == $i` is true exactly when `$i` is even (signed integer division
-/// truncates toward zero). The generator should emit only even numbers.
+/// `intdiv($i, 2) * 2 == $i` is true exactly when `$i` is even, so the generator
+/// emits only even numbers. (Plain `/` is float division in PHP — `$i / 2 * 2`
+/// always equals `$i` — so `intdiv` is used to exercise truncating division.)
 #[test]
 fn test_generator_int_division_in_yield_expr() {
     let out = compile_and_run(
         r#"<?php
 function gen(int $n) {
     for ($i = 0; $i < $n; $i++) {
-        if ($i == $i / 2 * 2) {
+        if ($i == intdiv($i, 2) * 2) {
             yield $i;
         }
     }
@@ -182,10 +183,12 @@ foreach (gen() as $v) {
     assert_eq!(out, "28");
 }
 
-/// Verifies that stack-passed parameters (beyond the 8-register ABI limit) are preserved in the generator frame.
+/// Verifies that a stack-passed integer parameter is preserved across the generator's lazy start.
 ///
-/// All 7 parameters cannot fit in registers; the 7th parameter (`$g`) is stack-passed.
-/// Verifies that both `$g` and `$a + $g` (mixing a register and stack argument) are correct after resume.
+/// On x86_64 SysV (6 integer arg registers) the 7th parameter `$g` is passed on the caller stack;
+/// the generator constructor must spill it from the caller stack into the boxed `start_args`, and
+/// the entry wrapper must forward it back through the call stack to the body. Mixing `$g` with a
+/// register-passed `$a` checks both paths line up.
 #[test]
 fn test_generator_stack_passed_parameter_survives_in_frame() {
     let out = compile_and_run(
@@ -201,6 +204,46 @@ foreach (gen(1, 2, 3, 4, 5, 6, 7) as $v) {
 "#,
     );
     assert_eq!(out, "7 8 ");
+}
+
+/// Verifies that a stack-passed string parameter keeps its pointer and length across the lazy start.
+///
+/// A string consumes two integer argument registers, so after five integer parameters fill
+/// rdi–r8 on x86_64 SysV the `string $s` no longer fits and is passed on the caller stack as a
+/// pointer/length pair. The constructor must spill both words and the entry wrapper must forward
+/// the pair back, so concatenating `$s` proves the secondary (length) word is not lost.
+#[test]
+fn test_generator_stack_passed_string_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function gen(int $a, int $b, int $c, int $d, int $e, string $s) {
+    yield $s . "!";
+    yield $a . $s;
+}
+foreach (gen(1, 2, 3, 4, 5, "hi") as $v) {
+    echo $v;
+    echo " ";
+}
+"#,
+    );
+    assert_eq!(out, "hi! 1hi ");
+}
+
+/// Verifies that a generator with more parameters than the coroutine's start-argument
+/// capacity is rejected with a clear diagnostic rather than silently corrupting adjacent
+/// fiber fields. Parameters are boxed into the fixed `FIBER_START_ARGS_MAX` (7) slots, so
+/// an 8th parameter has nowhere to live.
+#[test]
+#[should_panic(expected = "generators support at most 7")]
+fn test_generator_too_many_parameters_is_rejected() {
+    compile_and_run(
+        r#"<?php
+function gen(int $a, int $b, int $c, int $d, int $e, int $f, int $g, int $h) {
+    yield $h;
+}
+foreach (gen(1, 2, 3, 4, 5, 6, 7, 8) as $v) { echo $v; }
+"#,
+    );
 }
 
 /// Verifies that a user function call embedded in arithmetic is correctly evaluated within a yield expression.

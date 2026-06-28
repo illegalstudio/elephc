@@ -25,7 +25,7 @@ use crate::names::{
     static_method_symbol, static_property_symbol,
 };
 use crate::parser::ast::ExprKind;
-use crate::types::{EnumCaseInfo, EnumCaseValue, FunctionSig, PhpType};
+use crate::types::{EnumCaseInfo, EnumCaseValue, PhpType};
 
 use super::context::FunctionContext;
 use super::fibers;
@@ -160,7 +160,14 @@ fn emit_user_function(
 ) -> Result<()> {
     if function.flags.is_generator {
         let entry_label = user_function_entry_symbol(function);
-        return emit_generator_function(module, function, &entry_label, emitter, data);
+        return emit_generator_function(
+            module,
+            function,
+            &entry_label,
+            emitter,
+            data,
+            regalloc_linear,
+        );
     }
     let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
     let epilogue_label = user_function_epilogue_symbol(function);
@@ -213,7 +220,14 @@ fn emit_class_method(
 ) -> Result<()> {
     let entry_label = class_method_entry_symbol(function)?;
     if function.flags.is_generator {
-        return emit_generator_function(module, function, &entry_label, emitter, data);
+        return emit_generator_function(
+            module,
+            function,
+            &entry_label,
+            emitter,
+            data,
+            regalloc_linear,
+        );
     }
     let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
     let epilogue_label = format!("{}_epilogue", entry_label);
@@ -234,85 +248,418 @@ fn emit_class_method(
     Ok(())
 }
 
-/// Emits a generator wrapper/resume pair from source metadata carried by the EIR function.
+/// Emits a generator as a stackful coroutine: a constructor at the public entry
+/// label, the Mixed-returning body via the normal backend, and an arg-unboxing
+/// callback that the fiber entry trampoline runs on the coroutine stack.
+///
+/// The constructor (`entry_label`) allocates a Fiber-shaped Generator object via
+/// `__rt_fiber_construct`, stamping the Generator class id and the callback as
+/// the coroutine entry wrapper, then returns the object. The body
+/// (`<entry_label>__genbody`) is the generator's EIR function, which returns the
+/// value passed to `return` (read back by `getReturn`). The callback
+/// (`<entry_label>__gencb`) runs the body and parks its return value in the
+/// generator's `gen_return_value` slot.
 fn emit_generator_function(
     module: &Module,
     function: &Function,
     entry_label: &str,
     emitter: &mut Emitter,
     data: &mut DataSection,
+    regalloc_linear: bool,
 ) -> Result<()> {
-    let source = function.generator_source.as_ref().ok_or_else(|| {
-        CodegenIrError::invalid_module(format!(
-            "generator function '{}' is missing retained source metadata",
-            function.name
-        ))
-    })?;
-    let signature = generator_signature(function, source.visible_param_count);
-    let hidden_params = generator_hidden_params(function, source.visible_param_count);
-    crate::codegen::emit_generator_with_label(
-        emitter,
-        data,
-        entry_label,
-        &signature,
-        &hidden_params,
-        &source.body,
-        Some(&module.class_infos),
-    );
+    let body_label = format!("{}__genbody", entry_label);
+    let callback_label = format!("{}__gencb", entry_label);
+    let param_types = generator_param_types(function);
+    // Parameters (and closure captures, which arrive as call arguments) are boxed into the
+    // coroutine's fixed `start_args` slots; there are only `FIBER_START_ARGS_MAX` of them.
+    // Reject overflow with a clear diagnostic instead of silently writing past the slots into
+    // adjacent fiber fields.
+    let max_params = crate::codegen::runtime::FIBER_START_ARGS_MAX as usize;
+    if param_types.len() > max_params {
+        return Err(CodegenIrError::unsupported(format!(
+            "generator '{}' has {} parameters including closure captures; \
+             generators support at most {} because parameters are stored in the \
+             coroutine's start-argument slots",
+            function.name,
+            param_types.len(),
+            max_params
+        )));
+    }
+    emit_generator_constructor(emitter, entry_label, &callback_label, &param_types);
+    emit_generator_body(module, function, &body_label, emitter, data, regalloc_linear)?;
+    emit_generator_callback(emitter, &callback_label, &body_label, &param_types);
     Ok(())
 }
 
-/// Rebuilds the visible generator signature from EIR parameter metadata.
-fn generator_signature(function: &Function, visible_param_count: usize) -> FunctionSig {
-    FunctionSig {
-        params: function
-            .params
-            .iter()
-            .take(visible_param_count)
-            .map(|param| (param.name.clone(), param.php_type.clone()))
-            .collect(),
-        defaults: function
-            .params
-            .iter()
-            .take(visible_param_count)
-            .map(|_| None)
-            .collect(),
-        return_type: function.return_php_type.clone(),
-        declared_return: !matches!(function.return_php_type, PhpType::Mixed),
-        ref_params: function
-            .params
-            .iter()
-            .take(visible_param_count)
-            .map(|param| param.by_ref)
-            .collect(),
-        declared_params: function
-            .params
-            .iter()
-            .take(visible_param_count)
-            .map(|param| !matches!(param.php_type, PhpType::Mixed))
-            .collect(),
-        variadic: function
-            .params
-            .iter()
-            .take(visible_param_count)
-            .find(|param| param.variadic)
-            .map(|param| param.name.clone()),
-        deprecation: None,
-    }
-}
-
-/// Returns hidden generator parameters such as closure captures.
-fn generator_hidden_params(
-    function: &Function,
-    visible_param_count: usize,
-) -> Vec<(String, PhpType, bool)> {
+/// Returns the codegen representations of every value a generator's caller
+/// forwards into the coroutine in argument registers: the visible parameters
+/// plus any closure-capture parameters (closure captures are lowered as direct
+/// call arguments — `call $capture data[symbol]` — so they arrive in registers
+/// exactly like ordinary parameters). The constructor boxes each into the
+/// generator's `start_args` slots and the callback unboxes them back into the
+/// body's parameter registers.
+fn generator_param_types(function: &Function) -> Vec<PhpType> {
     function
         .params
         .iter()
-        .skip(visible_param_count)
-        .map(|param| (param.name.clone(), param.php_type.clone(), param.by_ref))
+        .map(|param| param.php_type.codegen_repr())
         .collect()
 }
+
+/// ABI placement category for a generator parameter as it crosses the
+/// box/unbox boundary between the constructor and the coroutine body.
+#[derive(Clone, Copy, PartialEq)]
+enum GenParamKind {
+    /// One integer/pointer register (int, bool, object, array, callable, ...).
+    IntLike,
+    /// One floating-point register.
+    Float,
+    /// Two integer registers: string pointer followed by length.
+    Str,
+    /// An already-boxed Mixed cell pointer forwarded as-is.
+    Mixed,
+}
+
+/// Classifies a parameter's codegen representation into a `GenParamKind`.
+fn gen_param_kind(ty: &PhpType) -> GenParamKind {
+    match ty {
+        PhpType::Float => GenParamKind::Float,
+        PhpType::Str => GenParamKind::Str,
+        PhpType::Mixed | PhpType::Union(_) => GenParamKind::Mixed,
+        _ => GenParamKind::IntLike,
+    }
+}
+
+/// Frame-pointer-relative byte offset of the slot caching the saved
+/// generator-object register. Frame slots use negative offsets from the frame
+/// pointer (`[x29,#-off]` / `[rbp-off]`); offset 0 aliases the saved frame
+/// pointer on x86_64, so the first usable slot starts at 16.
+const GEN_SAVE_OFF: usize = 16;
+
+/// Returns the frame-pointer-relative byte offset of the scratch slot for
+/// generator parameter `idx`. Each parameter reserves a contiguous 16-byte cell
+/// `[slot - 8, slot + 8)`: the primary value (pointer/scalar/float) sits at `slot`
+/// and the string length / tagged tag at `slot - 8`, matching the secondary-word
+/// convention of `emit_store_incoming_param` and the outgoing call helpers.
+fn gen_param_slot(idx: usize) -> usize {
+    32 + idx * 16
+}
+
+/// Computes the 16-byte-aligned frame size for the generator constructor/callback
+/// scratch frame holding `n` parameter slots (plus the saved generator-object
+/// slot and the 16-byte frame footer).
+fn gen_arg_frame_size(n: usize) -> usize {
+    let bytes = n * 16 + 48;
+    (bytes + 15) & !15
+}
+
+/// Emits the generator constructor at `entry_label`.
+///
+/// Allocates the Generator coroutine object (reusing `__rt_fiber_construct` with
+/// the Generator class id and `callback_label` as the coroutine entry wrapper),
+/// boxes each caller-visible parameter into the generator's `start_args` slots
+/// (so the values survive until the body lazily starts, owned by the generator),
+/// then returns the object.
+fn emit_generator_constructor(
+    emitter: &mut Emitter,
+    entry_label: &str,
+    callback_label: &str,
+    param_types: &[PhpType],
+) {
+    use crate::codegen::runtime::{FIBER_START_ARGS_OFFSET, FIBER_START_ARG_COUNT_OFFSET};
+    let target = emitter.target;
+    let n = param_types.len();
+    let frame_size = gen_arg_frame_size(n);
+    let gen_reg = abi::int_result_reg(emitter); // x0 / rax — also the construct result
+    let gen_cache = match target.arch {
+        Arch::AArch64 => "x19",
+        Arch::X86_64 => "r12",
+    };
+
+    emitter.blank();
+    emitter.comment(&format!("--- generator constructor {} ---", entry_label));
+    emitter.label_global(entry_label);
+    abi::emit_frame_prologue(emitter, frame_size);
+    abi::store_at_offset(emitter, gen_cache, GEN_SAVE_OFF); // preserve the caller's callee-saved generator-object cache register
+
+    // -- spill the incoming parameters into frame slots before __rt_fiber_construct clobbers them --
+    // `emit_store_incoming_param` consumes the argument registers in ABI order and falls back to the
+    // caller stack once the integer/float register budget is exhausted (e.g. a 7th integer parameter
+    // on x86_64 SysV), so stack-passed parameters survive instead of being dropped. The register reads
+    // must happen before the construct call; caller-stack reads are frame-pointer-relative and remain
+    // valid across it.
+    let mut cursor = abi::IncomingArgCursor::for_target(target, 0);
+    for (idx, ty) in param_types.iter().enumerate() {
+        abi::emit_store_incoming_param(emitter, &format!("arg{idx}"), ty, gen_param_slot(idx), false, &mut cursor);
+    }
+
+    // -- allocate the Generator coroutine object --
+    match target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #0");                                  // no callable descriptor — the wrapper runs the compiled body
+            abi::emit_load_symbol_to_reg(emitter, "x1", "_generator_class_id", 0); // x1 = runtime class id of Generator
+            abi::emit_symbol_address(emitter, "x2", callback_label);            // x2 = generator coroutine entry wrapper
+            emitter.instruction("bl __rt_fiber_construct");                     // x0 = freshly allocated Generator coroutine object
+            emitter.instruction("mov x19, x0");                                 // cache the generator object across the per-parameter boxing calls
+        }
+        Arch::X86_64 => {
+            emitter.instruction("xor edi, edi");                                // no callable descriptor — the wrapper runs the compiled body
+            abi::emit_load_symbol_to_reg(emitter, "rsi", "_generator_class_id", 0); // rsi = runtime class id of Generator
+            abi::emit_symbol_address(emitter, "rdx", callback_label);          // rdx = generator coroutine entry wrapper
+            emitter.instruction("call __rt_fiber_construct");                   // rax = freshly allocated Generator coroutine object
+            emitter.instruction("mov r12, rax");                                // cache the generator object across the per-parameter boxing calls
+        }
+    }
+
+    // -- box each spilled parameter into an owned Mixed cell stored in start_args --
+    for (idx, ty) in param_types.iter().enumerate() {
+        let slot = gen_param_slot(idx);
+        let store_off = FIBER_START_ARGS_OFFSET as usize + idx * 8;
+        match gen_param_kind(ty) {
+            GenParamKind::Mixed => {
+                abi::load_at_offset(emitter, gen_reg, slot);
+                match target.arch {
+                    Arch::AArch64 => emitter.instruction("bl __rt_incref"),     // own a reference to the forwarded Mixed cell
+                    Arch::X86_64 => emitter.instruction("call __rt_incref"),    // own a reference to the forwarded Mixed cell
+                }
+            }
+            GenParamKind::Float => {
+                let freg = match target.arch {
+                    Arch::AArch64 => "d0",
+                    Arch::X86_64 => "xmm0",
+                };
+                abi::load_at_offset(emitter, freg, slot);
+                crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Float);
+            }
+            GenParamKind::Str => match target.arch {
+                Arch::AArch64 => {
+                    abi::load_at_offset(emitter, "x1", slot);
+                    abi::load_at_offset(emitter, "x2", slot - 8);
+                    crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Str);
+                }
+                Arch::X86_64 => {
+                    abi::load_at_offset(emitter, "rax", slot);
+                    abi::load_at_offset(emitter, "rdx", slot - 8);
+                    crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Str);
+                }
+            },
+            GenParamKind::IntLike => {
+                abi::load_at_offset(emitter, gen_reg, slot);
+                crate::codegen::emit_box_current_value_as_mixed(emitter, ty);
+            }
+        }
+        match target.arch {
+            Arch::AArch64 => emitter
+                .instruction(&format!("str {}, [x19, #{}]", gen_reg, store_off)), // store the owned Mixed cell into the generator start_args slot
+            Arch::X86_64 => emitter.instruction(&format!(
+                "mov QWORD PTR [r12 + {}], {}",
+                store_off, gen_reg
+            )), // store the owned Mixed cell into the generator start_args slot
+        }
+    }
+
+    // -- publish the forwarded argument count and return the Generator object --
+    match target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x9, #{}", n));                    // number of boxed start arguments forwarded to the body
+            emitter.instruction(&format!("str x9, [x19, #{}]", FIBER_START_ARG_COUNT_OFFSET)); // publish the start argument count
+            emitter.instruction("mov x0, x19");                                 // return the Generator object to the caller
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!(
+                "mov QWORD PTR [r12 + {}], {}",
+                FIBER_START_ARG_COUNT_OFFSET, n
+            )); // publish the start argument count
+            emitter.instruction("mov rax, r12");                                // return the Generator object to the caller
+        }
+    }
+    abi::load_at_offset(emitter, gen_cache, GEN_SAVE_OFF); // restore the caller's callee-saved generator-object cache register
+    abi::emit_frame_restore(emitter, frame_size);
+    abi::emit_return(emitter);
+}
+
+/// Emits the generator body as a normal EIR function at `body_label`.
+///
+/// The body is the generator's EIR function, lowered with a Mixed return type so
+/// `return $x` produces the value read back by `getReturn`. It runs on the
+/// coroutine stack and reaches `__rt_gen_suspend` at each `yield`.
+fn emit_generator_body(
+    module: &Module,
+    function: &Function,
+    body_label: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    regalloc_linear: bool,
+) -> Result<()> {
+    let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
+    let epilogue_label = format!("{}_epilogue", body_label);
+    let mut ctx = FunctionContext::new(
+        module,
+        function,
+        emitter,
+        data,
+        layout,
+        false,
+        false,
+        false,
+        Some(epilogue_label),
+    );
+    frame::emit_function_prologue_with_label(&mut ctx, body_label)?;
+    emit_blocks(&mut ctx)?;
+    frame::emit_function_epilogue(&mut ctx);
+    Ok(())
+}
+
+/// Emits the generator coroutine entry wrapper at `callback_label`.
+///
+/// The fiber entry trampoline calls this wrapper on the coroutine stack with the
+/// Generator object in the first argument register. The wrapper unboxes the
+/// generator's `start_args` cells back into the body's parameter registers, runs
+/// the body, stores the body's boxed return value into the generator's
+/// `gen_return_value` slot, then returns null so the fiber transfer value does
+/// not alias the parked return value.
+fn emit_generator_callback(
+    emitter: &mut Emitter,
+    callback_label: &str,
+    body_label: &str,
+    param_types: &[PhpType],
+) {
+    use crate::codegen::runtime::generators::coro::GEN_RETURN_VALUE_OFFSET;
+    use crate::codegen::runtime::FIBER_START_ARGS_OFFSET;
+    let target = emitter.target;
+    let n = param_types.len();
+    let frame_size = gen_arg_frame_size(n);
+    let gen_cache = match target.arch {
+        Arch::AArch64 => "x19",
+        Arch::X86_64 => "r12",
+    };
+    let result_reg = abi::int_result_reg(emitter); // x0 / rax
+    let assignments = abi::build_outgoing_arg_assignments_for_target(target, param_types, 0);
+
+    emitter.blank();
+    emitter.comment(&format!("--- generator entry wrapper {} ---", callback_label));
+    emitter.label_global(callback_label);
+    abi::emit_frame_prologue(emitter, frame_size);
+    abi::store_at_offset(emitter, gen_cache, GEN_SAVE_OFF); // preserve the caller's callee-saved generator-object cache register
+    match target.arch {
+        Arch::AArch64 => emitter.instruction("mov x19, x0"),                    // x19 = Generator object passed by __rt_fiber_entry
+        Arch::X86_64 => emitter.instruction("mov r12, rdi"),                    // r12 = Generator object passed by __rt_fiber_entry
+    };
+
+    // -- unbox each start_args cell into its scratch frame slot --
+    for (idx, ty) in param_types.iter().enumerate() {
+        let slot = gen_param_slot(idx);
+        let load_off = FIBER_START_ARGS_OFFSET as usize + idx * 8;
+        match target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("ldr x0, [x19, #{}]", load_off));  // load the boxed Mixed start argument
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", load_off)); // load the boxed Mixed start argument
+            }
+        }
+        if gen_param_kind(ty) == GenParamKind::Mixed {
+            abi::store_at_offset(emitter, result_reg, slot); // Mixed parameters keep their boxed cell pointer
+            continue;
+        }
+        match target.arch {
+            Arch::AArch64 => emitter.instruction("bl __rt_mixed_unbox"),        // x1 = primary payload, x2 = string length
+            Arch::X86_64 => emitter.instruction("call __rt_mixed_unbox"),       // rdi = primary payload, rdx = string length
+        }
+        match (gen_param_kind(ty), target.arch) {
+            (GenParamKind::Float, Arch::AArch64) => {
+                emitter.instruction("fmov d0, x1");                             // reinterpret the unboxed float payload bits
+                abi::store_at_offset(emitter, "d0", slot);
+            }
+            (GenParamKind::Float, Arch::X86_64) => {
+                emitter.instruction("movq xmm0, rdi");                          // reinterpret the unboxed float payload bits
+                abi::store_at_offset(emitter, "xmm0", slot);
+            }
+            (GenParamKind::Str, Arch::AArch64) => {
+                abi::store_at_offset(emitter, "x1", slot);
+                abi::store_at_offset(emitter, "x2", slot - 8);
+            }
+            (GenParamKind::Str, Arch::X86_64) => {
+                abi::store_at_offset(emitter, "rdi", slot);
+                abi::store_at_offset(emitter, "rdx", slot - 8);
+            }
+            (_, Arch::AArch64) => abi::store_at_offset(emitter, "x1", slot),
+            (_, Arch::X86_64) => abi::store_at_offset(emitter, "rdi", slot),
+        }
+    }
+
+    // -- forward the unboxed parameters to the body through the normal call ABI --
+    // Push each parameter onto the temporary call stack in source order, then let
+    // `materialize_outgoing_args` place them into argument registers and the caller-stack
+    // overflow area exactly as an ordinary call would. This routes parameters beyond the
+    // ABI register budget (e.g. a 7th integer parameter on x86_64 SysV) through the stack
+    // instead of dropping them.
+    for (idx, ty) in param_types.iter().enumerate() {
+        let slot = gen_param_slot(idx);
+        match gen_param_kind(ty) {
+            GenParamKind::Float => {
+                let freg = match target.arch {
+                    Arch::AArch64 => "d0",
+                    Arch::X86_64 => "xmm0",
+                };
+                abi::load_at_offset(emitter, freg, slot);
+                abi::emit_push_float_reg(emitter, freg);                        // stage the float parameter on the temporary call stack
+            }
+            GenParamKind::Str => {
+                let (lo, hi) = match target.arch {
+                    Arch::AArch64 => ("x9", "x10"),
+                    Arch::X86_64 => ("r10", "r11"),
+                };
+                abi::load_at_offset(emitter, lo, slot);
+                abi::load_at_offset(emitter, hi, slot - 8);
+                abi::emit_push_reg_pair(emitter, lo, hi);                       // stage the string pointer/length pair on the temporary call stack
+            }
+            GenParamKind::IntLike | GenParamKind::Mixed => {
+                let reg = match target.arch {
+                    Arch::AArch64 => "x9",
+                    Arch::X86_64 => "r10",
+                };
+                abi::load_at_offset(emitter, reg, slot);
+                abi::emit_push_reg(emitter, reg);                               // stage the scalar/pointer parameter on the temporary call stack
+            }
+        }
+    }
+    let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
+    // ARM64 keeps a 16-byte nested-call save slot below the outgoing stack arguments;
+    // x86_64 needs no such pad because the call instruction itself pushes the return address.
+    let call_pad = if overflow_bytes > 0 && target.arch == Arch::AArch64 {
+        16
+    } else {
+        0
+    };
+    abi::emit_reserve_temporary_stack(emitter, call_pad);
+
+    // -- run the body, park its return value, and yield a null fiber transfer value --
+    match target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("bl {}", body_label));                 // run the generator body to completion; x0 = boxed return value
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("call {}", body_label));               // run the generator body to completion; rax = boxed return value
+        }
+    }
+    abi::emit_release_temporary_stack(emitter, call_pad); // drop the ARM64 nested-call alignment pad
+    abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop any stack-passed parameters after the body returns
+    match target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("str x0, [x19, #{}]", GEN_RETURN_VALUE_OFFSET)); // park the body return value for getReturn()
+            emitter.instruction("mov x0, #0");                                  // hand the fiber transfer value a null so it does not alias the return
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rax", GEN_RETURN_VALUE_OFFSET)); // park the body return value for getReturn()
+            emitter.instruction("xor eax, eax");                                // hand the fiber transfer value a null so it does not alias the return
+        }
+    }
+    abi::load_at_offset(emitter, gen_cache, GEN_SAVE_OFF); // restore the caller's callee-saved generator-object cache register
+    abi::emit_frame_restore(emitter, frame_size);
+    abi::emit_return(emitter);
+}
+
 
 /// Returns the runtime metadata entry label for an EIR class-method function.
 fn class_method_entry_symbol(function: &Function) -> Result<String> {

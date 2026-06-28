@@ -145,7 +145,7 @@ pub(crate) use driver_support::{
     runtime_value_tag,
 };
 pub(crate) use expr::arrays::emit_array_value_type_stamp;
-pub(crate) use functions::{emit_fiber_wrapper, emit_generator_with_label};
+pub(crate) use functions::emit_fiber_wrapper;
 pub(crate) use sentinels::{NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL};
 pub use sentinels::{set_null_repr, NullRepr};
 #[allow(unused_imports)]
