@@ -426,7 +426,7 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_stream_bucket_push_result(name, *brigade, *bucket, values)?
         }
-        "stream_select" => eval_stream_select_result(evaluated_args, values)?,
+        "stream_select" => eval_stream_select_result(evaluated_args, context, values)?,
         "stream_socket_server" => {
             let [address] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);

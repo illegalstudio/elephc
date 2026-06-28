@@ -31,6 +31,7 @@ mod builtins_stream_contexts;
 mod builtins_stream_extensions;
 mod builtins_stream_settings;
 mod builtins_stream_sockets;
+mod builtins_stream_wrapper_cast;
 mod builtins_stream_wrapper_directories;
 mod builtins_stream_wrapper_file_io;
 mod builtins_stream_wrapper_metadata;

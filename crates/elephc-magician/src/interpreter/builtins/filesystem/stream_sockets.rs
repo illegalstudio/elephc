@@ -328,21 +328,65 @@ pub(in crate::interpreter) fn eval_builtin_stream_select(
     if !(4..=5).contains(&args.len()) {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let mut evaluated_args = Vec::with_capacity(args.len());
     for arg in args {
-        let _ = eval_expr(arg, context, scope, values)?;
+        evaluated_args.push(eval_expr(arg, context, scope, values)?);
     }
-    values.int(0)
+    eval_stream_select_result(&evaluated_args, context, values)
 }
 
 /// Evaluates materialized `stream_select(...)` arguments.
 pub(in crate::interpreter) fn eval_stream_select_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !(4..=5).contains(&evaluated_args.len()) {
         return Err(EvalStatus::RuntimeFatal);
     }
+    for array in evaluated_args.iter().take(3) {
+        eval_stream_select_cast_array(*array, context, values)?;
+    }
     values.int(0)
+}
+
+/// Invokes `stream_cast(STREAM_CAST_FOR_SELECT)` for wrapper resources in an array.
+fn eval_stream_select_cast_array(
+    array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !values.is_array_like(array)? {
+        return Ok(());
+    }
+    let len = values.array_len(array)?;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, key)?;
+        eval_stream_select_cast_value(value, context, values)?;
+    }
+    Ok(())
+}
+
+/// Invokes `stream_cast()` for one userspace-wrapper stream resource value.
+fn eval_stream_select_cast_value(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_RESOURCE {
+        return Ok(());
+    }
+    let display_id = eval_int_value(value, values)?;
+    let Some(id) = display_id.checked_sub(1) else {
+        return Ok(());
+    };
+    let Some(result) =
+        eval_user_wrapper_stream_cast_result(id, EVAL_STREAM_CAST_FOR_SELECT, context, values)?
+    else {
+        return Ok(());
+    };
+    values.release(result)
 }
 
 /// Converts a runtime resource cell into eval's zero-based socket id.
