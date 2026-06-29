@@ -66,6 +66,10 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "is_a" | "is_subclass_of" => optional(params, 2),
 
         "count" => optional(params, 1),
+        "getdate" | "hrtime" => optional(params, 0),
+        "header" => optional(params, 1),
+        "http_response_code" => optional(params, 0),
+        "localtime" => optional(params, 0),
         "microtime" | "php_uname" | "readline" | "umask" | "exit" | "die" => {
             optional(params, 0)
         }
@@ -106,7 +110,7 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "array_walk" | "usort" | "uksort" | "uasort" => fixed_by_ref(params, &["array"]),
         "call_user_func" => variadic(params, &[]),
 
-        "log" | "round" | "date" | "nl2br" => optional(params, 1),
+        "log" | "round" | "date" | "gmdate" | "nl2br" => optional(params, 1),
         "min" | "max" => variadic(params, &[]),
         "json_encode" | "json_decode" | "json_validate" => optional(params, 1),
 
@@ -165,6 +169,13 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("is_subclass_of", 2) => Bool(true),
 
         ("count", 1) => Int(0),
+        ("getdate", 0) => Null,
+        ("header", 1) => Bool(true),
+        ("header", 2) => Int(0),
+        ("hrtime", 0) => Bool(false),
+        ("http_response_code", 0) => Int(0),
+        ("localtime", 0) => Null,
+        ("localtime", 1) => Bool(false),
         ("microtime", 0) => Bool(false),
         ("php_uname", 0) => String("a"),
         ("readline" | "umask", 0) => Null,
@@ -205,7 +216,7 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
 
         ("log", 1) => Float(std::f64::consts::E),
         ("round", 1) => Int(0),
-        ("date", 1) => Null,
+        ("date" | "gmdate", 1) => Null,
         ("nl2br", 1) => Bool(true),
         ("json_encode", 1) => Int(0),
         ("json_encode", 2) => Int(512),

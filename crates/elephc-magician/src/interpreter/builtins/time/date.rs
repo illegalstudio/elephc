@@ -11,9 +11,19 @@
 use super::super::super::*;
 use super::super::*;
 use super::*;
+use std::os::unix::ffi::OsStrExt;
+use std::sync::Mutex;
+
+static EVAL_TZ_MUTEX: Mutex<()> = Mutex::new(());
+
+unsafe extern "C" {
+    /// Re-reads libc's process-global timezone environment.
+    fn tzset();
+}
 
 /// Evaluates PHP `date($format, $timestamp = time())` for the eval subset.
-pub(in crate::interpreter) fn eval_builtin_date(
+pub(in crate::interpreter) fn eval_builtin_date_like(
+    name: &str,
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
@@ -22,12 +32,12 @@ pub(in crate::interpreter) fn eval_builtin_date(
     match args {
         [format] => {
             let format = eval_expr(format, context, scope, values)?;
-            eval_date_result(format, None, values)
+            eval_date_result(name, format, None, context, values)
         }
         [format, timestamp] => {
             let format = eval_expr(format, context, scope, values)?;
             let timestamp = eval_expr(timestamp, context, scope, values)?;
-            eval_date_result(format, Some(timestamp), values)
+            eval_date_result(name, format, Some(timestamp), context, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -35,21 +45,36 @@ pub(in crate::interpreter) fn eval_builtin_date(
 
 /// Formats one Unix timestamp through PHP `date()` token rules supported by elephc.
 pub(in crate::interpreter) fn eval_date_result(
+    name: &str,
     format: RuntimeCellHandle,
     timestamp: Option<RuntimeCellHandle>,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let format = values.string_bytes(format)?;
     let timestamp = match timestamp {
-        Some(timestamp) => eval_int_value(timestamp, values)?,
+        Some(timestamp) if !values.is_null(timestamp)? => eval_int_value(timestamp, values)?,
         None => eval_current_unix_timestamp()?,
+        Some(_) => eval_current_unix_timestamp()?,
     };
-    let tm = eval_localtime(timestamp)?;
+    let tm = match name {
+        "date" => eval_context_localtime(timestamp, context)?,
+        "gmdate" => eval_gmtime(timestamp)?,
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    };
     let output = eval_format_date_bytes(&format, &tm, timestamp)?;
     values.string_bytes_value(&output)
 }
 
-/// Converts one Unix timestamp to local broken-down time through libc.
+/// Converts one Unix timestamp to eval-timezone broken-down time through libc.
+pub(in crate::interpreter) fn eval_context_localtime(
+    timestamp: i64,
+    context: &ElephcEvalContext,
+) -> Result<libc::tm, EvalStatus> {
+    eval_with_timezone(context.default_timezone(), || eval_localtime(timestamp))
+}
+
+/// Converts one Unix timestamp to process-local broken-down time through libc.
 pub(in crate::interpreter) fn eval_localtime(timestamp: i64) -> Result<libc::tm, EvalStatus> {
     let raw: libc::time_t = timestamp.try_into().map_err(|_| EvalStatus::RuntimeFatal)?;
     let mut tm = MaybeUninit::<libc::tm>::uninit();
@@ -58,6 +83,61 @@ pub(in crate::interpreter) fn eval_localtime(timestamp: i64) -> Result<libc::tm,
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(unsafe { tm.assume_init() })
+}
+
+/// Converts one Unix timestamp to UTC broken-down time through libc.
+pub(in crate::interpreter) fn eval_gmtime(timestamp: i64) -> Result<libc::tm, EvalStatus> {
+    let raw: libc::time_t = timestamp.try_into().map_err(|_| EvalStatus::RuntimeFatal)?;
+    let mut tm = MaybeUninit::<libc::tm>::uninit();
+    let result = unsafe { libc::gmtime_r(&raw, tm.as_mut_ptr()) };
+    if result.is_null() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(unsafe { tm.assume_init() })
+}
+
+/// Runs one libc timezone-sensitive operation under the eval context timezone.
+pub(in crate::interpreter) fn eval_with_timezone<T>(
+    timezone: &str,
+    operation: impl FnOnce() -> Result<T, EvalStatus>,
+) -> Result<T, EvalStatus> {
+    let _guard = EVAL_TZ_MUTEX
+        .lock()
+        .map_err(|_| EvalStatus::RuntimeFatal)?;
+    let previous = std::env::var_os("TZ")
+        .map(|value| CString::new(value.as_bytes()).map_err(|_| EvalStatus::RuntimeFatal))
+        .transpose()?;
+    eval_apply_process_timezone(timezone)?;
+    let result = operation();
+    eval_restore_process_timezone(previous.as_ref())?;
+    result
+}
+
+/// Applies one timezone identifier to libc's process-global timezone state.
+fn eval_apply_process_timezone(timezone: &str) -> Result<(), EvalStatus> {
+    let key = CString::new("TZ").map_err(|_| EvalStatus::RuntimeFatal)?;
+    let value = CString::new(timezone).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let status = unsafe { libc::setenv(key.as_ptr(), value.as_ptr(), 1) };
+    if status != 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    unsafe { tzset() };
+    Ok(())
+}
+
+/// Restores the process timezone that was active before an eval-local conversion.
+fn eval_restore_process_timezone(previous: Option<&CString>) -> Result<(), EvalStatus> {
+    let key = CString::new("TZ").map_err(|_| EvalStatus::RuntimeFatal)?;
+    let status = if let Some(value) = previous {
+        unsafe { libc::setenv(key.as_ptr(), value.as_ptr(), 1) }
+    } else {
+        unsafe { libc::unsetenv(key.as_ptr()) }
+    };
+    if status != 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    unsafe { tzset() };
+    Ok(())
 }
 
 /// Applies PHP `date()` tokens to one local broken-down timestamp.

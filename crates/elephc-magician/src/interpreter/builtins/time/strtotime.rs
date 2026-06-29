@@ -22,21 +22,25 @@ pub(in crate::interpreter) fn eval_builtin_strtotime(
         return Err(EvalStatus::RuntimeFatal);
     };
     let datetime = eval_expr(datetime, context, scope, values)?;
-    eval_strtotime_result(datetime, values)
+    eval_strtotime_result(datetime, context, values)
 }
 
 /// Parses one eval `strtotime()` input and boxes the resulting timestamp.
 pub(in crate::interpreter) fn eval_strtotime_result(
     datetime: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let bytes = values.string_bytes(datetime)?;
-    let timestamp = eval_strtotime_bytes(&bytes)?;
+    let timestamp = eval_strtotime_bytes(&bytes, context)?;
     values.int(timestamp)
 }
 
 /// Parses eval's supported `strtotime()` strings into local Unix timestamps.
-pub(in crate::interpreter) fn eval_strtotime_bytes(bytes: &[u8]) -> Result<i64, EvalStatus> {
+pub(in crate::interpreter) fn eval_strtotime_bytes(
+    bytes: &[u8],
+    context: &ElephcEvalContext,
+) -> Result<i64, EvalStatus> {
     let bytes = eval_trim_ascii_whitespace(bytes);
     if bytes.eq_ignore_ascii_case(b"now") {
         return eval_current_unix_timestamp();
@@ -44,7 +48,7 @@ pub(in crate::interpreter) fn eval_strtotime_bytes(bytes: &[u8]) -> Result<i64, 
     let Some((year, month, day, hour, minute, second)) = eval_parse_iso_datetime(bytes) else {
         return Ok(-1);
     };
-    eval_mktime_timestamp(hour, minute, second, month, day, year)
+    eval_context_mktime_timestamp((hour, minute, second, month, day, year), context)
 }
 
 /// Trims ASCII whitespace from both ends of one byte slice.

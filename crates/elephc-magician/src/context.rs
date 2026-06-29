@@ -802,6 +802,8 @@ pub struct ElephcEvalContext {
     streams: EvalStreamResources,
     json_last_error: i64,
     json_last_error_msg: String,
+    default_timezone: String,
+    http_response_code: i64,
     call_file: String,
     call_dir: String,
     call_line: i64,
@@ -868,6 +870,8 @@ impl ElephcEvalContext {
             streams: EvalStreamResources::default(),
             json_last_error: 0,
             json_last_error_msg: String::from("No error"),
+            default_timezone: String::from("UTC"),
+            http_response_code: 200,
             call_file: String::new(),
             call_dir: String::new(),
             call_line: 0,
@@ -935,6 +939,8 @@ impl ElephcEvalContext {
             streams: EvalStreamResources::default(),
             json_last_error: 0,
             json_last_error_msg: String::from("No error"),
+            default_timezone: String::from("UTC"),
+            http_response_code: 200,
             call_file: String::new(),
             call_dir: String::new(),
             call_line: 0,
@@ -3686,6 +3692,30 @@ impl ElephcEvalContext {
     /// Returns the PHP message for the last eval JSON operation.
     pub fn json_last_error_msg(&self) -> &str {
         &self.json_last_error_msg
+    }
+
+    /// Returns the eval-local PHP default timezone identifier.
+    pub fn default_timezone(&self) -> &str {
+        &self.default_timezone
+    }
+
+    /// Replaces the eval-local PHP default timezone identifier.
+    pub fn set_default_timezone(&mut self, timezone: impl Into<String>) {
+        self.default_timezone = timezone.into();
+    }
+
+    /// Returns the eval-local HTTP response code used by web-facing builtins.
+    pub const fn http_response_code(&self) -> i64 {
+        self.http_response_code
+    }
+
+    /// Applies a new eval-local HTTP response code and returns the previous one.
+    pub fn replace_http_response_code(&mut self, response_code: i64) -> i64 {
+        let previous = self.http_response_code;
+        if response_code > 0 {
+            self.http_response_code = response_code;
+        }
+        previous
     }
 
     /// Updates the source file, directory, and line for the current eval call site.

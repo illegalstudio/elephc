@@ -9,6 +9,7 @@
 //! - Time conversion helpers stay scoped to the eval interpreter and use libc for
 //!   local calendar conversions where PHP behavior depends on host locale/timezone.
 
+mod calendar;
 mod clock;
 mod date;
 mod mktime;
@@ -16,6 +17,7 @@ mod sleep;
 mod strtotime;
 mod system;
 
+pub(in crate::interpreter) use calendar::*;
 pub(in crate::interpreter) use clock::*;
 pub(in crate::interpreter) use date::*;
 pub(in crate::interpreter) use mktime::*;

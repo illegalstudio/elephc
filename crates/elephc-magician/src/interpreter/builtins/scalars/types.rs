@@ -310,6 +310,10 @@ pub(in crate::interpreter) fn eval_type_predicate_result(
         "is_iterable" => eval_is_iterable_value(tag, value, context, values)?,
         "is_object" => tag == EVAL_TAG_OBJECT,
         "is_resource" => tag == EVAL_TAG_RESOURCE,
+        "is_scalar" => matches!(
+            tag,
+            EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_STRING | EVAL_TAG_BOOL
+        ),
         "is_nan" => eval_float_value(value, values)?.is_nan(),
         "is_infinite" => eval_float_value(value, values)?.is_infinite(),
         "is_finite" => eval_float_value(value, values)?.is_finite(),
