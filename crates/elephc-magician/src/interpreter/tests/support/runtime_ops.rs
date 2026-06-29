@@ -386,6 +386,13 @@ impl RuntimeValueOps for FakeOps {
     fn type_tag(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         self.runtime_type_tag(value)
     }
+    /// Creates a fake invoker-only by-reference marker.
+    fn invoker_ref_cell(
+        &mut self,
+        slot: *mut RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Ok(self.alloc(FakeValue::InvokerRefCell(slot as usize)))
+    }
     /// Returns the fake object handle as a stable object identity.
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         self.runtime_object_identity(object)

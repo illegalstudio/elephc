@@ -57,8 +57,9 @@ use constant_eval::*;
 use constants::*;
 pub use control::EvalOutcome;
 use control::{
-    BoundMethodArg, EvalArraySpliceDirectArgs, EvalControl, EvalPredefinedConstant,
-    EvalSprintfSpec, EvaluatedCallArg, EvaluatedCallable,
+    BoundMethodArg, BoundNativeFunctionArgs, BoundNativeFunctionRefSlot,
+    EvalArraySpliceDirectArgs, EvalControl, EvalPredefinedConstant, EvalSprintfSpec,
+    EvaluatedCallArg, EvaluatedCallable,
 };
 use core_builtins::*;
 use debug_output::*;

@@ -747,6 +747,14 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Ok(unsafe { __elephc_eval_value_type_tag(value.as_ptr()) })
     }
 
+    /// Creates an invoker-only by-reference marker for a staged Mixed slot.
+    fn invoker_ref_cell(
+        &mut self,
+        slot: *mut RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_invoker_ref_cell(slot) })
+    }
+
     /// Returns the unboxed object payload pointer for SPL object identity builtins.
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         let identity = unsafe { __elephc_eval_value_object_identity(object.as_ptr()) };

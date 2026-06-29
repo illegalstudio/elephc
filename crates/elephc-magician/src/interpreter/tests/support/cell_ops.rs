@@ -25,6 +25,7 @@ impl FakeOps {
             FakeValue::Assoc(_) => EVAL_TAG_ASSOC,
             FakeValue::Object(_) | FakeValue::Iterator { .. } => EVAL_TAG_OBJECT,
             FakeValue::Resource(_) => EVAL_TAG_RESOURCE,
+            FakeValue::InvokerRefCell(_) => 11,
             FakeValue::Null => EVAL_TAG_NULL,
         })
     }
@@ -85,6 +86,7 @@ impl FakeOps {
             FakeValue::Assoc(value) => !value.is_empty(),
             FakeValue::Object(_) | FakeValue::Iterator { .. } => true,
             FakeValue::Resource(_) => true,
+            FakeValue::InvokerRefCell(_) => true,
         })
     }
 }

@@ -43,6 +43,19 @@ pub(super) struct BoundMethodArg {
     pub(super) variadic_ref_targets: Vec<(RuntimeCellHandle, EvalReferenceTarget)>,
 }
 
+/// One native function argument list prepared for the descriptor invoker ABI.
+pub(super) struct BoundNativeFunctionArgs {
+    pub(super) values: Vec<RuntimeCellHandle>,
+    pub(super) ref_slots: Vec<BoundNativeFunctionRefSlot>,
+}
+
+/// One staged Mixed-slot reference passed to a native function invoker.
+pub(super) struct BoundNativeFunctionRefSlot {
+    pub(super) original: RuntimeCellHandle,
+    pub(super) slot: Box<RuntimeCellHandle>,
+    pub(super) target: EvalReferenceTarget,
+}
+
 /// One already evaluated PHP callback supported by the eval dispatcher.
 pub(super) enum EvaluatedCallable {
     Named(String),

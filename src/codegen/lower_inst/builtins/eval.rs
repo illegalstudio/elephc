@@ -2390,10 +2390,14 @@ fn function_has_eval_metadata(function: &Function) -> bool {
 
 /// Returns true when eval can dispatch a native function through the generated bridge.
 fn function_signature_can_bridge_with_eval(function: &Function) -> bool {
-    function
-        .params
-        .iter()
-        .all(|param| !param.by_ref)
+    function.params.iter().all(|param| {
+        !param.by_ref || eval_native_function_ref_param_supported(&param.php_type)
+    })
+}
+
+/// Returns true when a native function by-reference parameter can use a Mixed staging slot.
+fn eval_native_function_ref_param_supported(ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Mixed)
 }
 
 /// Returns true when eval can dispatch a native method through the generated bridge.

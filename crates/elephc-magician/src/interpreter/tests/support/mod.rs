@@ -46,6 +46,7 @@ pub(super) enum FakeValue {
     Object(Vec<(String, RuntimeCellHandle)>),
     Iterator { len: i64, position: i64 },
     Resource(i64),
+    InvokerRefCell(usize),
 }
 
 /// Test runtime hooks that allocate stable fake handles and record echo output.
