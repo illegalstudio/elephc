@@ -364,8 +364,11 @@ pub trait RuntimeValueOps {
         source_tag: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
-    /// Extracts the low raw payload word from a boxed scalar Mixed cell.
+    /// Extracts the low raw payload word from a boxed Mixed cell.
     fn raw_value_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus>;
+
+    /// Retains one raw heap payload word so a staged native by-ref slot owns it.
+    fn retain_raw_heap_word(&mut self, word: u64) -> Result<u64, EvalStatus>;
 
     /// Boxes one raw scalar payload word as a Mixed cell with the provided runtime tag.
     fn raw_word_value(
@@ -373,6 +376,12 @@ pub trait RuntimeValueOps {
         source_tag: u64,
         word: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Boxes one raw heap payload word as a Mixed cell after inspecting its heap kind.
+    fn raw_heap_word_value(&mut self, word: u64) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Releases one raw heap payload word owned by a staged native by-ref slot.
+    fn release_raw_heap_word(&mut self, word: u64) -> Result<(), EvalStatus>;
 
     /// Returns the unboxed object payload pointer used for PHP object identity.
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus>;

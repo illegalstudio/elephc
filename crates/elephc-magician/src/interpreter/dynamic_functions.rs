@@ -584,18 +584,38 @@ fn stage_native_function_invoker_args(
             continue;
         }
         let target = bound_arg.ref_target.ok_or(EvalStatus::RuntimeFatal)?;
-        if let Some(tag) = native_function_raw_word_ref_tag(function.param_type(param_index)) {
-            let original = values.raw_value_word(bound_arg.value)?;
-            let mut slot = Box::new(original);
-            let marker =
-                values.invoker_raw_ref_cell(slot.as_mut() as *mut u64 as *mut c_void, tag)?;
-            invoker_values.push(marker);
-            ref_slots.push(BoundNativeFunctionRefSlot::RawWord {
-                tag,
-                original,
-                slot,
-                target,
-            });
+        if let Some(raw_ref_kind) = native_function_raw_ref_kind(function.param_type(param_index)) {
+            match raw_ref_kind {
+                NativeFunctionRawRefKind::Scalar { tag } => {
+                    let original = values.raw_value_word(bound_arg.value)?;
+                    let mut slot = Box::new(original);
+                    let marker =
+                        values.invoker_raw_ref_cell(slot.as_mut() as *mut u64 as *mut c_void, tag)?;
+                    invoker_values.push(marker);
+                    ref_slots.push(BoundNativeFunctionRefSlot::RawWord {
+                        tag,
+                        original,
+                        slot,
+                        target,
+                    });
+                }
+                NativeFunctionRawRefKind::OwnedHeap => {
+                    let source_tag = values.type_tag(bound_arg.value)?;
+                    let original = values.raw_value_word(bound_arg.value)?;
+                    let retained = values.retain_raw_heap_word(original)?;
+                    let mut slot = Box::new(retained);
+                    let marker = values.invoker_raw_ref_cell(
+                        slot.as_mut() as *mut u64 as *mut c_void,
+                        source_tag,
+                    )?;
+                    invoker_values.push(marker);
+                    ref_slots.push(BoundNativeFunctionRefSlot::OwnedRawWord {
+                        original,
+                        slot,
+                        target,
+                    });
+                }
+            }
             continue;
         }
         let original = bound_arg.value;
@@ -614,8 +634,14 @@ fn stage_native_function_invoker_args(
     })
 }
 
-/// Returns the runtime tag for a by-reference parameter that can use one raw word.
-fn native_function_raw_word_ref_tag(param_type: Option<&EvalParameterType>) -> Option<u64> {
+/// Describes a native function by-reference parameter that can use one raw word.
+enum NativeFunctionRawRefKind {
+    Scalar { tag: u64 },
+    OwnedHeap,
+}
+
+/// Returns the raw-slot strategy for a by-reference parameter that can use one raw word.
+fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Option<NativeFunctionRawRefKind> {
     let param_type = param_type?;
     if param_type.allows_null()
         || param_type.is_intersection()
@@ -624,9 +650,15 @@ fn native_function_raw_word_ref_tag(param_type: Option<&EvalParameterType>) -> O
         return None;
     }
     match param_type.variants().first()? {
-        EvalParameterTypeVariant::Bool => Some(EVAL_TAG_BOOL),
-        EvalParameterTypeVariant::Float => Some(EVAL_TAG_FLOAT),
-        EvalParameterTypeVariant::Int => Some(EVAL_TAG_INT),
+        EvalParameterTypeVariant::Array
+        | EvalParameterTypeVariant::Class(_)
+        | EvalParameterTypeVariant::Iterable
+        | EvalParameterTypeVariant::Object => Some(NativeFunctionRawRefKind::OwnedHeap),
+        EvalParameterTypeVariant::Bool => Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_BOOL }),
+        EvalParameterTypeVariant::Float => {
+            Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_FLOAT })
+        }
+        EvalParameterTypeVariant::Int => Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_INT }),
         _ => None,
     }
 }
@@ -1708,6 +1740,27 @@ fn write_back_native_function_ref_args(
                     continue;
                 }
                 let value = values.raw_word_value(*tag, word)?;
+                eval_write_direct_ref_target(
+                    target,
+                    value,
+                    context,
+                    values,
+                    Some(ScopeCellOwnership::Owned),
+                )?;
+            }
+            BoundNativeFunctionRefSlot::OwnedRawWord {
+                original,
+                slot,
+                target,
+            } => {
+                let word = **slot;
+                if word == *original {
+                    values.release_raw_heap_word(word)?;
+                    continue;
+                }
+                let value = values.raw_heap_word_value(word);
+                values.release_raw_heap_word(word)?;
+                let value = value?;
                 eval_write_direct_ref_target(
                     target,
                     value,

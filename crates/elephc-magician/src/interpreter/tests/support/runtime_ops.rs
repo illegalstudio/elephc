@@ -401,14 +401,23 @@ impl RuntimeValueOps for FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Ok(self.alloc(FakeValue::InvokerRefCell(slot as usize)))
     }
-    /// Extracts one fake scalar payload word for raw by-reference staging.
+    /// Extracts one fake low payload word for raw by-reference staging.
     fn raw_value_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         Ok(match self.get(value) {
             FakeValue::Bool(value) => u64::from(value),
             FakeValue::Float(value) => value.to_bits(),
             FakeValue::Int(value) => value as u64,
+            FakeValue::Array(_)
+            | FakeValue::Assoc(_)
+            | FakeValue::Object(_)
+            | FakeValue::Iterator { .. } => value.as_ptr() as u64,
             _ => 0,
         })
+    }
+    /// Retains a fake raw heap word for native by-reference staging.
+    fn retain_raw_heap_word(&mut self, word: u64) -> Result<u64, EvalStatus> {
+        self.runtime_retain(RuntimeCellHandle::from_raw(word as *mut RuntimeCell))?;
+        Ok(word)
     }
     /// Boxes one fake scalar raw payload word with the provided runtime tag.
     fn raw_word_value(
@@ -422,6 +431,14 @@ impl RuntimeValueOps for FakeOps {
             EVAL_TAG_BOOL => self.runtime_bool_value(word != 0),
             _ => Err(EvalStatus::RuntimeFatal),
         }
+    }
+    /// Converts a fake raw heap word back to its stable fake handle.
+    fn raw_heap_word_value(&mut self, word: u64) -> Result<RuntimeCellHandle, EvalStatus> {
+        Ok(RuntimeCellHandle::from_raw(word as *mut RuntimeCell))
+    }
+    /// Records release of a fake raw heap word owned by a staged slot.
+    fn release_raw_heap_word(&mut self, word: u64) -> Result<(), EvalStatus> {
+        self.runtime_release(RuntimeCellHandle::from_raw(word as *mut RuntimeCell))
     }
     /// Returns the fake object handle as a stable object identity.
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {

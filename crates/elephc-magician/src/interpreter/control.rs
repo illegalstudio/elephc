@@ -62,6 +62,11 @@ pub(super) enum BoundNativeFunctionRefSlot {
         slot: Box<u64>,
         target: EvalReferenceTarget,
     },
+    OwnedRawWord {
+        original: u64,
+        slot: Box<u64>,
+        target: EvalReferenceTarget,
+    },
 }
 
 /// One already evaluated PHP callback supported by the eval dispatcher.

@@ -268,10 +268,13 @@ unsafe extern "C" {
         source_tag: u64,
     ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_raw_word(value: *mut RuntimeCell) -> u64;
+    pub(super) fn __elephc_eval_value_retain_raw_heap_word(word: u64) -> u64;
     pub(super) fn __elephc_eval_value_from_raw_word(
         source_tag: u64,
         word: u64,
     ) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_value_from_raw_heap_word(word: u64) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_value_release_raw_heap_word(word: u64);
     /// Returns the unboxed object payload pointer for object-tagged eval values.
     pub(super) fn __elephc_eval_value_object_identity(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_warning(message_ptr: *const u8, message_len: u64);

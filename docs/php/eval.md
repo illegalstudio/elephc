@@ -113,9 +113,11 @@ eval fragments. String keys in unpacked argument arrays bind as named
 parameters. Direct calls and variable-function calls can also invoke registered
 AOT global user functions when their by-reference parameters use generated
 `mixed`/union-style boxed storage or one-word scalar raw storage (`int`, `bool`,
-or `float`). Nullable scalar, string, array, iterable, object, and other
-raw-storage by-reference free-function parameters remain metadata-only until
-the function bridge has typed staging/writeback for those ABI layouts.
+or `float`) or one-word heap raw storage (`array`, `iterable`, and
+object/class parameters). Nullable scalar, string, native-only ABI layouts, and
+other multi-word or unsupported raw-storage by-reference free-function
+parameters remain metadata-only until the function bridge has typed
+staging/writeback for those ABI layouts.
 `call_user_func()` remains by-value for registered AOT free-function
 by-reference parameters.
 
@@ -535,12 +537,13 @@ generated/AOT free functions with positional variadic tails when the generated
 signature has no by-reference parameters. Direct and variable-function calls
 can additionally invoke generated/AOT free functions whose by-reference
 parameters use boxed Mixed/union storage or one-word scalar raw storage
-(`int`, `bool`, or `float`). Registered generated/AOT free-function parameter
+(`int`, `bool`, or `float`) or one-word heap raw storage (`array`, `iterable`,
+and object/class parameters). Registered generated/AOT free-function parameter
 names, declared types, return types, by-reference and variadic flags,
 required/optional counts, and supported defaults are also exposed through
 `ReflectionFunction` / `ReflectionParameter` metadata. Unsupported
 generated/AOT free-function bridge shapes, such as nullable tagged-scalar,
-string, array, iterable, object, native-only ABI layouts, and other raw-storage
+string, native-only ABI layouts, and other multi-word or unsupported raw-storage
 by-reference parameters, remain reflectable as metadata but are not invocable
 through eval. Supported callable-builtin invocation is
 covered by the general Reflection support documented in
@@ -916,8 +919,8 @@ Generated/AOT free-function and method type metadata, return metadata,
 by-reference and variadic parameter flags, and generated/AOT
 class/method/property/class-constant attributes are exposed for registered
 metadata slices, while unsupported native-only bridge shapes and raw-storage
-by-reference free-function bridge shapes beyond `int`, `bool`, and `float`
-remain metadata-only rather than invocable through eval.
+by-reference free-function bridge shapes beyond the current Mixed/scalar/one-word
+heap slice remain metadata-only rather than invocable through eval.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

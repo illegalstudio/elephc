@@ -784,9 +784,57 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #16");                                     // release the wrapper frame
     emitter.instruction("ret");                                                 // return the raw payload word
 
+    label_c_global(emitter, "__elephc_eval_value_retain_raw_heap_word");
+    emitter.instruction("sub sp, sp, #32");                                     // reserve a wrapper frame while retaining the raw heap word
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across incref
+    emitter.instruction("add x29, sp, #16");                                    // establish a stable frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the raw heap word for the C return value
+    emitter.instruction("bl __rt_incref");                                      // retain the heap payload for the staged by-ref slot
+    emitter.instruction("ldr x0, [sp, #0]");                                    // return the original raw heap word to Rust
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the retain wrapper frame
+    emitter.instruction("ret");                                                 // return the retained raw heap word
+
     label_c_global(emitter, "__elephc_eval_value_from_raw_word");
     emitter.instruction("mov x2, xzr");                                         // raw one-word scalar payloads have no high payload word
     emitter.instruction("b __rt_mixed_from_value");                             // box the raw scalar payload and return it to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_from_raw_heap_word");
+    emitter.instruction("cbz x0, __elephc_eval_value_from_raw_heap_word_miss"); // null raw heap words cannot be boxed
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap kind word for tag recovery
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind tag
+    emitter.instruction("cmp x9, #2");                                          // heap kind 2 stores indexed-array payloads
+    emitter.instruction("b.eq __elephc_eval_value_from_raw_heap_word_array");   // box indexed arrays with runtime tag 4
+    emitter.instruction("cmp x9, #3");                                          // heap kind 3 stores associative hash payloads
+    emitter.instruction("b.eq __elephc_eval_value_from_raw_heap_word_hash");    // box hashes with runtime tag 5
+    emitter.instruction("cmp x9, #4");                                          // heap kind 4 stores object payloads
+    emitter.instruction("b.eq __elephc_eval_value_from_raw_heap_word_object");  // box objects with runtime tag 6
+    emitter.instruction("cmp x9, #5");                                          // heap kind 5 stores boxed Mixed payloads
+    emitter.instruction("b.eq __elephc_eval_value_from_raw_heap_word_mixed");   // box nested Mixed cells with runtime tag 7
+    emitter.label("__elephc_eval_value_from_raw_heap_word_miss");
+    emitter.instruction("mov x0, xzr");                                         // report malformed raw heap words as a null Rust handle
+    emitter.instruction("ret");                                                 // return the failed boxing sentinel
+    emitter.label("__elephc_eval_value_from_raw_heap_word_array");
+    emitter.instruction("mov x1, x0");                                          // move the indexed-array payload into the boxing low word
+    emitter.instruction("mov x0, #4");                                          // runtime tag 4 = indexed array
+    emitter.instruction("b __elephc_eval_value_from_raw_heap_word_box");        // share the one-word heap boxing tail
+    emitter.label("__elephc_eval_value_from_raw_heap_word_hash");
+    emitter.instruction("mov x1, x0");                                          // move the hash payload into the boxing low word
+    emitter.instruction("mov x0, #5");                                          // runtime tag 5 = associative array
+    emitter.instruction("b __elephc_eval_value_from_raw_heap_word_box");        // share the one-word heap boxing tail
+    emitter.label("__elephc_eval_value_from_raw_heap_word_object");
+    emitter.instruction("mov x1, x0");                                          // move the object payload into the boxing low word
+    emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
+    emitter.instruction("b __elephc_eval_value_from_raw_heap_word_box");        // share the one-word heap boxing tail
+    emitter.label("__elephc_eval_value_from_raw_heap_word_mixed");
+    emitter.instruction("mov x1, x0");                                          // move the boxed Mixed payload into the boxing low word
+    emitter.instruction("mov x0, #7");                                          // runtime tag 7 = Mixed
+    emitter.label("__elephc_eval_value_from_raw_heap_word_box");
+    emitter.instruction("mov x2, xzr");                                         // one-word heap payloads do not use a high word
+    emitter.instruction("b __rt_mixed_from_value");                             // retain and box the raw heap payload for eval
+
+    label_c_global(emitter, "__elephc_eval_value_release_raw_heap_word");
+    emitter.instruction("b __rt_decref_any");                                   // release the staged raw heap slot owner
 
     label_c_global(emitter, "__elephc_eval_value_object_identity");
     emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while unboxing the object cell
@@ -2289,11 +2337,58 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the raw payload word
 
+    label_c_global(emitter, "__elephc_eval_value_retain_raw_heap_word");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer while retaining a raw heap word
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve space for the raw heap word return value
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the raw heap word across incref
+    emitter.instruction("mov rax, rdi");                                        // move the raw heap word into the runtime incref input register
+    emitter.instruction("call __rt_incref");                                    // retain the heap payload for the staged by-ref slot
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the original raw heap word to Rust
+    emitter.instruction("add rsp, 16");                                         // release the retain wrapper spill slot
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the retained raw heap word
+
     label_c_global(emitter, "__elephc_eval_value_from_raw_word");
     emitter.instruction("mov rax, rdi");                                        // move the runtime tag into the mixed boxing tag register
     emitter.instruction("mov rdi, rsi");                                        // move the raw scalar word into the low payload register
     emitter.instruction("xor esi, esi");                                        // raw one-word scalar payloads have no high payload word
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the raw scalar payload and return it to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_from_raw_heap_word");
+    emitter.instruction("test rdi, rdi");                                       // reject null raw heap words before reading their header
+    emitter.instruction("jz __elephc_eval_value_from_raw_heap_word_miss_x86");  // null raw heap words cannot be boxed
+    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load the uniform x86_64 heap kind word for tag recovery
+    emitter.instruction("and r10, 0xff");                                       // isolate the low-byte heap kind tag
+    emitter.instruction("cmp r10, 2");                                          // heap kind 2 stores indexed-array payloads
+    emitter.instruction("je __elephc_eval_value_from_raw_heap_word_array_x86"); // box indexed arrays with runtime tag 4
+    emitter.instruction("cmp r10, 3");                                          // heap kind 3 stores associative hash payloads
+    emitter.instruction("je __elephc_eval_value_from_raw_heap_word_hash_x86");  // box hashes with runtime tag 5
+    emitter.instruction("cmp r10, 4");                                          // heap kind 4 stores object payloads
+    emitter.instruction("je __elephc_eval_value_from_raw_heap_word_object_x86"); // box objects with runtime tag 6
+    emitter.instruction("cmp r10, 5");                                          // heap kind 5 stores boxed Mixed payloads
+    emitter.instruction("je __elephc_eval_value_from_raw_heap_word_mixed_x86"); // box nested Mixed cells with runtime tag 7
+    emitter.label("__elephc_eval_value_from_raw_heap_word_miss_x86");
+    emitter.instruction("xor eax, eax");                                        // report malformed raw heap words as a null Rust handle
+    emitter.instruction("ret");                                                 // return the failed boxing sentinel
+    emitter.label("__elephc_eval_value_from_raw_heap_word_array_x86");
+    emitter.instruction("mov rax, 4");                                          // runtime tag 4 = indexed array
+    emitter.instruction("jmp __elephc_eval_value_from_raw_heap_word_box_x86");  // share the one-word heap boxing tail
+    emitter.label("__elephc_eval_value_from_raw_heap_word_hash_x86");
+    emitter.instruction("mov rax, 5");                                          // runtime tag 5 = associative array
+    emitter.instruction("jmp __elephc_eval_value_from_raw_heap_word_box_x86");  // share the one-word heap boxing tail
+    emitter.label("__elephc_eval_value_from_raw_heap_word_object_x86");
+    emitter.instruction("mov rax, 6");                                          // runtime tag 6 = object
+    emitter.instruction("jmp __elephc_eval_value_from_raw_heap_word_box_x86");  // share the one-word heap boxing tail
+    emitter.label("__elephc_eval_value_from_raw_heap_word_mixed_x86");
+    emitter.instruction("mov rax, 7");                                          // runtime tag 7 = Mixed
+    emitter.label("__elephc_eval_value_from_raw_heap_word_box_x86");
+    emitter.instruction("xor esi, esi");                                        // one-word heap payloads do not use a high word
+    emitter.instruction("jmp __rt_mixed_from_value");                           // retain and box the raw heap payload for eval
+
+    label_c_global(emitter, "__elephc_eval_value_release_raw_heap_word");
+    emitter.instruction("mov rax, rdi");                                        // move the raw heap word into the runtime release input register
+    emitter.instruction("jmp __rt_decref_any");                                 // release the staged raw heap slot owner
 
     label_c_global(emitter, "__elephc_eval_value_object_identity");
     emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer

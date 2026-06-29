@@ -5320,6 +5320,50 @@ return $first . ":" . $i . ":" . ($b ? "T" : "F") . ":" . ($f == 3.0 ? "F3" : "b
     assert_eq!(out, "done:9:F:F3");
 }
 
+/// Verifies eval can dispatch AOT user functions with one-word heap by-reference params.
+#[test]
+fn test_eval_fragment_can_call_native_user_function_with_heap_by_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+class NativeEvalRefBox {
+    public string $name;
+
+    public function __construct(string $name) {
+        $this->name = $name;
+    }
+}
+
+function native_eval_ref_array_heap(array &$items): string {
+    $items = ["A", "B"];
+    return "array";
+}
+
+function native_eval_ref_iterable_heap(iterable &$items): string {
+    $items = ["left" => "L", "right" => "R"];
+    return "iter";
+}
+
+function native_eval_ref_object_heap(NativeEvalRefBox &$box): string {
+    $box = new NativeEvalRefBox($box->name . "!");
+    return $box->name;
+}
+
+echo eval('$items = [1];
+$first = native_eval_ref_array_heap($items);
+$fn = "native_eval_ref_array_heap";
+$fn($items);
+native_eval_ref_array_heap(items: $items);
+$iter = [0];
+$iterFirst = native_eval_ref_iterable_heap($iter);
+$box = new NativeEvalRefBox("start");
+$objectFirst = native_eval_ref_object_heap($box);
+native_eval_ref_object_heap(box: $box);
+return $first . ":" . $items[0] . ":" . $items[1] . ":" . $iterFirst . ":" . $iter["right"] . ":" . $objectFirst . ":" . $box->name;');
+"#,
+    );
+    assert_eq!(out, "array:A:B:iter:R:start!:start!!");
+}
+
 /// Verifies eval can dispatch generated/AOT variadic functions through the native bridge.
 #[test]
 fn test_eval_fragment_can_call_native_variadic_user_function() {

@@ -764,9 +764,14 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Self::handle(unsafe { __elephc_eval_value_invoker_raw_ref_cell(slot, source_tag) })
     }
 
-    /// Extracts the low raw payload word from a boxed scalar Mixed cell.
+    /// Extracts the low raw payload word from a boxed Mixed cell.
     fn raw_value_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         Ok(unsafe { __elephc_eval_value_raw_word(value.as_ptr()) })
+    }
+
+    /// Retains one raw heap payload word for owned native by-reference staging.
+    fn retain_raw_heap_word(&mut self, word: u64) -> Result<u64, EvalStatus> {
+        Ok(unsafe { __elephc_eval_value_retain_raw_heap_word(word) })
     }
 
     /// Boxes one raw scalar payload word as a Mixed cell with the provided runtime tag.
@@ -776,6 +781,19 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         word: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_from_raw_word(source_tag, word) })
+    }
+
+    /// Boxes one raw heap payload word as a Mixed cell using its runtime heap kind.
+    fn raw_heap_word_value(&mut self, word: u64) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_from_raw_heap_word(word) })
+    }
+
+    /// Releases one raw heap payload word owned by native by-reference staging.
+    fn release_raw_heap_word(&mut self, word: u64) -> Result<(), EvalStatus> {
+        unsafe {
+            __elephc_eval_value_release_raw_heap_word(word);
+        }
+        Ok(())
     }
 
     /// Returns the unboxed object payload pointer for SPL object identity builtins.
