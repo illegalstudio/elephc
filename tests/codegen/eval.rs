@@ -7107,6 +7107,17 @@ class EvalAotCallableRefBox {
         $value = $value + $delta;
         return $value;
     }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->offset + $delta;
+        return $value;
+    }
+}
+
+class EvalAotCallableRefDriver {
+    public static function run(callable $callback, int &$value, int $delta) {
+        return $callback($value, $delta);
+    }
 }
 
 echo eval('$box = new EvalAotCallableRefBox(5);
@@ -7118,7 +7129,20 @@ $staticValue = "3";
 echo $string($staticValue, 4) . ":" . gettype($staticValue) . ":" . $staticValue . "|";
 $first = EvalAotCallableRefBox::add(...);
 $next = "2";
-return $first($next, 6) . ":" . gettype($next) . ":" . $next;');
+echo $first($next, 6) . ":" . gettype($next) . ":" . $next . "|";
+$instanceFirst = $box->bump(...);
+$instanceValue = "4";
+echo $instanceFirst($instanceValue) . ":" . gettype($instanceValue) . ":" . $instanceValue . "|";
+$invokable = new EvalAotCallableRefBox(10);
+$invokableValue = "1";
+echo $invokable($invokableValue, 2) . ":" . gettype($invokableValue) . ":" . $invokableValue . "|";
+$invokableFirst = $invokable(...);
+$firstValue = "2";
+echo $invokableFirst($firstValue, 3) . ":" . gettype($firstValue) . ":" . $firstValue . "|";
+$bridge = new EvalAotCallableRefBox(20);
+$bridgeFirst = $bridge(...);
+$bridgeValue = "5";
+return EvalAotCallableRefDriver::run($bridgeFirst, $bridgeValue, 1) . ":" . gettype($bridgeValue) . ":" . $bridgeValue;');
 "#,
     );
     assert!(
@@ -7128,7 +7152,7 @@ return $first($next, 6) . ":" . gettype($next) . ":" . $next;');
     );
     assert_eq!(
         out.stdout,
-        "12:integer:12|7:integer:7|8:integer:8"
+        "12:integer:12|7:integer:7|8:integer:8|9:integer:9|13:integer:13|15:integer:15|26:integer:26"
     );
 }
 
@@ -7194,6 +7218,32 @@ $box = new EvalAotCallableArgBox($invokable);
 return $box->value . ":" .
     $box->apply($invokable) . ":" .
     EvalAotCallableArgBox::applyStatic($invokable);');
+echo ":";
+echo eval('$function = eval_aot_callable_arg_suffix(...);
+$box = new EvalAotCallableArgBox($function);
+return $box->value . ":" .
+    $box->apply($function) . ":" .
+    EvalAotCallableArgBox::applyStatic($function);');
+echo ":";
+echo eval('$static = EvalAotCallableArgTarget::suffix(...);
+$box = new EvalAotCallableArgBox($static);
+return $box->value . ":" .
+    $box->apply($static) . ":" .
+    EvalAotCallableArgBox::applyStatic($static);');
+echo ":";
+echo eval('$target = new EvalAotCallableArgTarget();
+$instance = $target->instanceSuffix(...);
+$box = new EvalAotCallableArgBox($instance);
+return $box->value . ":" .
+    $box->apply($instance) . ":" .
+    EvalAotCallableArgBox::applyStatic($instance);');
+echo ":";
+echo eval('$target = new EvalAotCallableArgTarget();
+$invokable = $target(...);
+$box = new EvalAotCallableArgBox($invokable);
+return $box->value . ":" .
+    $box->apply($invokable) . ":" .
+    EvalAotCallableArgBox::applyStatic($invokable);');
 "##,
     );
     assert!(
@@ -7201,7 +7251,10 @@ return $box->value . ":" .
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "C!:M!:S!:C?:M?:S?:C~:M~:S~:C#:M#:S#");
+    assert_eq!(
+        out.stdout,
+        "C!:M!:S!:C?:M?:S?:C~:M~:S~:C#:M#:S#:C!:M!:S!:C?:M?:S?:C~:M~:S~:C#:M#:S#"
+    );
 }
 
 /// Verifies eval static calls and static callables dispatch public AOT static methods.
