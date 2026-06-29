@@ -7313,6 +7313,65 @@ return EvalAotCallableRefDriver::run($bridgeFirst, $bridgeValue, 1) . ":" . gett
     );
 }
 
+/// Verifies eval `call_user_func_array()` preserves AOT callable by-reference writeback.
+#[test]
+fn test_eval_call_user_func_array_aot_callables_write_back_by_ref_args() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotCallArrayRefBox {
+    public int $offset = 0;
+
+    public function __construct(int $offset = 0) {
+        $this->offset = $offset;
+    }
+
+    public function bump(int &$value): int {
+        $value = $value + $this->offset;
+        return $value;
+    }
+
+    public static function add(int &$value, int $delta): int {
+        $value = $value + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->offset + $delta;
+        return $value;
+    }
+}
+
+echo eval('$box = new EvalAotCallArrayRefBox(5);
+$method = [$box, "bump"];
+$value = "7";
+echo call_user_func_array($method, [&$value]) . ":" . gettype($value) . ":" . $value . "|";
+$string = "EvalAotCallArrayRefBox::add";
+$staticValue = "3";
+echo call_user_func_array($string, [&$staticValue, 4]) . ":" . gettype($staticValue) . ":" . $staticValue . "|";
+$namedValue = "5";
+echo call_user_func_array($string, ["delta" => 2, "value" => &$namedValue]) . ":" . gettype($namedValue) . ":" . $namedValue . "|";
+$first = EvalAotCallArrayRefBox::add(...);
+$next = "2";
+echo call_user_func_array($first, [&$next, 6]) . ":" . gettype($next) . ":" . $next . "|";
+$invokable = new EvalAotCallArrayRefBox(10);
+$invokableValue = "1";
+echo call_user_func_array($invokable, [&$invokableValue, 2]) . ":" . gettype($invokableValue) . ":" . $invokableValue . "|";
+$invokableFirst = $invokable(...);
+$firstValue = "2";
+echo call_user_func_array($invokableFirst, [&$firstValue, 3]) . ":" . gettype($firstValue) . ":" . $firstValue;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "12:integer:12|7:integer:7|7:integer:7|8:integer:8|13:integer:13|15:integer:15"
+    );
+}
+
 /// Verifies eval can pass runtime PHP callbacks to generated/AOT callable-typed methods.
 #[test]
 fn test_eval_fragment_passes_callable_args_to_aot_methods() {

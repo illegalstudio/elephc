@@ -54,7 +54,13 @@ pub(in crate::interpreter) fn eval_call_arg_values(
             if !values.is_array_like(spread)? {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            append_unpacked_call_arg_values(spread, &mut evaluated_args, &mut saw_named, values)?;
+            append_unpacked_call_arg_values(
+                spread,
+                &mut evaluated_args,
+                &mut saw_named,
+                context,
+                values,
+            )?;
             continue;
         }
 
@@ -255,12 +261,19 @@ fn eval_static_property_call_arg_value(
 /// Converts a `call_user_func_array` argument array into ordered call arguments.
 pub(in crate::interpreter) fn eval_array_call_arg_values(
     arg_array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
     let len = values.array_len(arg_array)?;
     let mut evaluated_args = Vec::with_capacity(len);
     let mut saw_named = false;
-    append_unpacked_call_arg_values(arg_array, &mut evaluated_args, &mut saw_named, values)?;
+    append_unpacked_call_arg_values(
+        arg_array,
+        &mut evaluated_args,
+        &mut saw_named,
+        context,
+        values,
+    )?;
     Ok(evaluated_args)
 }
 
@@ -269,12 +282,15 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
     array: RuntimeCellHandle,
     evaluated_args: &mut Vec<EvaluatedCallArg>,
     saw_named: &mut bool,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let len = values.array_len(array)?;
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
+        let ref_target = eval_array_reference_key(key, values)?
+            .and_then(|key| context.array_element_alias(array, &key).cloned());
         match values.type_tag(key)? {
             EVAL_TAG_INT => {
                 if *saw_named {
@@ -283,7 +299,7 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
                 evaluated_args.push(EvaluatedCallArg {
                     name: None,
                     value,
-                    ref_target: None,
+                    ref_target,
                 });
             }
             EVAL_TAG_STRING => {
@@ -293,7 +309,7 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
                 evaluated_args.push(EvaluatedCallArg {
                     name: Some(name),
                     value,
-                    ref_target: None,
+                    ref_target,
                 });
             }
             _ => return Err(EvalStatus::RuntimeFatal),
@@ -1383,10 +1399,12 @@ fn eval_method_default_call_arg_is_supported(arg: &EvalCallArg) -> bool {
 fn eval_method_default_array_element_is_supported(element: &EvalArrayElement) -> bool {
     match element {
         EvalArrayElement::Value(value) => eval_method_default_expr_is_supported(value),
+        EvalArrayElement::Reference(_) => false,
         EvalArrayElement::KeyValue { key, value } => {
             eval_method_default_expr_is_supported(key)
                 && eval_method_default_expr_is_supported(value)
         }
+        EvalArrayElement::KeyReference { .. } => false,
     }
 }
 

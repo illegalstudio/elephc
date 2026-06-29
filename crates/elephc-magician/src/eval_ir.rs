@@ -2734,7 +2734,9 @@ impl EvalCallArg {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalArrayElement {
     Value(EvalExpr),
+    Reference(EvalExpr),
     KeyValue { key: EvalExpr, value: EvalExpr },
+    KeyReference { key: EvalExpr, value: EvalExpr },
 }
 
 /// One ordered arm in a PHP `match` expression parsed from an eval fragment.

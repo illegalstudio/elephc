@@ -34,8 +34,8 @@ mod statements;
 mod throwables;
 
 use crate::context::{
-    ElephcEvalContext, ElephcEvalExecutionScope, EvalReferenceTarget, NativeCallableDefault,
-    NativeCallableSignature, NativeFunction,
+    ElephcEvalContext, ElephcEvalExecutionScope, EvalArrayReferenceKey, EvalReferenceTarget,
+    NativeCallableDefault, NativeCallableSignature, NativeFunction,
 };
 use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir::{
@@ -204,7 +204,7 @@ pub fn execute_context_function_call_array_outcome(
     if !values.is_array_like(arg_array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let evaluated_args = eval_array_call_arg_values(arg_array, values)?;
+    let evaluated_args = eval_array_call_arg_values(arg_array, context, values)?;
     match eval_callable_with_call_array_args(name, evaluated_args, context, values) {
         Ok(result) => Ok(EvalOutcome::Value(result)),
         Err(EvalStatus::UncaughtThrowable) => context

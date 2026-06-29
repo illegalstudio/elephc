@@ -31,7 +31,7 @@ pub(in crate::interpreter) fn eval_builtin_iterator_apply(
             let callback = eval_expr(callback, context, scope, values)?;
             let callback = eval_callable(callback, context, values)?;
             let callback_args = eval_expr(callback_args, context, scope, values)?;
-            let callback_args = eval_iterator_apply_arg_values(callback_args, values)?;
+            let callback_args = eval_iterator_apply_arg_values(callback_args, context, values)?;
             eval_iterator_apply_result(iterator, &callback, callback_args, context, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
@@ -41,6 +41,7 @@ pub(in crate::interpreter) fn eval_builtin_iterator_apply(
 /// Converts the optional `iterator_apply()` callback-args value into call arguments.
 pub(in crate::interpreter) fn eval_iterator_apply_arg_values(
     args: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
     if values.is_null(args)? {
@@ -49,7 +50,7 @@ pub(in crate::interpreter) fn eval_iterator_apply_arg_values(
     if !values.is_array_like(args)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    eval_array_call_arg_values(args, values)
+    eval_array_call_arg_values(args, context, values)
 }
 
 /// Applies a callback to each valid position of an eval-supported Traversable object.

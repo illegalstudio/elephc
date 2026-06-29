@@ -651,6 +651,38 @@ return $value;"#,
     assert_eq!(values.get(result), FakeValue::Int(3));
 }
 
+/// Verifies `call_user_func_array()` preserves by-reference array elements for AOT methods.
+#[test]
+fn execute_program_call_user_func_array_runtime_method_writes_back_by_ref_type_coercion() {
+    let program = parse_fragment(
+        br#"$box = new KnownClass(10);
+$cb = [$box, "add2_x"];
+$value = "3";
+echo call_user_func_array($cb, [&$value, 2]);
+echo ":";
+return $value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut signature = NativeCallableSignature::new(2);
+    assert!(signature.set_param_name(0, "left"));
+    assert!(signature.set_param_name(1, "right"));
+    assert!(signature.set_param_type(
+        0,
+        EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false)
+    ));
+    assert!(signature.set_param_by_ref(0, true));
+    assert!(context.define_native_method_signature("KnownClass", "add2_x", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("call_user_func_array should preserve by-ref array element target");
+
+    assert_eq!(values.output, "15:");
+    assert_eq!(values.get(result), FakeValue::Int(3));
+}
+
 /// Verifies string and first-class AOT static callables preserve by-reference writeback.
 #[test]
 fn execute_program_static_runtime_callables_write_back_by_ref_type_coercion() {

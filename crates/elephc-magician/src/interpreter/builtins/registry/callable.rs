@@ -54,7 +54,7 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values(
     if !values.is_array_like(arg_array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let evaluated_args = eval_array_call_arg_values(arg_array, values)?;
+    let evaluated_args = eval_array_call_arg_values(arg_array, context, values)?;
     eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
 }
 

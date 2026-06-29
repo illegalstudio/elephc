@@ -9112,7 +9112,7 @@ fn eval_reflection_class_new_instance_result(
     let constructor_args = if method_name.eq_ignore_ascii_case("newInstance") {
         evaluated_args
     } else if method_name.eq_ignore_ascii_case("newInstanceArgs") {
-        eval_reflection_class_new_instance_args(evaluated_args, values)?
+        eval_reflection_class_new_instance_args(evaluated_args, context, values)?
     } else {
         return Ok(None);
     };
@@ -9169,10 +9169,11 @@ fn eval_reflection_class_new_instance_result(
 /// Expands the single `ReflectionClass::newInstanceArgs()` array argument.
 fn eval_reflection_class_new_instance_args(
     evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("args")], evaluated_args)?;
-    eval_array_call_arg_values(args[0], values)
+    eval_array_call_arg_values(args[0], context, values)
 }
 
 /// Runs ReflectionClass construction with only public constructor visibility.

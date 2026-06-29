@@ -57,6 +57,24 @@ fn parse_fragment_accepts_assoc_array_literal_source() {
         ])))]
     );
 }
+
+/// Verifies array literals preserve by-reference element syntax.
+#[test]
+fn parse_fragment_accepts_array_reference_elements_source() {
+    let program = parse_fragment(br#"return [&$value, "named" => &$other];"#)
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Array(vec![
+            EvalArrayElement::Reference(EvalExpr::LoadVar("value".to_string())),
+            EvalArrayElement::KeyReference {
+                key: EvalExpr::Const(EvalConst::String("named".to_string())),
+                value: EvalExpr::LoadVar("other".to_string()),
+            },
+        ])))]
+    );
+}
+
 /// Verifies indexed array writes parse as variable-target array set statements.
 #[test]
 fn parse_fragment_accepts_indexed_array_write_source() {

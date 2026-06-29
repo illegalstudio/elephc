@@ -22,7 +22,13 @@ pub(in crate::interpreter) fn eval_expr(
         EvalExpr::Array(elements) => {
             if elements
                 .iter()
-                .any(|element| matches!(element, EvalArrayElement::KeyValue { .. }))
+                .any(|element| {
+                    matches!(
+                        element,
+                        EvalArrayElement::KeyValue { .. }
+                            | EvalArrayElement::KeyReference { .. }
+                    )
+                })
             {
                 eval_assoc_array(elements, context, scope, values)
             } else {

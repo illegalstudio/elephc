@@ -275,6 +275,13 @@ pub enum EvalReferenceTarget {
     },
 }
 
+/// Normalized PHP array key used for eval-side reference metadata.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum EvalArrayReferenceKey {
+    Int(i64),
+    String(Vec<u8>),
+}
+
 /// Late-static dispatch metadata attached to eval-created static callable arrays.
 #[derive(Clone)]
 struct EvalStaticCallableMetadata {
@@ -782,6 +789,7 @@ pub struct ElephcEvalContext {
     dynamic_destructing_objects: HashSet<u64>,
     dynamic_destructed_objects: HashSet<u64>,
     dynamic_property_aliases: HashMap<(u64, String), EvalReferenceTarget>,
+    array_element_aliases: HashMap<(usize, EvalArrayReferenceKey), EvalReferenceTarget>,
     dynamic_initialized_properties: HashSet<(u64, String)>,
     eval_reflection_attributes: HashMap<u64, EvalReflectionAttributeMetadata>,
     eval_reflection_classes: HashMap<u64, String>,
@@ -850,6 +858,7 @@ impl ElephcEvalContext {
             dynamic_destructing_objects: HashSet::new(),
             dynamic_destructed_objects: HashSet::new(),
             dynamic_property_aliases: HashMap::new(),
+            array_element_aliases: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
@@ -919,6 +928,7 @@ impl ElephcEvalContext {
             dynamic_destructing_objects: HashSet::new(),
             dynamic_destructed_objects: HashSet::new(),
             dynamic_property_aliases: HashMap::new(),
+            array_element_aliases: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
@@ -1695,6 +1705,27 @@ impl ElephcEvalContext {
     ) -> Option<EvalReferenceTarget> {
         self.dynamic_property_aliases
             .remove(&(identity, storage_property_name.to_string()))
+    }
+
+    /// Binds one runtime array element slot to a PHP reference target.
+    pub fn bind_array_element_alias(
+        &mut self,
+        array: RuntimeCellHandle,
+        key: EvalArrayReferenceKey,
+        target: EvalReferenceTarget,
+    ) -> Option<EvalReferenceTarget> {
+        self.array_element_aliases
+            .insert((array.as_ptr() as usize, key), target)
+    }
+
+    /// Returns the persistent reference target bound to one runtime array element slot.
+    pub fn array_element_alias(
+        &self,
+        array: RuntimeCellHandle,
+        key: &EvalArrayReferenceKey,
+    ) -> Option<&EvalReferenceTarget> {
+        self.array_element_aliases
+            .get(&(array.as_ptr() as usize, key.clone()))
     }
 
     /// Marks one eval object storage slot as initialized.

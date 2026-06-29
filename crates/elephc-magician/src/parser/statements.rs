@@ -3529,10 +3529,12 @@ fn eval_call_arg_default_is_supported(arg: &EvalCallArg) -> bool {
 fn eval_array_element_default_is_supported(element: &EvalArrayElement) -> bool {
     match element {
         EvalArrayElement::Value(value) => eval_constant_expression_default_is_supported(value),
+        EvalArrayElement::Reference(_) => false,
         EvalArrayElement::KeyValue { key, value } => {
             eval_constant_expression_default_is_supported(key)
                 && eval_constant_expression_default_is_supported(value)
         }
+        EvalArrayElement::KeyReference { .. } => false,
     }
 }
 
@@ -3759,10 +3761,12 @@ fn eval_attribute_array_arg_from_elements(
         .iter()
         .map(|element| match element {
             EvalArrayElement::Value(value) => eval_attribute_arg_from_expr(value),
+            EvalArrayElement::Reference(_) => None,
             EvalArrayElement::KeyValue { key, value } => {
                 let value = eval_attribute_arg_from_expr(value)?;
                 eval_attribute_array_keyed_arg(key, value)
             }
+            EvalArrayElement::KeyReference { .. } => None,
         })
         .collect::<Option<Vec<_>>>()
         .map(EvalAttributeArg::Array)
@@ -4134,7 +4138,14 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
     match expr {
         EvalExpr::Array(elements) => elements.iter().any(|element| match element {
             EvalArrayElement::Value(value) => eval_expr_uses_this_property(value, property_name),
+            EvalArrayElement::Reference(value) => {
+                eval_expr_uses_this_property(value, property_name)
+            }
             EvalArrayElement::KeyValue { key, value } => {
+                eval_expr_uses_this_property(key, property_name)
+                    || eval_expr_uses_this_property(value, property_name)
+            }
+            EvalArrayElement::KeyReference { key, value } => {
                 eval_expr_uses_this_property(key, property_name)
                     || eval_expr_uses_this_property(value, property_name)
             }

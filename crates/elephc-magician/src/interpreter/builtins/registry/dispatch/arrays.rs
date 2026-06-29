@@ -237,7 +237,7 @@ pub(in crate::interpreter) fn eval_arrays_builtin_with_values(
             }
             [iterator, callback, args] => {
                 let callback = eval_callable(*callback, context, values)?;
-                let callback_args = eval_iterator_apply_arg_values(*args, values)?;
+                let callback_args = eval_iterator_apply_arg_values(*args, context, values)?;
                 eval_iterator_apply_result(*iterator, &callback, callback_args, context, values)?
             }
             _ => return Err(EvalStatus::RuntimeFatal),

@@ -1318,10 +1318,29 @@ impl Parser {
             return Ok(EvalExpr::Array(elements));
         }
         loop {
+            if self.consume(TokenKind::Ampersand) {
+                let value = self.parse_expr()?;
+                elements.push(EvalArrayElement::Reference(value));
+                if !self.consume(TokenKind::Comma) {
+                    break;
+                }
+                if self.consume(close.clone()) {
+                    return Ok(EvalExpr::Array(elements));
+                }
+                continue;
+            }
             let first = self.parse_expr()?;
             if self.consume(TokenKind::FatArrow) {
-                let value = self.parse_expr()?;
-                elements.push(EvalArrayElement::KeyValue { key: first, value });
+                if self.consume(TokenKind::Ampersand) {
+                    let value = self.parse_expr()?;
+                    elements.push(EvalArrayElement::KeyReference {
+                        key: first,
+                        value,
+                    });
+                } else {
+                    let value = self.parse_expr()?;
+                    elements.push(EvalArrayElement::KeyValue { key: first, value });
+                }
             } else {
                 elements.push(EvalArrayElement::Value(first));
             }
