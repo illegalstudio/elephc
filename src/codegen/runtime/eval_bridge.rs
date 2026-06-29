@@ -784,6 +784,40 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #16");                                     // release the wrapper frame
     emitter.instruction("ret");                                                 // return the raw payload word
 
+    label_c_global(emitter, "__elephc_eval_value_raw_high_word");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while unboxing the string cell
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across mixed_unbox
+    emitter.instruction("mov x29, sp");                                         // establish a frame pointer for the wrapper call
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the boxed payload words
+    emitter.instruction("mov x0, x2");                                          // return the high payload word to Rust
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore caller frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the wrapper frame
+    emitter.instruction("ret");                                                 // return the raw high payload word
+
+    label_c_global(emitter, "__elephc_eval_value_retain_raw_string");
+    emitter.instruction("sub sp, sp, #48");                                     // reserve a wrapper frame while persisting the raw string
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across str_persist
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable frame pointer
+    emitter.instruction("str x2, [sp, #0]");                                    // save the Rust out-len pointer across string persistence
+    emitter.instruction("mov x2, x1");                                          // move the raw string length into str_persist input
+    emitter.instruction("mov x1, x0");                                          // move the raw string pointer into str_persist input
+    emitter.instruction("bl __rt_str_persist");                                 // duplicate the string for staged by-ref ownership
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the Rust out-len pointer
+    emitter.instruction("str x2, [x9]");                                        // report the persisted string length to Rust
+    emitter.instruction("mov x0, x1");                                          // return the persisted string pointer to Rust
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the string retain wrapper frame
+    emitter.instruction("ret");                                                 // return the retained raw string pointer
+
+    label_c_global(emitter, "__elephc_eval_value_from_raw_string");
+    emitter.instruction("mov x2, x1");                                          // move the raw string length into the Mixed high word
+    emitter.instruction("mov x1, x0");                                          // move the raw string pointer into the Mixed low word
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("b __rt_mixed_from_value");                             // persist and box the raw string payload for eval
+
+    label_c_global(emitter, "__elephc_eval_value_release_raw_string");
+    emitter.instruction("b __rt_heap_free_safe");                               // release the staged raw string owner
+
     label_c_global(emitter, "__elephc_eval_value_retain_raw_heap_word");
     emitter.instruction("sub sp, sp, #32");                                     // reserve a wrapper frame while retaining the raw heap word
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across incref
@@ -2336,6 +2370,38 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // return the scalar low payload word to Rust
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the raw payload word
+
+    label_c_global(emitter, "__elephc_eval_value_raw_high_word");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("mov rax, rdi");                                        // move the boxed cell into mixed_unbox input
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the boxed payload words
+    emitter.instruction("mov rax, rsi");                                        // return the high payload word to Rust
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the raw high payload word
+
+    label_c_global(emitter, "__elephc_eval_value_retain_raw_string");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer while persisting a raw string
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve space for the Rust out-len pointer
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdx");                        // save the Rust out-len pointer across str_persist
+    emitter.instruction("mov rax, rdi");                                        // move the raw string pointer into str_persist input
+    emitter.instruction("mov rdx, rsi");                                        // move the raw string length into str_persist input
+    emitter.instruction("call __rt_str_persist");                               // duplicate the string for staged by-ref ownership
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the Rust out-len pointer
+    emitter.instruction("mov QWORD PTR [r10], rdx");                            // report the persisted string length to Rust
+    emitter.instruction("add rsp, 16");                                         // release the string retain wrapper spill slot
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the retained raw string pointer
+
+    label_c_global(emitter, "__elephc_eval_value_from_raw_string");
+    emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("mov rdx, rsi");                                        // move the raw string length into the Mixed high word
+    emitter.instruction("jmp __rt_mixed_from_value");                           // persist and box the raw string payload for eval
+
+    label_c_global(emitter, "__elephc_eval_value_release_raw_string");
+    emitter.instruction("mov rax, rdi");                                        // move the raw string pointer into the runtime release input register
+    emitter.instruction("jmp __rt_heap_free_safe");                             // release the staged raw string owner
 
     label_c_global(emitter, "__elephc_eval_value_retain_raw_heap_word");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer while retaining a raw heap word

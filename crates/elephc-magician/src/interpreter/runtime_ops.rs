@@ -367,6 +367,18 @@ pub trait RuntimeValueOps {
     /// Extracts the low raw payload word from a boxed Mixed cell.
     fn raw_value_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus>;
 
+    /// Extracts the high raw payload word from a boxed Mixed cell.
+    fn raw_value_high_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus>;
+
+    /// Duplicates one raw string payload so a staged native by-ref slot owns it.
+    fn retain_raw_string_words(&mut self, ptr: u64, len: u64) -> Result<(u64, u64), EvalStatus>;
+
+    /// Boxes one raw string payload as a Mixed string cell.
+    fn raw_string_value(&mut self, ptr: u64, len: u64) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Releases one raw string payload owned by a staged native by-ref slot.
+    fn release_raw_string_words(&mut self, ptr: u64, len: u64) -> Result<(), EvalStatus>;
+
     /// Retains one raw heap payload word so a staged native by-ref slot owns it.
     fn retain_raw_heap_word(&mut self, word: u64) -> Result<u64, EvalStatus>;
 
