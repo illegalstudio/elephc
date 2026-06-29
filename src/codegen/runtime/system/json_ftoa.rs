@@ -1,24 +1,25 @@
 //! Purpose:
-//! Emits the `__rt_json_ftoa` runtime helper: formats a finite double the way
-//! PHP's `json_encode` does, i.e. at `serialize_precision = -1` (the shortest
-//! decimal string that round-trips back to the same `double`), with JSON's
-//! exact layout — lowercase `e`, a `d.d` mantissa in exponential form, an
+//! Emits the `__rt_json_ftoa` runtime helper: formats a finite double at
+//! `serialize_precision = -1` (the shortest decimal string that round-trips
+//! back to the same `double`), with a `d.d` mantissa in exponential form, an
 //! exponent with no leading zeros, and NO trailing `.0` for integer-valued
-//! floats (`100`, not `100.0`).
+//! floats (`100`, not `100.0`). The exponent marker is a caller-supplied
+//! parameter: `'e'` (lowercase) for PHP's `json_encode` layout, `'E'`
+//! (uppercase) for PHP's `serialize`/`var_export` layout — the only byte that
+//! differs between the two formats (thresholds and digits are identical).
 //!
 //! Called from:
 //! - `crate::codegen::runtime::emitters::emit_runtime()` via
 //!   `crate::codegen::runtime::system`.
-//! - `__rt_json_encode_float` (same module group) replaces its former
-//!   `__rt_ftoa` (precision-14) calls with `__rt_json_ftoa` for the finite and
-//!   substituted-zero paths.
+//! - `__rt_json_encode_float` (same module group) passes `'e'` for the finite
+//!   and substituted-zero paths; `__rt_serialize` passes `'E'`.
 //!
 //! Key details:
 //! - The shortest precision is found by probing `snprintf("%.*e", p, x)` for
 //!   `p` in `[0, 16]` and stopping at the first `p` whose `strtod` re-parse
 //!   equals `x` (17 significant digits always round-trip, so `p = 16` is the
 //!   ceiling). This mirrors the tested `var_export` prelude formatter, minus
-//!   the `.0` suffix and using lowercase `e`.
+//!   the `.0` suffix and using the caller-supplied exponent marker.
 //! - The decimal exponent `E` is parsed from the `%e` scratch via `strtol`;
 //!   `decpt = E + 1` selects exponential layout when `decpt < -3 || decpt > 17`
 //!   (the same thresholds PHP/`zend_gcvt` use), otherwise a decimal layout is
@@ -33,10 +34,14 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::abi;
 
-/// Emits `__rt_json_ftoa`, the JSON shortest-round-trip float formatter.
+/// Emits `__rt_json_ftoa`, the shortest-round-trip float formatter shared by
+/// `json_encode` and `serialize`.
 ///
 /// Input: AArch64 `d0` / x86_64 `xmm0` = a finite double (Inf/NaN are excluded
-/// by the caller `__rt_json_encode_float`).
+/// by the caller `__rt_json_encode_float`); AArch64 `w0` / x86_64 `dil` = the
+/// ASCII exponent marker to emit in exponential form (`'e'` for json, `'E'`
+/// for serialize). The char is stashed on the stack and only consumed on the
+/// exponential path, so callers always pass it even for decimal-valued floats.
 /// Output: AArch64 `x1`/`x2`, x86_64 `rax`/`rdx` = pointer/length of the
 /// formatted slice inside `_concat_buf`, with `_concat_off` advanced past it.
 pub(crate) fn emit_json_ftoa(emitter: &mut Emitter) {
@@ -50,12 +55,13 @@ pub(crate) fn emit_json_ftoa(emitter: &mut Emitter) {
     emitter.label_global("__rt_json_ftoa");
 
     // -- set up stack frame (128 bytes) --
-    emitter.instruction("sub sp, sp, #128");                                    // variadic area, scratch, saved double, saved regs
+    emitter.instruction("sub sp, sp, #144");                                    // variadic area, scratch, saved double, saved regs, exp char
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish a new frame pointer
     emitter.instruction("stp x19, x20, [sp, #96]");                             // save callee-saved registers x19/x20
     emitter.instruction("str x21, [sp, #88]");                                  // save callee-saved register x21
     emitter.instruction("str d0, [sp, #80]");                                   // save the input double for re-formatting and compare
+    emitter.instruction("strb w0, [sp, #136]");                                 // stash exponent char param ('e' json / 'E' serialize)
 
     // -- probe for the shortest precision p in [0,16] that round-trips --
     emitter.instruction("mov x19, #0");                                         // p = 0 (precision passed to "%.*e")
@@ -161,7 +167,7 @@ pub(crate) fn emit_json_ftoa(emitter: &mut Emitter) {
     emitter.instruction("add x14, x14, #1");                                    // advance the fractional index
     emitter.instruction("b __rt_json_ftoa_exp_frac_loop");                      // copy the next fractional digit
     emitter.label("__rt_json_ftoa_exp_e");
-    emitter.instruction("mov w13, #101");                                       // ASCII 'e' (lowercase, json layout)
+    emitter.instruction("ldrb w13, [sp, #136]");                                // exponent char param ('e' json / 'E' serialize)
     emitter.instruction("strb w13, [x12], #1");                                 // emit the exponent marker
     emitter.instruction("cmp x21, #0");                                         // is the exponent negative?
     emitter.instruction("b.ge __rt_json_ftoa_exp_pos");                         // positive exponent uses '+'
@@ -202,7 +208,7 @@ pub(crate) fn emit_json_ftoa(emitter: &mut Emitter) {
     emitter.instruction("ldr x21, [sp, #88]");                                  // restore callee-saved register x21
     emitter.instruction("ldp x19, x20, [sp, #96]");                             // restore callee-saved registers x19/x20
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #128");                                    // release the stack frame
+    emitter.instruction("add sp, sp, #144");                                    // release the stack frame
     emitter.instruction("ret");                                                 // return result pointer (x1) and length (x2)
 }
 
@@ -214,7 +220,8 @@ pub(crate) fn emit_json_ftoa(emitter: &mut Emitter) {
 /// `_concat_buf`. Variadic calls use the SysV register convention (`rcx` =
 /// `*` precision, `xmm0` = double, `al` = 1).
 ///
-/// Input: `xmm0` = a finite double. Output: `rax`/`rdx` = pointer/length.
+/// Input: `xmm0` = a finite double, `dil` = the ASCII exponent marker.
+/// Output: `rax`/`rdx` = pointer/length.
 fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_ftoa (serialize_precision=-1 shortest round-trip) ---");
@@ -226,7 +233,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r12");                                            // save callee-saved r12 (sign flag)
     emitter.instruction("push r13");                                            // save callee-saved r13 (exponent)
     emitter.instruction("push r14");                                            // save callee-saved r14 (result start pointer)
-    emitter.instruction("sub rsp, 80");                                         // reserve scratch buffer and saved-double slot
+    emitter.instruction("sub rsp, 96");                                         // reserve scratch buffer, saved-double slot, exp char
+    emitter.instruction("mov DWORD PTR [rsp + 80], edi");                       // stash exponent char param ('e' json / 'E' serialize)
     emitter.instruction("movsd QWORD PTR [rsp + 64], xmm0");                    // save the input double for re-formatting and compare
     emitter.instruction("xor ebx, ebx");                                        // p = 0 (precision passed to "%.*e")
 
@@ -326,7 +334,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc rdi");                                             // advance the fractional index
     emitter.instruction("jmp __rt_json_ftoa_exp_frac_loop_x");                  // copy the next fractional digit
     emitter.label("__rt_json_ftoa_exp_e_x");
-    emitter.instruction("mov BYTE PTR [r10], 101");                             // emit 'e' (lowercase, json layout)
+    emitter.instruction("movzx eax, BYTE PTR [rsp + 80]");                      // exponent char param ('e' json / 'E' serialize)
+    emitter.instruction("mov BYTE PTR [r10], al");                              // emit the exponent marker
     emitter.instruction("inc r10");                                             // advance the cursor
     emitter.instruction("test r13, r13");                                       // is the exponent negative?
     emitter.instruction("jns __rt_json_ftoa_exp_pos_x");                        // non-negative exponent uses '+'
@@ -376,7 +385,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the new concat offset
 
     emitter.label("__rt_json_ftoa_done_x");
-    emitter.instruction("add rsp, 80");                                         // release the scratch frame
+    emitter.instruction("add rsp, 96");                                         // release the scratch frame
     emitter.instruction("pop r14");                                             // restore callee-saved r14
     emitter.instruction("pop r13");                                             // restore callee-saved r13
     emitter.instruction("pop r12");                                             // restore callee-saved r12

@@ -181,6 +181,40 @@ var_dump(is_nan(unserialize("d:NAN;")));
     assert_eq!(out, "d:INF;\nd:-INF;\nd:NAN;\nfloat(INF)\nbool(true)\n");
 }
 
+/// Regression: floats that serialize in exponential notation must use PHP's
+/// uppercase `'E'` exponent marker (`d:1.0E+20;`), matching `serialize`/
+/// `var_export` and distinct from `json_encode`'s lowercase `'e'`. Before the
+/// `__rt_json_ftoa` exponent-char parameter, the shared formatter emitted `'e'`
+/// here, breaking byte-for-byte PHP compatibility. Covers a positive and a
+/// negative mantissa, a negative exponent, and a three-digit exponent.
+#[test]
+fn test_serialize_exponential_floats_use_uppercase_e() {
+    let out = compile_and_run(
+        r#"<?php
+echo serialize(1e20), "\n";
+echo serialize(1.5e-10), "\n";
+echo serialize(-2.5e-8), "\n";
+echo serialize(1e100), "\n";
+"#,
+    );
+    assert_eq!(out, "d:1.0E+20;\nd:1.5E-10;\nd:-2.5E-8;\nd:1.0E+100;\n");
+}
+
+/// Regression: an exponential float round-trips through `unserialize` (libc
+/// `strtod` accepts the uppercase `E`) and re-`serialize` reproduces PHP's exact
+/// bytes, confirming the serialize and unserialize paths agree on `'E'`.
+#[test]
+fn test_serialize_exponential_float_round_trip() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(serialize(1.0e20) === "d:1.0E+20;");
+var_dump(unserialize("d:1.0E+20;") === 1.0e20);
+echo serialize(unserialize("d:1.0E+20;")), "\n";
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nd:1.0E+20;\n");
+}
+
 /// Verifies object serialization (Stage A): public/protected/private mangled keys,
 /// declaration order, mixed-typed properties, null, nested objects, and objects
 /// inside indexed/associative arrays — all byte-exact with the PHP interpreter.

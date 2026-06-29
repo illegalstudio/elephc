@@ -11,7 +11,9 @@
 //!   `d:<shortest-round-trip>;` (`d:INF;`/`d:-INF;`/`d:NAN;` for non-finite),
 //!   `s:<bytelen>:"<raw>";`, and (added in a later increment) `a:<n>:{...}`.
 //! - Float digits reuse `__rt_json_ftoa` (serialize_precision = -1, the same
-//!   shortest-round-trip formatter PHP uses for serialize floats).
+//!   shortest-round-trip formatter PHP uses for serialize floats), passing the
+//!   uppercase `'E'` exponent marker so exponential floats match PHP's
+//!   `serialize`/`var_export` layout (`d:1.0E+20;`), not `json_encode`'s `'e'`.
 //! - All helpers append at the current `_concat_off`, advance it past the bytes
 //!   written, and return the slice pointer/length in the string result registers
 //!   (`x1`/`x2` on AArch64, `rax`/`rdx` on x86_64).
@@ -298,6 +300,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x12, [x9]");                                       // point the float formatter at the current write position
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the raw float bit pattern
     emitter.instruction("fmov d0, x9");                                         // move the bits into the FP argument register
+    emitter.instruction("mov w0, #69");                                         // exponent marker 'E' (serialize uppercase layout)
     emitter.instruction("bl __rt_json_ftoa");                                   // append the shortest round-trip digits in place
     emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // reload the offset advanced by the formatter
@@ -1123,6 +1126,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], rcx");                            // point the float formatter at the write position
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload the raw float bit pattern
     emitter.instruction("movq xmm0, r9");                                       // move the bits into the FP argument register
+    emitter.instruction("mov edi, 69");                                         // exponent marker 'E' (serialize uppercase layout)
     emitter.instruction("call __rt_json_ftoa");                                 // append the shortest round-trip digits in place
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // reload the offset advanced by the formatter
