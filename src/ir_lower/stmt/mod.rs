@@ -1278,9 +1278,15 @@ fn lower_dynamic_switch_dispatch(
     default_block: BlockId,
 ) {
     let subject_is_str = subject.ir_type == IrType::Str;
-    // Non-string subjects are coerced to an integer once and reused by the ICmp path.
-    let int_subject =
-        if subject_is_str { None } else { Some(coerce_to_int(ctx, subject, None)) };
+    let subject_is_mixed = matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Mixed));
+    // Non-string, non-Mixed subjects are coerced to an integer once and reused by the ICmp path.
+    // Mixed subjects must use loose equality for every case because the runtime tag may be
+    // float, string, bool, etc. — coercing to int would truncate a float (issue #397).
+    let int_subject = if subject_is_str || subject_is_mixed {
+        None
+    } else {
+        Some(coerce_to_int(ctx, subject, None))
+    };
     for ((case_exprs, _), case_block) in cases.iter().zip(blocks) {
         for case_expr in case_exprs {
             let case_value = lower_expr(ctx, case_expr);
@@ -1288,7 +1294,9 @@ fn lower_dynamic_switch_dispatch(
             // collapses every case to `0 == 0`, and coercing a float to int would
             // truncate the subject (so `switch (1.5) { case 1.5; }` would wrongly
             // match `case 1`). The cheap ICmp fast path stays for integer-like pairs.
+            // Mixed subjects must always use loose equality (tag-aware comparison).
             let use_loose_eq = subject_is_str
+                || subject_is_mixed
                 || case_value.ir_type == IrType::Str
                 || float_loose_eq_pair(subject.ir_type, case_value.ir_type);
             let matched = if use_loose_eq {

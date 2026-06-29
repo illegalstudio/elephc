@@ -469,3 +469,77 @@ echo ($i == $m ? "y" : "n"), ($m == $i ? "y" : "n"), ($i == $h["n"] ? "y" : "n")
     );
     assert_eq!(out, "yyyn");
 }
+
+/// Regression for #397: loose equality with a Mixed operand holding a float
+/// must not truncate the float to int before comparison. `1.5 == 1` must be
+/// false, `1.5 == 1.5` must be true.
+#[test]
+fn test_loose_eq_mixed_float_vs_int() {
+    let out = compile_and_run(
+        r#"<?php
+function check($m) {
+    var_dump($m == 1);
+    var_dump($m == 1.5);
+    var_dump($m == 2);
+}
+check(1.5);
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\nbool(false)\n");
+}
+
+/// Regression for #397: switch with a Mixed subject holding a float must use
+/// loose equality, not integer truncation. `switch(1.5) { case 1: ...; case
+/// 1.5: ... }` must match `case 1.5`.
+#[test]
+fn test_switch_mixed_float_subject() {
+    let out = compile_and_run(
+        r#"<?php
+function classify($x) {
+    switch ($x) {
+        case 1:   return "int-one";
+        case 1.5: return "onefive";
+        default:  return "other";
+    }
+}
+echo classify(1.5), "\n";
+"#,
+    );
+    assert_eq!(out, "onefive\n");
+}
+
+/// Regression for #397: switch with a Mixed subject holding an int must still
+/// match int cases correctly (no regression from the Mixed routing change).
+#[test]
+fn test_switch_mixed_int_subject() {
+    let out = compile_and_run(
+        r#"<?php
+function classify($x) {
+    switch ($x) {
+        case 1:   return "int-one";
+        case 1.5: return "onefive";
+        default:  return "other";
+    }
+}
+echo classify(1), "\n";
+echo classify(2), "\n";
+"#,
+    );
+    assert_eq!(out, "int-one\nother\n");
+}
+
+/// Regression for #397: `!=` (LooseNotEq) with a Mixed float operand must
+/// also avoid truncation. `1.5 != 1` must be true.
+#[test]
+fn test_loose_neq_mixed_float_vs_int() {
+    let out = compile_and_run(
+        r#"<?php
+function check($m) {
+    var_dump($m != 1);
+    var_dump($m != 1.5);
+}
+check(1.5);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\n");
+}

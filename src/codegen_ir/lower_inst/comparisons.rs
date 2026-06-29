@@ -250,6 +250,8 @@ pub(super) fn lower_loose_eq(
         emit_numeric_string_loose_eq(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
     } else if float_numeric_comparable(&lhs_ty, &rhs_ty) {
         emit_float_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
+    } else if mixed_numeric_comparable(&lhs_ty, &rhs_ty) {
+        emit_mixed_numeric_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
     } else if loose_intish_comparable(&lhs_ty, &rhs_ty) {
         let compare_truthiness = lhs_ty == PhpType::Bool || rhs_ty == PhpType::Bool;
         emit_intish_compare(ctx, lhs, rhs, is_equal, compare_truthiness)?;
@@ -292,6 +294,67 @@ fn string_numeric_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
 fn float_numeric_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
     let numeric = |ty: &PhpType| matches!(ty, PhpType::Int | PhpType::Float);
     (*lhs_ty == PhpType::Float || *rhs_ty == PhpType::Float) && numeric(lhs_ty) && numeric(rhs_ty)
+}
+
+/// Returns true when loose equality involves a `Mixed` operand and a numeric
+/// (`Int`/`Float`) operand. PHP `==` compares these numerically: if the Mixed
+/// holds a float, it must NOT be truncated to int before comparison (issue
+/// #397). The Mixed operand is cast to float (not int) so `1.5 == 1` is false
+/// and `1.5 == 1.5` is true.
+fn mixed_numeric_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
+    let numeric = |ty: &PhpType| matches!(ty, PhpType::Int | PhpType::Float);
+    let one_mixed = *lhs_ty == PhpType::Mixed || *rhs_ty == PhpType::Mixed;
+    let one_numeric = numeric(lhs_ty) || numeric(rhs_ty);
+    one_mixed && one_numeric
+}
+
+/// Emits loose equality for a `Mixed` vs numeric (`Int`/`Float`) pair by
+/// casting the Mixed operand to float (not int) and comparing numerically.
+/// This avoids truncating a float-valued Mixed to int before comparison,
+/// which would make `1.5 == 1` true (issue #397).
+fn emit_mixed_numeric_compare(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    lhs_ty: &PhpType,
+    rhs: ValueId,
+    rhs_ty: &PhpType,
+    is_equal: bool,
+) -> Result<()> {
+    let (mixed_value, numeric_value, numeric_ty) = if *lhs_ty == PhpType::Mixed {
+        (lhs, rhs, rhs_ty)
+    } else {
+        (rhs, lhs, lhs_ty)
+    };
+    // Load the numeric operand into the float result register and save it across the call.
+    let float_reg = abi::float_result_reg(ctx.emitter);
+    load_numeric_to_float_reg(ctx, numeric_value, numeric_ty, float_reg)?;
+    abi::emit_push_float_reg(ctx.emitter, float_reg);
+    // Load the Mixed operand and cast it to float (preserves float values instead of truncating).
+    ctx.load_value_to_result(mixed_value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+    // The cast result is in the float result register (d0/xmm0).
+    // Move it to secondary, then restore the saved numeric operand into the float result reg.
+    let sec_reg = secondary_float_reg(ctx.emitter.target.arch);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("fmov {}, {}", sec_reg, float_reg));  // move Mixed-cast float to d1
+            abi::emit_pop_float_reg(ctx.emitter, float_reg);                         // restore numeric operand into d0
+            ctx.emitter.instruction(&format!("fcmp {}, {}", float_reg, sec_reg));    // compare d0 (numeric) vs d1 (Mixed-cast)
+            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize equality as boolean
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("movsd {}, {}", sec_reg, float_reg));   // move Mixed-cast float to xmm1
+            abi::emit_pop_float_reg(ctx.emitter, float_reg);                         // restore numeric operand into xmm0
+            ctx.emitter.instruction(&format!("ucomisd {}, {}", float_reg, sec_reg)); // compare xmm0 (numeric) vs xmm1 (Mixed-cast)
+            if is_equal {
+                ctx.emitter.instruction("sete al");                             // equality (ZF=1, PF=0)
+            } else {
+                ctx.emitter.instruction("setne al");                            // inequality
+            }
+            ctx.emitter.instruction("movzx rax, al");                           // widen to 64-bit
+        }
+    }
+    Ok(())
 }
 
 /// Emits loose equality for bool/string operands using PHP truthiness rules.
