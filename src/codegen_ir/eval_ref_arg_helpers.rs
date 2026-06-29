@@ -15,7 +15,7 @@
 //!   boxed again during writeback.
 
 use crate::codegen::emit::Emitter;
-use crate::codegen::{abi, emit_box_current_value_as_mixed};
+use crate::codegen::{abi, emit_box_current_value_as_mixed, runtime_value_tag};
 use crate::types::{FunctionSig, PhpType};
 
 /// Describes the stack storage for one eval-supplied by-reference argument.
@@ -187,12 +187,24 @@ fn emit_aarch64_write_back_typed_ref_arg(
     stack_offset: usize,
     label_prefix: &str,
 ) {
+    if typed_ref_arg_is_refcounted_heap(&slot.param_ty) {
+        emit_aarch64_write_back_refcounted_typed_ref_arg(
+            emitter,
+            slot,
+            stack_offset,
+            label_prefix,
+        );
+        return;
+    }
+    let done_label = format!("{}_ref_{}_typed_done", label_prefix, slot.param_index);
+    emit_aarch64_skip_unchanged_typed_ref_arg(emitter, slot, stack_offset, &done_label);
     emit_aarch64_load_typed_ref_slot(emitter, &slot.param_ty, stack_offset + slot.raw_offset);
     emit_box_current_value_as_mixed(emitter, &slot.param_ty);
     emitter.instruction("mov x10, x0");                                         // keep the newly boxed ref value available for cell replacement
     abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
     emit_aarch64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "x9", "x10");
     emit_aarch64_release_typed_ref_slot(emitter, slot, stack_offset, label_prefix);
+    emitter.label(&done_label);
 }
 
 /// Boxes one x86_64 typed raw ref slot and replaces the original eval Mixed cell.
@@ -202,12 +214,220 @@ fn emit_x86_64_write_back_typed_ref_arg(
     stack_offset: usize,
     label_prefix: &str,
 ) {
+    if typed_ref_arg_is_refcounted_heap(&slot.param_ty) {
+        emit_x86_64_write_back_refcounted_typed_ref_arg(
+            emitter,
+            slot,
+            stack_offset,
+            label_prefix,
+        );
+        return;
+    }
+    let done_label = format!("{}_ref_{}_typed_done_x", label_prefix, slot.param_index);
+    emit_x86_64_skip_unchanged_typed_ref_arg(emitter, slot, stack_offset, &done_label);
     emit_x86_64_load_typed_ref_slot(emitter, &slot.param_ty, stack_offset + slot.raw_offset);
     emit_box_current_value_as_mixed(emitter, &slot.param_ty);
     emitter.instruction("mov r11, rax");                                        // keep the newly boxed ref value available for cell replacement
     abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
     emit_x86_64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "r10", "r11");
     emit_x86_64_release_typed_ref_slot(emitter, slot, stack_offset, label_prefix);
+    emitter.label(&done_label);
+}
+
+/// Writes one ARM64 refcounted raw ref slot back with borrowed/owned slot semantics.
+fn emit_aarch64_write_back_refcounted_typed_ref_arg(
+    emitter: &mut Emitter,
+    slot: &EvalRefArgSlot,
+    stack_offset: usize,
+    label_prefix: &str,
+) {
+    let changed_label = format!(
+        "{}_ref_{}_typed_changed",
+        label_prefix, slot.param_index
+    );
+    let unchanged_label = format!(
+        "{}_ref_{}_typed_unchanged",
+        label_prefix, slot.param_index
+    );
+    let done_label = format!("{}_ref_{}_typed_done", label_prefix, slot.param_index);
+    emit_aarch64_branch_on_refcounted_raw_slot_change(
+        emitter,
+        slot,
+        stack_offset,
+        &changed_label,
+        &unchanged_label,
+    );
+    emitter.label(&changed_label);
+    emit_aarch64_load_typed_ref_slot(emitter, &slot.param_ty, stack_offset + slot.raw_offset);
+    emit_box_current_value_as_mixed(emitter, &slot.param_ty);
+    emitter.instruction("mov x10, x0");                                         // keep the boxed replacement while updating the eval ref cell
+    abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
+    if slot.raw_refcounted_owned {
+        emit_aarch64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "x9", "x10");
+    } else {
+        emit_aarch64_replace_mixed_cell_without_releasing_old(emitter, "x9", "x10");
+    }
+    emit_aarch64_release_refcounted_raw_slot_value(emitter, slot, stack_offset);
+    emitter.instruction(&format!("b {}", done_label));                          // finish after transferring the changed raw ref payload
+    emitter.label(&unchanged_label);
+    if slot.raw_refcounted_owned {
+        emit_aarch64_release_refcounted_raw_slot_value(emitter, slot, stack_offset);
+    }
+    emitter.label(&done_label);
+}
+
+/// Writes one x86_64 refcounted raw ref slot back with borrowed/owned slot semantics.
+fn emit_x86_64_write_back_refcounted_typed_ref_arg(
+    emitter: &mut Emitter,
+    slot: &EvalRefArgSlot,
+    stack_offset: usize,
+    label_prefix: &str,
+) {
+    let changed_label = format!(
+        "{}_ref_{}_typed_changed_x",
+        label_prefix, slot.param_index
+    );
+    let unchanged_label = format!(
+        "{}_ref_{}_typed_unchanged_x",
+        label_prefix, slot.param_index
+    );
+    let done_label = format!("{}_ref_{}_typed_done_x", label_prefix, slot.param_index);
+    emit_x86_64_branch_on_refcounted_raw_slot_change(
+        emitter,
+        slot,
+        stack_offset,
+        &changed_label,
+        &unchanged_label,
+    );
+    emitter.label(&changed_label);
+    emit_x86_64_load_typed_ref_slot(emitter, &slot.param_ty, stack_offset + slot.raw_offset);
+    emit_box_current_value_as_mixed(emitter, &slot.param_ty);
+    emitter.instruction("mov r11, rax");                                        // keep the boxed replacement while updating the eval ref cell
+    abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
+    if slot.raw_refcounted_owned {
+        emit_x86_64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "r10", "r11");
+    } else {
+        emit_x86_64_replace_mixed_cell_without_releasing_old(emitter, "r10", "r11");
+    }
+    emit_x86_64_release_refcounted_raw_slot_value(emitter, slot, stack_offset);
+    emitter.instruction(&format!("jmp {}", done_label));                        // finish after transferring the changed raw ref payload
+    emitter.label(&unchanged_label);
+    if slot.raw_refcounted_owned {
+        emit_x86_64_release_refcounted_raw_slot_value(emitter, slot, stack_offset);
+    }
+    emitter.label(&done_label);
+}
+
+/// Branches on whether an ARM64 refcounted raw ref slot differs from the eval cell.
+fn emit_aarch64_branch_on_refcounted_raw_slot_change(
+    emitter: &mut Emitter,
+    slot: &EvalRefArgSlot,
+    stack_offset: usize,
+    changed_label: &str,
+    unchanged_label: &str,
+) {
+    abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
+    abi::emit_load_temporary_stack_slot(emitter, "x10", stack_offset + slot.raw_offset);
+    emitter.instruction("ldr x11, [x9, #8]");                                   // load the eval cell's current refcounted payload pointer
+    emitter.instruction("cmp x10, x11");                                        // did the native by-ref call replace the payload pointer?
+    emitter.instruction(&format!("b.ne {}", changed_label));                    // changed raw slots need boxing and eval-cell replacement
+    emitter.instruction(&format!("b {}", unchanged_label));                     // unchanged raw slots keep the existing eval cell payload
+}
+
+/// Branches on whether an x86_64 refcounted raw ref slot differs from the eval cell.
+fn emit_x86_64_branch_on_refcounted_raw_slot_change(
+    emitter: &mut Emitter,
+    slot: &EvalRefArgSlot,
+    stack_offset: usize,
+    changed_label: &str,
+    unchanged_label: &str,
+) {
+    abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
+    abi::emit_load_temporary_stack_slot(emitter, "r11", stack_offset + slot.raw_offset);
+    emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                         // load the eval cell's current refcounted payload pointer
+    emitter.instruction("cmp r11, r9");                                         // did the native by-ref call replace the payload pointer?
+    emitter.instruction(&format!("jne {}", changed_label));                     // changed raw slots need boxing and eval-cell replacement
+    emitter.instruction(&format!("jmp {}", unchanged_label));                   // unchanged raw slots keep the existing eval cell payload
+}
+
+/// Releases the current ARM64 refcounted raw slot value.
+fn emit_aarch64_release_refcounted_raw_slot_value(
+    emitter: &mut Emitter,
+    slot: &EvalRefArgSlot,
+    stack_offset: usize,
+) {
+    abi::emit_load_temporary_stack_slot(emitter, "x0", stack_offset + slot.raw_offset);
+    abi::emit_decref_if_refcounted(emitter, &slot.param_ty.codegen_repr());
+}
+
+/// Releases the current x86_64 refcounted raw slot value.
+fn emit_x86_64_release_refcounted_raw_slot_value(
+    emitter: &mut Emitter,
+    slot: &EvalRefArgSlot,
+    stack_offset: usize,
+) {
+    abi::emit_load_temporary_stack_slot(emitter, "rax", stack_offset + slot.raw_offset);
+    abi::emit_decref_if_refcounted(emitter, &slot.param_ty.codegen_repr());
+}
+
+/// Skips ARM64 typed writeback when the raw slot still matches the original Mixed payload.
+fn emit_aarch64_skip_unchanged_typed_ref_arg(
+    emitter: &mut Emitter,
+    slot: &EvalRefArgSlot,
+    stack_offset: usize,
+    done_label: &str,
+) {
+    let Some(expected_tag) = typed_ref_arg_unchanged_runtime_tag(&slot.param_ty) else {
+        return;
+    };
+    let changed_label = format!("{}_changed", done_label);
+    abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
+    abi::emit_load_temporary_stack_slot(emitter, "x10", stack_offset + slot.raw_offset);
+    emitter.instruction("ldr x11, [x9]");                                       // load the original eval cell runtime tag before skipping writeback
+    emitter.instruction(&format!("cmp x11, #{}", expected_tag));                // only skip when the eval cell already has the target scalar tag
+    emitter.instruction(&format!("b.ne {}", changed_label));                    // coerce or rewrite cells whose original tag differs
+    emitter.instruction("ldr x11, [x9, #8]");                                   // load the original eval cell scalar payload word
+    emitter.instruction("cmp x10, x11");                                        // did the native call leave the raw ref slot unchanged?
+    emitter.instruction(&format!("b.eq {}", done_label));                       // keep the existing Mixed cell when no replacement is needed
+    emitter.label(&changed_label);
+}
+
+/// Skips x86_64 typed writeback when the raw slot still matches the original Mixed payload.
+fn emit_x86_64_skip_unchanged_typed_ref_arg(
+    emitter: &mut Emitter,
+    slot: &EvalRefArgSlot,
+    stack_offset: usize,
+    done_label: &str,
+) {
+    let Some(expected_tag) = typed_ref_arg_unchanged_runtime_tag(&slot.param_ty) else {
+        return;
+    };
+    let changed_label = format!("{}_changed", done_label);
+    abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
+    abi::emit_load_temporary_stack_slot(emitter, "r11", stack_offset + slot.raw_offset);
+    emitter.instruction("mov r9, QWORD PTR [r10]");                             // load the original eval cell runtime tag before skipping writeback
+    emitter.instruction(&format!("cmp r9, {}", expected_tag));                  // only skip when the eval cell already has the target scalar tag
+    emitter.instruction(&format!("jne {}", changed_label));                     // coerce or rewrite cells whose original tag differs
+    emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                         // load the original eval cell scalar payload word
+    emitter.instruction("cmp r11, r9");                                         // did the native call leave the raw ref slot unchanged?
+    emitter.instruction(&format!("je {}", done_label));                         // keep the existing Mixed cell when no replacement is needed
+    emitter.label(&changed_label);
+}
+
+/// Returns the runtime scalar tag that can skip writeback on exact tag and payload match.
+fn typed_ref_arg_unchanged_runtime_tag(ty: &PhpType) -> Option<u8> {
+    match ty.codegen_repr() {
+        ty @ (PhpType::Int | PhpType::Bool | PhpType::Float) => Some(runtime_value_tag(&ty)),
+        _ => None,
+    }
+}
+
+/// Returns true when a typed raw ref slot stores a refcounted heap payload pointer.
+fn typed_ref_arg_is_refcounted_heap(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Object(_)
+    )
 }
 
 /// Loads one ARM64 typed raw ref slot into the canonical result registers.
@@ -356,6 +576,46 @@ fn emit_x86_64_release_refcounted_raw_slot(
     abi::emit_load_temporary_stack_slot(emitter, "rax", stack_offset + slot.raw_offset);
     abi::emit_decref_if_refcounted(emitter, ty);
     emitter.label(&done_label);
+}
+
+/// Copies a replacement ARM64 Mixed cell into an existing target cell without releasing old payload.
+fn emit_aarch64_replace_mixed_cell_without_releasing_old(
+    emitter: &mut Emitter,
+    target_reg: &str,
+    replacement_reg: &str,
+) {
+    abi::emit_push_reg_pair(emitter, target_reg, replacement_reg);
+    emitter.instruction("ldr x9, [sp]");                                        // reload the original Mixed cell pointer for direct replacement
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the replacement Mixed cell pointer
+    emitter.instruction("ldr x11, [x10]");                                      // copy the replacement runtime tag
+    emitter.instruction("str x11, [x9]");                                       // overwrite the target cell tag
+    emitter.instruction("ldr x11, [x10, #8]");                                  // copy the replacement low payload word
+    emitter.instruction("str x11, [x9, #8]");                                   // overwrite the target cell low payload word
+    emitter.instruction("ldr x11, [x10, #16]");                                 // copy the replacement high payload word
+    emitter.instruction("str x11, [x9, #16]");                                  // overwrite the target cell high payload word
+    emitter.instruction("mov x0, x10");                                         // pass the now-empty replacement cell storage to heap_free
+    abi::emit_call_label(emitter, "__rt_heap_free");
+    abi::emit_release_temporary_stack(emitter, 16);
+}
+
+/// Copies a replacement x86_64 Mixed cell into an existing target cell without releasing old payload.
+fn emit_x86_64_replace_mixed_cell_without_releasing_old(
+    emitter: &mut Emitter,
+    target_reg: &str,
+    replacement_reg: &str,
+) {
+    abi::emit_push_reg_pair(emitter, target_reg, replacement_reg);
+    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // reload the original Mixed cell pointer for direct replacement
+    emitter.instruction("mov r11, QWORD PTR [rsp + 8]");                        // reload the replacement Mixed cell pointer
+    emitter.instruction("mov r9, QWORD PTR [r11]");                             // copy the replacement runtime tag
+    emitter.instruction("mov QWORD PTR [r10], r9");                             // overwrite the target cell tag
+    emitter.instruction("mov r9, QWORD PTR [r11 + 8]");                         // copy the replacement low payload word
+    emitter.instruction("mov QWORD PTR [r10 + 8], r9");                         // overwrite the target cell low payload word
+    emitter.instruction("mov r9, QWORD PTR [r11 + 16]");                        // copy the replacement high payload word
+    emitter.instruction("mov QWORD PTR [r10 + 16], r9");                        // overwrite the target cell high payload word
+    emitter.instruction("mov rax, r11");                                        // pass the now-empty replacement cell storage to heap_free
+    abi::emit_call_label(emitter, "__rt_heap_free");
+    abi::emit_release_temporary_stack(emitter, 16);
 }
 
 /// Copies one replacement ARM64 Mixed cell payload into an existing target cell.
