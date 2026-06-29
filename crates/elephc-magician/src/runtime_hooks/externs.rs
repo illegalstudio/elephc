@@ -11,7 +11,7 @@
 //! - Symbols are provided by the main elephc runtime object when eval is enabled.
 //! - Null return pointers are translated to `EvalStatus::RuntimeFatal` by callers.
 
-use crate::value::RuntimeCell;
+use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 #[cfg(not(test))]
 unsafe extern "C" {
@@ -258,6 +258,9 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_type_tag(value: *mut RuntimeCell) -> u64;
+    pub(super) fn __elephc_eval_value_invoker_ref_cell(
+        slot: *mut RuntimeCellHandle,
+    ) -> *mut RuntimeCell;
     /// Returns the unboxed object payload pointer for object-tagged eval values.
     pub(super) fn __elephc_eval_value_object_identity(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_warning(message_ptr: *const u8, message_len: u64);

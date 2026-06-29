@@ -5274,6 +5274,27 @@ eval('echo native_eval_spread(...["L", "R"]);');
     assert_eq!(out, "L:R");
 }
 
+/// Verifies eval can dispatch AOT user functions with untyped by-reference params.
+#[test]
+fn test_eval_fragment_can_call_native_user_function_with_mixed_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+function native_eval_ref_update(mixed &$value, string $suffix): string {
+    $value = $value . $suffix;
+    return "ret:" . $value;
+}
+
+echo eval('$value = "A";
+$first = native_eval_ref_update($value, "B");
+$fn = "native_eval_ref_update";
+$fn($value, "C");
+native_eval_ref_update(value: $value, suffix: "D");
+return $first . ":" . $value;');
+"#,
+    );
+    assert_eq!(out, "ret:AB:ABCD");
+}
+
 /// Verifies eval can dispatch generated/AOT variadic functions through the native bridge.
 #[test]
 fn test_eval_fragment_can_call_native_variadic_user_function() {

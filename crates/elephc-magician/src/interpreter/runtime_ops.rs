@@ -349,6 +349,12 @@ pub trait RuntimeValueOps {
     /// Returns the concrete boxed Mixed runtime tag after unwrapping nested Mixed cells.
     fn type_tag(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus>;
 
+    /// Creates an invoker-only by-reference marker for a staged Mixed slot.
+    fn invoker_ref_cell(
+        &mut self,
+        slot: *mut RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Returns the unboxed object payload pointer used for PHP object identity.
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus>;
 

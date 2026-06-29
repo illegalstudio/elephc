@@ -15,6 +15,8 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+const EVAL_RUNTIME_TAG_MIXED: i64 = 7;
+const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
 
 /// Builds the x86_64 instruction that installs the Mixed heap-kind marker.
 fn x86_64_mixed_heap_kind_instruction() -> String {
@@ -759,6 +761,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the type-tag wrapper frame
     emitter.instruction("ret");                                                 // return the unboxed runtime tag to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_invoker_ref_cell");
+    emitter.instruction("mov x1, x0");                                          // pass the staged Mixed slot address as marker payload
+    emitter.instruction(&format!("mov x0, #{}", INVOKER_ARG_REF_CELL_TAG));     // runtime tag 11 marks descriptor-invoker by-reference args
+    emitter.instruction(&format!("mov x2, #{}", EVAL_RUNTIME_TAG_MIXED));       // source tag 7 tells invoker fallback paths the slot stores Mixed
+    emitter.instruction("b __rt_mixed_from_value");                             // box the marker cell and return it to Rust
 
     label_c_global(emitter, "__elephc_eval_value_object_identity");
     emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while unboxing the object cell
@@ -2242,6 +2250,11 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_unbox");                               // unwrap nested Mixed cells and return the concrete runtime tag
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the unboxed runtime tag to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_invoker_ref_cell");
+    emitter.instruction(&format!("mov rax, {}", INVOKER_ARG_REF_CELL_TAG));     // runtime tag 11 marks descriptor-invoker by-reference args
+    emitter.instruction(&format!("mov rsi, {}", EVAL_RUNTIME_TAG_MIXED));       // source tag 7 tells invoker fallback paths the slot stores Mixed
+    emitter.instruction("jmp __rt_mixed_from_value");                           // box the marker cell and return it to Rust
 
     label_c_global(emitter, "__elephc_eval_value_object_identity");
     emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer

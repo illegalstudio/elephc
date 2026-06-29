@@ -15,6 +15,7 @@ use std::ffi::c_void;
 pub type RuntimeCell = c_void;
 
 /// Wraps an opaque runtime cell pointer without taking ownership by itself.
+#[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuntimeCellHandle {
     ptr: *mut RuntimeCell,
