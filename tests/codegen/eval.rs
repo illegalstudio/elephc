@@ -3148,6 +3148,40 @@ fclose($client); fclose($peer); fclose($server);');
     assert_eq!(out, "dynaccept:dynrecv:namedaccept:namedrecv");
 }
 
+/// Verifies eval fsockopen and stream_select callables write by-reference outputs.
+#[test]
+fn test_eval_dynamic_fsockopen_and_stream_select_write_ref_outputs() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$server = stream_socket_server("tcp://127.0.0.1:0");
+$addr = stream_socket_get_name($server, false);
+$parts = explode(":", $addr);
+$open = "fsockopen";
+$errno = 9; $errstr = "x";
+$client = $open("127.0.0.1", intval($parts[1]), $errno, $errstr);
+$peer = stream_socket_accept($server);
+echo is_resource($client) && is_resource($peer) && $errno === 0 && $errstr === "" ? "dynfsock" : "bad"; echo ":";
+fclose($client); fclose($peer); fclose($server);
+$server = stream_socket_server("tcp://127.0.0.1:0");
+$addr = stream_socket_get_name($server, false);
+$parts = explode(":", $addr);
+$namedErrno = 9; $namedErrstr = "x";
+$client = fsockopen(hostname: "127.0.0.1", port: intval($parts[1]), error_code: $namedErrno, error_message: $namedErrstr);
+$peer = stream_socket_accept($server);
+echo is_resource($client) && is_resource($peer) && $namedErrno === 0 && $namedErrstr === "" ? "namedfsock" : "bad"; echo ":";
+fclose($client); fclose($peer); fclose($server);
+$pair = stream_socket_pair(1, 1, 0);
+$read = [$pair[1]]; $write = [$pair[0]]; $except = [$pair[0]];
+$select = stream_select(...);
+echo $select($read, $write, $except, 0) === 0 && count($read) === 0 && count($write) === 0 && count($except) === 0 ? "fccselect" : "bad"; echo ":";
+$read = [$pair[1]]; $write = []; $except = [];
+echo stream_select(read: $read, write: $write, except: $except, seconds: 0) === 0 && count($read) === 0 ? "namedselect" : "bad";
+fclose($pair[0]); fclose($pair[1]);');
+"#,
+    );
+    assert_eq!(out, "dynfsock:namedfsock:fccselect:namedselect");
+}
+
 /// Verifies eval disk-space builtins return positive local capacity and zero on failure.
 #[test]
 fn test_eval_dispatches_disk_space_builtin_calls() {
