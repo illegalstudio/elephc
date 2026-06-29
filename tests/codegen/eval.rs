@@ -5274,6 +5274,30 @@ eval('echo native_eval_spread(...["L", "R"]);');
     assert_eq!(out, "L:R");
 }
 
+/// Verifies eval can dispatch generated/AOT variadic functions through the native bridge.
+#[test]
+fn test_eval_fragment_can_call_native_variadic_user_function() {
+    let out = compile_and_run(
+        r#"<?php
+function native_eval_variadic_collect(string $head, string ...$items): string {
+    return $head . ":" . count($items) . ":" . $items[0] . ":" . $items[1];
+}
+
+function native_eval_variadic_default(string $head = "D", string ...$items): string {
+    return $head . ":" . count($items) . ":" . (count($items) > 0 ? $items[0] : "-");
+}
+
+echo eval('$fn = "native_eval_variadic_collect";
+return native_eval_variadic_collect("H", "A", "B") . "|"
+    . native_eval_variadic_default(head: "N") . "|"
+    . native_eval_variadic_default("P", "Q") . "|"
+    . $fn("V", "X", "Y") . "|"
+    . call_user_func("native_eval_variadic_collect", "C", "M", "N");');
+"#,
+    );
+    assert_eq!(out, "H:2:A:B|N:0:-|P:1:Q|V:2:X:Y|C:2:M:N");
+}
+
 /// Verifies eval fragments called from methods can mutate public properties through `$this`.
 #[test]
 fn test_eval_fragment_can_mutate_this_public_property() {

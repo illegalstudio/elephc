@@ -522,13 +522,17 @@ dispatch eval-declared functions with the same named/default/variadic argument
 binding used by direct eval function calls. Runtime-held generated/AOT
 `ReflectionFunction` objects can invoke registered generated functions through
 the native bridge with parameter names, supported defaults, named arguments, and
-indexed or string-keyed runtime argument arrays. Registered generated/AOT
+indexed or string-keyed runtime argument arrays. Direct eval calls, variable
+function calls, and `call_user_func()` paths can also invoke registered
+generated/AOT free functions with positional variadic tails when the generated
+signature has no by-reference parameters. Registered generated/AOT
 free-function parameter names, declared types, return types, by-reference and
 variadic flags, required/optional counts, and supported defaults are also
 exposed through `ReflectionFunction` / `ReflectionParameter` metadata.
-Unsupported generated/AOT free-function bridge shapes remain reflectable as
-metadata but are not invocable through eval. Supported callable-builtin
-invocation is covered by the general Reflection support documented in
+Unsupported generated/AOT free-function bridge shapes, such as by-reference
+function parameters and native-only ABI layouts, remain reflectable as metadata
+but are not invocable through eval. Supported callable-builtin invocation is
+covered by the general Reflection support documented in
 `docs/php/classes.md`.
 Defaulted eval method parameters are
 bound when omitted and reported through `ReflectionParameter::isOptional()`,
@@ -861,11 +865,14 @@ fail at runtime with an eval fatal diagnostic.
 The fragment subset is broad but not the full elephc language surface. In
 particular, advanced native callable descriptors and full `Closure` object
 semantics for callback values are still outside eval fragments. Runtime/AOT
-object-method, static-method, and constructor fallback from eval can bind
-registered names, defaults, positional variadic tails, and by-reference lvalue
-metadata. Generated AOT bridge dispatch supports visibility-checked
-non-by-reference signatures whose generated ABI storage is scalar/string,
-callable descriptor, boxed Mixed/union, array/hash, iterable, or object.
+free-function, object-method, static-method, and constructor fallback from eval
+can bind registered names, defaults, and positional variadic tails; method,
+static-method, and constructor fallback can also bind by-reference lvalue
+metadata. Generated AOT bridge dispatch supports visibility-checked method,
+static-method, and constructor signatures whose generated ABI storage is
+scalar/string, callable descriptor, boxed Mixed/union, array/hash, iterable, or
+object, plus non-by-reference free-function signatures using the descriptor
+invoker ABI.
 Registered type specs validate nullable and union members, intersection object
 parameters, and intersection object returns before or after the generated AOT
 call. By-reference method and constructor parameters remain limited to the
@@ -896,8 +903,9 @@ limit there is the supported type slice rather than a fixed parameter count.
 Generated/AOT free-function and method type metadata, return metadata,
 by-reference and variadic parameter flags, and generated/AOT
 class/method/property/class-constant attributes are exposed for registered
-metadata slices, while unsupported native-only bridge shapes remain
-metadata-only rather than invocable through eval.
+metadata slices, while unsupported native-only bridge shapes and by-reference
+free-function bridge shapes remain metadata-only rather than invocable through
+eval.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`
