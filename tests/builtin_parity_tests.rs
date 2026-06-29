@@ -24,8 +24,12 @@ const EVAL_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &[
     "array_reverse",
     "array_splice",
     "nl2br",
+    "preg_match",
     "print_r",
 ];
+
+/// Eval supports extra optional by-reference parameters before the static backend does.
+const EVAL_BY_REF_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["preg_match_all"];
 
 /// Eval supports variadic debug output before the static backend does.
 const EVAL_VARIADIC_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["var_dump"];
@@ -63,6 +67,10 @@ fn shared_builtin_signature_shape_matches_static_signatures() {
         };
         if EVAL_SIGNATURE_EXTENSION_BUILTINS.contains(name) {
             assert_eval_signature_extends_static_signature(name, &static_meta, &eval_meta);
+            continue;
+        }
+        if EVAL_BY_REF_SIGNATURE_EXTENSION_BUILTINS.contains(name) {
+            assert_eval_by_ref_signature_extends_static_signature(name, &static_meta, &eval_meta);
             continue;
         }
         if EVAL_VARIADIC_SIGNATURE_EXTENSION_BUILTINS.contains(name) {
@@ -123,6 +131,34 @@ fn assert_eval_signature_extends_static_signature(
     assert!(
         eval_meta.default_param_count >= static_meta.default_param_count,
         "{name} eval extension must not remove defaults"
+    );
+}
+
+/// Verifies a documented eval by-reference extension keeps the static prefix contract.
+fn assert_eval_by_ref_signature_extends_static_signature(
+    name: &str,
+    static_meta: &elephc::builtin_metadata::BuiltinSignatureMetadata,
+    eval_meta: &elephc_magician::builtin_metadata::BuiltinSignatureMetadata,
+) {
+    assert!(
+        eval_meta.params.starts_with(&static_meta.params),
+        "{name} eval by-ref extension must preserve static parameter prefix: static={static_meta:#?} eval={eval_meta:#?}"
+    );
+    assert_eq!(
+        static_meta.required_param_count, eval_meta.required_param_count,
+        "{name} eval by-ref extension must preserve required parameter count"
+    );
+    assert_eq!(
+        static_meta.variadic, eval_meta.variadic,
+        "{name} eval by-ref extension must not change variadic behavior"
+    );
+    assert!(
+        eval_meta.by_ref_params.starts_with(&static_meta.by_ref_params),
+        "{name} eval by-ref extension must preserve static by-reference prefix"
+    );
+    assert!(
+        eval_meta.default_param_count >= static_meta.default_param_count,
+        "{name} eval by-ref extension must not remove defaults"
     );
 }
 
