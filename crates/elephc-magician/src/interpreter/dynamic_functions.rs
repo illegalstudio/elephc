@@ -9,6 +9,7 @@
 //! - Static locals are persisted through `ElephcEvalContext` after function execution.
 
 use super::*;
+use std::ffi::c_void;
 
 /// Evaluates an eval-declared user function with PHP-style argument binding.
 pub(in crate::interpreter) fn eval_dynamic_function(
@@ -563,7 +564,7 @@ fn native_function_parameter_ref_target(
     ref_target.map(Some).ok_or(EvalStatus::RuntimeFatal)
 }
 
-/// Converts bound values into descriptor-invoker arguments, staging Mixed by-reference slots.
+/// Converts bound values into descriptor-invoker arguments, staging by-reference slots.
 fn stage_native_function_invoker_args(
     function: &NativeFunction,
     variadic_index: Option<usize>,
@@ -583,11 +584,25 @@ fn stage_native_function_invoker_args(
             continue;
         }
         let target = bound_arg.ref_target.ok_or(EvalStatus::RuntimeFatal)?;
+        if let Some(tag) = native_function_raw_word_ref_tag(function.param_type(param_index)) {
+            let original = values.raw_value_word(bound_arg.value)?;
+            let mut slot = Box::new(original);
+            let marker =
+                values.invoker_raw_ref_cell(slot.as_mut() as *mut u64 as *mut c_void, tag)?;
+            invoker_values.push(marker);
+            ref_slots.push(BoundNativeFunctionRefSlot::RawWord {
+                tag,
+                original,
+                slot,
+                target,
+            });
+            continue;
+        }
         let original = bound_arg.value;
         let mut slot = Box::new(original);
         let marker = values.invoker_ref_cell(slot.as_mut() as *mut RuntimeCellHandle)?;
         invoker_values.push(marker);
-        ref_slots.push(BoundNativeFunctionRefSlot {
+        ref_slots.push(BoundNativeFunctionRefSlot::Mixed {
             original,
             slot,
             target,
@@ -597,6 +612,23 @@ fn stage_native_function_invoker_args(
         values: invoker_values,
         ref_slots,
     })
+}
+
+/// Returns the runtime tag for a by-reference parameter that can use one raw word.
+fn native_function_raw_word_ref_tag(param_type: Option<&EvalParameterType>) -> Option<u64> {
+    let param_type = param_type?;
+    if param_type.allows_null()
+        || param_type.is_intersection()
+        || param_type.variants().len() != 1
+    {
+        return None;
+    }
+    match param_type.variants().first()? {
+        EvalParameterTypeVariant::Bool => Some(EVAL_TAG_BOOL),
+        EvalParameterTypeVariant::Float => Some(EVAL_TAG_FLOAT),
+        EvalParameterTypeVariant::Int => Some(EVAL_TAG_INT),
+        _ => None,
+    }
 }
 
 /// Returns the variadic parameter index for a native AOT function, if registered.
@@ -1643,21 +1675,48 @@ fn write_back_native_function_ref_args(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for ref_slot in &bound_args.ref_slots {
-        let value = *ref_slot.slot;
-        if value == ref_slot.original {
-            continue;
+        match ref_slot {
+            BoundNativeFunctionRefSlot::Mixed {
+                original,
+                slot,
+                target,
+            } => {
+                let value = **slot;
+                if value == *original {
+                    continue;
+                }
+                let current = eval_reference_target_value(target, context, values)?;
+                if current == value {
+                    continue;
+                }
+                eval_write_direct_ref_target(
+                    target,
+                    value,
+                    context,
+                    values,
+                    Some(ScopeCellOwnership::Owned),
+                )?;
+            }
+            BoundNativeFunctionRefSlot::RawWord {
+                tag,
+                original,
+                slot,
+                target,
+            } => {
+                let word = **slot;
+                if word == *original {
+                    continue;
+                }
+                let value = values.raw_word_value(*tag, word)?;
+                eval_write_direct_ref_target(
+                    target,
+                    value,
+                    context,
+                    values,
+                    Some(ScopeCellOwnership::Owned),
+                )?;
+            }
         }
-        let current = eval_reference_target_value(&ref_slot.target, context, values)?;
-        if current == value {
-            continue;
-        }
-        eval_write_direct_ref_target(
-            &ref_slot.target,
-            value,
-            context,
-            values,
-            Some(ScopeCellOwnership::Owned),
-        )?;
     }
     Ok(())
 }

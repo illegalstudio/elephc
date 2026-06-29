@@ -2397,7 +2397,10 @@ fn function_signature_can_bridge_with_eval(function: &Function) -> bool {
 
 /// Returns true when a native function by-reference parameter can use a Mixed staging slot.
 fn eval_native_function_ref_param_supported(ty: &PhpType) -> bool {
-    matches!(ty.codegen_repr(), PhpType::Mixed)
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Mixed | PhpType::Int | PhpType::Bool | PhpType::Float
+    )
 }
 
 /// Returns true when eval can dispatch a native method through the generated bridge.

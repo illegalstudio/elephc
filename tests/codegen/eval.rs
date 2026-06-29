@@ -5295,6 +5295,31 @@ return $first . ":" . $value;');
     assert_eq!(out, "ret:AB:ABCD");
 }
 
+/// Verifies eval can dispatch AOT user functions with raw scalar by-reference params.
+#[test]
+fn test_eval_fragment_can_call_native_user_function_with_scalar_by_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+function native_eval_ref_scalars(int &$i, bool &$b, float &$f): string {
+    $i = $i + 2;
+    $b = !$b;
+    $f = $f + 0.5;
+    return "done";
+}
+
+echo eval('$i = 3;
+$b = true;
+$f = 1.5;
+$first = native_eval_ref_scalars($i, $b, $f);
+$fn = "native_eval_ref_scalars";
+$fn($i, $b, $f);
+native_eval_ref_scalars(i: $i, b: $b, f: $f);
+return $first . ":" . $i . ":" . ($b ? "T" : "F") . ":" . ($f == 3.0 ? "F3" : "bad");');
+"#,
+    );
+    assert_eq!(out, "done:9:F:F3");
+}
+
 /// Verifies eval can dispatch generated/AOT variadic functions through the native bridge.
 #[test]
 fn test_eval_fragment_can_call_native_variadic_user_function() {

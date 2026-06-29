@@ -755,6 +755,29 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Self::handle(unsafe { __elephc_eval_value_invoker_ref_cell(slot) })
     }
 
+    /// Creates an invoker-only by-reference marker for a staged raw one-word slot.
+    fn invoker_raw_ref_cell(
+        &mut self,
+        slot: *mut std::ffi::c_void,
+        source_tag: u64,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_invoker_raw_ref_cell(slot, source_tag) })
+    }
+
+    /// Extracts the low raw payload word from a boxed scalar Mixed cell.
+    fn raw_value_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
+        Ok(unsafe { __elephc_eval_value_raw_word(value.as_ptr()) })
+    }
+
+    /// Boxes one raw scalar payload word as a Mixed cell with the provided runtime tag.
+    fn raw_word_value(
+        &mut self,
+        source_tag: u64,
+        word: u64,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_from_raw_word(source_tag, word) })
+    }
+
     /// Returns the unboxed object payload pointer for SPL object identity builtins.
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         let identity = unsafe { __elephc_eval_value_object_identity(object.as_ptr()) };
