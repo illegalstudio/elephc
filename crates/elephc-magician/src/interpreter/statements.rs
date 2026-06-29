@@ -10327,9 +10327,13 @@ fn eval_native_method_with_evaluated_args_bridge_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut resolved_bridge_scope = bridge_scope.map(str::to_string);
     let metadata =
         eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?;
     if let Some((declaring_class, visibility, _, is_abstract)) = metadata {
+        if resolved_bridge_scope.is_none() {
+            resolved_bridge_scope = Some(declaring_class.clone());
+        }
         if !is_abstract
             && validate_eval_member_access(&declaring_class, visibility, context).is_err()
         {
@@ -10366,7 +10370,7 @@ fn eval_native_method_with_evaluated_args_bridge_scope(
         class_name,
         method_name,
         evaluated_args,
-        bridge_scope,
+        resolved_bridge_scope.as_deref(),
         called_class_scope,
         context,
         values,
@@ -10405,13 +10409,10 @@ pub(in crate::interpreter) fn eval_native_method_with_evaluated_args_unchecked_b
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let signature = context.native_method_signature(class_name, method_name);
-    let bound_args = bind_native_callable_bound_args(
-        signature,
-        evaluated_args,
-        context,
-        values,
-    )?;
+    let signature_owner = bridge_scope.unwrap_or(class_name);
+    let signature = context.native_method_signature(signature_owner, method_name);
+    let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
+    let bound_args = bind_native_callable_bound_args(signature, evaluated_args, context, values)?;
     let result = if let Some(scope) = bridge_scope {
         eval_native_method_call_with_scope(
             scope,
@@ -10428,7 +10429,14 @@ pub(in crate::interpreter) fn eval_native_method_with_evaluated_args_unchecked_b
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
     match (result, writeback) {
         (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(result), Ok(())) => Ok(result),
+        (Ok(result), Ok(())) => eval_declared_native_return_value(
+            return_type.as_ref(),
+            Some(signature_owner),
+            called_class_scope.or(Some(class_name)),
+            result,
+            context,
+            values,
+        ),
     }
 }
 
@@ -10461,9 +10469,13 @@ fn eval_native_static_method_with_evaluated_args_bridge_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut resolved_bridge_scope = bridge_scope.map(str::to_string);
     let metadata =
         eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?;
     if let Some((declaring_class, visibility, is_static, is_abstract)) = metadata {
+        if resolved_bridge_scope.is_none() {
+            resolved_bridge_scope = Some(declaring_class.clone());
+        }
         if is_static
             && !is_abstract
             && validate_eval_member_access(&declaring_class, visibility, context).is_err()
@@ -10498,7 +10510,7 @@ fn eval_native_static_method_with_evaluated_args_bridge_scope(
         class_name,
         method_name,
         evaluated_args,
-        bridge_scope,
+        resolved_bridge_scope.as_deref(),
         called_class_scope,
         context,
         values,
@@ -10534,13 +10546,10 @@ pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args_unch
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let signature = context.native_static_method_signature(class_name, method_name);
-    let bound_args = bind_native_callable_bound_args(
-        signature,
-        evaluated_args,
-        context,
-        values,
-    )?;
+    let signature_owner = bridge_scope.unwrap_or(class_name);
+    let signature = context.native_static_method_signature(signature_owner, method_name);
+    let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
+    let bound_args = bind_native_callable_bound_args(signature, evaluated_args, context, values)?;
     let result = if let Some(scope) = bridge_scope {
         eval_native_static_method_call_with_scope(
             scope,
@@ -10557,7 +10566,14 @@ pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args_unch
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
     match (result, writeback) {
         (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(result), Ok(())) => Ok(result),
+        (Ok(result), Ok(())) => eval_declared_native_return_value(
+            return_type.as_ref(),
+            Some(signature_owner),
+            called_class_scope.or(Some(class_name)),
+            result,
+            context,
+            values,
+        ),
     }
 }
 

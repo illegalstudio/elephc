@@ -355,6 +355,7 @@ pub(crate) fn compile_and_run_files_with_defines(
             elephc::codegen::Emit::Executable,
             &exported_functions,
             regalloc_linear,
+            false,
         )
         .expect("EIR backend codegen failed for multi-file codegen fixture");
         let runtime_features = ir_module.required_runtime_features;

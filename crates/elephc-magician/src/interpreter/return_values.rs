@@ -40,6 +40,38 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
     }
 }
 
+/// Applies a registered native/AOT return type to an already materialized result.
+pub(in crate::interpreter) fn eval_declared_native_return_value(
+    return_type: Option<&EvalParameterType>,
+    return_owner: Option<&str>,
+    called_class_name: Option<&str>,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(return_type) = return_type else {
+        return Ok(value);
+    };
+    if eval_declared_return_type_is_void(return_type) {
+        return if values.type_tag(value)? == EVAL_TAG_NULL {
+            Ok(value)
+        } else {
+            Err(EvalStatus::RuntimeFatal)
+        };
+    }
+    if eval_declared_return_type_is_never(return_type) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_declared_return_value(
+        return_type,
+        return_owner,
+        called_class_name,
+        value,
+        context,
+        values,
+    )
+}
+
 /// Materializes an implicit return according to the declared return type.
 fn eval_declared_implicit_return_value(
     return_type: Option<&EvalParameterType>,
