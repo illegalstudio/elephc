@@ -599,6 +599,22 @@ fn stage_native_function_invoker_args(
                         target,
                     });
                 }
+                NativeFunctionRawRefKind::String => {
+                    let original_ptr = values.raw_value_word(bound_arg.value)?;
+                    let original_len = values.raw_value_high_word(bound_arg.value)?;
+                    let retained = values.retain_raw_string_words(original_ptr, original_len)?;
+                    let mut slot = Box::new([retained.0, retained.1]);
+                    let marker = values.invoker_raw_ref_cell(
+                        slot.as_mut() as *mut [u64; 2] as *mut c_void,
+                        EVAL_TAG_STRING,
+                    )?;
+                    invoker_values.push(marker);
+                    ref_slots.push(BoundNativeFunctionRefSlot::RawString {
+                        original: [retained.0, retained.1],
+                        slot,
+                        target,
+                    });
+                }
                 NativeFunctionRawRefKind::OwnedHeap => {
                     let source_tag = values.type_tag(bound_arg.value)?;
                     let original = values.raw_value_word(bound_arg.value)?;
@@ -634,13 +650,14 @@ fn stage_native_function_invoker_args(
     })
 }
 
-/// Describes a native function by-reference parameter that can use one raw word.
+/// Describes native function by-reference parameters that can use typed raw slots.
 enum NativeFunctionRawRefKind {
     Scalar { tag: u64 },
+    String,
     OwnedHeap,
 }
 
-/// Returns the raw-slot strategy for a by-reference parameter that can use one raw word.
+/// Returns the raw-slot strategy for one supported by-reference parameter.
 fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Option<NativeFunctionRawRefKind> {
     let param_type = param_type?;
     if param_type.allows_null()
@@ -659,6 +676,7 @@ fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Optio
             Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_FLOAT })
         }
         EvalParameterTypeVariant::Int => Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_INT }),
+        EvalParameterTypeVariant::String => Some(NativeFunctionRawRefKind::String),
         _ => None,
     }
 }
@@ -1740,6 +1758,27 @@ fn write_back_native_function_ref_args(
                     continue;
                 }
                 let value = values.raw_word_value(*tag, word)?;
+                eval_write_direct_ref_target(
+                    target,
+                    value,
+                    context,
+                    values,
+                    Some(ScopeCellOwnership::Owned),
+                )?;
+            }
+            BoundNativeFunctionRefSlot::RawString {
+                original,
+                slot,
+                target,
+            } => {
+                let words = **slot;
+                if words == *original {
+                    values.release_raw_string_words(words[0], words[1])?;
+                    continue;
+                }
+                let value = values.raw_string_value(words[0], words[1]);
+                values.release_raw_string_words(words[0], words[1])?;
+                let value = value?;
                 eval_write_direct_ref_target(
                     target,
                     value,

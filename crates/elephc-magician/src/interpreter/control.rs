@@ -62,6 +62,11 @@ pub(super) enum BoundNativeFunctionRefSlot {
         slot: Box<u64>,
         target: EvalReferenceTarget,
     },
+    RawString {
+        original: [u64; 2],
+        slot: Box<[u64; 2]>,
+        target: EvalReferenceTarget,
+    },
     OwnedRawWord {
         original: u64,
         slot: Box<u64>,

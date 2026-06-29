@@ -267,13 +267,30 @@ unsafe extern "C" {
         slot: *mut c_void,
         source_tag: u64,
     ) -> *mut RuntimeCell;
+    /// Extracts the low raw payload word from a boxed runtime value.
     pub(super) fn __elephc_eval_value_raw_word(value: *mut RuntimeCell) -> u64;
+    /// Extracts the high raw payload word from a boxed runtime value.
+    pub(super) fn __elephc_eval_value_raw_high_word(value: *mut RuntimeCell) -> u64;
+    /// Duplicates raw string storage for a staged native by-reference slot.
+    pub(super) fn __elephc_eval_value_retain_raw_string(
+        ptr: u64,
+        len: u64,
+        out_len: *mut u64,
+    ) -> u64;
+    /// Boxes raw string storage back into a runtime value for eval writeback.
+    pub(super) fn __elephc_eval_value_from_raw_string(ptr: u64, len: u64) -> *mut RuntimeCell;
+    /// Releases raw string storage owned by a staged native by-reference slot.
+    pub(super) fn __elephc_eval_value_release_raw_string(ptr: u64, len: u64);
+    /// Retains one raw heap payload word for a staged native by-reference slot.
     pub(super) fn __elephc_eval_value_retain_raw_heap_word(word: u64) -> u64;
+    /// Boxes one raw scalar payload word back into a runtime value.
     pub(super) fn __elephc_eval_value_from_raw_word(
         source_tag: u64,
         word: u64,
     ) -> *mut RuntimeCell;
+    /// Boxes one raw heap payload word back into a runtime value.
     pub(super) fn __elephc_eval_value_from_raw_heap_word(word: u64) -> *mut RuntimeCell;
+    /// Releases one raw heap payload word owned by a staged by-reference slot.
     pub(super) fn __elephc_eval_value_release_raw_heap_word(word: u64);
     /// Returns the unboxed object payload pointer for object-tagged eval values.
     pub(super) fn __elephc_eval_value_object_identity(value: *mut RuntimeCell) -> u64;

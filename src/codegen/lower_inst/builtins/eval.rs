@@ -2407,6 +2407,7 @@ fn eval_native_function_ref_param_supported(ty: &PhpType) -> bool {
             | PhpType::Iterable
             | PhpType::Mixed
             | PhpType::Object(_)
+            | PhpType::Str
     )
 }
 

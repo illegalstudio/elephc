@@ -5320,6 +5320,27 @@ return $first . ":" . $i . ":" . ($b ? "T" : "F") . ":" . ($f == 3.0 ? "F3" : "b
     assert_eq!(out, "done:9:F:F3");
 }
 
+/// Verifies eval can dispatch AOT user functions with string by-reference params.
+#[test]
+fn test_eval_fragment_can_call_native_user_function_with_string_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+function native_eval_ref_string(string &$value): string {
+    $value = $value . "!";
+    return "ret:" . $value;
+}
+
+echo eval('$value = "A";
+$first = native_eval_ref_string($value);
+$fn = "native_eval_ref_string";
+$fn($value);
+native_eval_ref_string(value: $value);
+return $first . ":" . $value;');
+"#,
+    );
+    assert_eq!(out, "ret:A!:A!!!");
+}
+
 /// Verifies eval can dispatch AOT user functions with one-word heap by-reference params.
 #[test]
 fn test_eval_fragment_can_call_native_user_function_with_heap_by_ref_args() {

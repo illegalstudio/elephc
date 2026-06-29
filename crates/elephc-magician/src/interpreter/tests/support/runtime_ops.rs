@@ -407,12 +407,34 @@ impl RuntimeValueOps for FakeOps {
             FakeValue::Bool(value) => u64::from(value),
             FakeValue::Float(value) => value.to_bits(),
             FakeValue::Int(value) => value as u64,
+            FakeValue::String(_) | FakeValue::Bytes(_) => value.as_ptr() as u64,
             FakeValue::Array(_)
             | FakeValue::Assoc(_)
             | FakeValue::Object(_)
             | FakeValue::Iterator { .. } => value.as_ptr() as u64,
             _ => 0,
         })
+    }
+    /// Extracts one fake high payload word for raw by-reference staging.
+    fn raw_value_high_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
+        Ok(match self.get(value) {
+            FakeValue::String(value) => value.len() as u64,
+            FakeValue::Bytes(value) => value.len() as u64,
+            _ => 0,
+        })
+    }
+    /// Retains a fake raw string payload for native by-reference staging.
+    fn retain_raw_string_words(&mut self, ptr: u64, len: u64) -> Result<(u64, u64), EvalStatus> {
+        self.runtime_retain(RuntimeCellHandle::from_raw(ptr as *mut RuntimeCell))?;
+        Ok((ptr, len))
+    }
+    /// Converts a fake raw string payload back to its stable fake handle.
+    fn raw_string_value(&mut self, ptr: u64, _len: u64) -> Result<RuntimeCellHandle, EvalStatus> {
+        Ok(RuntimeCellHandle::from_raw(ptr as *mut RuntimeCell))
+    }
+    /// Records release of a fake raw string payload owned by a staged slot.
+    fn release_raw_string_words(&mut self, ptr: u64, _len: u64) -> Result<(), EvalStatus> {
+        self.runtime_release(RuntimeCellHandle::from_raw(ptr as *mut RuntimeCell))
     }
     /// Retains a fake raw heap word for native by-reference staging.
     fn retain_raw_heap_word(&mut self, word: u64) -> Result<u64, EvalStatus> {

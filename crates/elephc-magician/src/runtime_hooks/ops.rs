@@ -769,6 +769,31 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Ok(unsafe { __elephc_eval_value_raw_word(value.as_ptr()) })
     }
 
+    /// Extracts the high raw payload word from a boxed Mixed cell.
+    fn raw_value_high_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
+        Ok(unsafe { __elephc_eval_value_raw_high_word(value.as_ptr()) })
+    }
+
+    /// Duplicates one raw string payload for owned native by-reference staging.
+    fn retain_raw_string_words(&mut self, ptr: u64, len: u64) -> Result<(u64, u64), EvalStatus> {
+        let mut out_len = 0;
+        let out_ptr = unsafe { __elephc_eval_value_retain_raw_string(ptr, len, &mut out_len) };
+        Ok((out_ptr, out_len))
+    }
+
+    /// Boxes one raw string payload as a Mixed string cell.
+    fn raw_string_value(&mut self, ptr: u64, len: u64) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_from_raw_string(ptr, len) })
+    }
+
+    /// Releases one raw string payload owned by native by-reference staging.
+    fn release_raw_string_words(&mut self, ptr: u64, len: u64) -> Result<(), EvalStatus> {
+        unsafe {
+            __elephc_eval_value_release_raw_string(ptr, len);
+        }
+        Ok(())
+    }
+
     /// Retains one raw heap payload word for owned native by-reference staging.
     fn retain_raw_heap_word(&mut self, word: u64) -> Result<u64, EvalStatus> {
         Ok(unsafe { __elephc_eval_value_retain_raw_heap_word(word) })
