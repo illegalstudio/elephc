@@ -354,8 +354,9 @@ fn substitute_relative_class_types_in_flattened(classes: &mut [FlattenedClass]) 
     }
 }
 
-/// Rewrites the relative class types `self`/`static`/`parent` in each method's parameter and
-/// return type annotations to `self_class`/`parent`. Shared by class and interface processing.
+/// Rewrites the relative class types `self`/`static`/`parent` in each method's parameter,
+/// variadic-parameter, and return type annotations to `self_class`/`parent`. Shared by class
+/// and interface processing.
 fn substitute_relative_class_types_in_methods(
     methods: &mut [ClassMethod],
     self_class: &str,
@@ -369,6 +370,9 @@ fn substitute_relative_class_types_in_methods(
         }
         if let Some(ret) = method.return_type.as_mut() {
             *ret = ret.substitute_relative_class_types(self_class, parent);
+        }
+        if let Some(variadic_ty) = method.variadic_type.as_mut() {
+            *variadic_ty = variadic_ty.substitute_relative_class_types(self_class, parent);
         }
     }
 }
