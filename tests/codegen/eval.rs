@@ -19919,6 +19919,97 @@ return count($default) . ":" . $default[0] . ":" . $default[1];');
     assert_eq!(out.stdout, "left:required:right:O:D:B:items:O:2:1:2");
 }
 
+/// Verifies eval materializes generated/AOT constant-expression defaults.
+#[test]
+fn test_eval_aot_callable_constant_expression_defaults() {
+    let out = compile_and_run_capture(
+        r#"<?php
+const EVAL_AOT_DEFAULT_GLOBAL_SUM = 9;
+const EVAL_AOT_DEFAULT_GLOBAL_WORD = "G";
+
+function eval_aot_default_expression_function(
+    int $sum = 1 + 2,
+    string $word = "A" . "B",
+    bool $flag = !false,
+    array $items = [2 * 3, "x" . "y", 1 + 1 => "two"],
+    int $global = EVAL_AOT_DEFAULT_GLOBAL_SUM + 1,
+    string $globalWord = EVAL_AOT_DEFAULT_GLOBAL_WORD . "H",
+    int $pathFlag = PATHINFO_EXTENSION,
+    ?string $maybe = null,
+    float $scale = 1.5
+): string {
+    return $sum . ":" . $word . ":" . ($flag ? "T" : "F") . ":" .
+        $items[0] . ":" . $items[1] . ":" . $items[2] . ":" .
+        $global . ":" . $globalWord . ":" . $pathFlag . ":" .
+        ($maybe === null ? "null" : "set") . ":" . ($scale > 1.0 ? "float" : "bad");
+}
+
+class EvalAotDefaultExpressionDep {
+    public string $label;
+
+    public function __construct(string $label = "base") {
+        $this->label = $label;
+    }
+}
+
+interface EvalAotDefaultExpressionIface {
+    public const IFACE_TAG = "I";
+}
+
+class EvalAotDefaultExpressionBase {
+    public const OFFSET = 4;
+    public const TAG = "B";
+}
+
+class EvalAotDefaultExpressionTarget extends EvalAotDefaultExpressionBase implements EvalAotDefaultExpressionIface {
+    public const LOCAL = 3;
+    public const LABEL = "L";
+
+    public string $label;
+
+    public function __construct(
+        string $prefix = EvalAotDefaultExpressionTarget::LABEL . EvalAotDefaultExpressionBase::TAG,
+        int $count = EvalAotDefaultExpressionTarget::LOCAL + EvalAotDefaultExpressionBase::OFFSET
+    ) {
+        $this->label = $prefix . ":" . $count;
+    }
+
+    public function describe(
+        EvalAotDefaultExpressionDep $dep = new EvalAotDefaultExpressionDep(EvalAotDefaultExpressionBase::TAG . "E"),
+        array $items = [
+            EvalAotDefaultExpressionTarget::LOCAL + EvalAotDefaultExpressionBase::OFFSET,
+            EvalAotDefaultExpressionIface::IFACE_TAG
+        ]
+    ): string {
+        return $dep->label . ":" . $items[0] . ":" . $items[1];
+    }
+
+    public function className(string $name = EvalAotDefaultExpressionTarget::class): string {
+        return $name;
+    }
+}
+
+echo eval('$target = new EvalAotDefaultExpressionTarget();
+$ref = new ReflectionFunction("eval_aot_default_expression_function");
+$items = $ref->getParameters()[3]->getDefaultValue();
+return eval_aot_default_expression_function() . "|"
+    . $target->describe() . "|"
+    . $target->label . "|"
+    . $target->className() . "|"
+    . $items[0] . ":" . $items[2];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "3:AB:T:6:xy:two:10:GH:4:null:float|BE:7:I|LB:7|EvalAotDefaultExpressionTarget|6:two"
+    );
+}
+
 /// Verifies eval ReflectionParameter exposes generated/AOT function type flags.
 #[test]
 fn test_eval_reflection_parameter_exposes_aot_function_type_flags() {
