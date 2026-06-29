@@ -7341,6 +7341,63 @@ return EvalAotCallableRefDriver::run($bridgeFirst, $bridgeValue, 1) . ":" . gett
     );
 }
 
+/// Verifies eval AOT callable by-reference writeback updates property lvalues.
+#[test]
+fn test_eval_fragment_aot_callables_write_back_by_ref_property_lvalues() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotCallableRefLvalueBox {
+    public int $value = 1;
+    public static int $staticValue = 2;
+    public static int $dynStaticValue = 3;
+    public int $offset = 0;
+
+    public function __construct(int $offset = 0) {
+        $this->offset = $offset;
+    }
+
+    public function bump(int &$value): int {
+        $value = $value + $this->offset;
+        return $value;
+    }
+
+    public static function add(int &$value, int $delta): int {
+        $value = $value + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->offset + $delta;
+        return $value;
+    }
+}
+
+echo eval('$box = new EvalAotCallableRefLvalueBox(4);
+$method = [$box, "bump"];
+echo $method($box->value) . ":" . $box->value . "|";
+$name = "value";
+echo $method($box->{$name}) . ":" . $box->value . "|";
+$string = "EvalAotCallableRefLvalueBox::add";
+echo $string(EvalAotCallableRefLvalueBox::$staticValue, 5) . ":" . EvalAotCallableRefLvalueBox::$staticValue . "|";
+$class = "EvalAotCallableRefLvalueBox";
+$staticName = "dynStaticValue";
+echo $string($class::${$staticName}, 6) . ":" . EvalAotCallableRefLvalueBox::$dynStaticValue . "|";
+$first = EvalAotCallableRefLvalueBox::add(...);
+echo $first($box->value, 3) . ":" . $box->value . "|";
+$invokable = new EvalAotCallableRefLvalueBox(10);
+echo $invokable($box->{$name}, 2) . ":" . $box->value . "|";
+$invokableFirst = $invokable(...);
+echo $invokableFirst(EvalAotCallableRefLvalueBox::$staticValue, 1) . ":" . EvalAotCallableRefLvalueBox::$staticValue;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "5:5|9:9|7:7|9:9|12:12|24:24|18:18");
+}
+
 /// Verifies eval `call_user_func_array()` preserves AOT callable by-reference writeback.
 #[test]
 fn test_eval_call_user_func_array_aot_callables_write_back_by_ref_args() {
