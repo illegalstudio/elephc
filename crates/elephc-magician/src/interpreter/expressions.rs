@@ -1062,7 +1062,14 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => {
             eval_builtin_ctype(name, args, context, scope, values)
         }
-        "date" => eval_builtin_date(args, context, scope, values),
+        "checkdate" => eval_builtin_checkdate(args, context, scope, values),
+        "date" | "gmdate" => eval_builtin_date_like(name, args, context, scope, values),
+        "date_default_timezone_get" => {
+            eval_builtin_date_default_timezone_get(args, context, values)
+        }
+        "date_default_timezone_set" => {
+            eval_builtin_date_default_timezone_set(args, context, scope, values)
+        }
         "define" => eval_builtin_define(args, context, scope, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
         "dirname" => eval_builtin_dirname(args, context, scope, values),
@@ -1113,6 +1120,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(name, args, context, scope, values)
         }
+        "getdate" => eval_builtin_getdate(args, context, scope, values),
         "gethostbyaddr" => eval_builtin_gethostbyaddr(args, context, scope, values),
         "gethostbyname" => eval_builtin_gethostbyname(args, context, scope, values),
         "gethostname" => eval_builtin_gethostname(args, values),
@@ -1140,6 +1148,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "hash" | "hash_file" | "hash_hmac" | "md5" | "sha1" => {
             eval_builtin_hash_one_shot(name, args, context, scope, values)
         }
+        "header" => eval_builtin_header(args, context, scope, values),
         "chown" | "chgrp" | "lchown" | "lchgrp" => {
             eval_builtin_chown_like(name, args, context, scope, values)
         }
@@ -1162,9 +1171,12 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "iterator_to_array" => eval_builtin_iterator_to_array(args, context, scope, values),
         "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable" | "is_writable"
         | "is_writeable" => eval_builtin_file_probe(name, args, context, scope, values),
+        "hrtime" => eval_builtin_hrtime(args, context, scope, values),
+        "http_response_code" => eval_builtin_http_response_code(args, context, scope, values),
         "is_array" | "is_bool" | "is_double" | "is_finite" | "is_float" | "is_infinite"
         | "is_int" | "is_integer" | "is_iterable" | "is_long" | "is_nan" | "is_null"
-        | "is_numeric" | "is_object" | "is_real" | "is_resource" | "is_string" => {
+        | "is_numeric" | "is_object" | "is_real" | "is_resource" | "is_scalar"
+        | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
@@ -1177,8 +1189,9 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
         "log" => eval_builtin_log(args, context, scope, values),
         "max" | "min" => eval_builtin_min_max(name, args, context, scope, values),
+        "localtime" => eval_builtin_localtime(args, context, scope, values),
         "microtime" => eval_builtin_microtime(args, context, scope, values),
-        "mktime" => eval_builtin_mktime(args, context, scope, values),
+        "mktime" | "gmmktime" => eval_builtin_mktime_like(name, args, context, scope, values),
         "nl2br" => eval_builtin_nl2br(args, context, scope, values),
         "number_format" => eval_builtin_number_format(args, context, scope, values),
         "ord" => eval_builtin_ord(args, context, scope, values),

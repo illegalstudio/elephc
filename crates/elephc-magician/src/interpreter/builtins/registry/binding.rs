@@ -158,7 +158,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "boolval" | "empty" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool"
         | "is_double" | "is_float" | "is_int" | "is_integer" | "is_iterable" | "is_long"
         | "is_null" | "is_numeric" | "is_object" | "is_real" | "is_resource" | "is_string"
-        | "is_callable" | "strval" => Some(&["value"]),
+        | "is_scalar" | "is_callable" | "strval" => Some(&["value"]),
         "is_finite" | "is_infinite" | "is_nan" => Some(&["num"]),
         "settype" => Some(&["var", "type"]),
         "get_called_class" => Some(&[]),
@@ -193,7 +193,10 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "copy" | "rename" => Some(&["from", "to"]),
         "crc32" => Some(&["string"]),
         "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => Some(&["text"]),
-        "date" => Some(&["format", "timestamp"]),
+        "checkdate" => Some(&["month", "day", "year"]),
+        "date" | "gmdate" => Some(&["format", "timestamp"]),
+        "date_default_timezone_get" => Some(&[]),
+        "date_default_timezone_set" => Some(&["timezoneId"]),
         "define" => Some(&["constant_name", "value"]),
         "defined" => Some(&["constant_name"]),
         "die" | "exit" => Some(&["status"]),
@@ -234,6 +237,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "ftruncate" => Some(&["stream", "size"]),
         "fwrite" => Some(&["stream", "data"]),
         "function_exists" => Some(&["function"]),
+        "getdate" => Some(&["timestamp"]),
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => Some(&[]),
         "gethostbyaddr" => Some(&["ip"]),
         "gethostbyname" => Some(&["hostname"]),
@@ -255,6 +259,9 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "hash_hmac" => Some(&["algo", "data", "key", "binary"]),
         "hash_init" => Some(&["algo", "flags", "key"]),
         "hash_update" => Some(&["context", "data"]),
+        "header" => Some(&["header", "replace", "response_code"]),
+        "hrtime" => Some(&["as_number"]),
+        "http_response_code" => Some(&["response_code"]),
         "gzcompress" | "gzdeflate" => Some(&["data", "level"]),
         "gzinflate" | "gzuncompress" => Some(&["data", "max_length"]),
         "hypot" => Some(&["x", "y"]),
@@ -277,8 +284,11 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "log" => Some(&["num", "base"]),
         "max" | "min" => Some(&["value", "values"]),
         "md5" | "sha1" => Some(&["string", "binary"]),
+        "localtime" => Some(&["timestamp", "associative"]),
         "microtime" => Some(&["as_float"]),
-        "mktime" => Some(&["hour", "minute", "second", "month", "day", "year"]),
+        "mktime" | "gmmktime" => {
+            Some(&["hour", "minute", "second", "month", "day", "year"])
+        }
         "nl2br" => Some(&["string", "use_xhtml"]),
         "number_format" => Some(&[
             "num",

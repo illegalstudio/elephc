@@ -67,6 +67,41 @@ return function_exists("mktime");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies eval UTC calendar builtins and timezone probes are callable-visible.
+#[test]
+fn execute_program_dispatches_extended_calendar_builtins() {
+    let program = parse_fragment(
+        br#"echo date_default_timezone_get(); echo ":";
+echo date_default_timezone_set("UTC") ? "set" : "bad"; echo ":";
+$ts = gmmktime(0, 0, 0, 1, 2, 2024);
+echo gmdate("Y-m-d H:i:s", $ts); echo ":";
+echo call_user_func("gmdate", "Y", $ts); echo ":";
+echo checkdate(2, 29, 2024) ? "leap" : "bad"; echo ":";
+echo checkdate(2, 29, 2023) ? "bad" : "common"; echo ":";
+$g = getdate(0);
+echo $g["year"] . "-" . $g["mon"] . "-" . $g["mday"] . " " . $g["hours"] . ":" . $g["minutes"] . ":" . $g["seconds"];
+echo ":" . $g["weekday"] . ":" . $g["month"] . ":" . $g[0];
+$l = localtime(0, true);
+echo ":" . ($l["tm_year"] + 1900) . "-" . $l["tm_mon"] . "-" . $l["tm_mday"] . " " . $l["tm_hour"];
+$n = localtime(0);
+$callLocal = call_user_func_array("localtime", ["timestamp" => 0, "associative" => true]);
+echo ":" . ($n[5] + 1900) . "-" . $n[4] . ":" . $callLocal["tm_sec"];
+echo ":" . function_exists("gmdate") . function_exists("gmmktime") . function_exists("checkdate");
+echo function_exists("getdate") . function_exists("localtime") . function_exists("date_default_timezone_get");
+return function_exists("date_default_timezone_set");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "UTC:set:2024-01-02 00:00:00:2024:leap:common:1970-1-1 0:0:0:Thursday:January:0:1970-0-1 0:1970-0:0:111111"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval `strtotime()` parses supported ISO date strings and rejects others.
 #[test]
 fn execute_program_dispatches_strtotime_builtin() {
@@ -114,6 +149,38 @@ return function_exists("microtime");"#,
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
     assert_eq!(values.output, "now:named:call:array:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+/// Verifies eval `hrtime()`, `http_response_code()`, and `header()` dispatch paths.
+#[test]
+fn execute_program_dispatches_hrtime_and_http_header_builtins() {
+    let program = parse_fragment(
+        br#"$parts = hrtime();
+echo count($parts) === 2 ? "parts" : "bad"; echo ":";
+echo is_int($parts[0]) && is_int($parts[1]) ? "ints" : "bad"; echo ":";
+echo hrtime(true) > 0 ? "number" : "bad"; echo ":";
+echo http_response_code(); echo ":";
+echo http_response_code(404); echo ":";
+echo http_response_code(); echo ":";
+header("X-Test: 1", true, 201);
+echo http_response_code(); echo ":";
+echo call_user_func("http_response_code", 202); echo ":";
+echo http_response_code(); echo ":";
+echo call_user_func_array("header", ["header" => "X-Test: 2", "replace" => false, "response_code" => 204]);
+echo http_response_code(); echo ":";
+echo function_exists("hrtime") . function_exists("http_response_code") . function_exists("header");
+return is_callable("header");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "parts:ints:number:200:200:404:201:201:202:204:111"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval realpath-cache stubs match elephc's empty-cache runtime view.

@@ -71,6 +71,33 @@ return function_exists("is_infinite");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies eval `is_scalar()` matches PHP scalar-tag membership directly and by callable.
+#[test]
+fn execute_program_dispatches_is_scalar_builtin() {
+    let program = parse_fragment(
+        br#"echo is_scalar(1) ? "i" : "bad";
+echo is_scalar(1.5) ? "f" : "bad";
+echo is_scalar("x") ? "s" : "bad";
+echo is_scalar(false) ? "b" : "bad";
+echo is_scalar(null) ? "bad" : "n";
+echo is_scalar([1]) ? "bad" : "a";
+echo is_scalar($object) ? "bad" : "o";
+echo ":";
+echo call_user_func("is_scalar", "x") ? "call" : "bad";
+echo ":";
+return call_user_func_array("is_scalar", ["value" => [1]]);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let object = values.alloc(FakeValue::Object(Vec::new()));
+    scope.set("object".to_string(), object, ScopeCellOwnership::Borrowed);
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "ifsbnao:call:");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
 /// Verifies eval `is_resource()` recognizes resource-tagged runtime cells from scope.
 #[test]
 fn execute_program_dispatches_is_resource_true() {

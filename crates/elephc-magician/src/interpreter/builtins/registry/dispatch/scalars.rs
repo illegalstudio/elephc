@@ -99,7 +99,8 @@ pub(in crate::interpreter) fn eval_scalars_builtin_with_values(
         }
         "is_array" | "is_bool" | "is_double" | "is_finite" | "is_float" | "is_infinite"
         | "is_int" | "is_integer" | "is_iterable" | "is_long" | "is_nan" | "is_null"
-        | "is_numeric" | "is_object" | "is_real" | "is_resource" | "is_string" => {
+        | "is_numeric" | "is_object" | "is_real" | "is_resource" | "is_scalar"
+        | "is_string" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
