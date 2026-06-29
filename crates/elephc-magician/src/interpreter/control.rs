@@ -54,23 +54,32 @@ pub(super) enum BoundNativeFunctionRefSlot {
     Mixed {
         original: RuntimeCellHandle,
         slot: Box<RuntimeCellHandle>,
-        target: EvalReferenceTarget,
+        target: Option<EvalReferenceTarget>,
     },
     RawWord {
         tag: u64,
         original: u64,
         slot: Box<u64>,
-        target: EvalReferenceTarget,
+        target: Option<EvalReferenceTarget>,
     },
     RawString {
         original: [u64; 2],
         slot: Box<[u64; 2]>,
-        target: EvalReferenceTarget,
+        target: Option<EvalReferenceTarget>,
     },
     OwnedRawWord {
         original: u64,
         slot: Box<u64>,
-        target: EvalReferenceTarget,
+        target: Option<EvalReferenceTarget>,
+    },
+}
+
+/// How a callable binder should handle by-reference parameters without caller storage.
+#[derive(Clone, Copy)]
+pub(super) enum EvalByRefBindingMode<'a> {
+    RequireTarget,
+    WarnByValue {
+        callable_name: &'a str,
     },
 }
 

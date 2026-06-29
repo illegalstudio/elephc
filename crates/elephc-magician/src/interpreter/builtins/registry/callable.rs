@@ -68,7 +68,12 @@ pub(in crate::interpreter) fn eval_call_user_func_with_values(
         return Err(EvalStatus::RuntimeFatal);
     };
     let callback = eval_call_user_func_callback(*callback, "call_user_func", context, values)?;
-    eval_evaluated_callable_with_values(&callback, callback_args.to_vec(), context, values)
+    eval_evaluated_callable_with_call_user_func_values(
+        &callback,
+        callback_args.to_vec(),
+        context,
+        values,
+    )
 }
 
 /// Normalizes a `call_user_func*` callback and maps non-invokable objects to PHP's TypeError.
@@ -326,6 +331,100 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
             },
         },
     }
+}
+
+/// Invokes a normalized callback through `call_user_func()` by-value argument semantics.
+fn eval_evaluated_callable_with_call_user_func_values(
+    callback: &EvaluatedCallable,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match callback {
+        EvaluatedCallable::Named(name) => {
+            eval_named_callable_with_call_user_func_values(name, evaluated_args, context, values)
+        }
+        _ => eval_evaluated_callable_with_values(callback, evaluated_args, context, values),
+    }
+}
+
+/// Invokes a named callable through `call_user_func()` and warns for by-ref parameters.
+fn eval_named_callable_with_call_user_func_values(
+    name: &str,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? {
+        return Ok(result);
+    }
+    if let Some(function) = context.function(name).cloned() {
+        let evaluated_args = positional_args(evaluated_args);
+        let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
+            function.name(),
+            function.params(),
+            function.parameter_is_by_ref(),
+            function.parameter_is_variadic(),
+            evaluated_args.len(),
+            values,
+        )?;
+        return eval_dynamic_function_with_evaluated_args_and_ref_flags(
+            &function,
+            &parameter_is_by_ref,
+            evaluated_args,
+            context,
+            values,
+        );
+    }
+    if let Some(function) = context.native_function(name) {
+        let evaluated_args = positional_args(evaluated_args);
+        let evaluated_args = bind_evaluated_native_function_args_for_call_user_func(
+            name,
+            &function,
+            evaluated_args,
+            context,
+            values,
+        )?;
+        return eval_native_function_with_values(function, evaluated_args, context, values);
+    }
+    Err(EvalStatus::UnsupportedConstruct)
+}
+
+/// Builds by-value binding flags for `call_user_func()` and emits PHP by-ref warnings.
+fn eval_call_user_func_by_value_ref_flags(
+    callable_name: &str,
+    params: &[String],
+    parameter_is_by_ref: &[bool],
+    parameter_is_variadic: &[bool],
+    supplied_count: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<bool>, EvalStatus> {
+    let variadic_index = parameter_is_variadic
+        .iter()
+        .position(|is_variadic| *is_variadic);
+    for arg_index in 0..supplied_count {
+        let param_index = if variadic_index.is_some_and(|index| arg_index >= index) {
+            variadic_index.ok_or(EvalStatus::RuntimeFatal)?
+        } else {
+            arg_index
+        };
+        if !parameter_is_by_ref
+            .get(param_index)
+            .copied()
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let param_name = params
+            .get(param_index)
+            .map(String::as_str)
+            .unwrap_or("arg");
+        values.warning(&format!(
+            "{callable_name}(): Argument #{} (${param_name}) must be passed by reference, value given",
+            arg_index + 1
+        ))?;
+    }
+    Ok(vec![false; params.len()])
 }
 
 /// Invokes an already normalized callback with optional named-argument metadata.

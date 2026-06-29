@@ -347,10 +347,45 @@ pub(in crate::interpreter) fn bind_evaluated_native_function_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<BoundNativeFunctionArgs, EvalStatus> {
+    bind_evaluated_native_function_args_with_mode(
+        function,
+        evaluated_args,
+        EvalByRefBindingMode::RequireTarget,
+        context,
+        values,
+    )
+}
+
+/// Binds native AOT function args for `call_user_func()` by-value by-ref degradation.
+pub(in crate::interpreter) fn bind_evaluated_native_function_args_for_call_user_func(
+    callable_name: &str,
+    function: &NativeFunction,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<BoundNativeFunctionArgs, EvalStatus> {
+    bind_evaluated_native_function_args_with_mode(
+        function,
+        evaluated_args,
+        EvalByRefBindingMode::WarnByValue { callable_name },
+        context,
+        values,
+    )
+}
+
+/// Binds already evaluated native AOT function args using the selected by-reference mode.
+fn bind_evaluated_native_function_args_with_mode(
+    function: &NativeFunction,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<BoundNativeFunctionArgs, EvalStatus> {
     if native_function_variadic_index(function).is_some() {
         return bind_evaluated_native_variadic_function_args(
             function,
             evaluated_args,
+            by_ref_mode,
             context,
             values,
         );
@@ -371,6 +406,8 @@ pub(in crate::interpreter) fn bind_evaluated_native_function_args(
                 &name,
                 arg.value,
                 arg.ref_target,
+                by_ref_mode,
+                values,
             )?;
         } else {
             bind_native_function_positional_arg(
@@ -380,6 +417,8 @@ pub(in crate::interpreter) fn bind_evaluated_native_function_args(
                 &mut next_positional,
                 arg.value,
                 arg.ref_target,
+                by_ref_mode,
+                values,
             )?;
         }
     }
@@ -406,13 +445,14 @@ pub(in crate::interpreter) fn bind_evaluated_native_function_args(
         .collect::<Option<Vec<_>>>()
         .ok_or(EvalStatus::RuntimeFatal)?;
     apply_native_function_arg_types(function, None, &mut bound_args, context, values)?;
-    stage_native_function_invoker_args(function, None, bound_args, values)
+    stage_native_function_invoker_args(function, None, bound_args, by_ref_mode, values)
 }
 
 /// Binds a native AOT variadic function while keeping the raw invoker argument layout.
 fn bind_evaluated_native_variadic_function_args(
     function: &NativeFunction,
     evaluated_args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<BoundNativeFunctionArgs, EvalStatus> {
@@ -437,6 +477,8 @@ fn bind_evaluated_native_variadic_function_args(
                 &name,
                 arg.value,
                 arg.ref_target,
+                by_ref_mode,
+                values,
             )?;
         } else if next_positional < variadic_index {
             bind_native_function_positional_arg(
@@ -446,12 +488,16 @@ fn bind_evaluated_native_variadic_function_args(
                 &mut next_positional,
                 arg.value,
                 arg.ref_target,
+                by_ref_mode,
+                values,
             )?;
         } else {
             let ref_target = native_function_parameter_ref_target(
                 function,
                 Some(variadic_index),
                 arg.ref_target,
+                by_ref_mode,
+                values,
             )?;
             variadic_args.push(BoundMethodArg {
                 value: arg.value,
@@ -490,7 +536,13 @@ fn bind_evaluated_native_variadic_function_args(
         context,
         values,
     )?;
-    stage_native_function_invoker_args(function, Some(variadic_index), bound_args, values)
+    stage_native_function_invoker_args(
+        function,
+        Some(variadic_index),
+        bound_args,
+        by_ref_mode,
+        values,
+    )
 }
 
 /// Applies registered native AOT function parameter types after argument binding.
@@ -523,6 +575,8 @@ fn bind_native_function_named_arg(
     name: &str,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let Some(param_index) = native_function_named_param_index(function, variadic_index, name) else {
         return Err(EvalStatus::RuntimeFatal);
@@ -530,7 +584,8 @@ fn bind_native_function_named_arg(
     if bound_args[param_index].is_some() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let ref_target = native_function_parameter_ref_target(function, Some(param_index), ref_target)?;
+    let ref_target =
+        native_function_parameter_ref_target(function, Some(param_index), ref_target, by_ref_mode, values)?;
     bound_args[param_index] = Some(BoundMethodArg {
         value,
         ref_target,
@@ -547,6 +602,8 @@ fn bind_native_function_positional_arg(
     next_positional: &mut usize,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let param_index = *next_positional;
     if variadic_index.is_some_and(|index| param_index >= index)
@@ -555,7 +612,8 @@ fn bind_native_function_positional_arg(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let ref_target = native_function_parameter_ref_target(function, Some(param_index), ref_target)?;
+    let ref_target =
+        native_function_parameter_ref_target(function, Some(param_index), ref_target, by_ref_mode, values)?;
     bound_args[param_index] = Some(BoundMethodArg {
         value,
         ref_target,
@@ -570,6 +628,8 @@ fn native_function_parameter_ref_target(
     function: &NativeFunction,
     param_index: Option<usize>,
     ref_target: Option<EvalReferenceTarget>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalReferenceTarget>, EvalStatus> {
     let Some(param_index) = param_index else {
         return Ok(None);
@@ -577,7 +637,20 @@ fn native_function_parameter_ref_target(
     if !function.param_by_ref(param_index) {
         return Ok(None);
     }
-    ref_target.map(Some).ok_or(EvalStatus::RuntimeFatal)
+    if let Some(ref_target) = ref_target {
+        return Ok(Some(ref_target));
+    }
+    match by_ref_mode {
+        EvalByRefBindingMode::RequireTarget => Err(EvalStatus::RuntimeFatal),
+        EvalByRefBindingMode::WarnByValue { callable_name } => {
+            let param_name = native_function_param_warning_name(function, param_index);
+            values.warning(&format!(
+                "{callable_name}(): Argument #{} (${param_name}) must be passed by reference, value given",
+                param_index + 1
+            ))?;
+            Ok(None)
+        }
+    }
 }
 
 /// Converts bound values into descriptor-invoker arguments, staging by-reference slots.
@@ -585,6 +658,7 @@ fn stage_native_function_invoker_args(
     function: &NativeFunction,
     variadic_index: Option<usize>,
     bound_args: Vec<BoundMethodArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<BoundNativeFunctionArgs, EvalStatus> {
     let mut invoker_values = Vec::with_capacity(bound_args.len());
@@ -599,7 +673,11 @@ fn stage_native_function_invoker_args(
             invoker_values.push(bound_arg.value);
             continue;
         }
-        let target = bound_arg.ref_target.ok_or(EvalStatus::RuntimeFatal)?;
+        let target = match (bound_arg.ref_target, by_ref_mode) {
+            (Some(target), _) => Some(target),
+            (None, EvalByRefBindingMode::WarnByValue { .. }) => None,
+            (None, EvalByRefBindingMode::RequireTarget) => return Err(EvalStatus::RuntimeFatal),
+        };
         if let Some(raw_ref_kind) = native_function_raw_ref_kind(function.param_type(param_index)) {
             match raw_ref_kind {
                 NativeFunctionRawRefKind::Scalar { tag } => {
@@ -664,6 +742,16 @@ fn stage_native_function_invoker_args(
         values: invoker_values,
         ref_slots,
     })
+}
+
+/// Returns the PHP parameter name used in by-reference warning diagnostics.
+fn native_function_param_warning_name(function: &NativeFunction, param_index: usize) -> String {
+    function
+        .param_names()
+        .get(param_index)
+        .filter(|name| !name.is_empty())
+        .cloned()
+        .unwrap_or_else(|| format!("arg{}", param_index + 1))
 }
 
 /// Describes native function by-reference parameters that can use typed raw slots.
@@ -1753,6 +1841,9 @@ fn write_back_native_function_ref_args(
                 if value == *original {
                     continue;
                 }
+                let Some(target) = target else {
+                    continue;
+                };
                 let current = eval_reference_target_value(target, context, values)?;
                 if current == value {
                     continue;
@@ -1775,6 +1866,9 @@ fn write_back_native_function_ref_args(
                 if word == *original {
                     continue;
                 }
+                let Some(target) = target else {
+                    continue;
+                };
                 let value = values.raw_word_value(*tag, word)?;
                 eval_write_direct_ref_target(
                     target,
@@ -1790,6 +1884,16 @@ fn write_back_native_function_ref_args(
                 target,
             } => {
                 let words = **slot;
+                if target.is_none() {
+                    values.release_raw_string_words(words[0], words[1])?;
+                    if words[0] != original[0] {
+                        values.release_raw_string_words(original[0], original[1])?;
+                    }
+                    continue;
+                }
+                let Some(target) = target else {
+                    return Err(EvalStatus::RuntimeFatal);
+                };
                 if words == *original {
                     values.release_raw_string_words(words[0], words[1])?;
                     continue;
@@ -1814,6 +1918,16 @@ fn write_back_native_function_ref_args(
                 target,
             } => {
                 let word = **slot;
+                if target.is_none() {
+                    values.release_raw_heap_word(word)?;
+                    if word != *original {
+                        values.release_raw_heap_word(*original)?;
+                    }
+                    continue;
+                }
+                let Some(target) = target else {
+                    return Err(EvalStatus::RuntimeFatal);
+                };
                 if word == *original {
                     values.release_raw_heap_word(word)?;
                     continue;

@@ -7484,6 +7484,63 @@ echo call_user_func_array($invokableFirst, [&$firstValue, 3]) . ":" . gettype($f
     );
 }
 
+/// Verifies eval `call_user_func()` warns and passes eval-declared by-ref params by value.
+#[test]
+fn test_eval_call_user_func_eval_function_by_ref_args_warn_and_use_value_copy() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('function eval_cuf_ref_string(&$value) {
+    $value .= "x";
+    return $value;
+}
+$value = "a";
+echo call_user_func("eval_cuf_ref_string", $value) . ":" . $value;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "ax:a");
+    assert!(
+        out.stderr.contains(
+            "eval_cuf_ref_string(): Argument #1 ($value) must be passed by reference, value given"
+        ),
+        "missing by-ref warning: {}",
+        out.stderr
+    );
+}
+
+/// Verifies eval `call_user_func()` warns and passes AOT by-ref params by value.
+#[test]
+fn test_eval_call_user_func_aot_function_by_ref_args_warn_and_use_value_copy() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function eval_aot_cuf_ref_int(int &$value): int {
+    $value = $value + 2;
+    return $value;
+}
+
+eval('$value = 3;
+echo call_user_func("eval_aot_cuf_ref_int", $value) . ":" . $value;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "5:3");
+    assert!(
+        out.stderr.contains(
+            "eval_aot_cuf_ref_int(): Argument #1 ($value) must be passed by reference, value given"
+        ),
+        "missing by-ref warning: {}",
+        out.stderr
+    );
+}
+
 /// Verifies eval `ReflectionClass::newInstanceArgs()` preserves AOT constructor by-reference writeback.
 #[test]
 fn test_eval_reflection_new_instance_args_aot_constructor_writes_back_by_ref_args() {
