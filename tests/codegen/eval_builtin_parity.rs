@@ -40,6 +40,23 @@ echo function_exists("eval_declared_lookup") ? eval_declared_lookup() : "d";
     assert_eq!(out, "BSCD");
 }
 
+/// Verifies compiler-internal raw time helpers stay hidden from PHP function lookup.
+#[test]
+fn test_internal_raw_time_helpers_are_not_php_visible_before_or_after_eval() {
+    let out = compile_and_run(
+        r#"<?php
+echo function_exists("__elephc_mktime_raw") ? "M" : "m";
+echo function_exists("__elephc_gmmktime_raw") ? "G" : "g";
+echo function_exists("__elephc_strtotime_raw") ? "S" : "s";
+eval('echo function_exists("__elephc_mktime_raw") ? "M" : "m";
+echo function_exists("__elephc_gmmktime_raw") ? "G" : "g";
+echo function_exists("__elephc_strtotime_raw") ? "S" : "s";');
+"#,
+    );
+
+    assert_eq!(out, "mgsmgs");
+}
+
 /// Verifies eval builtin lookup remains case-insensitive after eval is active.
 #[test]
 fn test_eval_function_exists_builtin_case_insensitive() {

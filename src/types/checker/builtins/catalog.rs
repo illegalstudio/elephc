@@ -13,9 +13,6 @@
 //!   hidden from `function_exists()` and first-class callable surfaces.
 
 const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
-    "__elephc_gmmktime_raw",
-    "__elephc_mktime_raw",
-    "__elephc_strtotime_raw",
     "abs",
     "acos",
     "addslashes",
@@ -438,8 +435,11 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
 ];
 
 const INTERNAL_BUILTIN_FUNCTIONS: &[&str] = &[
+    "__elephc_gmmktime_raw",
+    "__elephc_mktime_raw",
     "__elephc_phar_list_entries",
     "__elephc_phar_set_compression",
+    "__elephc_strtotime_raw",
 ];
 
 const LANGUAGE_CONSTRUCT_FUNCTIONS: &[&str] = &["eval"];

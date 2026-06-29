@@ -42,7 +42,15 @@ const EVAL_ONLY_REFLECTION_BUILTINS: &[&str] = &[
 ];
 
 /// Eval supports these PHP optional parameters before the static backend does.
-const EVAL_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["array_reverse", "array_splice", "nl2br"];
+const EVAL_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &[
+    "array_reverse",
+    "array_splice",
+    "nl2br",
+    "print_r",
+];
+
+/// Eval supports variadic debug output before the static backend does.
+const EVAL_VARIADIC_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["var_dump"];
 
 /// Verifies every non-raw-memory static builtin is visible through eval's function lookup.
 #[test]
@@ -89,6 +97,14 @@ fn shared_builtin_signature_shape_matches_static_signatures() {
         };
         if EVAL_SIGNATURE_EXTENSION_BUILTINS.contains(name) {
             assert_eval_signature_extends_static_signature(name, &static_meta, &eval_meta);
+            continue;
+        }
+        if EVAL_VARIADIC_SIGNATURE_EXTENSION_BUILTINS.contains(name) {
+            assert_eval_variadic_signature_extends_static_signature(
+                name,
+                &static_meta,
+                &eval_meta,
+            );
             continue;
         }
 
@@ -141,6 +157,34 @@ fn assert_eval_signature_extends_static_signature(
     assert!(
         eval_meta.default_param_count >= static_meta.default_param_count,
         "{name} eval extension must not remove defaults"
+    );
+}
+
+/// Verifies a documented eval variadic extension keeps the static prefix contract.
+fn assert_eval_variadic_signature_extends_static_signature(
+    name: &str,
+    static_meta: &elephc::builtin_metadata::BuiltinSignatureMetadata,
+    eval_meta: &elephc_magician::builtin_metadata::BuiltinSignatureMetadata,
+) {
+    assert!(
+        eval_meta.params.starts_with(&static_meta.params),
+        "{name} eval variadic extension must preserve static parameter prefix: static={static_meta:#?} eval={eval_meta:#?}"
+    );
+    assert_eq!(
+        static_meta.required_param_count, eval_meta.required_param_count,
+        "{name} eval variadic extension must preserve required parameter count"
+    );
+    assert!(
+        static_meta.variadic.is_none() && eval_meta.variadic.is_some(),
+        "{name} eval variadic extension must add, not remove, variadic behavior"
+    );
+    assert_eq!(
+        static_meta.by_ref_params, eval_meta.by_ref_params,
+        "{name} eval variadic extension must preserve by-reference parameters"
+    );
+    assert!(
+        eval_meta.default_param_count >= static_meta.default_param_count,
+        "{name} eval variadic extension must not remove defaults"
     );
 }
 

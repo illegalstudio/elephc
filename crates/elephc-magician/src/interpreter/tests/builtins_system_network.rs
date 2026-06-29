@@ -116,7 +116,10 @@ echo ":" . (strtotime("2024/06/15") === -1 ? "bad" : "wrong");
 $call = call_user_func("strtotime", "2024-01-02 03:04:05");
 echo ":" . date("Y-m-d H:i:s", $call);
 $spread = call_user_func_array("strtotime", ["datetime" => "2024-01-02"]);
-echo ":" . date("Y-m-d", $spread) . ":";
+echo ":" . date("Y-m-d", $spread);
+echo ":" . strtotime("now", 1700000000);
+$base = call_user_func_array("strtotime", ["datetime" => "now", "baseTimestamp" => 1700000001]);
+echo ":" . $base . ":";
 return function_exists("strtotime");"#,
     )
     .expect("parse eval fragment");
@@ -127,7 +130,7 @@ return function_exists("strtotime");"#,
 
     assert_eq!(
             values.output,
-            "2024-06-15 00:00:00:2024-06-15 12:30:45:2024-06-15 12:30:00:bad:2024-01-02 03:04:05:2024-01-02:"
+            "2024-06-15 00:00:00:2024-06-15 12:30:45:2024-06-15 12:30:00:bad:2024-01-02 03:04:05:2024-01-02:1700000000:1700000001:"
         );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

@@ -7086,6 +7086,52 @@ echo (new EvalAotCallableArrayNamedBox())->run();
     assert_eq!(out.stdout, "AB:CD:EF");
 }
 
+/// Verifies eval AOT callables preserve typed by-reference argument writeback.
+#[test]
+fn test_eval_fragment_aot_callables_write_back_typed_by_ref_args() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotCallableRefBox {
+    public int $offset = 0;
+
+    public function __construct(int $offset = 0) {
+        $this->offset = $offset;
+    }
+
+    public function bump(int &$value): int {
+        $value = $value + $this->offset;
+        return $value;
+    }
+
+    public static function add(int &$value, int $delta): int {
+        $value = $value + $delta;
+        return $value;
+    }
+}
+
+echo eval('$box = new EvalAotCallableRefBox(5);
+$method = [$box, "bump"];
+$value = "7";
+echo $method($value) . ":" . gettype($value) . ":" . $value . "|";
+$string = "EvalAotCallableRefBox::add";
+$staticValue = "3";
+echo $string($staticValue, 4) . ":" . gettype($staticValue) . ":" . $staticValue . "|";
+$first = EvalAotCallableRefBox::add(...);
+$next = "2";
+return $first($next, 6) . ":" . gettype($next) . ":" . $next;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "12:integer:12|7:integer:7|8:integer:8"
+    );
+}
+
 /// Verifies eval can pass runtime PHP callbacks to generated/AOT callable-typed methods.
 #[test]
 fn test_eval_fragment_passes_callable_args_to_aot_methods() {

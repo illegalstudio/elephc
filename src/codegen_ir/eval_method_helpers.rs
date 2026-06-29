@@ -1396,7 +1396,7 @@ fn emit_aarch64_prepare_method_args(
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
-    emitter.instruction("ldr x0, [sp, #16]");                                   // load the unboxed receiver as the first method argument
+    emitter.instruction("ldr x0, [x29, #-32]");                                 // load the unboxed receiver as the first method argument
     abi::emit_push_result_value(emitter, &receiver_ty);
     let mut arg_temp_bytes = eval_arg_temp_slot_size(&receiver_ty);
     for (index, param_ty) in slot.params.iter().enumerate() {

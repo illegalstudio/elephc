@@ -620,6 +620,71 @@ fn execute_program_static_runtime_method_hook_rejects_by_ref_temporary_arg() {
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies callable-array AOT method dispatch preserves by-reference writeback.
+#[test]
+fn execute_program_callable_array_runtime_method_writes_back_by_ref_type_coercion() {
+    let program = parse_fragment(
+        br#"$box = new KnownClass(10);
+$cb = [$box, "add2_x"];
+$value = "3";
+echo $cb($value, 2);
+return $value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut signature = NativeCallableSignature::new(2);
+    assert!(signature.set_param_name(0, "left"));
+    assert!(signature.set_param_name(1, "right"));
+    assert!(signature.set_param_type(
+        0,
+        EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false)
+    ));
+    assert!(signature.set_param_by_ref(0, true));
+    assert!(context.define_native_method_signature("KnownClass", "add2_x", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("callable-array runtime method should preserve by-ref target");
+
+    assert_eq!(values.output, "15");
+    assert_eq!(values.get(result), FakeValue::Int(3));
+}
+
+/// Verifies string and first-class AOT static callables preserve by-reference writeback.
+#[test]
+fn execute_program_static_runtime_callables_write_back_by_ref_type_coercion() {
+    let program = parse_fragment(
+        br#"$string = "KnownClass::sum";
+$left = "3";
+echo $string($left, 2); echo ":";
+echo $left + 1; echo ":";
+$first = KnownClass::sum(...);
+$next = "4";
+echo $first($next, 5); echo ":";
+return $next;"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut signature = NativeCallableSignature::new(2);
+    assert!(signature.set_param_name(0, "left"));
+    assert!(signature.set_param_name(1, "right"));
+    assert!(signature.set_param_type(
+        0,
+        EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false)
+    ));
+    assert!(signature.set_param_by_ref(0, true));
+    assert!(context.define_native_static_method_signature("KnownClass", "sum", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("runtime static callables should preserve by-ref target");
+
+    assert_eq!(values.output, "5:4:9:");
+    assert_eq!(values.get(result), FakeValue::Int(4));
+}
+
 /// Verifies runtime AOT static method fallback rejects named arguments without metadata.
 #[test]
 fn execute_program_static_runtime_method_hook_rejects_unregistered_named_args() {

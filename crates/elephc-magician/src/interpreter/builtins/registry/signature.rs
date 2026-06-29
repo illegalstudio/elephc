@@ -110,7 +110,7 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "array_walk" | "usort" | "uksort" | "uasort" => fixed_by_ref(params, &["array"]),
         "call_user_func" => variadic(params, &[]),
 
-        "log" | "round" | "date" | "gmdate" | "nl2br" => optional(params, 1),
+        "log" | "round" | "date" | "gmdate" | "nl2br" | "strtotime" => optional(params, 1),
         "min" | "max" => variadic(params, &[]),
         "json_encode" | "json_decode" | "json_validate" => optional(params, 1),
 
@@ -217,6 +217,7 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("log", 1) => Float(std::f64::consts::E),
         ("round", 1) => Int(0),
         ("date" | "gmdate", 1) => Null,
+        ("strtotime", 1) => Null,
         ("nl2br", 1) => Bool(true),
         ("json_encode", 1) => Int(0),
         ("json_encode", 2) => Int(512),

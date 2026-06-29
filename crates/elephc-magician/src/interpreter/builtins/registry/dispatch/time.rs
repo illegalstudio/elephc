@@ -97,12 +97,13 @@ pub(in crate::interpreter) fn eval_time_builtin_with_values(
             }
             eval_time_result(values)?
         }
-        "strtotime" => {
-            let [datetime] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_strtotime_result(*datetime, context, values)?
-        }
+        "strtotime" => match evaluated_args {
+            [datetime] => eval_strtotime_result(*datetime, None, context, values)?,
+            [datetime, base_timestamp] => {
+                eval_strtotime_result(*datetime, Some(*base_timestamp), context, values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "usleep" => {
             let [microseconds] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);

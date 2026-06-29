@@ -370,7 +370,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "stream_wrapper_unregister" | "stream_wrapper_restore" => Some(&["protocol"]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
-        "strtotime" => Some(&["datetime"]),
+        "strtotime" => Some(&["datetime", "baseTimestamp"]),
         "strstr" => Some(&["haystack", "needle", "before_needle"]),
         "str_pad" => Some(&["string", "length", "pad_string", "pad_type"]),
         "str_replace" | "str_ireplace" => Some(&["search", "replace", "subject", "count"]),

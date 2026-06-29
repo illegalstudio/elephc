@@ -279,6 +279,35 @@ fn execute_program_rejects_runtime_constructor_by_ref_temporary_arg() {
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies runtime/AOT constructor fallback writes coerced by-reference args back.
+#[test]
+fn execute_program_writes_back_runtime_constructor_by_ref_type_coercion() {
+    let program = parse_fragment(
+        br#"$value = "9";
+$box = new KnownClass($value);
+echo $box->read_x();
+return $value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut signature = NativeCallableSignature::new(1);
+    assert!(signature.set_param_name(0, "value"));
+    assert!(signature.set_param_type(
+        0,
+        EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false)
+    ));
+    assert!(signature.set_param_by_ref(0, true));
+    assert!(context.define_native_constructor_signature("KnownClass", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("registered constructor by-ref coercion should bind");
+
+    assert_eq!(values.output, "9");
+    assert_eq!(values.get(result), FakeValue::Int(9));
+}
+
 /// Verifies eval-declared classes create objects with properties and methods.
 #[test]
 fn execute_program_constructs_eval_declared_class_with_method() {
