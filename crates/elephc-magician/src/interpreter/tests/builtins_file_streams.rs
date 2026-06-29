@@ -154,6 +154,16 @@ $staticName = "staticValue";
 echo flock($h, LOCK_EX, $class::${{$staticName}}) ? "dynstaticlock" : "bad"; echo ":";
 echo EvalFlockWouldBlockBox::$staticValue === false ? "dynstatic0" : "bad"; echo ":";
 flock($h, LOCK_UN);
+$lock = "flock";
+$dynamicWould = true;
+echo $lock($h, LOCK_SH, $dynamicWould) ? "dynfnlock" : "bad"; echo ":";
+echo $dynamicWould === false ? "dynfn0" : "bad"; echo ":";
+flock($h, LOCK_UN);
+$firstClassLock = flock(...);
+$firstClassWould = true;
+echo $firstClassLock($h, LOCK_EX, $firstClassWould) ? "fcclock" : "bad"; echo ":";
+echo $firstClassWould === false ? "fcc0" : "bad"; echo ":";
+flock($h, LOCK_UN);
 echo call_user_func("flock", $h, LOCK_SH) ? "calllock" : "bad"; echo ":";
 flock($h, LOCK_UN);
 echo flock($h, 99) === false ? "invalid" : "bad"; echo ":";
@@ -174,7 +184,7 @@ return true;"#
     let _ = std::fs::remove_file(&file);
     assert_eq!(
         values.output,
-        "lock:would0:unlock:would1:proplock:prop0:dynlock:dyn0:staticlock:static0:dynstaticlock:dynstatic0:calllock:invalid:cleanup:11111:locks=1234"
+        "lock:would0:unlock:would1:proplock:prop0:dynlock:dyn0:staticlock:static0:dynstaticlock:dynstatic0:dynfnlock:dynfn0:fcclock:fcc0:calllock:invalid:cleanup:11111:locks=1234"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

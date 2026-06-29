@@ -38,6 +38,7 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
         }
         "preg_match" => eval_dynamic_preg_match_call(evaluated_args, context, values)?,
         "preg_match_all" => eval_dynamic_preg_match_all_call(evaluated_args, context, values)?,
+        "flock" => eval_dynamic_flock_call(evaluated_args, context, values)?,
         _ => return Ok(None),
     };
     Ok(result)
@@ -243,6 +244,38 @@ fn eval_dynamic_preg_match_all_call(
         eval_preg_match_all_capture_result(pattern.value, subject.value, flags, values)?;
     eval_write_preg_matches_target(target, matches_array, context, values)?;
     Ok(Some(result))
+}
+
+/// Evaluates a dynamic `flock()` call when `$would_block` is a writable lvalue.
+fn eval_dynamic_flock_call(
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["stream", "operation", "would_block"],
+        evaluated_args,
+        false,
+    )?;
+    let stream = required_evaluated_ref_arg(&bound, 0)?;
+    let operation = required_evaluated_ref_arg(&bound, 1)?;
+    let Some(would_block) = optional_evaluated_ref_arg(&bound, 2) else {
+        return Ok(None);
+    };
+    let Some(target) = would_block.ref_target.as_ref() else {
+        return Ok(None);
+    };
+    let (success, would_block) =
+        eval_flock_result(stream.value, operation.value, context, values)?;
+    let would_block = values.bool_value(would_block)?;
+    eval_write_direct_ref_target(
+        target,
+        would_block,
+        context,
+        values,
+        Some(ScopeCellOwnership::Owned),
+    )?;
+    values.bool_value(success).map(Some)
 }
 
 /// Binds already evaluated arguments while preserving by-reference target metadata.

@@ -3092,6 +3092,30 @@ echo function_exists("filesize"); echo function_exists("unlink");');
     );
 }
 
+/// Verifies dynamic eval `flock()` callables write the by-reference `$would_block` output.
+#[test]
+fn test_eval_dynamic_flock_callables_write_would_block_by_ref() {
+    let out = compile_and_run(
+        r#"<?php
+eval('file_put_contents("eval-lock.txt", "x");
+$h = fopen("eval-lock.txt", "r+");
+$lock = "flock";
+$would = true;
+echo $lock($h, LOCK_EX, $would) ? "dynlock" : "bad"; echo ":";
+echo $would === false ? "dyn0" : "bad"; echo ":";
+flock($h, LOCK_UN);
+$firstClass = flock(...);
+$firstClassWould = true;
+echo $firstClass($h, LOCK_SH, $firstClassWould) ? "fcclock" : "bad"; echo ":";
+echo $firstClassWould === false ? "fcc0" : "bad"; echo ":";
+flock($h, LOCK_UN);
+fclose($h);
+echo unlink("eval-lock.txt") ? "cleanup" : "bad";');
+"#,
+    );
+    assert_eq!(out, "dynlock:dyn0:fcclock:fcc0:cleanup");
+}
+
 /// Verifies eval disk-space builtins return positive local capacity and zero on failure.
 #[test]
 fn test_eval_dispatches_disk_space_builtin_calls() {
