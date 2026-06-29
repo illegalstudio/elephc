@@ -340,3 +340,57 @@ fn test_int_chained_arithmetic_no_overflow() {
     let out = compile_and_run("<?php echo $argc + 1 + 2 + 3;");
     assert_eq!(out, "7");
 }
+
+/// Regression for #369 Tier 2 Stage 0: a checked op with two constant operands
+/// is folded at IR level by ConstFold. The result type narrows from Mixed to
+/// Int when there is no overflow. This verifies the type-narrowing path works
+/// end-to-end (acquire/release of the narrowed value, local store, echo).
+#[test]
+fn test_checked_op_constant_folds_no_overflow() {
+    let out = compile_and_run(r#"<?php $x = 1 + 2; echo $x;"#);
+    assert_eq!(out, "3");
+}
+
+/// Regression for #369 Tier 2 Stage 0: a checked op with two constant operands
+/// that overflows is folded to a float constant by ConstFold. The result type
+/// narrows from Mixed to Float.
+#[test]
+fn test_checked_op_constant_folds_overflow_to_float() {
+    let out = compile_and_run(r#"<?php $x = 9223372036854775807 + 1; echo $x;"#);
+    assert_eq!(out, "9.2233720368548E+18");
+}
+
+/// Regression for #369 Tier 2 Stage 0: a checked subtraction with two constant
+/// operands that overflows is folded to a float constant.
+#[test]
+fn test_checked_sub_constant_folds_overflow_to_float() {
+    let out = compile_and_run(r#"<?php $x = -9223372036854775808 - 1; echo $x;"#);
+    assert_eq!(out, "-9.2233720368548E+18");
+}
+
+/// Regression for #369 Tier 2 Stage 0: a checked multiplication with two
+/// constant operands that overflows is folded to a float constant.
+#[test]
+fn test_checked_mul_constant_folds_overflow_to_float() {
+    let out = compile_and_run(r#"<?php $x = 9223372036854775807 * 2; echo $x;"#);
+    assert_eq!(out, "1.844674407371E+19");
+}
+
+/// Regression for #369 Tier 2 Stage 0: a checked op folded to a constant and
+/// stored to a local, then used in a subsequent checked op that also folds.
+/// Verifies chained constant propagation through local slots with type
+/// narrowing.
+#[test]
+fn test_checked_op_chained_constant_folds() {
+    let out = compile_and_run(r#"<?php $a = 100 + 200; $b = $a + 300; echo $b;"#);
+    assert_eq!(out, "600");
+}
+
+/// Regression for #369 Tier 2 Stage 0: a checked op with two constant operands
+/// that does NOT overflow folds to an Int constant, and the result is used in a
+/// Mixed-typed context (var_dump) to verify the type narrowing is safe.
+#[test]
+fn test_checked_op_constant_folds_no_overflow_var_dump() {
+    let out = compile_and_run(r#"<?php $x = 42 + 8; var_dump($x);"#);
+    assert_eq!(out, "int(50)\n");
+}
