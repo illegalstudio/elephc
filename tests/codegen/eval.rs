@@ -1486,6 +1486,33 @@ echo $rsort(EvalFirstClassRefLikeBuiltinBox::$staticItems) . ":" . EvalFirstClas
     assert_eq!(out, "3:2:2:1:1,2,3:1:integer:42:2:b:1:21");
 }
 
+/// Verifies eval `call_user_func_array()` preserves ref-like builtin writeback aliases.
+#[test]
+fn test_eval_call_user_func_array_ref_like_builtin_callables_write_back_lvalues() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalCallArrayRefLikeBuiltinBox {
+    public array $items = [3, 1, 2];
+    public static array $staticItems = [1, 2];
+    public mixed $value = "42";
+    public static mixed $staticValue = "0";
+}
+$box = new EvalCallArrayRefLikeBuiltinBox();
+$sort = sort(...);
+echo call_user_func_array($sort, [&$box->items]) . ":" . implode(",", $box->items) . ":";
+$rsort = rsort(...);
+echo call_user_func_array($rsort, [&EvalCallArrayRefLikeBuiltinBox::$staticItems]) . ":" . implode(",", EvalCallArrayRefLikeBuiltinBox::$staticItems) . ":";
+$set = settype(...);
+echo call_user_func_array($set, ["var" => &$box->value, "type" => "integer"]) . ":" . gettype($box->value) . ":" . $box->value . ":";
+$string = "settype";
+echo call_user_func_array($string, [&EvalCallArrayRefLikeBuiltinBox::$staticValue, "bool"]) . ":" . gettype(EvalCallArrayRefLikeBuiltinBox::$staticValue) . ":" . (EvalCallArrayRefLikeBuiltinBox::$staticValue ? "true" : "false") . ":";
+$push = array_push(...);
+echo call_user_func_array($push, [&$box->items, 4]) . ":" . $box->items[3];');
+"#,
+    );
+    assert_eq!(out, "1:1,2,3:1:2,1:1:integer:42:1:boolean:false:4:4");
+}
+
 /// Verifies eval `array_splice()` mutates writable lvalue arguments.
 #[test]
 fn test_eval_dispatches_array_splice_builtin_call() {
