@@ -7372,6 +7372,37 @@ echo call_user_func_array($invokableFirst, [&$firstValue, 3]) . ":" . gettype($f
     );
 }
 
+/// Verifies eval `ReflectionClass::newInstanceArgs()` preserves AOT constructor by-reference writeback.
+#[test]
+fn test_eval_reflection_new_instance_args_aot_constructor_writes_back_by_ref_args() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectCtorArrayRefBox {
+    public int $seen = 0;
+
+    public function __construct(int &$value, int $delta = 0) {
+        $value = $value + $delta;
+        $this->seen = $value;
+    }
+}
+
+echo eval('$ref = new ReflectionClass("EvalAotReflectCtorArrayRefBox");
+$value = "3";
+$box = $ref->newInstanceArgs([&$value, 4]);
+echo $box->seen . ":" . gettype($value) . ":" . $value . "|";
+$named = "5";
+$box = $ref->newInstanceArgs(["delta" => 2, "value" => &$named]);
+echo $box->seen . ":" . gettype($named) . ":" . $named;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "7:integer:7|7:integer:7");
+}
+
 /// Verifies eval can pass runtime PHP callbacks to generated/AOT callable-typed methods.
 #[test]
 fn test_eval_fragment_passes_callable_args_to_aot_methods() {
