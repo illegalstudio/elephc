@@ -363,6 +363,18 @@ fn lower_numeric_binary(
             return lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
         }
     }
+    if matches!(op, BinOp::Div) && (lhs.ir_type == IrType::Str || rhs.ir_type == IrType::Str) {
+        let lhs = coerce_to_float(ctx, lhs, expr);
+        let rhs = coerce_to_float(ctx, rhs, expr);
+        return ctx.emit_value(
+            Op::FDiv,
+            vec![lhs.value, rhs.value],
+            None,
+            PhpType::Float,
+            Op::FDiv.default_effects(),
+            Some(expr.span),
+        );
+    }
     if lhs.ir_type == IrType::F64 || rhs.ir_type == IrType::F64 {
         let lhs = coerce_to_float(ctx, lhs, expr);
         let rhs = coerce_to_float(ctx, rhs, expr);
@@ -9314,6 +9326,7 @@ fn coerce_to_float_at_span(
     match value.ir_type {
         IrType::F64 => value,
         IrType::I64 => ctx.emit_value(Op::IToF, vec![value.value], None, PhpType::Float, Op::IToF.default_effects(), span),
+        IrType::Str => ctx.emit_value(Op::StrToF, vec![value.value], None, PhpType::Float, Op::StrToF.default_effects(), span),
         _ => ctx.emit_value(
             Op::Cast,
             vec![value.value],

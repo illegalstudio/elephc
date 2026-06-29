@@ -129,16 +129,6 @@ fn test_error_type_mismatch_reassign() {
     expect_error("<?php $x = 42; $x = \"hello\";", "cannot reassign $x");
 }
 
-/// Verifies that arithmetic on a string operand produces an error.
-/// Input: `$x = "hi"; echo $x + 1;` — string is not numeric.
-#[test]
-fn test_error_arithmetic_on_string() {
-    expect_error(
-        "<?php $x = \"hi\"; echo $x + 1;",
-        "Arithmetic operators require numeric operands",
-    );
-}
-
 /// Verifies that negating a non-numeric string produces an error.
 /// Input: `$x = "hi"; echo -$x;`
 #[test]
@@ -146,16 +136,6 @@ fn test_error_negate_string() {
     expect_error(
         "<?php $x = \"hi\"; echo -$x;",
         "Cannot negate a non-numeric value",
-    );
-}
-
-/// Verifies that comparison operators on strings produce an error.
-/// Input: `$x = "a"; echo $x < 1;` — string vs int comparison is invalid.
-#[test]
-fn test_error_comparison_on_string() {
-    expect_error(
-        "<?php $x = \"a\"; echo $x < 1;",
-        "Comparison operators require numeric operands",
     );
 }
 

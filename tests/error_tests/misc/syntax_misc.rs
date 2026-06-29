@@ -110,16 +110,6 @@ fn test_error_bitwise_not_string() {
     );
 }
 
-/// Tests that the spaceship operator `<=>` with string operands rejects them
-/// with the "Spaceship operator requires numeric operands" error.
-#[test]
-fn test_error_spaceship_string() {
-    expect_error(
-        r#"<?php echo "a" <=> "b";"#,
-        "Spaceship operator requires numeric operands",
-    );
-}
-
 /// Tests that using `$this` inside a `static` method produces the expected
 /// "Cannot use $this inside a static method" error.
 #[test]

@@ -56,7 +56,36 @@ pub fn emit_mixed_numeric_binops(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #2");                                          // does the right operand hold a double payload?
     emitter.instruction("b.eq __rt_mixed_numeric_float_path");                  // any double payload makes the whole operation double-valued
 
+    // -- string operands may be float-form (e.g. "1.5"); check and route to the float path --
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the left runtime value tag
+    emitter.instruction("cmp x9, #1");                                          // does the left operand hold a string payload?
+    emitter.instruction("b.eq __rt_mixed_numeric_check_str_float_left");        // check if the left string is float-form
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the right runtime value tag
+    emitter.instruction("cmp x9, #1");                                          // does the right operand hold a string payload?
+    emitter.instruction("b.eq __rt_mixed_numeric_check_str_float_right");       // check if the right string is float-form
+    emitter.instruction("b __rt_mixed_numeric_int_path");                       // neither operand is a string; proceed with integer arithmetic
+
+    emitter.label("__rt_mixed_numeric_check_str_float_left");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // load the boxed left operand pointer
+    emitter.instruction("bl __rt_mixed_unbox");                                 // unbox: x0=tag, x1=string ptr, x2=string length
+    emitter.instruction("bl __rt_str_is_float_form");                           // check if the left string is float-form (x1/x2 preserved)
+    emitter.instruction("cmp x0, #0");                                          // is the left string float-form?
+    emitter.instruction("b.ne __rt_mixed_numeric_float_path");                  // yes: route to the float path for correct float arithmetic
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the right runtime value tag
+    emitter.instruction("cmp x9, #1");                                          // does the right operand hold a string payload?
+    emitter.instruction("b.eq __rt_mixed_numeric_check_str_float_right");       // check if the right string is float-form
+    emitter.instruction("b __rt_mixed_numeric_int_path");                       // right is not a string; proceed with integer arithmetic
+
+    emitter.label("__rt_mixed_numeric_check_str_float_right");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // load the boxed right operand pointer
+    emitter.instruction("bl __rt_mixed_unbox");                                 // unbox: x0=tag, x1=string ptr, x2=string length
+    emitter.instruction("bl __rt_str_is_float_form");                           // check if the right string is float-form (x1/x2 preserved)
+    emitter.instruction("cmp x0, #0");                                          // is the right string float-form?
+    emitter.instruction("b.ne __rt_mixed_numeric_float_path");                  // yes: route to the float path for correct float arithmetic
+    emitter.instruction("b __rt_mixed_numeric_int_path");                       // right string is int-form; proceed with integer arithmetic
+
     // -- integer path with PHP overflow promotion --
+    emitter.label("__rt_mixed_numeric_int_path");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed left operand before casting to integer
     emitter.instruction("bl __rt_mixed_cast_int");                              // coerce the left operand using the current integer numeric rules
     emitter.instruction("str x0, [sp, #40]");                                   // save the left integer payload across the right cast
@@ -190,7 +219,35 @@ fn emit_mixed_numeric_binops_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [rbp - 40], 2");                         // does the right operand hold a double payload?
     emitter.instruction("je __rt_mixed_numeric_float_path_linux_x86_64");       // any double payload makes the whole operation double-valued
 
+    // -- string operands may be float-form (e.g. "1.5"); check and route to the float path --
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 1");                         // does the left operand hold a string payload?
+    emitter.instruction("je __rt_mixed_numeric_check_str_float_left_x86_64");   // check if the left string is float-form
+    emitter.instruction("cmp QWORD PTR [rbp - 40], 1");                         // does the right operand hold a string payload?
+    emitter.instruction("je __rt_mixed_numeric_check_str_float_right_x86_64");  // check if the right string is float-form
+    emitter.instruction("jmp __rt_mixed_numeric_int_path_linux_x86_64");        // neither operand is a string; proceed with integer arithmetic
+
+    emitter.label("__rt_mixed_numeric_check_str_float_left_x86_64");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load the boxed left operand pointer
+    emitter.instruction("call __rt_mixed_unbox");                               // unbox: rax=tag, rdi=string ptr, rdx=string length
+    emitter.instruction("mov rax, rdi");                                        // move string pointer to rax for __rt_str_is_float_form
+    emitter.instruction("call __rt_str_is_float_form");                         // check if the left string is float-form
+    emitter.instruction("test rax, rax");                                       // is the left string float-form?
+    emitter.instruction("jne __rt_mixed_numeric_float_path_linux_x86_64");      // yes: route to the float path for correct float arithmetic
+    emitter.instruction("cmp QWORD PTR [rbp - 40], 1");                         // does the right operand hold a string payload?
+    emitter.instruction("je __rt_mixed_numeric_check_str_float_right_x86_64");  // check if the right string is float-form
+    emitter.instruction("jmp __rt_mixed_numeric_int_path_linux_x86_64");        // right is not a string; proceed with integer arithmetic
+
+    emitter.label("__rt_mixed_numeric_check_str_float_right_x86_64");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the boxed right operand pointer
+    emitter.instruction("call __rt_mixed_unbox");                               // unbox: rax=tag, rdi=string ptr, rdx=string length
+    emitter.instruction("mov rax, rdi");                                        // move string pointer to rax for __rt_str_is_float_form
+    emitter.instruction("call __rt_str_is_float_form");                         // check if the right string is float-form
+    emitter.instruction("test rax, rax");                                       // is the right string float-form?
+    emitter.instruction("jne __rt_mixed_numeric_float_path_linux_x86_64");      // yes: route to the float path for correct float arithmetic
+    emitter.instruction("jmp __rt_mixed_numeric_int_path_linux_x86_64");        // right string is int-form; proceed with integer arithmetic
+
     // -- integer path with PHP overflow promotion --
+    emitter.label("__rt_mixed_numeric_int_path_linux_x86_64");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the boxed left operand before casting to integer
     emitter.instruction("call __rt_mixed_cast_int");                            // coerce the left operand using the current integer numeric rules
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the left integer payload across the right cast
