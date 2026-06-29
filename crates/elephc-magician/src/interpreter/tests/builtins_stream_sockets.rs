@@ -21,11 +21,15 @@ $addr = stream_socket_get_name($server, false);
 echo $addr !== false ? "name" : "bad"; echo ":";
 $client = stream_socket_client("tcp://" . $addr);
 echo is_resource($client) ? "client" : "bad"; echo ":";
-$peer = stream_socket_accept($server);
+$peerName = "";
+$peer = stream_socket_accept($server, null, $peerName);
 echo is_resource($peer) ? "accept" : "bad"; echo ":";
+echo $peerName !== "" ? "peerout" : "bad"; echo ":";
 echo stream_socket_get_name($client, true) !== false ? "peername" : "bad"; echo ":";
 echo stream_socket_sendto($client, "ping") === 4 ? "send" : "bad"; echo ":";
-echo stream_socket_recvfrom($peer, 4) === "ping" ? "recv" : "bad"; echo ":";
+$remoteAddr = "";
+echo stream_socket_recvfrom($peer, 4, 0, $remoteAddr) === "ping" ? "recv" : "bad"; echo ":";
+echo $remoteAddr !== "" ? "addrout" : "bad"; echo ":";
 fwrite($peer, "pong");
 echo fread($client, 4) === "pong" ? "roundtrip" : "bad"; echo ":";
 echo stream_socket_enable_crypto($client, false) ? "cryptooff" : "bad"; echo ":";
@@ -45,6 +49,18 @@ $pfs = pfsockopen("127.0.0.1", intval($parts[1]));
 $peer = stream_socket_accept($server);
 echo is_resource($pfs) && is_resource($peer) ? "pfsock" : "bad"; echo ":";
 fclose($pfs); fclose($peer); fclose($server);
+$server = stream_socket_server("tcp://127.0.0.1:0");
+$addr = stream_socket_get_name($server, false);
+$accept = "stream_socket_accept";
+$client = stream_socket_client("tcp://" . $addr);
+$dynPeer = "";
+$peer = $accept($server, null, $dynPeer);
+echo is_resource($peer) && $dynPeer !== "" ? "dynaccept" : "bad"; echo ":";
+fwrite($client, "call");
+$recv = stream_socket_recvfrom(...);
+$dynAddr = "";
+echo $recv($peer, 4, 0, $dynAddr) === "call" && $dynAddr !== "" ? "dynrecv" : "bad"; echo ":";
+fclose($client); fclose($peer); fclose($server);
 $pair = stream_socket_pair(1, 1, 0);
 echo is_array($pair) && is_resource($pair[0]) && is_resource($pair[1]) ? "pair" : "bad"; echo ":";
 fwrite($pair[0], "xy");
@@ -69,8 +85,9 @@ return true;"#,
     assert_eq!(
         values.output,
         concat!(
-            "server:name:client:accept:peername:send:recv:roundtrip:cryptooff:",
-            "shutdown:fsock:pfsock:pair:pairio:select:111111111111"
+            "server:name:client:accept:peerout:peername:send:recv:addrout:",
+            "roundtrip:cryptooff:shutdown:fsock:pfsock:dynaccept:dynrecv:",
+            "pair:pairio:select:111111111111"
         )
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));

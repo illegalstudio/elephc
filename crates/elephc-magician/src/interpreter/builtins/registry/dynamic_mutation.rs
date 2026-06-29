@@ -39,6 +39,12 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
         "preg_match" => eval_dynamic_preg_match_call(evaluated_args, context, values)?,
         "preg_match_all" => eval_dynamic_preg_match_all_call(evaluated_args, context, values)?,
         "flock" => eval_dynamic_flock_call(evaluated_args, context, values)?,
+        "stream_socket_accept" => {
+            eval_dynamic_stream_socket_accept_call(evaluated_args, context, values)?
+        }
+        "stream_socket_recvfrom" => {
+            eval_dynamic_stream_socket_recvfrom_call(evaluated_args, context, values)?
+        }
         _ => return Ok(None),
     };
     Ok(result)
@@ -278,8 +284,75 @@ fn eval_dynamic_flock_call(
     values.bool_value(success).map(Some)
 }
 
+/// Evaluates a dynamic `stream_socket_accept()` call when `$peer_name` is writable.
+fn eval_dynamic_stream_socket_accept_call(
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["socket", "timeout", "peer_name"],
+        evaluated_args,
+        false,
+    )?;
+    let socket = required_evaluated_ref_arg(&bound, 0)?;
+    let Some(peer_name) = optional_evaluated_ref_arg(&bound, 2) else {
+        return Ok(None);
+    };
+    let Some(target) = peer_name.ref_target.as_ref() else {
+        return Ok(None);
+    };
+    let (result, peer_name) =
+        eval_stream_socket_accept_with_peer_result(socket.value, context, values)?;
+    if let Some(peer_name) = peer_name {
+        let peer_name = values.string(&peer_name)?;
+        eval_write_direct_ref_target(
+            target,
+            peer_name,
+            context,
+            values,
+            Some(ScopeCellOwnership::Owned),
+        )?;
+    }
+    Ok(Some(result))
+}
+
+/// Evaluates a dynamic `stream_socket_recvfrom()` call when `$address` is writable.
+fn eval_dynamic_stream_socket_recvfrom_call(
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["socket", "length", "flags", "address"],
+        evaluated_args,
+        false,
+    )?;
+    let socket = required_evaluated_ref_arg(&bound, 0)?;
+    let length = required_evaluated_ref_arg(&bound, 1)?;
+    let Some(address) = optional_evaluated_ref_arg(&bound, 3) else {
+        return Ok(None);
+    };
+    let Some(target) = address.ref_target.as_ref() else {
+        return Ok(None);
+    };
+    let (result, address) =
+        eval_stream_socket_recvfrom_with_address_result(socket.value, length.value, context, values)?;
+    if let Some(address) = address {
+        let address = values.string(&address)?;
+        eval_write_direct_ref_target(
+            target,
+            address,
+            context,
+            values,
+            Some(ScopeCellOwnership::Owned),
+        )?;
+    }
+    Ok(Some(result))
+}
+
 /// Binds already evaluated arguments while preserving by-reference target metadata.
-fn bind_evaluated_ref_builtin_args(
+pub(in crate::interpreter) fn bind_evaluated_ref_builtin_args(
     params: &[&str],
     evaluated_args: &[EvaluatedCallArg],
     variadic_last: bool,
@@ -331,7 +404,7 @@ fn bind_evaluated_ref_builtin_args(
 }
 
 /// Returns a required already evaluated argument by bound parameter index.
-fn required_evaluated_ref_arg(
+pub(in crate::interpreter) fn required_evaluated_ref_arg(
     bound_args: &[Option<EvaluatedCallArg>],
     index: usize,
 ) -> Result<&EvaluatedCallArg, EvalStatus> {
@@ -342,7 +415,7 @@ fn required_evaluated_ref_arg(
 }
 
 /// Returns an optional already evaluated argument by bound parameter index.
-fn optional_evaluated_ref_arg(
+pub(in crate::interpreter) fn optional_evaluated_ref_arg(
     bound_args: &[Option<EvaluatedCallArg>],
     index: usize,
 ) -> Option<&EvaluatedCallArg> {
