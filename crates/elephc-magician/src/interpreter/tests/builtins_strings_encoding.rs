@@ -176,6 +176,31 @@ return function_exists("preg_match") && function_exists("preg_match_all") && fun
         );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies dynamic preg callables write by-reference `$matches` targets.
+#[test]
+fn execute_program_dispatches_dynamic_preg_match_ref_targets() {
+    let program = parse_fragment(
+        br#"$match = "preg_match";
+$ok = $match("/([a-z]+)([0-9]+)/", "id42", $matches);
+echo $ok . ":" . $matches[0] . ":" . $matches[1] . ":" . $matches[2] . ":";
+$matchAll = "preg_match_all";
+$count = $matchAll("/([a-z])([0-9])/", "a1 b2", $all, PREG_SET_ORDER);
+echo $count . ":" . $all[1][0] . ":" . $all[1][2] . ":";
+$firstClass = preg_match(...);
+$okAgain = $firstClass("/([A-Z]+)/", "ID", $firstClassMatches);
+return $okAgain . ":" . $firstClassMatches[0];"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1:id42:id:42:2:b2:2:");
+    assert_eq!(values.get(result), FakeValue::String("1:ID".to_string()));
+}
+
 /// Verifies eval HTML entity builtins encode, decode, and dispatch as callables.
 #[test]
 fn execute_program_dispatches_html_entity_builtins() {

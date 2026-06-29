@@ -2992,6 +2992,25 @@ echo function_exists("preg_match") && function_exists("preg_match_all") && funct
     );
 }
 
+/// Verifies dynamic eval preg callables write by-reference `$matches` arrays.
+#[test]
+fn test_eval_dynamic_preg_callables_write_matches_by_ref() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$match = "preg_match";
+$ok = $match("/([a-z]+)([0-9]+)/", "id42", $matches);
+echo $ok . ":" . $matches[0] . ":" . $matches[1] . ":" . $matches[2] . ":";
+$matchAll = "preg_match_all";
+$count = $matchAll("/([a-z])([0-9])/", "a1 b2", $all, PREG_SET_ORDER);
+echo $count . ":" . $all[1][0] . ":" . $all[1][2] . ":";
+$firstClass = preg_match(...);
+$okAgain = $firstClass("/([A-Z]+)/", "ID", $firstClassMatches);
+echo $okAgain . ":" . $firstClassMatches[0];');
+"#,
+    );
+    assert_eq!(out, "1:id42:id:42:2:b2:2:1:ID");
+}
+
 /// Verifies eval `fnmatch()` supports wildcards, classes, flags, constants, and callables.
 #[test]
 fn test_eval_dispatches_fnmatch_builtin_call() {

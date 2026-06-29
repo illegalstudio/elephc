@@ -36,6 +36,8 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
         "uasort" | "uksort" | "usort" => {
             eval_dynamic_user_sort_call(name, evaluated_args, context, values)?
         }
+        "preg_match" => eval_dynamic_preg_match_call(evaluated_args, context, values)?,
+        "preg_match_all" => eval_dynamic_preg_match_all_call(evaluated_args, context, values)?,
         _ => return Ok(None),
     };
     Ok(result)
@@ -188,6 +190,58 @@ fn eval_dynamic_user_sort_call(
         eval_user_sort_replacement(name, array.value, callback.value, context, values)?;
     let result = values.bool_value(true)?;
     eval_write_direct_ref_target(target, replacement, context, values, None)?;
+    Ok(Some(result))
+}
+
+/// Evaluates a dynamic `preg_match()` call when `$matches` is a writable lvalue.
+fn eval_dynamic_preg_match_call(
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["pattern", "subject", "matches", "flags"],
+        evaluated_args,
+        false,
+    )?;
+    let pattern = required_evaluated_ref_arg(&bound, 0)?;
+    let subject = required_evaluated_ref_arg(&bound, 1)?;
+    let Some(matches) = optional_evaluated_ref_arg(&bound, 2) else {
+        return Ok(None);
+    };
+    let Some(target) = matches.ref_target.as_ref() else {
+        return Ok(None);
+    };
+    let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let (result, matches_array) =
+        eval_preg_match_capture_result(pattern.value, subject.value, flags, values)?;
+    eval_write_preg_matches_target(target, matches_array, context, values)?;
+    Ok(Some(result))
+}
+
+/// Evaluates a dynamic `preg_match_all()` call when `$matches` is a writable lvalue.
+fn eval_dynamic_preg_match_all_call(
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["pattern", "subject", "matches", "flags"],
+        evaluated_args,
+        false,
+    )?;
+    let pattern = required_evaluated_ref_arg(&bound, 0)?;
+    let subject = required_evaluated_ref_arg(&bound, 1)?;
+    let Some(matches) = optional_evaluated_ref_arg(&bound, 2) else {
+        return Ok(None);
+    };
+    let Some(target) = matches.ref_target.as_ref() else {
+        return Ok(None);
+    };
+    let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let (result, matches_array) =
+        eval_preg_match_all_capture_result(pattern.value, subject.value, flags, values)?;
+    eval_write_preg_matches_target(target, matches_array, context, values)?;
     Ok(Some(result))
 }
 
