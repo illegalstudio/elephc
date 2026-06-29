@@ -370,7 +370,108 @@ pub(in crate::interpreter) fn eval_array_reduce_result(
     Ok(carry)
 }
 
-/// Evaluates PHP `array_walk()` for side-effect callbacks over value/key pairs.
+/// Evaluates direct PHP `array_walk()` calls and preserves element by-ref targets.
+pub(in crate::interpreter) fn eval_builtin_array_walk_call(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (array, array_target, callback) =
+        eval_array_walk_direct_args(args, context, scope, values)?;
+    eval_array_walk_ref_result(array, array_target, callback, context, values)
+}
+
+/// Evaluates and binds direct `array_walk()` arguments in PHP source order.
+fn eval_array_walk_direct_args(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, EvalReferenceTarget, RuntimeCellHandle), EvalStatus> {
+    let mut array_target = None;
+    let mut callback = None;
+    let mut positional_index = 0;
+    let mut saw_named = false;
+
+    for arg in args {
+        if arg.is_spread() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let parameter = if let Some(name) = arg.name() {
+            saw_named = true;
+            name
+        } else {
+            if saw_named {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let parameter = match positional_index {
+                0 => "array",
+                1 => "callback",
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
+            positional_index += 1;
+            parameter
+        };
+
+        match parameter {
+            "array" => {
+                if array_target.is_some() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                array_target = Some(eval_array_mutation_lvalue_arg(arg, context, scope, values)?);
+            }
+            "callback" => {
+                if callback.is_some() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                callback = Some(eval_expr(arg.value(), context, scope, values)?);
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
+    let (array, array_target) = array_target.ok_or(EvalStatus::RuntimeFatal)?;
+    let callback = callback.ok_or(EvalStatus::RuntimeFatal)?;
+    Ok((array, array_target, callback))
+}
+
+/// Walks one writable eval array by invoking a callable with element ref targets.
+pub(in crate::interpreter) fn eval_array_walk_ref_result(
+    array: RuntimeCellHandle,
+    array_target: EvalReferenceTarget,
+    callback: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback = eval_callable(callback, context, values)?;
+    let len = values.array_len(array)?;
+    for position in 0..len {
+        let current_array = eval_reference_target_value(&array_target, context, values)?;
+        let key = values.array_iter_key(current_array, position)?;
+        let value = values.array_get(current_array, key)?;
+        let ref_target = EvalReferenceTarget::NestedArrayElement {
+            array_target: Box::new(array_target.clone()),
+            index: key,
+        };
+        let args = vec![
+            EvaluatedCallArg {
+                name: None,
+                value,
+                ref_target: Some(ref_target),
+            },
+            EvaluatedCallArg {
+                name: None,
+                value: key,
+                ref_target: None,
+            },
+        ];
+        let _ = eval_evaluated_callable_with_call_array_args(&callback, args, context, values)?;
+    }
+    values.bool_value(true)
+}
+
+/// Evaluates PHP `array_walk()` for by-value callable dispatch.
 pub(in crate::interpreter) fn eval_builtin_array_walk(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,

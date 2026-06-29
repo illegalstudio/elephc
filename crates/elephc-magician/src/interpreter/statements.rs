@@ -9705,7 +9705,7 @@ fn write_back_method_array_element_ref_target(
     {
         if values.is_array_like(existing.cell())? {
             ownership = existing.flags().ownership;
-            existing.cell()
+            values.array_clone_shallow(existing.cell())?
         } else {
             eval_new_array_for_index(index, values)?
         }
@@ -9729,7 +9729,7 @@ fn write_back_method_nested_array_element_ref_target(
 ) -> Result<(), EvalStatus> {
     let current = eval_reference_target_value(array_target, context, values)?;
     let array = if values.is_array_like(current)? {
-        current
+        values.array_clone_shallow(current)?
     } else {
         eval_new_array_for_index(index, values)?
     };

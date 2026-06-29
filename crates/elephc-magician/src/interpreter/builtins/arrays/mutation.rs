@@ -155,6 +155,9 @@ pub(in crate::interpreter) fn eval_builtin_array_pop_shift_call(
     if name == "array_splice" {
         return eval_builtin_array_splice_call(args, context, scope, values);
     }
+    if name == "array_walk" {
+        return eval_builtin_array_walk_call(args, context, scope, values);
+    }
     if matches!(
         name,
         "arsort"
