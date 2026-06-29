@@ -1458,6 +1458,34 @@ echo function_exists("array_push") && function_exists("array_unshift");');
     );
 }
 
+/// Verifies first-class eval builtin callables preserve ref-like writeback targets.
+#[test]
+fn test_eval_first_class_ref_like_builtin_callables_write_back_lvalues() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$pop = array_pop(...);
+$items = [1, 2, 3];
+echo $pop($items) . ":" . count($items) . ":" . $items[1] . ":";
+$sort = sort(...);
+$sortable = [3, 1, 2];
+echo $sort($sortable) . ":" . implode(",", $sortable) . ":";
+$set = settype(...);
+$value = "42";
+echo $set($value, "integer") . ":" . gettype($value) . ":" . $value . ":";
+class EvalFirstClassRefLikeBuiltinBox {
+    public array $items = ["a"];
+    public static array $staticItems = [2, 1];
+}
+$box = new EvalFirstClassRefLikeBuiltinBox();
+$push = array_push(...);
+echo $push($box->items, "b") . ":" . $box->items[1] . ":";
+$rsort = rsort(...);
+echo $rsort(EvalFirstClassRefLikeBuiltinBox::$staticItems) . ":" . EvalFirstClassRefLikeBuiltinBox::$staticItems[0] . EvalFirstClassRefLikeBuiltinBox::$staticItems[1];');
+"#,
+    );
+    assert_eq!(out, "3:2:2:1:1,2,3:1:integer:42:2:b:1:21");
+}
+
 /// Verifies eval `array_splice()` mutates writable lvalue arguments.
 #[test]
 fn test_eval_dispatches_array_splice_builtin_call() {
