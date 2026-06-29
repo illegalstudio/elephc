@@ -407,7 +407,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         ArrayHashUnion => check_array_hash_union(function, inst_id, inst),
         HashArrayUnion => check_hash_array_union(function, inst_id, inst),
         ArrayLen | ArrayGet | ArrayIsset | ArraySet | ArrayPush | ArrayEnsureUnique
-        | ArrayCloneShallow | ArrayToHash => {
+        | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
         }
         MixedArrayAppend => {

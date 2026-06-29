@@ -114,6 +114,14 @@ pub(crate) struct LoweringContext<'m, 'f> {
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
+    /// foreach loop-key locals whose source is a concretely-indexed array
+    /// (`Array` of a non-Mixed element type), so the runtime key is always an
+    /// integer even though `Op::IterCurrentKey` lowers it as Mixed. Used by
+    /// `lower_array_assign` to avoid promoting a `$dst[$key] = ...` write to the
+    /// hash path (and coercing the key to int) for these int-valued keys, while
+    /// still promoting for keys that may be strings (generic `Array(Mixed)`,
+    /// `AssocArray`, `Mixed`, `Union` sources).
+    foreach_int_key_locals: HashSet<String>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
@@ -177,6 +185,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
+            foreach_int_key_locals: HashSet::new(),
             return_type,
             return_php_type,
             by_ref_return: false,
@@ -244,6 +253,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns the current known PHP type for a local or `Mixed` when unknown.
     pub(crate) fn local_type(&self, name: &str) -> PhpType {
         self.local_types.get(name).cloned().unwrap_or(PhpType::Mixed)
+    }
+
+    /// Records a foreach loop-key local whose source is a concretely-indexed
+    /// array, so its runtime key is always an integer (see `foreach_int_key_locals`).
+    pub(crate) fn mark_foreach_int_key(&mut self, name: &str) {
+        self.foreach_int_key_locals.insert(name.to_string());
+    }
+
+    /// Returns true when `name` is a foreach loop key known to hold an integer at
+    /// runtime despite its Mixed EIR type, so an indexed write can safely coerce it
+    /// to int instead of promoting the destination to a hash.
+    pub(crate) fn is_foreach_int_key(&self, name: &str) -> bool {
+        self.foreach_int_key_locals.contains(name)
     }
 
     /// Returns the checker-known top-level type for a `global` alias name.

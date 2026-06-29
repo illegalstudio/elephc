@@ -262,6 +262,7 @@ pub enum Op {
     ArrayHashUnion,
     HashArrayUnion,
     ArrayToHash,
+    ArraySetMixedKey,
     ArrayKeyExists,
     OffsetExists,
     OffsetUnset,
@@ -413,6 +414,7 @@ impl Op {
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            ArraySetMixedKey => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             ArrayUnion | HashUnion | ArrayHashUnion | HashArrayUnion | ArrayToHash => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
@@ -576,6 +578,7 @@ impl Op {
             ArrayHashUnion => "array_hash_union",
             HashArrayUnion => "hash_array_union",
             ArrayToHash => "array_to_hash",
+        ArraySetMixedKey => "array_set_mixed_key",
             ArrayKeyExists => "array_key_exists",
             OffsetExists => "offset_exists",
             OffsetUnset => "offset_unset",

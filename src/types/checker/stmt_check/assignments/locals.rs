@@ -97,6 +97,14 @@ pub(super) fn check_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    // A direct reassignment (`$k = ...`) makes `$k` an ordinary local: it is no
+    // longer the boxed `Mixed` `foreach` iteration key. Drop the foreach-key
+    // marker so a subsequent `$dst[$k] = $v` is routed by `$k`'s real type (e.g.
+    // a string key promotes the destination to `AssocArray`) instead of being
+    // forced onto the `Array(Mixed)` / `Op::ArraySetMixedKey` path, which would
+    // disagree with the lowering (it routes on the index's runtime IR type) and
+    // produce a spurious `AssocArray -> Array(Mixed)` backend error.
+    checker.foreach_key_locals.remove(name);
     let null_coalesce_default = null_coalesce_assignment_default(name, value);
     let saved_self_ref_ty = if env.contains_key(name) && closure_captures_name_by_ref(value, name) {
         Some(env.insert(name.to_string(), PhpType::Callable))

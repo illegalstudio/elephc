@@ -52,10 +52,23 @@ pub(super) fn check_array_assign(
     }
     if let PhpType::Array(elem_ty) = &arr_ty {
         let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
-        if !matches!(normalized_idx_ty, PhpType::Int)
+        // A foreach loop key is a boxed `Mixed` cell at runtime (`Op::IterCurrentKey`)
+        // even when the checker types it as `Int`/`Str` from the source array, so it
+        // may hold either an integer or a string and the destination must stay indexed
+        // `Array(Mixed)` with the indexed-vs-hash decision deferred to the runtime
+        // write helper (`Op::ArraySetMixedKey`). A non-foreach string-typed key (a
+        // literal string, or a string-valued expression like `"k" . $i` or a plain
+        // string variable) always means associative hash storage in PHP, so it
+        // promotes to `AssocArray` and stays usable by direct string-key reads. A
+        // non-foreach `Mixed`-typed key (e.g. a `mixed` parameter) is likewise a
+        // runtime-tagged cell, so it stays `Array(Mixed)` to match the lowering's
+        // `ArraySetMixedKey` routing.
+        let index_is_foreach_key = matches!(&index.kind, ExprKind::Variable(name) if checker.is_foreach_key(name));
+        let forces_hash = matches!(normalized_idx_ty, PhpType::Str)
+            || (matches!(idx_ty, PhpType::Str) && !index_is_foreach_key)
             || (matches!(elem_ty.as_ref(), PhpType::Never)
-                && static_array_key_forces_hash_storage(index))
-        {
+                && static_array_key_forces_hash_storage(index));
+        if forces_hash {
             let merged_key = if matches!(elem_ty.as_ref(), PhpType::Never) {
                 normalized_idx_ty
             } else {
@@ -76,6 +89,11 @@ pub(super) fn check_array_assign(
                     key: Box::new(merged_key),
                     value: Box::new(merged_value),
                 },
+            );
+        } else if index_is_foreach_key || matches!(idx_ty, PhpType::Mixed) {
+            env.insert(
+                array.to_string(),
+                PhpType::Array(Box::new(PhpType::Mixed)),
             );
         } else if **elem_ty != val_ty {
             let merged_ty = checker

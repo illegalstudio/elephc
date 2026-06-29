@@ -240,6 +240,89 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     Ok(())
 }
 
+/// Lowers a boxed-Mixed-key write into a statically `Array(Mixed)` indexed local.
+///
+/// The key tag is only known at runtime (PHP `foreach` keys are always `Mixed`
+/// in EIR), so the write goes through `__rt_array_set_mixed_key`, which keeps
+/// integer keys on indexed storage and promotes string keys to a hash. The value
+/// is consumed as a boxed `Mixed` cell exactly like `__rt_array_set_mixed`; the
+/// key is read (not consumed) by the helper.
+pub(super) fn lower_array_set_mixed_key(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let value = expect_operand(inst, 2)?;
+    require_indexed_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
+    let key_ty = ctx.value_php_type(key)?.codegen_repr();
+    if !matches!(key_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_set_mixed_key key PHP type {:?}",
+            key_ty
+        )));
+    }
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            lower_array_set_mixed_key_aarch64(ctx, array, key, value, &value_ty)?
+        }
+        Arch::X86_64 => lower_array_set_mixed_key_x86_64(ctx, array, key, value, &value_ty)?,
+    }
+    // The storeback to the destination local is driven by the EIR-level
+    // `store_local` of this op's result value (emitted by `store_mutated_local`
+    // in `ir_lower`), so here we only materialize the call result into its SSA
+    // slot. Performing the storeback via `store_result_value`/`store_value_to_local`
+    // instead would leave the result SSA value unmaterialized, and the later
+    // EIR `store_local <result>` would read an uninitialized slot back into the
+    // destination local (clobbering it with garbage on every write).
+    store_if_result(ctx, inst)
+}
+
+/// Boxes or retains a value, then stores it into a `Mixed`-keyed indexed array on AArch64.
+fn lower_array_set_mixed_key_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    key: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
+        ctx.load_value_to_result(value)?;
+        abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
+    } else {
+        box_value_for_mixed_container(ctx, value, value_ty)?;
+    }
+    abi::emit_push_reg(ctx.emitter, "x0");
+    ctx.load_value_to_reg(array, "x0")?;
+    ctx.load_value_to_reg(key, "x1")?;
+    abi::emit_pop_reg(ctx.emitter, "x2");
+    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");
+    Ok(())
+}
+
+/// Boxes or retains a value, then stores it into a `Mixed`-keyed indexed array on x86_64.
+fn lower_array_set_mixed_key_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    key: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
+        ctx.load_value_to_result(value)?;
+        abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
+    } else {
+        box_value_for_mixed_container(ctx, value, value_ty)?;
+    }
+    abi::emit_push_reg(ctx.emitter, "rax");
+    ctx.load_value_to_reg(array, "rdi")?;
+    ctx.load_value_to_reg(key, "rsi")?;
+    abi::emit_pop_reg(ctx.emitter, "rdx");
+    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");
+    Ok(())
+}
+
 /// Lowers an indexed-array append through the runtime helper for the value type.
 pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;

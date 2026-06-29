@@ -1594,7 +1594,25 @@ fn iterator_source_kind_from_type(
     inst: &Instruction,
 ) -> Result<IteratorSourceKind> {
     match ty.codegen_repr() {
-        PhpType::Array(elem) => Ok(IteratorSourceKind::Indexed { elem: elem.codegen_repr() }),
+        PhpType::Array(elem) => {
+            let elem_repr = elem.codegen_repr();
+            // A boxed-Mixed/Union-element indexed array may be runtime-promoted
+            // to associative hash storage by `Op::ArraySetMixedKey` (notably a
+            // `foreach($src as $k=>$v) $dst[$k]=$v` rebuild that writes string
+            // keys), so its iteration must dispatch on the runtime heap kind
+            // instead of assuming indexed storage. The dynamic indexed value
+            // loader reuses existing Mixed boxes (value_type 7) via incref, so a
+            // genuinely indexed Mixed-element array iterates identically to the
+            // static indexed path; only runtime-promoted hashes route to hash
+            // iteration. Concrete-element indexed arrays (int/string/etc.) can
+            // never be promoted by `Op::ArraySetMixedKey`, so they keep the
+            // faster static indexed path with no extra heap-kind check.
+            if matches!(elem_repr, PhpType::Mixed | PhpType::Union(_)) {
+                Ok(IteratorSourceKind::DynamicIterable)
+            } else {
+                Ok(IteratorSourceKind::Indexed { elem: elem_repr })
+            }
+        }
         PhpType::AssocArray { .. } => Ok(IteratorSourceKind::Hash),
         PhpType::Iterable => Ok(IteratorSourceKind::DynamicIterable),
         PhpType::Mixed | PhpType::Union(_) => Ok(IteratorSourceKind::DynamicMixed),

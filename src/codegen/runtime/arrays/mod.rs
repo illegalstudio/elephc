@@ -54,6 +54,7 @@ mod array_push_refcounted;
 mod array_push_str;
 mod array_set_int;
 mod array_set_mixed;
+mod array_set_mixed_key;
 mod array_set_refcounted;
 mod array_set_str;
 mod array_rand;
@@ -230,7 +231,9 @@ pub use array_push_str::emit_array_push_str;
 pub use array_set_int::emit_array_set_int;
 /// Emit scalar indexed-array set helper.
 pub use array_set_mixed::emit_array_set_mixed;
-/// Emit boxed-Mixed indexed-array set helper.
+/// Emit boxed-Mixed-key indexed/hash array set helper.
+pub use array_set_mixed_key::emit_array_set_mixed_key;
+/// Emit refcounted indexed-array set helper.
 pub use array_set_refcounted::emit_array_set_refcounted;
 /// Emit refcounted indexed-array set helper.
 pub use array_set_str::emit_array_set_str;

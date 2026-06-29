@@ -46,14 +46,17 @@ pub fn emit_array_push_int(emitter: &mut Emitter) {
     emitter.instruction("cbnz x9, __rt_array_push_int_shape_ready");            // existing arrays already have their element shape fixed
     emitter.instruction("mov x10, #8");                                         // scalar/refcounted append slots are pointer-sized
     emitter.instruction("str x10, [x0, #16]");                                  // elem_size = 8 before any future grow copies live slots
-    emitter.instruction("ldr x10, [x0, #-8]");                                  // load packed array metadata to clear only legacy string tagging
+    emitter.instruction("ldr x10, [x0, #-8]");                                  // load packed array metadata to clear stale placeholder tagging
     emitter.instruction("lsr x11, x10, #8");                                    // move the value_type tag into the low bits
     emitter.instruction("and x11, x11, #0x7f");                                 // ignore the persistent COW flag while checking the value_type
-    emitter.instruction("cmp x11, #1");                                         // is this still the empty-array string fallback tag?
+    emitter.instruction("cmp x11, #1");                                         // is this the empty-array string fallback tag?
+    emitter.instruction("b.eq __rt_array_push_int_shape_clear");                // clear the stale string fallback tag before the first int append
+    emitter.instruction("cmp x11, #8");                                         // is this the empty-array never placeholder tag (e.g. `$dst = []`)?
     emitter.instruction("b.ne __rt_array_push_int_shape_ready");                // preserve refcounted tags pre-stamped by array_push_refcounted
+    emitter.label("__rt_array_push_int_shape_clear");
     emitter.instruction("mov x12, #0x80ff");                                    // keep indexed-array kind and persistent COW metadata only
-    emitter.instruction("and x10, x10, x12");                                   // clear the stale string value_type tag for scalar arrays
-    emitter.instruction("str x10, [x0, #-8]");                                  // publish scalar metadata before the first append
+    emitter.instruction("and x10, x10, x12");                                   // clear the stale placeholder value_type tag for scalar int arrays
+    emitter.instruction("str x10, [x0, #-8]");                                  // publish scalar int (value_type 0) metadata before the first append
     emitter.label("__rt_array_push_int_shape_ready");
 
     // -- check capacity before pushing --
@@ -114,15 +117,18 @@ fn emit_array_push_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // is this the first append into a freshly empty indexed array?
     emitter.instruction("jnz __rt_array_push_int_shape_ready");                 // existing arrays already have their element shape fixed
     emitter.instruction("mov QWORD PTR [rax + 16], 8");                         // elem_size = 8 before any future growth copies live scalar slots
-    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load packed metadata so only a legacy string tag is cleared
+    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load packed metadata so only a stale placeholder tag is cleared
     emitter.instruction("mov r8, r11");                                         // copy metadata before isolating the value_type tag
     emitter.instruction("shr r8, 8");                                           // move the value_type tag into the low bits
     emitter.instruction("and r8, 0x7f");                                        // ignore the persistent COW flag while checking the value_type
-    emitter.instruction("cmp r8, 1");                                           // is this still the empty-array string fallback tag?
+    emitter.instruction("cmp r8, 1");                                           // is this the empty-array string fallback tag?
+    emitter.instruction("je __rt_array_push_int_x86_shape_clear");              // clear the stale string fallback tag before the first int append
+    emitter.instruction("cmp r8, 8");                                           // is this the empty-array never placeholder tag (e.g. `$dst = []`)?
     emitter.instruction("jne __rt_array_push_int_shape_ready");                 // preserve refcounted tags pre-stamped by array_push_refcounted
+    emitter.label("__rt_array_push_int_x86_shape_clear");
     emitter.instruction("mov r8, 0xffffffff000080ff");                          // preserve heap marker, indexed-array kind, and persistent COW metadata
-    emitter.instruction("and r11, r8");                                         // clear the stale string value_type tag for scalar arrays
-    emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // publish scalar metadata before the first append
+    emitter.instruction("and r11, r8");                                         // clear the stale placeholder value_type tag for scalar int arrays
+    emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // publish scalar int (value_type 0) metadata before the first append
     emitter.label("__rt_array_push_int_shape_ready");
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // reload the indexed-array logical length after shape specialization
     emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // load the indexed-array capacity before deciding between the fast path and growth

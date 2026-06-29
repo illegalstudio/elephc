@@ -136,6 +136,14 @@ pub(crate) struct Checker {
     pub active_globals: HashSet<String>,
     /// Names introduced via `static` declarations in the current local scope.
     pub active_statics: HashSet<String>,
+    /// Names bound as `foreach` loop keys in the current function/closure scope.
+    /// A foreach key is a boxed `Mixed` cell at runtime (`Op::IterCurrentKey`)
+    /// even when the checker types it as `Int`/`Str` from the source array, so an
+    /// `$dst[$k] = $v` write under such a key must defer the indexed-vs-hash
+    /// decision to `Op::ArraySetMixedKey` (destination `Array(Mixed)`) instead of
+    /// promoting to `AssocArray` like a statically-known string key would. Mirrors
+    /// the lowering's `foreach_int_key_locals` lifetime (per function, not popped).
+    pub foreach_key_locals: HashSet<String>,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
     /// Stacks of break/continue depths at each enclosing `finally` block boundary,

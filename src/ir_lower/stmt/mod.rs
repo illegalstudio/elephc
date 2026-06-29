@@ -617,8 +617,25 @@ fn lower_array_assign(
     let mut index_value = lower_expr(ctx, index);
     let mut value_value = lower_expr(ctx, value);
     let op = array_set_op(array_value.ir_type);
+    // A literal string index always means a hash key, so promote the destination
+    // to associative storage like PHP. A boxed Mixed/Union index may hold either
+    // an integer or a string key (foreach loop keys are always Mixed in EIR via
+    // `Op::IterCurrentKey`), so it goes through `Op::ArraySetMixedKey`, whose
+    // runtime helper keeps integer keys on indexed storage (preserving indexed
+    // consumers like `implode`) and promotes only string keys to a hash. This
+    // stops a `foreach($arr as $k=>$v) $dst[$k]=$v` rebuild from collapsing a
+    // string key onto int 0. A foreach key over a concretely-indexed array is
+    // known to be int-valued, so it is left on the coerce path to avoid
+    // needlessly dispatching.
     if op == Op::ArraySet && index_value.ir_type == IrType::Str {
         lower_string_key_array_promotion(ctx, array, array_value, index_value, value_value, span);
+        return;
+    }
+    if op == Op::ArraySet
+        && index_is_boxed_mixed_key(index_value.ir_type)
+        && !index_is_foreach_int_key(ctx, index)
+    {
+        lower_mixed_key_array_set(ctx, array, array_value, index_value, value_value, span);
         return;
     }
     if op == Op::ArraySet {
@@ -676,6 +693,34 @@ fn lower_string_key_array_promotion(
     release_persisted_string_operand(ctx, index, span);
     release_persisted_string_operand(ctx, value, span);
     ctx.store_mutated_local(array, hash, assoc_ty, Some(span));
+}
+
+/// Writes `value` into the indexed local `array` under a boxed Mixed/Union key.
+///
+/// The destination stays statically `Array(Mixed)` (so indexed consumers such as
+/// `implode` keep routing to the indexed path) while `Op::ArraySetMixedKey`
+/// dispatches the key tag at runtime: integer keys stay on indexed storage and
+/// string keys promote the destination to a hash. This is the Mixed-key analogue
+/// of `lower_string_key_array_promotion`, which unconditionally promotes because
+/// a literal string key is always a hash key.
+fn lower_mixed_key_array_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    index: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+) {
+    let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let result = ctx.emit_value(
+        Op::ArraySetMixedKey,
+        vec![array_value.value, index.value, value.value],
+        None,
+        mixed_array_ty.clone(),
+        Op::ArraySetMixedKey.default_effects(),
+        Some(span),
+    );
+    ctx.store_mutated_local(array, result, mixed_array_ty, Some(span));
 }
 
 /// Returns the associative type produced by a string-key write to an indexed array.
@@ -979,9 +1024,23 @@ fn lower_foreach(
     body: &[Stmt],
 ) {
     let source = lower_expr(ctx, array);
-    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    let source_php_ty = ctx.builder.value_php_type(source.value);
+    let source_ty = source_php_ty.codegen_repr();
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
     let value_needs_null_init = !ctx.local_slots.contains_key(value_var);
+    // A foreach over a concretely-indexed array (`Array` of a non-Mixed element
+    // type) always yields integer keys, even though `Op::IterCurrentKey` lowers
+    // the key as Mixed. Tag the key local so a `$dst[$key] = ...` write coerces
+    // the int-valued Mixed key to int instead of promoting the destination to a
+    // hash. Generic `Array(Mixed)`, `AssocArray`, `Mixed`, and `Union` sources
+    // may carry string keys and are left untagged so the write promotes.
+    if let Some(key_var) = key_var {
+        if let PhpType::Array(elem_ty) = &source_php_ty {
+            if !matches!(elem_ty.as_ref(), PhpType::Mixed) {
+                ctx.mark_foreach_int_key(key_var);
+            }
+        }
+    }
     let iterator = ctx.emit_value(
         Op::IterStart,
         vec![source.value],
@@ -2559,6 +2618,30 @@ fn array_set_op(ir_type: IrType) -> Op {
         IrType::Heap(crate::ir::IrHeapKind::Buffer) => Op::BufferSet,
         _ => Op::RuntimeCall,
     }
+}
+
+/// Returns true when a lowered index value is a boxed `Mixed`/`Union` cell that
+/// may hold either an integer or a string array key (e.g. a foreach loop key,
+/// which `Op::IterCurrentKey` always produces as Mixed). Such writes go through
+/// `Op::ArraySetMixedKey` so the key tag is dispatched at runtime instead of
+/// coercing it to int (which would collapse a string key onto int 0).
+fn index_is_boxed_mixed_key(ir_type: IrType) -> bool {
+    matches!(
+        ir_type,
+        IrType::Heap(crate::ir::IrHeapKind::Mixed)
+            | IrType::Heap(crate::ir::IrHeapKind::Union)
+    )
+}
+
+/// Returns true when the index expression is a foreach loop key known to hold an
+/// integer at runtime (its source was a concretely-indexed array), so the
+/// destination write can keep the indexed `ArraySet` path with int coercion
+/// instead of promoting to a hash. See `LoweringContext::mark_foreach_int_key`.
+fn index_is_foreach_int_key(ctx: &LoweringContext<'_, '_>, index: &Expr) -> bool {
+    if let ExprKind::Variable(name) = &index.kind {
+        return ctx.is_foreach_int_key(name);
+    }
+    false
 }
 
 /// Extracts an integer switch case value from literal cases.
