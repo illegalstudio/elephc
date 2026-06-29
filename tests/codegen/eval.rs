@@ -3116,6 +3116,38 @@ echo unlink("eval-lock.txt") ? "cleanup" : "bad";');
     assert_eq!(out, "dynlock:dyn0:fcclock:fcc0:cleanup");
 }
 
+/// Verifies dynamic eval stream-socket callables write by-reference output parameters.
+#[test]
+fn test_eval_dynamic_stream_socket_callables_write_ref_outputs() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$server = stream_socket_server("tcp://127.0.0.1:0");
+$addr = stream_socket_get_name($server, false);
+$accept = "stream_socket_accept";
+$client = stream_socket_client("tcp://" . $addr);
+$peerName = "";
+$peer = $accept($server, null, $peerName);
+echo is_resource($peer) && $peerName !== "" ? "dynaccept" : "bad"; echo ":";
+stream_socket_sendto($client, "ping");
+$recv = stream_socket_recvfrom(...);
+$remoteAddr = "";
+echo $recv($peer, 4, 0, $remoteAddr) === "ping" && $remoteAddr !== "" ? "dynrecv" : "bad"; echo ":";
+fclose($client); fclose($peer); fclose($server);
+$server = stream_socket_server("tcp://127.0.0.1:0");
+$addr = stream_socket_get_name($server, false);
+$client = stream_socket_client("tcp://" . $addr);
+$directPeerName = "";
+$peer = stream_socket_accept(socket: $server, peer_name: $directPeerName);
+echo is_resource($peer) && $directPeerName !== "" ? "namedaccept" : "bad"; echo ":";
+stream_socket_sendto($client, "pong");
+$directAddr = "";
+echo stream_socket_recvfrom(socket: $peer, length: 4, address: $directAddr) === "pong" && $directAddr !== "" ? "namedrecv" : "bad";
+fclose($client); fclose($peer); fclose($server);');
+"#,
+    );
+    assert_eq!(out, "dynaccept:dynrecv:namedaccept:namedrecv");
+}
+
 /// Verifies eval disk-space builtins return positive local capacity and zero on failure.
 #[test]
 fn test_eval_dispatches_disk_space_builtin_calls() {

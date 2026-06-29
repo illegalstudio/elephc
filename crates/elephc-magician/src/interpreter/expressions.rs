@@ -708,6 +708,12 @@ pub(in crate::interpreter) fn eval_call(
     if name == "flock" {
         return eval_builtin_flock(args, context, scope, values);
     }
+    if name == "stream_socket_accept" {
+        return eval_builtin_stream_socket_accept_call(args, context, scope, values);
+    }
+    if name == "stream_socket_recvfrom" {
+        return eval_builtin_stream_socket_recvfrom_call(args, context, scope, values);
+    }
     if matches!(
         name,
         "array_pop"

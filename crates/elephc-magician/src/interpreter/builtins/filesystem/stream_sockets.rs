@@ -115,10 +115,39 @@ pub(in crate::interpreter) fn eval_builtin_stream_socket_accept(
         return Err(EvalStatus::RuntimeFatal);
     }
     let socket = eval_expr(&args[0], context, scope, values)?;
-    for arg in &args[1..] {
-        let _ = eval_expr(arg, context, scope, values)?;
+    if let Some(timeout) = args.get(1) {
+        let _ = eval_expr(timeout, context, scope, values)?;
     }
-    eval_stream_socket_accept_result(socket, context, values)
+    let peer_name_target = args
+        .get(2)
+        .map(|peer_name| eval_socket_output_ref_target(peer_name, context, scope, values))
+        .transpose()?;
+    let (result, peer_name) = eval_stream_socket_accept_with_peer_result(socket, context, values)?;
+    eval_write_socket_output_ref_target(peer_name_target.as_ref(), peer_name, context, values)?;
+    Ok(result)
+}
+
+/// Evaluates `stream_socket_accept()` over full eval call metadata.
+pub(in crate::interpreter) fn eval_builtin_stream_socket_accept_call(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["socket", "timeout", "peer_name"],
+        &evaluated_args,
+        false,
+    )?;
+    let socket = required_evaluated_ref_arg(&bound, 0)?;
+    let peer_name_target = optional_evaluated_ref_arg(&bound, 2)
+        .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
+        .transpose()?;
+    let (result, peer_name) =
+        eval_stream_socket_accept_with_peer_result(socket.value, context, values)?;
+    eval_write_socket_output_ref_target(peer_name_target.as_ref(), peer_name, context, values)?;
+    Ok(result)
 }
 
 /// Accepts one pending TCP connection from a listener resource.
@@ -132,6 +161,21 @@ pub(in crate::interpreter) fn eval_stream_socket_accept_result(
         Some(id) => values.resource(id),
         None => values.bool_value(false),
     }
+}
+
+/// Accepts one TCP connection and returns the accepted resource plus peer endpoint name.
+pub(in crate::interpreter) fn eval_stream_socket_accept_with_peer_result(
+    socket: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<String>), EvalStatus> {
+    let id = eval_socket_resource_id(socket, values)?;
+    let Some(accepted_id) = context.stream_resources_mut().accept_tcp(id) else {
+        return values.bool_value(false).map(|result| (result, None));
+    };
+    let peer_name = context.stream_resources().socket_name(accepted_id, true);
+    let result = values.resource(accepted_id)?;
+    Ok((result, peer_name))
 }
 
 /// Evaluates `stream_socket_get_name(socket, remote)`.
@@ -269,10 +313,41 @@ pub(in crate::interpreter) fn eval_builtin_stream_socket_recvfrom(
     }
     let stream = eval_expr(&args[0], context, scope, values)?;
     let length = eval_expr(&args[1], context, scope, values)?;
-    for arg in &args[2..] {
-        let _ = eval_expr(arg, context, scope, values)?;
+    if let Some(flags) = args.get(2) {
+        let _ = eval_expr(flags, context, scope, values)?;
     }
-    eval_stream_socket_recvfrom_result(stream, length, context, values)
+    let address_target = args
+        .get(3)
+        .map(|address| eval_socket_output_ref_target(address, context, scope, values))
+        .transpose()?;
+    let (result, address) =
+        eval_stream_socket_recvfrom_with_address_result(stream, length, context, values)?;
+    eval_write_socket_output_ref_target(address_target.as_ref(), address, context, values)?;
+    Ok(result)
+}
+
+/// Evaluates `stream_socket_recvfrom()` over full eval call metadata.
+pub(in crate::interpreter) fn eval_builtin_stream_socket_recvfrom_call(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["socket", "length", "flags", "address"],
+        &evaluated_args,
+        false,
+    )?;
+    let socket = required_evaluated_ref_arg(&bound, 0)?;
+    let length = required_evaluated_ref_arg(&bound, 1)?;
+    let address_target = optional_evaluated_ref_arg(&bound, 3)
+        .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
+        .transpose()?;
+    let (result, address) =
+        eval_stream_socket_recvfrom_with_address_result(socket.value, length.value, context, values)?;
+    eval_write_socket_output_ref_target(address_target.as_ref(), address, context, values)?;
+    Ok(result)
 }
 
 /// Reads bytes from a connected socket stream.
@@ -283,6 +358,50 @@ pub(in crate::interpreter) fn eval_stream_socket_recvfrom_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_fread_result(stream, length, context, values)
+}
+
+/// Reads bytes from a connected socket stream and returns the tracked remote endpoint name.
+pub(in crate::interpreter) fn eval_stream_socket_recvfrom_with_address_result(
+    stream: RuntimeCellHandle,
+    length: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<String>), EvalStatus> {
+    let id = eval_socket_resource_id(stream, values)?;
+    let address = context.stream_resources().socket_name(id, true);
+    let result = eval_fread_result(stream, length, context, values)?;
+    Ok((result, address))
+}
+
+/// Captures a writable output argument target for socket by-reference parameters.
+fn eval_socket_output_ref_target(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalReferenceTarget, EvalStatus> {
+    let (_, target) = eval_call_arg_value(expr, context, scope, values)?;
+    target.ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Writes a socket output string to a captured by-reference target when available.
+fn eval_write_socket_output_ref_target(
+    target: Option<&EvalReferenceTarget>,
+    value: Option<String>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some((target, value)) = target.zip(value) else {
+        return Ok(());
+    };
+    let value = values.string(&value)?;
+    eval_write_direct_ref_target(
+        target,
+        value,
+        context,
+        values,
+        Some(ScopeCellOwnership::Owned),
+    )
 }
 
 /// Evaluates `stream_socket_pair(domain, type, protocol)`.
