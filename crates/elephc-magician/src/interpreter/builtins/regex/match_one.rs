@@ -49,6 +49,35 @@ pub(in crate::interpreter) fn eval_builtin_preg_match(
     }
 }
 
+/// Evaluates PHP `preg_match()` over full eval call metadata.
+pub(in crate::interpreter) fn eval_builtin_preg_match_call(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["pattern", "subject", "matches", "flags"],
+        &evaluated_args,
+        false,
+    )?;
+    let pattern = required_evaluated_ref_arg(&bound, 0)?;
+    let subject = required_evaluated_ref_arg(&bound, 1)?;
+    let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let Some(matches) = optional_evaluated_ref_arg(&bound, 2) else {
+        return eval_preg_match_result(pattern.value, subject.value, values);
+    };
+    let target = matches
+        .ref_target
+        .clone()
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let (result, matches_array) =
+        eval_preg_match_capture_result(pattern.value, subject.value, flags, values)?;
+    eval_write_preg_matches_target(&target, matches_array, context, values)?;
+    Ok(result)
+}
+
 /// Returns whether one regex matches the subject string.
 pub(in crate::interpreter) fn eval_preg_match_result(
     pattern: RuntimeCellHandle,

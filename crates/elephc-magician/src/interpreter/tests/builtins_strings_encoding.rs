@@ -201,6 +201,28 @@ return $okAgain . ":" . $firstClassMatches[0];"#,
     assert_eq!(values.get(result), FakeValue::String("1:ID".to_string()));
 }
 
+/// Verifies named direct preg calls write by-reference `$matches` targets.
+#[test]
+fn execute_program_dispatches_named_preg_match_ref_targets() {
+    let program = parse_fragment(
+        br#"$named = [];
+$ok = preg_match(pattern: "/([a-z]+)([0-9]+)/", subject: "id42", matches: $named);
+echo $ok . ":" . $named[0] . ":" . $named[1] . ":" . $named[2] . ":";
+$all = [];
+$count = preg_match_all(pattern: "/([a-z])([0-9])/", subject: "a1 b2", matches: $all, flags: PREG_SET_ORDER);
+echo $count . ":" . $all[1][0] . ":" . $all[1][2] . ":";
+return preg_match(pattern: "/x/", subject: "x", flags: PREG_OFFSET_CAPTURE);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1:id42:id:42:2:b2:2:");
+    assert_eq!(values.get(result), FakeValue::Int(1));
+}
+
 /// Verifies eval HTML entity builtins encode, decode, and dispatch as callables.
 #[test]
 fn execute_program_dispatches_html_entity_builtins() {
