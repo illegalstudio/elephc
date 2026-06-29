@@ -3083,6 +3083,39 @@ echo preg_match(pattern: "/x/", subject: "x", flags: PREG_OFFSET_CAPTURE);');
     assert_eq!(out, "1:id42:id:42:2:b2:2:1");
 }
 
+/// Verifies eval `call_user_func*()` warns for by-value regex `$matches` outputs.
+#[test]
+fn test_eval_call_user_func_regex_ref_like_builtin_args_warn_and_use_value_copy() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('$matches = ["old"];
+echo call_user_func("preg_match", "/x/", "x", $matches) . ":" . $matches[0] . "|";
+$all = ["old"];
+echo call_user_func("preg_match_all", "/x/", "xx", $all) . ":" . $all[0] . "|";
+$named = ["old"];
+echo call_user_func_array("preg_match", ["pattern" => "/y/", "subject" => "y", "matches" => $named]) . ":" . $named[0] . "|";
+$flagged = ["old"];
+echo call_user_func("preg_match_all", "/([a-z])/", "ab", $flagged, PREG_SET_ORDER) . ":" . $flagged[0];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "1:old|2:old|1:old|2:old");
+    for warning in [
+        "preg_match(): Argument #3 ($matches) must be passed by reference, value given",
+        "preg_match_all(): Argument #3 ($matches) must be passed by reference, value given",
+    ] {
+        assert!(
+            out.stderr.contains(warning),
+            "missing by-ref warning {warning:?}: {}",
+            out.stderr
+        );
+    }
+}
+
 /// Verifies eval `fnmatch()` supports wildcards, classes, flags, constants, and callables.
 #[test]
 fn test_eval_dispatches_fnmatch_builtin_call() {
@@ -3186,6 +3219,47 @@ echo unlink("eval-lock.txt") ? "cleanup" : "bad";');
 "#,
     );
     assert_eq!(out, "dynlock:dyn0:fcclock:fcc0:cleanup");
+}
+
+/// Verifies eval `call_user_func()` warns for by-value filesystem ref-like outputs.
+#[test]
+fn test_eval_call_user_func_filesystem_ref_like_builtin_args_warn_and_use_value_copy() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('file_put_contents("eval-cuf-lock.txt", "x");
+$h = fopen("eval-cuf-lock.txt", "r+");
+$would = "old";
+echo call_user_func("flock", $h, LOCK_SH, $would) ? "lock" : "bad";
+echo ":" . $would . ":";
+flock($h, LOCK_UN);
+fclose($h);
+unlink("eval-cuf-lock.txt");
+$pair = stream_socket_pair(1, 1, 0);
+$read = [$pair[0]];
+$write = [];
+$except = [];
+echo call_user_func("stream_select", $read, $write, $except, 0) . ":";
+echo count($read) . ":" . count($write) . ":" . count($except);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "lock:old:0:1:0:0");
+    for warning in [
+        "flock(): Argument #3 ($would_block) must be passed by reference, value given",
+        "stream_select(): Argument #1 ($read) must be passed by reference, value given",
+        "stream_select(): Argument #2 ($write) must be passed by reference, value given",
+        "stream_select(): Argument #3 ($except) must be passed by reference, value given",
+    ] {
+        assert!(
+            out.stderr.contains(warning),
+            "missing by-ref warning {warning:?}: {}",
+            out.stderr
+        );
+    }
 }
 
 /// Verifies dynamic eval stream-socket callables write by-reference output parameters.

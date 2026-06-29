@@ -21,10 +21,46 @@ pub(in crate::interpreter) fn eval_regex_builtin_with_values(
     let result = match name {
         "preg_match" => match evaluated_args {
             [pattern, subject] => eval_preg_match_result(*pattern, *subject, values)?,
+            [pattern, subject, _matches] => {
+                values.warning(
+                    "preg_match(): Argument #3 ($matches) must be passed by reference, value given",
+                )?;
+                let (matched, matches) =
+                    eval_preg_match_capture_result(*pattern, *subject, None, values)?;
+                values.release(matches)?;
+                matched
+            }
+            [pattern, subject, _matches, flags] => {
+                values.warning(
+                    "preg_match(): Argument #3 ($matches) must be passed by reference, value given",
+                )?;
+                let (matched, matches) =
+                    eval_preg_match_capture_result(*pattern, *subject, Some(*flags), values)?;
+                values.release(matches)?;
+                matched
+            }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         "preg_match_all" => match evaluated_args {
             [pattern, subject] => eval_preg_match_all_result(*pattern, *subject, values)?,
+            [pattern, subject, _matches] => {
+                values.warning(
+                    "preg_match_all(): Argument #3 ($matches) must be passed by reference, value given",
+                )?;
+                let (count, matches) =
+                    eval_preg_match_all_capture_result(*pattern, *subject, None, values)?;
+                values.release(matches)?;
+                count
+            }
+            [pattern, subject, _matches, flags] => {
+                values.warning(
+                    "preg_match_all(): Argument #3 ($matches) must be passed by reference, value given",
+                )?;
+                let (count, matches) =
+                    eval_preg_match_all_capture_result(*pattern, *subject, Some(*flags), values)?;
+                values.release(matches)?;
+                count
+            }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         "preg_replace" => match evaluated_args {

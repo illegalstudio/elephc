@@ -167,6 +167,11 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             if !(2..=3).contains(&evaluated_args.len()) {
                 return Err(EvalStatus::RuntimeFatal);
             }
+            if evaluated_args.len() >= 3 {
+                values.warning(
+                    "flock(): Argument #3 ($would_block) must be passed by reference, value given",
+                )?;
+            }
             let (success, _) = eval_flock_result(
                 evaluated_args[0],
                 evaluated_args[1],
@@ -185,6 +190,7 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             if !(2..=5).contains(&evaluated_args.len()) {
                 return Err(EvalStatus::RuntimeFatal);
             }
+            eval_fsockopen_by_value_ref_warnings(name, evaluated_args.len(), values)?;
             eval_fsockopen_result(evaluated_args[0], evaluated_args[1], context, values)?
         }
         "fscanf" => {
@@ -426,7 +432,10 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_stream_bucket_push_result(name, *brigade, *bucket, values)?
         }
-        "stream_select" => eval_stream_select_result(evaluated_args, context, values)?,
+        "stream_select" => {
+            eval_stream_select_by_value_ref_warnings(evaluated_args.len(), values)?;
+            eval_stream_select_result(evaluated_args, context, values)?
+        }
         "stream_socket_server" => {
             let [address] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -442,6 +451,11 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
         "stream_socket_accept" => {
             if !(1..=3).contains(&evaluated_args.len()) {
                 return Err(EvalStatus::RuntimeFatal);
+            }
+            if evaluated_args.len() >= 3 {
+                values.warning(
+                    "stream_socket_accept(): Argument #3 ($peer_name) must be passed by reference, value given",
+                )?;
             }
             eval_stream_socket_accept_result(evaluated_args[0], context, values)?
         }
@@ -477,6 +491,11 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
         "stream_socket_recvfrom" => {
             if !(2..=4).contains(&evaluated_args.len()) {
                 return Err(EvalStatus::RuntimeFatal);
+            }
+            if evaluated_args.len() >= 4 {
+                values.warning(
+                    "stream_socket_recvfrom(): Argument #4 ($address) must be passed by reference, value given",
+                )?;
             }
             eval_stream_socket_recvfrom_result(
                 evaluated_args[0],
@@ -611,4 +630,40 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
         _ => return Ok(None),
     };
     Ok(Some(result))
+}
+
+/// Emits PHP by-reference warnings for by-value `fsockopen()` error outputs.
+fn eval_fsockopen_by_value_ref_warnings(
+    name: &str,
+    supplied_count: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if supplied_count >= 3 {
+        values.warning(&format!(
+            "{name}(): Argument #3 ($error_code) must be passed by reference, value given"
+        ))?;
+    }
+    if supplied_count >= 4 {
+        values.warning(&format!(
+            "{name}(): Argument #4 ($error_message) must be passed by reference, value given"
+        ))?;
+    }
+    Ok(())
+}
+
+/// Emits PHP by-reference warnings for by-value `stream_select()` array outputs.
+fn eval_stream_select_by_value_ref_warnings(
+    supplied_count: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for (index, param_name) in ["read", "write", "except"].iter().enumerate() {
+        if supplied_count <= index {
+            continue;
+        }
+        values.warning(&format!(
+            "stream_select(): Argument #{} (${param_name}) must be passed by reference, value given",
+            index + 1
+        ))?;
+    }
+    Ok(())
 }
