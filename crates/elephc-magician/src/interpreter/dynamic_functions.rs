@@ -1651,7 +1651,13 @@ fn write_back_native_function_ref_args(
         if current == value {
             continue;
         }
-        write_back_method_ref_target(&ref_slot.target, value, context, values)?;
+        eval_write_direct_ref_target(
+            &ref_slot.target,
+            value,
+            context,
+            values,
+            Some(ScopeCellOwnership::Owned),
+        )?;
     }
     Ok(())
 }
