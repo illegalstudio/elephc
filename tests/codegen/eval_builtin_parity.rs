@@ -8,6 +8,8 @@
 //! - Fixtures verify `function_exists()` and namespaced builtin fallback before
 //!   and after eval has introduced dynamic symbols.
 
+use std::fmt::Write;
+
 use crate::support::compile_and_run;
 
 /// Verifies AOT builtin lookup stays case-insensitive without eval being present.
@@ -69,6 +71,40 @@ echo function_exists("StRlEn") ? "M" : "m";');
     );
 
     assert_eq!(out, "SCM");
+}
+
+/// Verifies eval `function_exists()` sees every compiler-catalog builtin name.
+#[test]
+fn test_eval_function_exists_covers_static_builtin_catalog() {
+    let mut fragment = String::new();
+    for name in elephc::builtin_metadata::php_visible_builtin_names() {
+        writeln!(
+            &mut fragment,
+            "if (!function_exists(\"{name}\")) {{ echo \"{name},\"; }}"
+        )
+        .expect("write eval builtin probe");
+    }
+    fragment.push_str("return \"ok\";");
+
+    let source = format!("<?php\necho eval({});\n", php_single_quoted_literal(&fragment));
+    let out = compile_and_run(&source);
+
+    assert_eq!(out, "ok");
+}
+
+/// Escapes a Rust string as a PHP single-quoted string literal.
+fn php_single_quoted_literal(value: &str) -> String {
+    let mut literal = String::with_capacity(value.len() + 2);
+    literal.push('\'');
+    for ch in value.chars() {
+        match ch {
+            '\\' => literal.push_str("\\\\"),
+            '\'' => literal.push_str("\\'"),
+            _ => literal.push(ch),
+        }
+    }
+    literal.push('\'');
+    literal
 }
 
 /// Verifies namespaced function calls fall back to builtins in AOT and eval code.
