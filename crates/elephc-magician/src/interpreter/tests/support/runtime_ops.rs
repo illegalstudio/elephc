@@ -393,6 +393,36 @@ impl RuntimeValueOps for FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Ok(self.alloc(FakeValue::InvokerRefCell(slot as usize)))
     }
+    /// Creates a fake invoker-only raw by-reference marker.
+    fn invoker_raw_ref_cell(
+        &mut self,
+        slot: *mut std::ffi::c_void,
+        _source_tag: u64,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Ok(self.alloc(FakeValue::InvokerRefCell(slot as usize)))
+    }
+    /// Extracts one fake scalar payload word for raw by-reference staging.
+    fn raw_value_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
+        Ok(match self.get(value) {
+            FakeValue::Bool(value) => u64::from(value),
+            FakeValue::Float(value) => value.to_bits(),
+            FakeValue::Int(value) => value as u64,
+            _ => 0,
+        })
+    }
+    /// Boxes one fake scalar raw payload word with the provided runtime tag.
+    fn raw_word_value(
+        &mut self,
+        source_tag: u64,
+        word: u64,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        match source_tag {
+            EVAL_TAG_INT => self.runtime_int(word as i64),
+            EVAL_TAG_FLOAT => self.runtime_float(f64::from_bits(word)),
+            EVAL_TAG_BOOL => self.runtime_bool_value(word != 0),
+            _ => Err(EvalStatus::RuntimeFatal),
+        }
+    }
     /// Returns the fake object handle as a stable object identity.
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         self.runtime_object_identity(object)

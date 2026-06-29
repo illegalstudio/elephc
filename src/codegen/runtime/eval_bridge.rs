@@ -768,6 +768,26 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x2, #{}", EVAL_RUNTIME_TAG_MIXED));       // source tag 7 tells invoker fallback paths the slot stores Mixed
     emitter.instruction("b __rt_mixed_from_value");                             // box the marker cell and return it to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_invoker_raw_ref_cell");
+    emitter.instruction("mov x2, x1");                                          // pass the staged raw slot source tag as marker metadata
+    emitter.instruction("mov x1, x0");                                          // pass the staged raw slot address as marker payload
+    emitter.instruction(&format!("mov x0, #{}", INVOKER_ARG_REF_CELL_TAG));     // runtime tag 11 marks descriptor-invoker by-reference args
+    emitter.instruction("b __rt_mixed_from_value");                             // box the marker cell and return it to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_raw_word");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while unboxing the scalar cell
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across mixed_unbox
+    emitter.instruction("mov x29, sp");                                         // establish a frame pointer for the wrapper call
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the boxed scalar payload words
+    emitter.instruction("mov x0, x1");                                          // return the scalar low payload word to Rust
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore caller frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the wrapper frame
+    emitter.instruction("ret");                                                 // return the raw payload word
+
+    label_c_global(emitter, "__elephc_eval_value_from_raw_word");
+    emitter.instruction("mov x2, xzr");                                         // raw one-word scalar payloads have no high payload word
+    emitter.instruction("b __rt_mixed_from_value");                             // box the raw scalar payload and return it to Rust
+
     label_c_global(emitter, "__elephc_eval_value_object_identity");
     emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while unboxing the object cell
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across mixed_unbox
@@ -2255,6 +2275,25 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rax, {}", INVOKER_ARG_REF_CELL_TAG));     // runtime tag 11 marks descriptor-invoker by-reference args
     emitter.instruction(&format!("mov rsi, {}", EVAL_RUNTIME_TAG_MIXED));       // source tag 7 tells invoker fallback paths the slot stores Mixed
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the marker cell and return it to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_invoker_raw_ref_cell");
+    emitter.instruction(&format!("mov rax, {}", INVOKER_ARG_REF_CELL_TAG));     // runtime tag 11 marks descriptor-invoker by-reference args
+    emitter.instruction("jmp __rt_mixed_from_value");                           // box the marker cell and return it to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_raw_word");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("mov rax, rdi");                                        // move the boxed scalar cell into mixed_unbox input
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the boxed scalar payload words
+    emitter.instruction("mov rax, rdi");                                        // return the scalar low payload word to Rust
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the raw payload word
+
+    label_c_global(emitter, "__elephc_eval_value_from_raw_word");
+    emitter.instruction("mov rax, rdi");                                        // move the runtime tag into the mixed boxing tag register
+    emitter.instruction("mov rdi, rsi");                                        // move the raw scalar word into the low payload register
+    emitter.instruction("xor esi, esi");                                        // raw one-word scalar payloads have no high payload word
+    emitter.instruction("jmp __rt_mixed_from_value");                           // box the raw scalar payload and return it to Rust
 
     label_c_global(emitter, "__elephc_eval_value_object_identity");
     emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer

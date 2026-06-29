@@ -10,6 +10,8 @@
 //! - Implementors own allocation, retain/release, casting, arithmetic, and target runtime calls.
 //! - Tag constants mirror boxed Mixed runtime tags consumed by eval-only helpers.
 
+use std::ffi::c_void;
+
 use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
 use crate::value::RuntimeCellHandle;
@@ -353,6 +355,23 @@ pub trait RuntimeValueOps {
     fn invoker_ref_cell(
         &mut self,
         slot: *mut RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Creates an invoker-only by-reference marker for a staged raw one-word slot.
+    fn invoker_raw_ref_cell(
+        &mut self,
+        slot: *mut c_void,
+        source_tag: u64,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Extracts the low raw payload word from a boxed scalar Mixed cell.
+    fn raw_value_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus>;
+
+    /// Boxes one raw scalar payload word as a Mixed cell with the provided runtime tag.
+    fn raw_word_value(
+        &mut self,
+        source_tag: u64,
+        word: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Returns the unboxed object payload pointer used for PHP object identity.

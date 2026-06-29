@@ -49,11 +49,19 @@ pub(super) struct BoundNativeFunctionArgs {
     pub(super) ref_slots: Vec<BoundNativeFunctionRefSlot>,
 }
 
-/// One staged Mixed-slot reference passed to a native function invoker.
-pub(super) struct BoundNativeFunctionRefSlot {
-    pub(super) original: RuntimeCellHandle,
-    pub(super) slot: Box<RuntimeCellHandle>,
-    pub(super) target: EvalReferenceTarget,
+/// One staged by-reference slot passed to a native function invoker.
+pub(super) enum BoundNativeFunctionRefSlot {
+    Mixed {
+        original: RuntimeCellHandle,
+        slot: Box<RuntimeCellHandle>,
+        target: EvalReferenceTarget,
+    },
+    RawWord {
+        tag: u64,
+        original: u64,
+        slot: Box<u64>,
+        target: EvalReferenceTarget,
+    },
 }
 
 /// One already evaluated PHP callback supported by the eval dispatcher.

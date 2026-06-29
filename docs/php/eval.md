@@ -112,11 +112,12 @@ global user functions support positional, named, and spread arguments inside
 eval fragments. String keys in unpacked argument arrays bind as named
 parameters. Direct calls and variable-function calls can also invoke registered
 AOT global user functions when their by-reference parameters use generated
-`mixed`/union-style boxed storage; typed scalar, string, array, iterable,
-object, and other raw-storage by-reference free-function parameters remain
-metadata-only until the function bridge has typed staging/writeback for those
-ABI layouts. `call_user_func()` remains by-value for registered AOT
-free-function by-reference parameters.
+`mixed`/union-style boxed storage or one-word scalar raw storage (`int`, `bool`,
+or `float`). Nullable scalar, string, array, iterable, object, and other
+raw-storage by-reference free-function parameters remain metadata-only until
+the function bridge has typed staging/writeback for those ABI layouts.
+`call_user_func()` remains by-value for registered AOT free-function
+by-reference parameters.
 
 String-variable and expression callable calls such as `$fn(...)` and
 `$callbacks[0](...)` share the eval callable dispatcher for supported builtins,
@@ -533,14 +534,15 @@ function calls, and `call_user_func()` paths can also invoke registered
 generated/AOT free functions with positional variadic tails when the generated
 signature has no by-reference parameters. Direct and variable-function calls
 can additionally invoke generated/AOT free functions whose by-reference
-parameters use boxed Mixed/union storage. Registered generated/AOT
-free-function parameter names, declared types, return types, by-reference and
-variadic flags, required/optional counts, and supported defaults are also
-exposed through `ReflectionFunction` / `ReflectionParameter` metadata.
-Unsupported generated/AOT free-function bridge shapes, such as typed
-raw-storage by-reference parameters and native-only ABI layouts, remain
-reflectable as metadata but are not invocable through eval. Supported
-callable-builtin invocation is
+parameters use boxed Mixed/union storage or one-word scalar raw storage
+(`int`, `bool`, or `float`). Registered generated/AOT free-function parameter
+names, declared types, return types, by-reference and variadic flags,
+required/optional counts, and supported defaults are also exposed through
+`ReflectionFunction` / `ReflectionParameter` metadata. Unsupported
+generated/AOT free-function bridge shapes, such as nullable tagged-scalar,
+string, array, iterable, object, native-only ABI layouts, and other raw-storage
+by-reference parameters, remain reflectable as metadata but are not invocable
+through eval. Supported callable-builtin invocation is
 covered by the general Reflection support documented in
 `docs/php/classes.md`.
 Defaulted eval method parameters are
@@ -881,7 +883,8 @@ metadata. Generated AOT bridge dispatch supports visibility-checked method,
 static-method, and constructor signatures whose generated ABI storage is
 scalar/string, callable descriptor, boxed Mixed/union, array/hash, iterable, or
 object, plus free-function signatures using the descriptor invoker ABI when
-by-reference parameters, if any, use boxed Mixed/union storage.
+by-reference parameters, if any, use boxed Mixed/union storage or raw one-word
+scalar storage (`int`, `bool`, or `float`).
 Registered type specs validate nullable and union members, intersection object
 parameters, and intersection object returns before or after the generated AOT
 call. By-reference method and constructor parameters remain limited to the
@@ -912,9 +915,9 @@ limit there is the supported type slice rather than a fixed parameter count.
 Generated/AOT free-function and method type metadata, return metadata,
 by-reference and variadic parameter flags, and generated/AOT
 class/method/property/class-constant attributes are exposed for registered
-metadata slices, while unsupported native-only bridge shapes and typed
-raw-storage by-reference free-function bridge shapes remain metadata-only
-rather than invocable through eval.
+metadata slices, while unsupported native-only bridge shapes and raw-storage
+by-reference free-function bridge shapes beyond `int`, `bool`, and `float`
+remain metadata-only rather than invocable through eval.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`
