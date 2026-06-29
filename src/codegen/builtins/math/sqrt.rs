@@ -11,8 +11,8 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
-use crate::codegen::{abi, platform::Arch};
+use crate::codegen::expr::{coerce_to_float, emit_expr};
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -39,10 +39,8 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("sqrt()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
-    // -- convert int to float if needed, then compute square root --
-    if ty != PhpType::Float {
-        abi::emit_int_result_to_float_result(emitter);                          // normalize integer sqrt() inputs into the active floating-point result register before the square-root operation
-    }
+    // -- normalize int/Mixed inputs to a float, then compute square root --
+    coerce_to_float(emitter, &ty);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("fsqrt d0, d0");                                // compute the scalar square root in the native AArch64 floating-point result register

@@ -121,6 +121,46 @@ pub(super) fn lower_float_binop(
     store_if_result(ctx, inst)
 }
 
+/// Lowers PHP float `/` with a zero-divisor guard that raises an uncatchable fatal.
+///
+/// Mirrors the legacy backend's `emit_float_div_by_zero_guard`: an exact `0.0` divisor fatals
+/// (PHP raises a catchable `DivisionByZeroError`; elephc has no exception unwinding yet), while a
+/// NaN divisor is left alone (`x / NaN = NaN`), so on x86_64 a parity check skips the fatal for
+/// the unordered case and on AArch64 `b.ne` naturally skips the unordered (`Z=0`) NaN result.
+pub(super) fn lower_float_div(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let lhs_reg = secondary_float_reg(ctx.emitter.target.arch);
+    let rhs_reg = abi::float_result_reg(ctx.emitter);
+    require_float(ctx.load_value_to_reg(lhs, lhs_reg)?, inst)?;
+    require_float(ctx.load_value_to_reg(rhs, rhs_reg)?, inst)?;
+    let ok_label = ctx.next_label("fdiv_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("fcmp {}, #0.0", rhs_reg));        // compare the float divisor against 0.0
+            ctx.emitter.instruction(&format!("b.ne {}", ok_label));             // skip the fatal when the divisor is non-zero (or NaN)
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xorps xmm2, xmm2");                        // materialize 0.0 in a scratch register for the comparison
+            ctx.emitter.instruction(&format!("ucomisd {}, xmm2", rhs_reg));     // compare the float divisor against 0.0 (sets PF when the divisor is NaN)
+            ctx.emitter.instruction(&format!("jne {}", ok_label));              // skip the fatal when the divisor differs from 0.0
+            ctx.emitter.instruction(&format!("jp {}", ok_label));               // skip the fatal when the divisor is NaN (unordered)
+        }
+    }
+    abi::emit_fatal_to_stderr(ctx.emitter, ctx.data, b"Fatal error: division by zero\n");
+    ctx.emitter.label(&ok_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("fdiv {}, {}, {}", rhs_reg, lhs_reg, rhs_reg)); // compute the floating-point quotient left / right
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("divsd {}, {}", lhs_reg, rhs_reg)); // divide the left float operand by the divisor
+            ctx.emitter.instruction(&format!("movsd {}, {}", rhs_reg, lhs_reg)); // move the quotient back into the float result register
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers floating-point exponentiation through libc `pow`.
 pub(super) fn lower_float_pow(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;

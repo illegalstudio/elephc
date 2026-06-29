@@ -8,13 +8,13 @@ sidebar:
 ## sort()
 
 ```php
-function sort(array $array, int $flags): bool
+function sort(array $value, int $flags): bool
 ```
 
 Lowers `sort()` for indexed integer arrays by mutating the source array in place.
 
 **Parameters**:
-- `$array` (`array`), passed by reference
+- `$value` (`array`)
 - `$flags` (`int`)
 
 **Returns**: `bool`

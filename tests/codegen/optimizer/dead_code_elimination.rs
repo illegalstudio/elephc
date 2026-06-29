@@ -21,3 +21,5 @@ mod guards;
 mod tail_sinking;
 #[path = "dead_code_elimination/normalization.rs"]
 mod normalization;
+#[path = "dead_code_elimination/may_throw.rs"]
+mod may_throw;

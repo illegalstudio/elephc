@@ -146,3 +146,93 @@ echo count($result) . ":" . $result[0] . "," . $result[1];
     );
     assert_eq!(out, "2:first,second");
 }
+
+/// Regression: `array_merge` of STRING arrays must keep every element. String indexed
+/// arrays use 16-byte (ptr+len) slots, but `Str` is not `is_refcounted()`, so they were
+/// routed through the scalar 8-byte merge, corrupting every element past the first
+/// (`array_merge(["a","b"],["c"])` returned `["a","",""]`). A dedicated `__rt_array_merge_str`
+/// fixes it.
+#[test]
+fn test_array_merge_string_elements_keeps_all() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["a", "b"];
+$b = ["c", "d"];
+echo implode(",", array_merge($a, $b));
+"#,
+    );
+    assert_eq!(out, "a,b,c,d");
+}
+
+/// Regression: `array_merge([], $strings)` — a common `$r = []; $r = array_merge($r, ...)`
+/// pattern — must use the string merge even though the empty first array carries no
+/// element-type hint. The helper is chosen from either argument's element type.
+#[test]
+fn test_array_merge_empty_first_string_array() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", array_merge([], ["only", "two"]));
+"#,
+    );
+    assert_eq!(out, "only,two");
+}
+
+/// Regression: merging string arrays persists each element into the result, so the merged
+/// array owns its own copies and the heap stays clean once every array (sources and the
+/// owned merge result) is freed at scope end.
+#[test]
+fn test_array_merge_string_elements_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = ["x", "yy"];
+$b = ["zzz"];
+$m = array_merge($a, $b);
+echo implode("|", $m);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "x|yy|zzz");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression (H10): in_array()/array_search() accept the optional `$strict` flag instead of
+/// failing to compile. elephc's element comparison is value/byte-exact, so it already yields strict
+/// semantics for a needle whose type matches the array element type (the common case). Uses string
+/// and integer arrays for in_array and an integer array for array_search (array_search on
+/// string-element arrays is a separate pre-existing gap).
+#[test]
+fn test_in_array_and_array_search_accept_strict_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$nums = [1, 2, 3];
+$strs = ["a", "b", "c"];
+$vals = [10, 20, 30];
+echo in_array(3, $nums, true) ? "1" : "0";
+echo in_array(9, $nums, true) ? "1" : "0";
+echo in_array("b", $strs, true) ? "1" : "0";
+echo "|";
+echo array_search(20, $vals, true);
+echo array_search(99, $vals, true) === false ? "F" : "?";
+"#,
+    );
+    assert_eq!(out, "101|1F");
+}
+
+/// Regression (H10): a non-literal `$strict` argument is still evaluated for its side effects, even
+/// though elephc's same-type comparison does not depend on the flag value. The side-effecting call
+/// must run exactly once before the search result is produced.
+#[test]
+fn test_in_array_strict_argument_side_effect_evaluated() {
+    let out = compile_and_run(
+        r#"<?php
+function strictFlag() { echo "S"; return true; }
+$r = in_array(2, [1, 2, 3], strictFlag());
+echo $r ? "Y" : "N";
+"#,
+    );
+    assert_eq!(out, "SY");
+}

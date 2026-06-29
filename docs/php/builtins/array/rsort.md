@@ -8,13 +8,13 @@ sidebar:
 ## rsort()
 
 ```php
-function rsort(array $array, int $flags): bool
+function rsort(array $value, int $flags): bool
 ```
 
 Lowers `rsort()` for indexed integer arrays by mutating the source array in place.
 
 **Parameters**:
-- `$array` (`array`), passed by reference
+- `$value` (`array`)
 - `$flags` (`int`)
 
 **Returns**: `bool`

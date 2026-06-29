@@ -17,7 +17,7 @@ Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
 - `$array` (`array`)
 - `$offset` (`int`)
 - `$length` (`int`), optional
-- `$preserve_keys` (`bool`)
+- `$preserve_keys` (`bool`), optional
 
 **Returns**: `array`
 

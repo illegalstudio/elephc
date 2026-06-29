@@ -94,7 +94,9 @@ pub(crate) fn emit_match_expr(
                     Arch::X86_64 => {
                         emitter.instruction("movsd xmm1, QWORD PTR [rsp]");     // reload the saved subject float into the x86_64 scratch compare register
                         emitter.instruction("ucomisd xmm1, xmm0");              // compare the saved subject float against the current pattern float
-                        emitter.instruction("sete al");                         // materialize the float equality result in the low x86_64 result byte
+                        emitter.instruction("sete al");                         // float equality result (PHP match uses strict ===)
+                        emitter.instruction("setnp cl");                        // NAN === NAN is false, so require an ordered compare
+                        emitter.instruction("and al, cl");                      // a NaN subject never matches a NaN arm
                         emitter.instruction("movzx eax, al");                   // widen the x86_64 boolean byte back into the canonical integer result register
                     }
                 },

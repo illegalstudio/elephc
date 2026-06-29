@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:850](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L850) (`lower_array_merge`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:957](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L957) (`lower_array_merge`)
 - **Function symbol**: `lower_array_merge()`
 
 
@@ -21,8 +21,7 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_array_diff`
-- `__rt_array_diff_refcounted`
+- `__rt_array_merge_str`
 
 ## Signature summary
 

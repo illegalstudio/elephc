@@ -8,13 +8,13 @@ sidebar:
 ## krsort()
 
 ```php
-function krsort(array $array, int $flags): bool
+function krsort(array $value, int $flags): bool
 ```
 
 Lowers `krsort()` through the legacy reverse key-sort helper surface.
 
 **Parameters**:
-- `$array` (`array`), passed by reference
+- `$value` (`array`)
 - `$flags` (`int`)
 
 **Returns**: `bool`

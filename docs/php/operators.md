@@ -12,8 +12,8 @@ sidebar:
 | `+` | `$a + $b` | Numeric addition, or PHP array union when both operands are arrays. Integer overflow promotes to `double`. |
 | `-` | `$a - $b` | Subtraction. Integer overflow promotes to `double`. |
 | `*` | `$a * $b` | Multiplication. Integer overflow promotes to `double`. |
-| `/` | `$a / $b` | Division (always returns float) |
-| `%` | `$a % $b` | Modulo |
+| `/` | `$a / $b` | Division (always returns float). Dividing by zero is a fatal error (PHP throws `DivisionByZeroError`; elephc's is not yet catchable). |
+| `%` | `$a % $b` | Modulo. Modulo by zero is a fatal error (PHP throws `DivisionByZeroError`; elephc's is not yet catchable). |
 | `**` | `$a ** $b` | Exponentiation (right-associative, returns float) |
 | `-$x` | `-$x` | Unary negation |
 

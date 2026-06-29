@@ -151,8 +151,8 @@ Current pruning coverage includes:
   - `continue`
 - dead code after exhaustive `if` / `else`
 - dead code after conservative exhaustive `switch ... default`
-- pure expression statements whose result is unused
-- pure dead subexpressions inside:
+- pure, non-throwing expression statements whose result is unused (a pure builtin that can still raise a PHP fatal on bad input — e.g. `str_repeat($s, -1);`, `explode("", $s);`, `min([]);` — is modeled as `may_throw` and **retained**, because PHP raises the error at that statement)
+- pure dead subexpressions inside (an unused branch is never evaluated by PHP, so a `may_throw` there is irrelevant and the branch is still pruned):
   - ternaries
   - `??`
   - short-circuit `&&` / `||`

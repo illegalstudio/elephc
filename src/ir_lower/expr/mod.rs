@@ -5608,10 +5608,40 @@ fn call_return_type_for_args(
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "array_fill" => array_fill_builtin_return_type_for_args(ctx, args, operands),
         "array_map" => array_map_builtin_return_type(ctx, args, operands),
+        "array_slice" => array_slice_builtin_return_type(ctx, args, operands),
         "iterator_to_array" => iterator_to_array_builtin_return_type(ctx, args, operands),
         "microtime" => microtime_builtin_return_type_for_args(args),
         _ => None,
     }
+}
+
+/// Returns the precise `array_slice()` result type when a literal `preserve_keys=true` 4th argument
+/// turns a scalar-element indexed array into an integer-keyed associative result.
+///
+/// Mirrors the checker (`src/types/checker/builtins/arrays.rs`) and the EIR backend dispatch in
+/// `lower_array_slice`: all three must agree on Array-vs-AssocArray or the result heap shape and the
+/// codegen path disagree. Returns `None` for the default (reindexed) slice so the normal indexed
+/// typing applies.
+fn array_slice_builtin_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+    operands: &[crate::ir::ValueId],
+) -> Option<PhpType> {
+    if !crate::types::array_slice_literal_preserve_keys(args) {
+        return None;
+    }
+    let elem = match ctx.builder.value_php_type(*operands.first()?).codegen_repr() {
+        PhpType::Array(inner)
+            if matches!(*inner, PhpType::Int | PhpType::Float | PhpType::Bool) =>
+        {
+            *inner
+        }
+        _ => return None,
+    };
+    Some(PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: Box::new(elem),
+    })
 }
 
 /// Returns `microtime()` metadata when the literal `as_float` flag is still available.
@@ -5663,6 +5693,21 @@ fn array_map_builtin_return_type(
     args: &[Expr],
     operands: &[crate::ir::ValueId],
 ) -> Option<PhpType> {
+    // The two-input-array form `array_map($cb, $a, $b)` is checker-bounded to integer- or string-
+    // element arrays whose callback returns that same scalar kind, so the result list element type
+    // is the shared element type (independent of the callback's possibly-untyped return).
+    if args.len() == 3 {
+        let array = operands.get(1)?;
+        return match ctx.builder.value_php_type(*array).codegen_repr() {
+            PhpType::Array(elem) if matches!(*elem, PhpType::Str) => {
+                Some(PhpType::Array(Box::new(PhpType::Str)))
+            }
+            PhpType::Array(elem) if matches!(*elem, PhpType::Int | PhpType::Bool) => {
+                Some(PhpType::Array(Box::new(PhpType::Int)))
+            }
+            _ => None,
+        };
+    }
     if args.len() != 2 {
         return None;
     }
@@ -5779,6 +5824,22 @@ fn numeric_builtin_return_type(
             let value = operands.first()?;
             let ty = ctx.builder.value_php_type(*value).codegen_repr();
             Some(abs_builtin_return_type(&ty))
+        }
+        "array_sum" | "array_product" => {
+            // A float-element array sums/multiplies through the floating-point runtime helper
+            // and returns a float (matching the EIR backend dispatch); every other element
+            // kind returns an integer.
+            let value = operands.first()?;
+            let float_elements = match ctx.builder.value_php_type(*value).codegen_repr() {
+                PhpType::Array(elem) => matches!(*elem, PhpType::Float),
+                PhpType::AssocArray { value, .. } => matches!(*value, PhpType::Float),
+                _ => false,
+            };
+            Some(if float_elements {
+                PhpType::Float
+            } else {
+                PhpType::Int
+            })
         }
         "min" | "max" => {
             let mut saw_float = false;
@@ -6092,11 +6153,18 @@ fn is_empty_array_element_type(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Void)
 }
 
-/// Returns true for element types copied safely by the scalar merge runtime helper.
+/// Returns true for element types the merged array can adopt from the second operand when the
+/// first is statically empty. Scalars use the 8-byte merge helper; strings use the dedicated
+/// `__rt_array_merge_str` (16-byte slots), so `Str` is included here as well.
 fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
     matches!(
         ty.codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable | PhpType::Void
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Callable
+            | PhpType::Void
+            | PhpType::Str
     )
 }
 

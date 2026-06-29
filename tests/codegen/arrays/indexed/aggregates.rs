@@ -48,3 +48,66 @@ echo array_product($a);
     );
     assert_eq!(out, "24");
 }
+
+/// Verifies array_sum() of a float[] accumulates as IEEE doubles (not raw 64-bit
+/// integers). Uses a value comparison so the result is checked numerically rather
+/// than via float-to-string formatting.
+#[test]
+fn test_array_sum_float_is_numeric() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1.5, 2.25];
+$s = array_sum($a);
+echo ($s == 3.75) ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies array_product() of a float[] multiplies as IEEE doubles.
+#[test]
+fn test_array_product_float_is_numeric() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1.5, 4.0];
+$p = array_product($a);
+echo ($p == 6.0) ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies the float sum prints the expected value (exact-representable so the
+/// formatting is unambiguous), exercising the float result register path through echo.
+#[test]
+fn test_array_sum_float_display() {
+    let out = compile_and_run(r#"<?php echo array_sum([1.5, 2.25]);"#);
+    assert_eq!(out, "3.75");
+}
+
+/// Verifies array_sum() of an int[] is unaffected by the float routing (regression guard).
+#[test]
+fn test_array_sum_int_unaffected() {
+    let out = compile_and_run(r#"<?php $a = [1, 2, 3]; echo array_sum($a);"#);
+    assert_eq!(out, "6");
+}
+
+/// Verifies summing a float[] does not leak: the array is borrowed by the runtime
+/// and released by the caller's epilogue.
+#[test]
+fn test_array_sum_float_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [1.5, 2.5, 3.0];
+$s = array_sum($a);
+echo ($s == 7.0) ? "ok" : "bad";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

@@ -2,7 +2,7 @@
 title: "in_array() — internals"
 description: "Compiler internals for in_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 50
+  order: 35
 ---
 
 ## `in_array()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1729](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1729) (`lower_in_array`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1338](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1338) (`lower_in_array`)
 - **Function symbol**: `lower_in_array()`
 
 

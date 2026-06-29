@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1048](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1048) (`lower_array_pop`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1210](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1210) (`lower_array_pop`)
 - **Function symbol**: `lower_array_pop()`
 
 
@@ -20,9 +20,7 @@ sidebar:
 
 ## Runtime helpers
 
-The following runtime helpers are referenced:
-- `__rt_sort_int`
-- `__rt_sort_str`
+_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
 
 ## Signature summary
 

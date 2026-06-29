@@ -8,13 +8,13 @@ sidebar:
 ## asort()
 
 ```php
-function asort(array $array, int $flags): bool
+function asort(array $value, int $flags): bool
 ```
 
 Lowers `asort()` for indexed integer arrays through the value-sort runtime wrapper.
 
 **Parameters**:
-- `$array` (`array`), passed by reference
+- `$value` (`array`)
 - `$flags` (`int`)
 
 **Returns**: `bool`

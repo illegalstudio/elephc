@@ -38,3 +38,6 @@ pub(crate) const HASH_INIT_UNKNOWN_ALGO_MSG: &str =
 /// name or a non-cryptographic checksum (PHP rejects HMAC over crc32/adler/fnv/joaat).
 pub(crate) const HASH_HMAC_UNKNOWN_ALGO_MSG: &str =
     "hash_hmac(): Argument #1 ($algo) must be a valid cryptographic hashing algorithm";
+/// Fatal error message when `str_split()` receives a `$length` argument less than 1 (PHP `ValueError`).
+pub(crate) const STR_SPLIT_LENGTH_MSG: &str =
+    "Fatal error: str_split(): Argument #2 ($length) must be greater than 0\n";

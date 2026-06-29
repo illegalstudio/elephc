@@ -14,6 +14,8 @@ use crate::codegen::platform::Platform;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
+use crate::types::round_constants::ROUND_INT_CONSTANTS;
+use crate::types::sort_constants::SORT_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::PhpType;
@@ -66,6 +68,12 @@ impl Checker {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         for (name, _value) in DATE_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in SORT_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in ROUND_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
 

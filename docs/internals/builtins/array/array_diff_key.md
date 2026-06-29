@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:896](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L896) (`lower_array_diff_key`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1019](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1019) (`lower_array_diff_key`)
 - **Function symbol**: `lower_array_diff_key()`
 
 
@@ -23,6 +23,7 @@ sidebar:
 The following runtime helpers are referenced:
 - `__rt_array_diff_key`
 - `__rt_array_intersect_key`
+- `__rt_array_slice_preserve`
 
 ## Signature summary
 

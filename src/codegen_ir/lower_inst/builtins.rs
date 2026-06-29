@@ -1092,6 +1092,10 @@ fn lower_floatval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<(
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "floatval for PHP type {:?}",

@@ -159,3 +159,50 @@ echo implode(",", $removed), "|", implode(",", $a3);
     );
     assert_eq!(out, "20,30|30,40,50|2,3|1,4,5");
 }
+
+/// Regression (M6): array_slice() with preserve_keys=true keeps the original integer offsets,
+/// producing an integer-keyed associative result (instead of reindexing from 0). Covers a positive
+/// offset, a negative offset, a float-element source, and that the default still reindexes.
+#[test]
+fn test_array_slice_preserve_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20, 30, 40, 50];
+$r = array_slice($a, 1, 3, true);
+echo count($r) . ":" . $r[1] . "," . $r[2] . "," . $r[3];
+echo "|";
+$n = array_slice($a, -2, 2, true);
+echo $n[3] . "," . $n[4];
+echo "|";
+$f = [1.5, 2.5, 3.5];
+$fr = array_slice($f, 1, 2, true);
+$sum = 0;
+foreach ($fr as $k => $v) { $sum = $sum + $k; echo $v . " "; }
+echo "k" . $sum;
+echo "|";
+$d = array_slice($a, 1, 2);
+echo $d[0] . "," . $d[1];
+"#,
+    );
+    assert_eq!(out, "3:20,30,40|40,50|2.5 3.5 k3|20,30");
+}
+
+/// Regression (M6): the key-preserving array_slice() result is a normal owned hash that frees
+/// cleanly at scope end (the new __rt_array_slice_preserve runtime must not leak the bucket storage).
+#[test]
+fn test_array_slice_preserve_keys_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [10, 20, 30, 40];
+$r = array_slice($a, 1, 2, true);
+echo $r[1] . "," . $r[2];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20,30");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

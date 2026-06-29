@@ -2,7 +2,7 @@
 title: "array_search() — internals"
 description: "Compiler internals for array_search(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 35
+  order: 23
 ---
 
 ## `array_search()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1710](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1710) (`lower_array_search`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1317](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1317) (`lower_array_search`)
 - **Function symbol**: `lower_array_search()`
 
 

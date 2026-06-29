@@ -8,13 +8,13 @@ sidebar:
 ## ksort()
 
 ```php
-function ksort(array $array, int $flags): bool
+function ksort(array $value, int $flags): bool
 ```
 
 Lowers `ksort()` through the legacy key-sort helper surface.
 
 **Parameters**:
-- `$array` (`array`), passed by reference
+- `$value` (`array`)
 - `$flags` (`int`)
 
 **Returns**: `bool`

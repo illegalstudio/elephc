@@ -39,15 +39,22 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("array_sum()");
-    emit_expr(&args[0], emitter, ctx, data);
+    let arr_ty = emit_expr(&args[0], emitter, ctx, data);
+    // -- a float[] sums as IEEE doubles (result in d0/xmm0); everything else sums as int --
+    let (runtime, ret_ty) = match &arr_ty {
+        PhpType::Array(elem) if matches!(**elem, PhpType::Float) => {
+            ("__rt_array_sum_float", PhpType::Float)
+        }
+        _ => ("__rt_array_sum", PhpType::Int),
+    };
     if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("mov rdi, rax");                                    // move the source scalar indexed-array pointer into the first x86_64 runtime argument register
-        abi::emit_call_label(emitter, "__rt_array_sum");                        // add the scalar indexed-array payloads through the x86_64 runtime helper
-        return Some(PhpType::Int);
+        emitter.instruction("mov rdi, rax");                                    // move the source indexed-array pointer into the first x86_64 runtime argument register
+        abi::emit_call_label(emitter, runtime);                                 // sum the indexed-array payloads through the x86_64 runtime helper
+        return Some(ret_ty);
     }
 
     // -- call runtime to compute sum of all array elements --
-    emitter.instruction("bl __rt_array_sum");                                   // call runtime: sum array elements → x0=sum
+    emitter.instruction(&format!("bl {}", runtime));                            // call runtime: sum array elements → x0 (int) or d0 (float)
 
-    Some(PhpType::Int)
+    Some(ret_ty)
 }

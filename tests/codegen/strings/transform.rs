@@ -249,6 +249,41 @@ echo count($parts) . " " . $parts[0] . " " . $parts[1] . " " . $parts[2];
     assert_eq!(out, "3 He ll o");
 }
 
+/// Verifies str_split's PHP-8 empty-string edge case (L3): `str_split("")` yields a single
+/// empty-string element (`[""]`, count 1), not an empty array; normal chunking still works.
+#[test]
+fn test_str_split_empty_string_yields_one_empty_element() {
+    let out = compile_and_run(
+        r#"<?php
+$a = str_split("");
+echo count($a) . "|" . ($a[0] === "" ? "empty" : "?");
+echo "|";
+$b = str_split("abcd", 2);
+echo count($b) . ":" . $b[0] . ":" . $b[1];
+"#,
+    );
+    assert_eq!(out, "1|empty|2:ab:cd");
+}
+
+/// Verifies str_split with a chunk length below 1 fatals like PHP's `ValueError` (L3) rather than
+/// hanging — the previous loop advanced the cursor by 0 and never terminated.
+#[test]
+fn test_str_split_zero_length_fatals() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$n = 0;
+$a = str_split("abc", $n);
+echo count($a);
+"#,
+    );
+    assert!(!out.success, "program unexpectedly succeeded: {}", out.stdout);
+    assert!(
+        out.stderr.contains("must be greater than 0"),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+}
+
 /// Verifies sprintf zero-pads an integer to a given width.
 #[test]
 fn test_sprintf_zero_padded_int() {

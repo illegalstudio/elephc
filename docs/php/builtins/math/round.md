@@ -8,7 +8,7 @@ sidebar:
 ## round()
 
 ```php
-function round(float $num, int $precision): float
+function round(float $num, int $precision, mixed $mode): float
 ```
 
 Lowers `round()` for concrete integer-like and floating operands.
@@ -16,6 +16,7 @@ Lowers `round()` for concrete integer-like and floating operands.
 **Parameters**:
 - `$num` (`float`)
 - `$precision` (`int`), optional
+- `$mode` (`mixed`), optional
 
 **Returns**: `float`
 

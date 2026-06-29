@@ -84,19 +84,18 @@ fn emit_unset_arg(
         let offset = var.stack_offset;
         let old_ty = var.ty.clone();
 
-        // -- free old heap value before unsetting --
-        if matches!(&old_ty, PhpType::Str) {
-            abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset); // load the previous heap pointer from the variable slot
-            abi::emit_call_label(emitter, "__rt_heap_free_safe");               // free old string storage when the previous value is heap-backed
-        } else if matches!(&old_ty, PhpType::Array(_)) {
-            abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset); // load the previous heap pointer from the variable slot
-            abi::emit_call_label(emitter, "__rt_decref_array");                 // decrement the array refcount and deep-free when it reaches zero
-        } else if matches!(&old_ty, PhpType::AssocArray { .. }) {
-            abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset); // load the previous heap pointer from the variable slot
-            abi::emit_call_label(emitter, "__rt_decref_hash");                  // decrement the hash refcount and deep-free when it reaches zero
-        } else if matches!(&old_ty, PhpType::Object(_)) {
-            abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset); // load the previous heap pointer from the variable slot
-            abi::emit_call_label(emitter, "__rt_decref_object");                // decrement the object refcount and deep-free when it reaches zero
+        // -- free old heap value before unsetting, but only when this slot owns it --
+        // A by-value `foreach` value var (and `$argv`) is a Borrowed alias into storage
+        // owned by the array/runtime, and a by-ref param aliases the caller's storage;
+        // freeing those here would double-free or corrupt memory owned elsewhere.
+        if ctx.var_owns_heap_slot(name) {
+            if matches!(&old_ty, PhpType::Str) {
+                abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset); // load the previous heap pointer from the variable slot
+                abi::emit_call_label(emitter, "__rt_heap_free_safe");               // free old string storage when the previous value is heap-backed
+            } else if old_ty.is_refcounted() {
+                abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset); // load the previous heap pointer from the variable slot
+                abi::emit_decref_if_refcounted(emitter, &old_ty);                   // decref the prior array/hash/object/mixed value, deep-freeing at refcount zero
+            }
         }
 
         // -- set variable to null sentinel value (0x7FFFFFFFFFFFFFFFE) --

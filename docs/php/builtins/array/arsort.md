@@ -8,13 +8,13 @@ sidebar:
 ## arsort()
 
 ```php
-function arsort(array $array, int $flags): bool
+function arsort(array $value, int $flags): bool
 ```
 
 Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper.
 
 **Parameters**:
-- `$array` (`array`), passed by reference
+- `$value` (`array`)
 - `$flags` (`int`)
 
 **Returns**: `bool`
