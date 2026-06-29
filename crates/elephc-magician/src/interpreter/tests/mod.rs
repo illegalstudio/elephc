@@ -24,6 +24,7 @@ mod builtins_json;
 mod builtins_language_constructs;
 mod builtins_math_formatting;
 mod builtins_process_pipes;
+mod builtins_raw_memory;
 mod builtins_readline;
 mod builtins_reflection_functions;
 mod builtins_scalars;

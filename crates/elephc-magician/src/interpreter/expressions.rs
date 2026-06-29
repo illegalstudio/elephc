@@ -1208,6 +1208,12 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "preg_replace" => eval_builtin_preg_replace(args, context, scope, values),
         "preg_replace_callback" => eval_builtin_preg_replace_callback(args, context, scope, values),
         "preg_split" => eval_builtin_preg_split(args, context, scope, values),
+        "buffer_free" | "buffer_len" | "buffer_new" | "ptr" | "ptr_get" | "ptr_is_null"
+        | "ptr_null" | "ptr_offset" | "ptr_read8" | "ptr_read16" | "ptr_read32"
+        | "ptr_read_string" | "ptr_set" | "ptr_sizeof" | "ptr_write8" | "ptr_write16"
+        | "ptr_write32" | "ptr_write_string" => {
+            eval_builtin_raw_memory(name, args, context, scope, values)
+        }
         "print_r" => eval_builtin_print_r(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
         "rand" | "mt_rand" => eval_builtin_rand(args, context, scope, values),

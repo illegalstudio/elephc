@@ -960,6 +960,37 @@ echo defined("COUNT_RECURSIVE") ? "C" : "bad";');
     assert_eq!(out, "4:2:3:6:2:3:C");
 }
 
+/// Verifies eval can dispatch raw pointer and buffer extension builtins through the bridge.
+#[test]
+fn test_eval_dispatches_raw_memory_builtins() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('$buf = buffer_new(4);
+$payload = ptr_offset($buf, 16);
+echo buffer_len($buf) . ":";
+ptr_set($payload, 123456789);
+echo ptr_get($payload) . ":";
+ptr_write8($payload, 255);
+ptr_write8(ptr_offset($payload, 1), 1);
+echo ptr_read8($payload) . "," . ptr_read8(ptr_offset($payload, 1)) . ":";
+call_user_func_array("ptr_write16", ["pointer" => $payload, "value" => 4660]);
+echo ptr_read16($payload) . ":";
+ptr_write32($payload, 305419896);
+echo ptr_read32($payload) . ":";
+$written = ptr_write_string($payload, "GET /");
+echo $written . ":" . ptr_read_string($payload, $written) . ":";
+echo strlen(ptr_read_string($payload, 0));
+buffer_free($buf);
+echo ":" . (ptr_is_null($buf) ? "freed" : "live");
+return ":" . function_exists("ptr_read16") . is_callable("ptr_write_string") . function_exists("buffer_new");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "4:123456789:255,1:4660:305419896:5:GET /:0:freed:111"
+    );
+}
+
 /// Verifies eval `count()` dispatches through `Countable` for generated/AOT objects.
 #[test]
 fn test_eval_counts_aot_countable_objects() {

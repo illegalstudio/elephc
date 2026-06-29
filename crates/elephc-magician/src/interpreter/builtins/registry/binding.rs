@@ -159,6 +159,8 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         | "is_double" | "is_float" | "is_int" | "is_integer" | "is_iterable" | "is_long"
         | "is_null" | "is_numeric" | "is_object" | "is_real" | "is_resource" | "is_string"
         | "is_scalar" | "is_callable" | "strval" => Some(&["value"]),
+        "buffer_new" => Some(&["length"]),
+        "buffer_len" | "buffer_free" => Some(&["buffer"]),
         "is_finite" | "is_infinite" | "is_nan" => Some(&["num"]),
         "settype" => Some(&["var", "type"]),
         "get_called_class" => Some(&[]),
@@ -304,6 +306,18 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "pclose" => Some(&["handle"]),
         "popen" => Some(&["command", "mode"]),
         "pow" => Some(&["num", "exponent"]),
+        "ptr" => Some(&["value"]),
+        "ptr_null" => Some(&[]),
+        "ptr_is_null" | "ptr_get" | "ptr_read8" | "ptr_read16" | "ptr_read32" => {
+            Some(&["pointer"])
+        }
+        "ptr_offset" => Some(&["pointer", "offset"]),
+        "ptr_read_string" => Some(&["pointer", "length"]),
+        "ptr_set" | "ptr_write8" | "ptr_write16" | "ptr_write32" => {
+            Some(&["pointer", "value"])
+        }
+        "ptr_write_string" => Some(&["pointer", "string"]),
+        "ptr_sizeof" => Some(&["type"]),
         "preg_match" => Some(&["pattern", "subject", "matches"]),
         "preg_match_all" => Some(&["pattern", "subject"]),
         "preg_replace" => Some(&["pattern", "replacement", "subject"]),

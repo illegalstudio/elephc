@@ -11,28 +11,6 @@
 
 use std::collections::BTreeSet;
 
-/// Static-only raw memory helpers are elephc extensions tied to AOT FFI values.
-const STATIC_ONLY_RAW_MEMORY_BUILTINS: &[&str] = &[
-    "buffer_free",
-    "buffer_len",
-    "buffer_new",
-    "ptr",
-    "ptr_get",
-    "ptr_is_null",
-    "ptr_null",
-    "ptr_offset",
-    "ptr_read16",
-    "ptr_read32",
-    "ptr_read8",
-    "ptr_read_string",
-    "ptr_set",
-    "ptr_sizeof",
-    "ptr_write16",
-    "ptr_write32",
-    "ptr_write8",
-    "ptr_write_string",
-];
-
 /// Eval-only reflection probes exist because magician can inspect dynamic eval metadata before the AOT catalog exposes them.
 const EVAL_ONLY_REFLECTION_BUILTINS: &[&str] = &[
     "get_called_class",
@@ -52,17 +30,12 @@ const EVAL_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &[
 /// Eval supports variadic debug output before the static backend does.
 const EVAL_VARIADIC_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["var_dump"];
 
-/// Verifies every non-raw-memory static builtin is visible through eval's function lookup.
+/// Verifies every static builtin is visible through eval's function lookup.
 #[test]
 fn static_php_visible_builtins_are_visible_to_eval() {
-    let static_only = STATIC_ONLY_RAW_MEMORY_BUILTINS
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
     let missing = elephc::builtin_metadata::php_visible_builtin_names()
         .iter()
         .copied()
-        .filter(|name| !static_only.contains(name))
         .filter(|name| !elephc_magician::builtin_metadata::php_visible_builtin_exists(name))
         .collect::<Vec<_>>();
 
@@ -75,18 +48,11 @@ fn static_php_visible_builtins_are_visible_to_eval() {
 /// Verifies eval has signature metadata for each shared static builtin.
 #[test]
 fn shared_builtin_signature_shape_matches_static_signatures() {
-    let static_only = STATIC_ONLY_RAW_MEMORY_BUILTINS
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
     let mut missing_static_signature = Vec::new();
     let mut missing_eval_signature = Vec::new();
     let mut mismatched_signatures = Vec::new();
 
     for name in elephc::builtin_metadata::php_visible_builtin_names() {
-        if static_only.contains(name) {
-            continue;
-        }
         let Some(static_meta) = elephc::builtin_metadata::builtin_signature_metadata(name) else {
             missing_static_signature.push(*name);
             continue;

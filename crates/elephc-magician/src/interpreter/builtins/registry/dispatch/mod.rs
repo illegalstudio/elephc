@@ -57,6 +57,11 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
     if let Some(result) = eval_regex_builtin_with_values(name, evaluated_args, context, values)? {
         return Ok(Some(result));
     }
+    if let Some(result) =
+        eval_raw_memory_builtin_with_values(name, evaluated_args, context, values)?
+    {
+        return Ok(Some(result));
+    }
     if let Some(result) = eval_strings_builtin_with_values(name, evaluated_args, context, values)? {
         return Ok(Some(result));
     }
