@@ -500,6 +500,12 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
 // Compiles a PHP source string, runs the binary, and returns stdout alongside the
 // temp directory path. The directory is preserved after the run so callers can
 // inspect written files (e.g., for file I/O fixture verification).
+//
+// Routes through `compile_source_to_asm_with_options` so it shares the production
+// EIR backend (and the full frontend, including the preludes) with `compile_and_run`.
+// Compiling here through the frozen legacy AST backend would miss EIR-only builtins
+// (e.g. `serialize`/`unserialize` reached transitively through synthetic SPL method
+// bodies), emitting them as undefined `_fn_*` symbols and failing at link time.
 /// Provides the Compile and run in dir helper used by the projects module.
 pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -508,45 +514,8 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
-    let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let synthetic_main = dir.join("test.php");
-    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
-    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
-    let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
-    let optimized = elephc::optimize::propagate_constants(resolved);
-    let optimized = elephc::optimize::prune_constant_control_flow(optimized);
-    let optimized = elephc::optimize::normalize_control_flow(optimized);
-    let optimized = elephc::optimize::eliminate_dead_code(optimized);
-    let requires_elephc_tls = check_result
-        .required_libraries
-        .iter()
-        .any(|lib| lib == "elephc_tls");
-    let (user_asm, runtime_asm) = elephc::codegen::generate(
-        &optimized,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.callable_param_sigs,
-        &check_result.callable_return_sigs,
-        &check_result.callable_array_return_sigs,
-        &check_result.interfaces,
-        &check_result.classes,
-        &check_result.enums,
-        &check_result.packed_classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
-        8_388_608,
-        false,
-        false,
-        target(),
-        requires_elephc_tls,
-        default_null_repr(),
-    );
-    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(

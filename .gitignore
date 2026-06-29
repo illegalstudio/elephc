@@ -7,3 +7,12 @@ __pycache__/
 .DS_Store
 # Internal planning docs (specs/plans) — kept locally, not tracked
 docs/superpowers/
+# Generated archives written to the repo root when the phar-write example
+# is run from here instead of its own directory (root-anchored so the
+# tracked examples/phar-reader/app.phar fixture is unaffected)
+/hello.phar
+/note.phar
+/oop.phar
+/bundle.tar
+/bundle.tar.gz
+/bundle.tar.bz2

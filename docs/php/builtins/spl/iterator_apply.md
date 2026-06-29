@@ -2,7 +2,7 @@
 title: "iterator_apply()"
 description: "Lowers `iterator_apply()` over supported Traversable sources and callback forms."
 sidebar:
-  order: 299
+  order: 301
 ---
 
 ## iterator_apply()

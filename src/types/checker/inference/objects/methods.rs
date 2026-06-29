@@ -21,8 +21,11 @@ impl Checker {
     ///
     /// Dispatches to `infer_method_call_on_class_type` for `Object` types,
     /// `infer_method_call_on_interface_type` for interface types, and
-    /// handles nullable union receivers. Returns `PhpType::Int` as a fallback
-    /// for unhandled types (e.g. `Mixed` without specific handler).
+    /// handles nullable union receivers. A `Mixed` receiver dispatches at
+    /// runtime over the classes that declare the method, so its result is the
+    /// union of those candidates' return types (see
+    /// `mixed_receiver_method_return_type`). Other unhandled receiver types fall
+    /// back to `PhpType::Int`.
     pub(crate) fn infer_method_call_type(
         &mut self,
         object: &Expr,
@@ -106,7 +109,61 @@ impl Checker {
                 _ => {}
             }
         }
+        // A method call on a `mixed` receiver dispatches on the runtime class id
+        // over exactly the classes that declare the method (see
+        // `mixed_method_candidates` / `lower_mixed_method_call` and the
+        // Mixed-receiver method emission in `ir_lower::program`). The static
+        // result is therefore the union of those candidates' return types. When
+        // they all agree on one type, codegen stores the call result raw (no
+        // boxing), so the precise type is correct; when they differ it is a
+        // union, which codegen boxes like the two-class union dispatch. Returning
+        // the historical `Int` fallback here instead made an *inferred* function
+        // return type silently coerce a boxed result: an un-annotated
+        // `function f($x) { return $x->name(); }` rendered the returned string as
+        // `0`. With no declaring class the runtime would fatal, so `mixed` is the
+        // safe static result.
+        if matches!(obj_ty, PhpType::Mixed) {
+            return Ok(self
+                .mixed_receiver_method_return_type(method, args.len())
+                .unwrap_or(PhpType::Mixed));
+        }
         Ok(PhpType::Int)
+    }
+
+    /// Computes the static return type of a method call on a `mixed` receiver as
+    /// the normalized union of the declared return types of every class that
+    /// declares `method` with a matching arity. This mirrors the runtime
+    /// candidate set used by `mixed_method_candidates` in codegen, so the
+    /// inferred type stays consistent with how each candidate branch stores its
+    /// result. Falls back to the name-only candidate set when arity filtering
+    /// finds nothing (e.g. methods with default parameters), and returns `None`
+    /// when no class declares the method at all.
+    fn mixed_receiver_method_return_type(&self, method: &str, arg_count: usize) -> Option<PhpType> {
+        let method_key = php_symbol_key(method);
+        let mut arity_matched: Vec<PhpType> = Vec::new();
+        let mut any_matched: Vec<PhpType> = Vec::new();
+        for class_info in self.classes.values() {
+            let Some(sig) = class_info.methods.get(&method_key) else {
+                continue;
+            };
+            let ty = sig.return_type.clone();
+            if !any_matched.contains(&ty) {
+                any_matched.push(ty.clone());
+            }
+            if sig.params.len() == arg_count && !arity_matched.contains(&ty) {
+                arity_matched.push(ty);
+            }
+        }
+        let candidates = if arity_matched.is_empty() {
+            any_matched
+        } else {
+            arity_matched
+        };
+        if candidates.is_empty() {
+            None
+        } else {
+            Some(self.normalize_union_type(candidates))
+        }
     }
 
     /// Infers the type of a nullsafe method call expression (`$obj?->method(...)`).

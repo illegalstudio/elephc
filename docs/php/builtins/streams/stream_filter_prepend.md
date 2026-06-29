@@ -2,7 +2,7 @@
 title: "stream_filter_prepend()"
 description: "stream_filter_prepend() — streams builtin supported by Elephc."
 sidebar:
-  order: 316
+  order: 318
 ---
 
 ## stream_filter_prepend()

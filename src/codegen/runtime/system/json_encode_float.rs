@@ -45,6 +45,7 @@ pub(crate) fn emit_json_encode_float(emitter: &mut Emitter) {
     // when JSON_PRESERVE_ZERO_FRACTION is set on an integer-valued result.
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and link register so we can run after __rt_ftoa
     emitter.instruction("mov x29, sp");                                         // establish a stable frame pointer
+    emitter.instruction("mov w0, #101");                                        // exponent marker 'e' (json lowercase layout)
     emitter.instruction("bl __rt_json_ftoa");                                   // format the finite float (shortest round-trip; x1=ptr, x2=len)
     emitter.instruction("b __rt_json_encode_float_post");                       // hand off to the post-formatter polish
 
@@ -54,6 +55,7 @@ pub(crate) fn emit_json_encode_float(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #7");                                          // JSON_ERROR_INF_OR_NAN = 7
     emitter.instruction("bl __rt_json_throw_error");                            // record the error and throw when JSON_THROW_ON_ERROR is set
     emitter.instruction("fmov d0, xzr");                                        // substitute 0 for the wrapper's partial-output path
+    emitter.instruction("mov w0, #101");                                        // exponent marker 'e' (json lowercase layout)
     emitter.instruction("bl __rt_json_ftoa");                                   // format the substituted zero value
     // fall through to the post-formatter polish so PRESERVE_ZERO_FRACTION
     // also applies to the substituted zero result.
@@ -125,6 +127,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer so we can run after __rt_ftoa
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the post-formatter polish
+    emitter.instruction("mov edi, 101");                                        // exponent marker 'e' (json lowercase layout)
     emitter.instruction("call __rt_json_ftoa");                                 // format the finite float (shortest round-trip; rax=ptr, rdx=len)
     emitter.instruction("jmp __rt_json_encode_float_post_x");                   // hand off to the post-formatter polish
 
@@ -134,6 +137,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, 7");                                          // JSON_ERROR_INF_OR_NAN = 7
     emitter.instruction("call __rt_json_throw_error");                          // record the error and throw when JSON_THROW_ON_ERROR is set
     emitter.instruction("xorpd xmm0, xmm0");                                    // substitute 0 for the wrapper's partial-output path
+    emitter.instruction("mov edi, 101");                                        // exponent marker 'e' (json lowercase layout)
     emitter.instruction("call __rt_json_ftoa");                                 // format the substituted zero value
     // fall through to the post-formatter polish so PRESERVE_ZERO_FRACTION
     // also applies to the substituted zero result.

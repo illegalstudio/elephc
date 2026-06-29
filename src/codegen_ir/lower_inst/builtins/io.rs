@@ -176,6 +176,113 @@ fn publish_phar_list_entries_function_pointer(ctx: &mut FunctionContext<'_>) {
     publish_phar_bridge_entries(ctx, ENTRIES);
 }
 
+/// Publishes the archive global-metadata read bridge.
+fn publish_phar_get_metadata_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] =
+        &[("elephc_phar_get_metadata", "_elephc_phar_get_metadata_fn")];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the archive global-metadata write bridge.
+fn publish_phar_set_metadata_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] =
+        &[("elephc_phar_set_metadata", "_elephc_phar_set_metadata_fn")];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the archive stub read bridge.
+fn publish_phar_get_stub_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[("elephc_phar_get_stub", "_elephc_phar_get_stub_fn")];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the archive stub write bridge.
+fn publish_phar_set_stub_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[("elephc_phar_set_stub", "_elephc_phar_set_stub_fn")];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the per-file metadata read bridge.
+fn publish_phar_get_file_metadata_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[(
+        "elephc_phar_get_file_metadata",
+        "_elephc_phar_get_file_metadata_fn",
+    )];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the per-file metadata write bridge.
+fn publish_phar_set_file_metadata_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[(
+        "elephc_phar_set_file_metadata",
+        "_elephc_phar_set_file_metadata_fn",
+    )];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the whole-archive gzip compression bridge.
+fn publish_phar_gzip_archive_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] =
+        &[("elephc_phar_gzip_archive", "_elephc_phar_gzip_archive_fn")];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the whole-archive bzip2 compression bridge.
+fn publish_phar_bzip2_archive_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] =
+        &[("elephc_phar_bzip2_archive", "_elephc_phar_bzip2_archive_fn")];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the whole-archive decompression bridge.
+fn publish_phar_decompress_archive_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[(
+        "elephc_phar_decompress_archive",
+        "_elephc_phar_decompress_archive_fn",
+    )];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the OpenSSL (RSA-SHA1) signing bridge.
+fn publish_phar_sign_openssl_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] =
+        &[("elephc_phar_sign_openssl", "_elephc_phar_sign_openssl_fn")];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the hash-based signing bridge.
+fn publish_phar_sign_hash_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[("elephc_phar_sign_hash", "_elephc_phar_sign_hash_fn")];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the ZipCrypto password bridge used to read encrypted ZIP entries.
+fn publish_phar_set_zip_password_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[(
+        "elephc_phar_set_zip_password",
+        "_elephc_phar_set_zip_password_fn",
+    )];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the signature-hash read bridge.
+fn publish_phar_get_signature_hash_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[(
+        "elephc_phar_get_signature_hash",
+        "_elephc_phar_get_signature_hash_fn",
+    )];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the signature-type read bridge.
+fn publish_phar_get_signature_type_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[(
+        "elephc_phar_get_signature_type",
+        "_elephc_phar_get_signature_type_fn",
+    )];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
 /// Lowers `hash_file(algo, filename, binary?)` by reading bytes then hashing them.
 pub(super) fn lower_hash_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "hash_file", 2, 3)?;
@@ -263,6 +370,12 @@ pub(super) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         }
         if path.starts_with("http://") {
             return lower_literal_http_fopen(ctx, inst, path);
+        }
+        if path.starts_with("compress.zlib://") {
+            return lower_literal_compress_zlib_fopen(ctx, inst, path);
+        }
+        if path.starts_with("compress.bzip2://") {
+            return lower_literal_compress_bzip2_fopen(ctx, inst, path);
         }
     }
     if filename_literal.is_none() {
@@ -1501,6 +1614,15 @@ fn lower_zlib_inflate_stream_filter_attach(
 ) -> Result<()> {
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
+    emit_zlib_inflate_attach_in_place(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Attaches the `zlib.inflate` read filter to the stream descriptor already held
+/// in the integer result register, leaving a resource-boxed `Mixed` in that
+/// register. Shared by `stream_filter_append("zlib.inflate")` and the
+/// `compress.zlib://` fopen wrapper.
+fn emit_zlib_inflate_attach_in_place(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let labels = vec![
@@ -1532,7 +1654,6 @@ fn lower_zlib_inflate_stream_filter_attach(
             });
         }
     }
-    store_if_result(ctx, inst)
 }
 
 /// Lowers `stream_filter_append($stream, "bzip2.compress", ...)`.
@@ -1575,6 +1696,15 @@ fn lower_bzip2_decompress_stream_filter_attach(
 ) -> Result<()> {
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
+    emit_bzip2_decompress_attach_in_place(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Attaches the `bzip2.decompress` read filter to the stream descriptor already
+/// held in the integer result register, leaving a resource-boxed `Mixed` in that
+/// register. Shared by `stream_filter_append("bzip2.decompress")` and the
+/// `compress.bzip2://` fopen wrapper.
+fn emit_bzip2_decompress_attach_in_place(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let labels = vec![
@@ -1605,6 +1735,95 @@ fn lower_bzip2_decompress_stream_filter_attach(
             });
         }
     }
+}
+
+/// Lowers `fopen("compress.zlib://<path>", ...)` for a compile-time literal path.
+/// Opens the underlying file read-only and attaches the `zlib.inflate` filter so
+/// reads see decompressed bytes; an empty or unopenable path boxes PHP false.
+fn lower_literal_compress_zlib_fopen(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    path: &str,
+) -> Result<()> {
+    let underlying = path.strip_prefix("compress.zlib://").unwrap_or("");
+    emit_literal_compress_wrapper_fopen(ctx, inst, underlying, CompressWrapper::Zlib)
+}
+
+/// Lowers `fopen("compress.bzip2://<path>", ...)` for a compile-time literal path.
+/// Opens the underlying file read-only and attaches the `bzip2.decompress` filter
+/// so reads see decompressed bytes; an empty or unopenable path boxes PHP false.
+fn lower_literal_compress_bzip2_fopen(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    path: &str,
+) -> Result<()> {
+    let underlying = path.strip_prefix("compress.bzip2://").unwrap_or("");
+    emit_literal_compress_wrapper_fopen(ctx, inst, underlying, CompressWrapper::Bzip2)
+}
+
+/// Selects which read-direction decompressor a `compress.*://` fopen wrapper attaches.
+#[derive(Clone, Copy)]
+enum CompressWrapper {
+    Zlib,
+    Bzip2,
+}
+
+/// Opens `underlying` read-only through `__rt_fopen` and attaches the matching
+/// decompressor so subsequent reads see plain bytes, boxing the filtered
+/// descriptor as a resource. An empty path, or a failed open, boxes PHP false —
+/// matching PHP's `compress.zlib://` / `compress.bzip2://` wrapper behavior.
+fn emit_literal_compress_wrapper_fopen(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    underlying: &str,
+    kind: CompressWrapper,
+) -> Result<()> {
+    if underlying.is_empty() {
+        emit_fd_result(ctx, -1);
+        box_stream_fd_or_false_result(ctx, "fopen");
+        return store_if_result(ctx, inst);
+    }
+    let (path_label, path_len) = ctx.data.add_string(underlying.as_bytes());
+    let (mode_label, mode_len) = ctx.data.add_string(b"r");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &path_label);
+            ctx.emitter.instruction(&format!("mov x2, #{}", path_len));         // pass the underlying path byte length
+            abi::emit_symbol_address(ctx.emitter, "x3", &mode_label);
+            ctx.emitter.instruction(&format!("mov x4, #{}", mode_len));         // pass the read-mode string byte length
+            abi::emit_call_label(ctx.emitter, "__rt_fopen");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rax", &path_label);
+            ctx.emitter.instruction(&format!("mov rdx, {}", path_len));         // pass the underlying path byte length
+            abi::emit_symbol_address(ctx.emitter, "rdi", &mode_label);
+            ctx.emitter.instruction(&format!("mov rsi, {}", mode_len));         // pass the read-mode string byte length
+            abi::emit_call_label(ctx.emitter, "__rt_fopen");
+        }
+    }
+    let false_label = ctx.next_label("compress_fopen_false");
+    let done_label = ctx.next_label("compress_fopen_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // negative descriptor means the underlying open failed
+            ctx.emitter.instruction(&format!("b.lt {}", false_label));          // box PHP false when the source could not be opened
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // negative descriptor means the underlying open failed
+            ctx.emitter.instruction(&format!("js {}", false_label));            // box PHP false when the source could not be opened
+        }
+    }
+    match kind {
+        CompressWrapper::Zlib => emit_zlib_inflate_attach_in_place(ctx),
+        CompressWrapper::Bzip2 => emit_bzip2_decompress_attach_in_place(ctx),
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done_label)), // skip false boxing after attaching the decompressor
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)),// skip false boxing after attaching the decompressor
+    }
+    ctx.emitter.label(&false_label);
+    box_stream_fd_or_false_result(ctx, "fopen");
+    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
 
@@ -3624,6 +3843,424 @@ pub(super) fn lower_elephc_phar_set_compression(
             ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the failure result
             ctx.emitter.label(&fail);
             ctx.emitter.instruction("xor eax, eax");                            // report false when the bridge is unavailable
+            ctx.emitter.label(&done);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `__elephc_phar_get_metadata()` into the metadata-read bridge call.
+pub(super) fn lower_elephc_phar_get_metadata(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_get_metadata_function_pointer(ctx);
+    emit_phar_get_string_bridge(
+        ctx,
+        inst,
+        "__elephc_phar_get_metadata",
+        "_elephc_phar_get_metadata_fn",
+    )
+}
+
+/// Lowers `__elephc_phar_get_stub()` into the stub-read bridge call.
+pub(super) fn lower_elephc_phar_get_stub(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_get_stub_function_pointer(ctx);
+    emit_phar_get_string_bridge(ctx, inst, "__elephc_phar_get_stub", "_elephc_phar_get_stub_fn")
+}
+
+/// Lowers `__elephc_phar_set_metadata()` into the metadata-write bridge call.
+pub(super) fn lower_elephc_phar_set_metadata(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_set_metadata_function_pointer(ctx);
+    emit_phar_set_string_bridge(
+        ctx,
+        inst,
+        "__elephc_phar_set_metadata",
+        "_elephc_phar_set_metadata_fn",
+    )
+}
+
+/// Lowers `__elephc_phar_set_stub()` into the stub-write bridge call.
+pub(super) fn lower_elephc_phar_set_stub(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_set_stub_function_pointer(ctx);
+    emit_phar_set_string_bridge(ctx, inst, "__elephc_phar_set_stub", "_elephc_phar_set_stub_fn")
+}
+
+/// Emits a `(path, data)` string -> bool PHAR bridge call (set metadata/stub).
+///
+/// Loads the path and data strings into the bridge's `(path_ptr, path_len, data_ptr,
+/// data_len)` argument registers, calls the optional bridge pointer in `slot`, and
+/// normalizes the result to a PHP bool (false when the bridge is unavailable).
+fn emit_phar_set_string_bridge(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    slot: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 2)?;
+    let path = expect_operand(inst, 0)?;
+    let data = expect_operand(inst, 1)?;
+    let fail = ctx.next_label("phar_set_string_fail");
+    let done = ctx.next_label("phar_set_string_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_to_result(ctx, data, "phar set-string data")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            load_string_to_result(ctx, path, "phar set-string path")?;
+            ctx.emitter.instruction("mov x0, x1");                              // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov x1, x2");                              // bridge arg 1 = archive path length
+            abi::emit_pop_reg_pair(ctx.emitter, "x2", "x3");
+            abi::emit_symbol_address(ctx.emitter, "x9", slot);
+            ctx.emitter.instruction("ldr x9, [x9]");                            // load the optional PHAR write bridge pointer
+            ctx.emitter.instruction(&format!("cbz x9, {}", fail));              // missing bridge makes the write fail
+            ctx.emitter.instruction("blr x9");                                  // rewrite the archive with the new metadata/stub
+            ctx.emitter.instruction("cmp x0, #0");                              // test the bridge success flag
+            ctx.emitter.instruction("cset x0, ne");                             // normalize bridge result to PHP bool
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the failure result
+            ctx.emitter.label(&fail);
+            ctx.emitter.instruction("mov x0, #0");                              // report false when the bridge is unavailable
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            load_string_to_result(ctx, data, "phar set-string data")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_string_to_result(ctx, path, "phar set-string path")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // bridge arg 1 = archive path length
+            abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", slot, 0);
+            ctx.emitter.instruction("test r10, r10");                           // test whether the PHAR write bridge was published
+            ctx.emitter.instruction(&format!("jz {}", fail));                   // missing bridge makes the write fail
+            ctx.emitter.instruction("call r10");                                // rewrite the archive with the new metadata/stub
+            ctx.emitter.instruction("test rax, rax");                           // test the bridge success flag
+            ctx.emitter.instruction("setne al");                                // normalize bridge result to PHP bool
+            ctx.emitter.instruction("movzx eax, al");                           // widen the normalized bool
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the failure result
+            ctx.emitter.label(&fail);
+            ctx.emitter.instruction("xor eax, eax");                            // report false when the bridge is unavailable
+            ctx.emitter.label(&done);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Emits a `(string) -> bool` PHAR bridge call (e.g. set the ZipCrypto password).
+///
+/// Loads the single string argument as (pointer, length), calls the optional bridge
+/// pointer in `slot`, and normalizes its return to a PHP bool. A null bridge yields
+/// false.
+fn emit_phar_string_to_bool_bridge(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    slot: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 1)?;
+    let value = expect_operand(inst, 0)?;
+    let fail = ctx.next_label("phar_string_bool_fail");
+    let done = ctx.next_label("phar_string_bool_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_to_result(ctx, value, "phar string->bool arg")?;
+            ctx.emitter.instruction("mov x0, x1");                              // bridge arg 0 = string pointer
+            ctx.emitter.instruction("mov x1, x2");                              // bridge arg 1 = string length
+            abi::emit_symbol_address(ctx.emitter, "x9", slot);
+            ctx.emitter.instruction("ldr x9, [x9]");                            // load the optional bridge pointer
+            ctx.emitter.instruction(&format!("cbz x9, {}", fail));              // missing bridge yields false
+            ctx.emitter.instruction("blr x9");                                  // call the bridge setter
+            ctx.emitter.instruction("cmp x0, #0");                              // test the bridge return flag
+            ctx.emitter.instruction("cset x0, ne");                             // normalize to a PHP bool
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the failure result
+            ctx.emitter.label(&fail);
+            ctx.emitter.instruction("mov x0, #0");                              // report false when the bridge is unavailable
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            load_string_to_result(ctx, value, "phar string->bool arg")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // bridge arg 0 = string pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // bridge arg 1 = string length
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", slot, 0);
+            ctx.emitter.instruction("test r10, r10");                           // test whether the bridge was published
+            ctx.emitter.instruction(&format!("jz {}", fail));                   // missing bridge yields false
+            ctx.emitter.instruction("call r10");                                // call the bridge setter
+            ctx.emitter.instruction("test rax, rax");                           // test the bridge return flag
+            ctx.emitter.instruction("setne al");                                // normalize to a PHP bool
+            ctx.emitter.instruction("movzx eax, al");                           // widen the normalized bool
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the failure result
+            ctx.emitter.label(&fail);
+            ctx.emitter.instruction("xor eax, eax");                            // report false when the bridge is unavailable
+            ctx.emitter.label(&done);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Emits a `(path) -> string` PHAR bridge call (read metadata/stub).
+///
+/// Calls the optional bridge pointer in `slot` with the path and an out-length slot,
+/// then persists the returned bytes into an owned PHP string. A null bridge or a null
+/// result yields an owned empty string (the OOP layer treats that as "not set").
+fn emit_phar_get_string_bridge(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    slot: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 1)?;
+    let path = expect_operand(inst, 0)?;
+    let empty = ctx.next_label("phar_get_string_empty");
+    let persist = ctx.next_label("phar_get_string_persist");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_to_result(ctx, path, "phar get-string path")?;
+            ctx.emitter.instruction("mov x0, x1");                              // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov x1, x2");                              // bridge arg 1 = archive path length
+            abi::emit_symbol_address(ctx.emitter, "x2", "_phar_list_len");      // bridge arg 2 = out-length slot
+            abi::emit_symbol_address(ctx.emitter, "x9", slot);
+            ctx.emitter.instruction("ldr x9, [x9]");                            // load the optional PHAR read bridge pointer
+            ctx.emitter.instruction(&format!("cbz x9, {}", empty));             // missing bridge yields an empty string
+            ctx.emitter.instruction("blr x9");                                  // read the metadata/stub bytes into the global buffer
+            ctx.emitter.instruction(&format!("cbz x0, {}", empty));             // a null result means the field is unset
+            ctx.emitter.instruction("mov x1, x0");                              // str_persist source pointer = bridge buffer
+            abi::emit_symbol_address(ctx.emitter, "x9", "_phar_list_len");
+            ctx.emitter.instruction("ldr x2, [x9]");                            // str_persist length = bridge out-length
+            ctx.emitter.instruction(&format!("b {}", persist));                 // persist the returned bytes
+            ctx.emitter.label(&empty);
+            ctx.emitter.instruction("mov x1, #0");                              // empty source pointer (length 0 is not dereferenced)
+            ctx.emitter.instruction("mov x2, #0");                              // empty string length
+            ctx.emitter.label(&persist);
+            ctx.emitter.instruction("bl __rt_str_persist");                     // copy into an owned heap string -> x1=ptr, x2=len
+        }
+        Arch::X86_64 => {
+            load_string_to_result(ctx, path, "phar get-string path")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // bridge arg 1 = archive path length
+            abi::emit_symbol_address(ctx.emitter, "rdx", "_phar_list_len");     // bridge arg 2 = out-length slot
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", slot, 0);
+            ctx.emitter.instruction("test r10, r10");                           // test whether the PHAR read bridge was published
+            ctx.emitter.instruction(&format!("jz {}", empty));                  // missing bridge yields an empty string
+            ctx.emitter.instruction("call r10");                                // read the metadata/stub bytes into the global buffer
+            ctx.emitter.instruction("test rax, rax");                           // a null result means the field is unset
+            ctx.emitter.instruction(&format!("jz {}", empty));                  // fall back to an empty string
+            ctx.emitter.instruction("mov rdi, rax");                            // str_persist source pointer = bridge buffer
+            abi::emit_load_symbol_to_reg(ctx.emitter, "rdx", "_phar_list_len", 0); // str_persist length = bridge out-length
+            ctx.emitter.instruction(&format!("jmp {}", persist));              // persist the returned bytes
+            ctx.emitter.label(&empty);
+            ctx.emitter.instruction("mov rdi, 0");                              // empty source pointer (length 0 is not dereferenced)
+            ctx.emitter.instruction("mov rdx, 0");                              // empty string length
+            ctx.emitter.label(&persist);
+            ctx.emitter.instruction("call __rt_str_persist");                  // copy into an owned heap string -> rax=ptr, rdx=len
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `__elephc_phar_get_file_metadata()` into the per-file metadata-read bridge.
+pub(super) fn lower_elephc_phar_get_file_metadata(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_get_file_metadata_function_pointer(ctx);
+    emit_phar_get_string_bridge(
+        ctx,
+        inst,
+        "__elephc_phar_get_file_metadata",
+        "_elephc_phar_get_file_metadata_fn",
+    )
+}
+
+/// Lowers `__elephc_phar_set_file_metadata()` into the per-file metadata-write bridge.
+/// The single `phar://archive/entry` URL argument is split by the bridge, so this
+/// reuses the same `(url, data) -> bool` shape as the archive-level metadata writer.
+pub(super) fn lower_elephc_phar_set_file_metadata(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_set_file_metadata_function_pointer(ctx);
+    emit_phar_set_string_bridge(
+        ctx,
+        inst,
+        "__elephc_phar_set_file_metadata",
+        "_elephc_phar_set_file_metadata_fn",
+    )
+}
+
+/// Lowers `__elephc_phar_gzip_archive(src)` into the whole-archive gzip bridge,
+/// returning the written destination path (or an empty string on failure).
+pub(super) fn lower_elephc_phar_gzip_archive(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_gzip_archive_function_pointer(ctx);
+    emit_phar_get_string_bridge(
+        ctx,
+        inst,
+        "__elephc_phar_gzip_archive",
+        "_elephc_phar_gzip_archive_fn",
+    )
+}
+
+/// Lowers `__elephc_phar_bzip2_archive(src)` into the whole-archive bzip2 bridge,
+/// returning the written destination path (or an empty string on failure).
+pub(super) fn lower_elephc_phar_bzip2_archive(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_bzip2_archive_function_pointer(ctx);
+    emit_phar_get_string_bridge(
+        ctx,
+        inst,
+        "__elephc_phar_bzip2_archive",
+        "_elephc_phar_bzip2_archive_fn",
+    )
+}
+
+/// Lowers `__elephc_phar_decompress_archive(src)` into the whole-archive decompression
+/// bridge, returning the written destination path (or an empty string on failure).
+pub(super) fn lower_elephc_phar_decompress_archive(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_decompress_archive_function_pointer(ctx);
+    emit_phar_get_string_bridge(
+        ctx,
+        inst,
+        "__elephc_phar_decompress_archive",
+        "_elephc_phar_decompress_archive_fn",
+    )
+}
+
+/// Lowers `__elephc_phar_sign_openssl(path, keyPem)` into the RSA-SHA1 signing bridge.
+pub(super) fn lower_elephc_phar_sign_openssl(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_sign_openssl_function_pointer(ctx);
+    emit_phar_set_string_bridge(
+        ctx,
+        inst,
+        "__elephc_phar_sign_openssl",
+        "_elephc_phar_sign_openssl_fn",
+    )
+}
+
+/// Lowers `__elephc_phar_sign_hash(path, algo)` into the hash-based signing bridge.
+pub(super) fn lower_elephc_phar_sign_hash(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_sign_hash_function_pointer(ctx);
+    emit_phar_path_int_to_bool_bridge(
+        ctx,
+        inst,
+        "__elephc_phar_sign_hash",
+        "_elephc_phar_sign_hash_fn",
+    )
+}
+
+/// Lowers `__elephc_phar_set_zip_password(password)` into the ZipCrypto password
+/// bridge that lets later reads decrypt encrypted ZIP entries.
+pub(super) fn lower_elephc_phar_set_zip_password(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_set_zip_password_function_pointer(ctx);
+    emit_phar_string_to_bool_bridge(
+        ctx,
+        inst,
+        "__elephc_phar_set_zip_password",
+        "_elephc_phar_set_zip_password_fn",
+    )
+}
+
+/// Lowers `__elephc_phar_get_signature_hash(path)` into the signature-hash read bridge.
+pub(super) fn lower_elephc_phar_get_signature_hash(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_get_signature_hash_function_pointer(ctx);
+    emit_phar_get_string_bridge(
+        ctx,
+        inst,
+        "__elephc_phar_get_signature_hash",
+        "_elephc_phar_get_signature_hash_fn",
+    )
+}
+
+/// Lowers `__elephc_phar_get_signature_type(path)` into the signature-type read bridge.
+pub(super) fn lower_elephc_phar_get_signature_type(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_phar_get_signature_type_function_pointer(ctx);
+    emit_phar_get_string_bridge(
+        ctx,
+        inst,
+        "__elephc_phar_get_signature_type",
+        "_elephc_phar_get_signature_type_fn",
+    )
+}
+
+/// Emits a `(path: string, value: int) -> bool` PHAR bridge call. Mirrors the
+/// archive-compression bridge: the integer is stashed, the path string is loaded into
+/// the path pointer/length registers, then the bridge pointer in `slot` is called and
+/// its result normalized to a PHP bool (false when the bridge is unavailable).
+fn emit_phar_path_int_to_bool_bridge(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    slot: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 2)?;
+    let path = expect_operand(inst, 0)?;
+    let value = expect_operand(inst, 1)?;
+    let fail = ctx.next_label("phar_path_int_fail");
+    let done = ctx.next_label("phar_path_int_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            load_string_to_result(ctx, path, "phar path-int bridge path")?;
+            ctx.emitter.instruction("mov x0, x1");                              // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov x1, x2");                              // bridge arg 1 = archive path length
+            abi::emit_pop_reg(ctx.emitter, "x2");
+            abi::emit_symbol_address(ctx.emitter, "x9", slot);
+            ctx.emitter.instruction("ldr x9, [x9]");                            // load the optional bridge pointer
+            ctx.emitter.instruction(&format!("cbz x9, {}", fail));             // missing bridge makes the op fail
+            ctx.emitter.instruction("blr x9");                                  // invoke the bridge
+            ctx.emitter.instruction("cmp x0, #0");                              // test the bridge success flag
+            ctx.emitter.instruction("cset x0, ne");                            // normalize to PHP bool
+            ctx.emitter.instruction(&format!("b {}", done));                   // skip the failure result
+            ctx.emitter.label(&fail);
+            ctx.emitter.instruction("mov x0, #0");                              // report false when the bridge is unavailable
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            load_string_to_result(ctx, path, "phar path-int bridge path")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // bridge arg 1 = archive path length
+            abi::emit_pop_reg(ctx.emitter, "rdx");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", slot, 0);
+            ctx.emitter.instruction("test r10, r10");                           // test whether the bridge was published
+            ctx.emitter.instruction(&format!("jz {}", fail));                  // missing bridge makes the op fail
+            ctx.emitter.instruction("call r10");                               // invoke the bridge
+            ctx.emitter.instruction("test rax, rax");                          // test the bridge success flag
+            ctx.emitter.instruction("setne al");                               // normalize to PHP bool
+            ctx.emitter.instruction("movzx eax, al");                          // widen the normalized bool
+            ctx.emitter.instruction(&format!("jmp {}", done));                 // skip the failure result
+            ctx.emitter.label(&fail);
+            ctx.emitter.instruction("xor eax, eax");                           // report false when the bridge is unavailable
             ctx.emitter.label(&done);
         }
     }

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3149](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3149) (`lower_disk_free_space`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3368](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3368) (`lower_disk_free_space`)
 - **Function symbol**: `lower_disk_free_space()`
 
 

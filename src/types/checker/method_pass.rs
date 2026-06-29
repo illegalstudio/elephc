@@ -97,6 +97,21 @@ impl Checker {
                                 .map(|(_, t)| t.clone())
                                 .unwrap_or(PhpType::Int)
                         };
+                        // PHP's __unserialize($data) always receives the associative
+                        // array produced by __serialize(); a bare `array` hint resolves
+                        // to an indexed Array(Mixed) that rejects $data['key']. Type the
+                        // first parameter as a string/int-keyed assoc array so the body
+                        // can read string keys, matching the bare hash the unserialize
+                        // runtime passes in (kept in sync with build_method_sig). Scoped
+                        // to user methods (real span); synthetic SPL bodies keep `array`.
+                        let ty = if method_key == "__unserialize" && i == 0 && method.span.line != 0 {
+                            PhpType::AssocArray {
+                                key: Box::new(PhpType::Mixed),
+                                value: Box::new(PhpType::Mixed),
+                            }
+                        } else {
+                            ty
+                        };
                         method_env.insert(pname.clone(), ty);
                     }
                     if let Some(variadic_name) = &method.variadic {

@@ -2,7 +2,7 @@
 title: "strrev()"
 description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 373
+  order: 375
 ---
 
 ## strrev()

@@ -2,7 +2,7 @@
 title: "spl_autoload_extensions()"
 description: "Lowers `spl_autoload_extensions()` against the legacy mutable extension globals."
 sidebar:
-  order: 304
+  order: 306
 ---
 
 ## spl_autoload_extensions()

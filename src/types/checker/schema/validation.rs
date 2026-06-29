@@ -23,10 +23,28 @@ pub(crate) fn build_method_sig(
     checker: &Checker,
     method: &ClassMethod,
 ) -> Result<FunctionSig, CompileError> {
+    let method_key = php_symbol_key(&method.name);
     let params: Vec<(String, PhpType)> = method
         .params
         .iter()
-        .map(|(n, type_ann, _, _)| {
+        .enumerate()
+        .map(|(i, (n, type_ann, _, _))| {
+            // PHP's __unserialize($data) always receives the associative array
+            // produced by __serialize(). A bare `array` hint resolves to an indexed
+            // Array(Mixed) (rejecting $data['key']); type the first parameter as a
+            // string/int-keyed assoc array so both the ABI and the body agree.
+            // Scoped to user-defined methods (real span): synthetic SPL __unserialize
+            // bodies are written for an indexed `array` and are called directly with
+            // one (e.g. SplDoublyLinkedList), so they must keep Array(Mixed).
+            if method_key == "__unserialize" && i == 0 && method.span.line != 0 {
+                return Ok((
+                    n.clone(),
+                    PhpType::AssocArray {
+                        key: Box::new(PhpType::Mixed),
+                        value: Box::new(PhpType::Mixed),
+                    },
+                ));
+            }
             let ty = match type_ann {
                 Some(type_ann) => checker.resolve_declared_param_type_hint(
                     type_ann,

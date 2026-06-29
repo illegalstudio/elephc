@@ -2,7 +2,7 @@
 title: "nl2br()"
 description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 350
+  order: 352
 ---
 
 ## nl2br()

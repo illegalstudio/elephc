@@ -2,7 +2,7 @@
 title: "__elephc_phar_list_entries() — internals"
 description: "Compiler internals for __elephc_phar_list_entries(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 414
+  order: 424
 ---
 
 ## `__elephc_phar_list_entries()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3634](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3634) (`lower_elephc_phar_list_entries`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4271](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4271) (`lower_elephc_phar_list_entries`)
 - **Function symbol**: `lower_elephc_phar_list_entries()`
 
 

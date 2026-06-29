@@ -2,7 +2,7 @@
 title: "ptr_read32()"
 description: "Lowers `ptr_read32(pointer)` by reading one unsigned 32-bit word through a checked pointer."
 sidebar:
-  order: 274
+  order: 276
 ---
 
 ## ptr_read32()

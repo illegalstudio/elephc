@@ -2,7 +2,7 @@
 title: "ptr_sizeof()"
 description: "Lowers `ptr_sizeof(\"type\")` by materializing the checked static byte size."
 sidebar:
-  order: 278
+  order: 280
 ---
 
 ## ptr_sizeof()

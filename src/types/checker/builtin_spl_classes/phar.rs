@@ -12,7 +12,9 @@
 
 use std::collections::HashMap;
 
-use crate::parser::ast::{BinOp, CastType, ClassConst, ClassMethod, ClassProperty, Expr, TypeExpr};
+use crate::parser::ast::{
+    BinOp, CastType, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, TypeExpr,
+};
 use crate::types::traits::FlattenedClass;
 
 use super::common::*;
@@ -198,6 +200,42 @@ fn phar_methods() -> Vec<ClassMethod> {
             phar_decompress_files_body(),
         ),
         method_with_body(
+            "compress",
+            vec![
+                param("compression", TypeExpr::Int),
+                param_default("extension", TypeExpr::Str, string_expr("")),
+            ],
+            Some(named_type("PharData")),
+            phar_compress_body(),
+        ),
+        method_with_body(
+            "decompress",
+            vec![param_default("extension", TypeExpr::Str, string_expr(""))],
+            Some(named_type("PharData")),
+            phar_decompress_body(),
+        ),
+        method_with_body(
+            "setSignatureAlgorithm",
+            vec![
+                param("algo", TypeExpr::Int),
+                param_default("privateKey", TypeExpr::Str, string_expr("")),
+            ],
+            Some(TypeExpr::Void),
+            phar_set_signature_algorithm_body(),
+        ),
+        method_with_body(
+            "getSignature",
+            Vec::new(),
+            Some(mixed_type()),
+            phar_get_signature_body(),
+        ),
+        method_with_body(
+            "setZipPassword",
+            vec![param("password", TypeExpr::Str)],
+            Some(TypeExpr::Bool),
+            phar_set_zip_password_body(),
+        ),
+        method_with_body(
             "delete",
             vec![param("localName", TypeExpr::Str)],
             Some(TypeExpr::Bool),
@@ -226,6 +264,34 @@ fn phar_file_info_methods() -> Vec<ClassMethod> {
             vec![param("filename", TypeExpr::Str)],
             Some(TypeExpr::Void),
             vec![property_assign_stmt(this_expr(), "path", var_expr("filename"))],
+        ),
+        method_with_body(
+            "setMetadata",
+            vec![param("metadata", mixed_type())],
+            Some(TypeExpr::Void),
+            phar_file_info_set_metadata_body(),
+        ),
+        method_with_body(
+            "getMetadata",
+            vec![param_default(
+                "unserializeOptions",
+                array_type(),
+                empty_array_expr(),
+            )],
+            Some(mixed_type()),
+            phar_file_info_get_metadata_body(),
+        ),
+        method_with_body(
+            "hasMetadata",
+            Vec::new(),
+            Some(TypeExpr::Bool),
+            phar_file_info_has_metadata_body(),
+        ),
+        method_with_body(
+            "delMetadata",
+            Vec::new(),
+            Some(TypeExpr::Bool),
+            phar_file_info_del_metadata_body(),
         ),
         method_with_body(
             "__toString",
@@ -269,13 +335,44 @@ fn phar_file_info_methods() -> Vec<ClassMethod> {
     ]
 }
 
-/// Builds constructor body that stores the archive path on the object.
+/// Builds constructor body that stores the archive path and loads any persisted
+/// stub and global metadata from the archive.
 fn phar_construct_body() -> Vec<crate::parser::ast::Stmt> {
     vec![
         property_assign_stmt(this_expr(), "path", var_expr("filename")),
         property_assign_stmt(this_expr(), "metadata", null_expr()),
         property_assign_stmt(this_expr(), "hasMetadata", bool_expr(false)),
-        property_assign_stmt(this_expr(), "stub", string_expr("<?php __HALT_COMPILER(); ?>")),
+        // Load the persisted stub, falling back to the default when none is stored.
+        assign_stmt(
+            "loadedStub",
+            function_call("__elephc_phar_get_stub", vec![var_expr("filename")]),
+        ),
+        if_stmt(
+            binary_expr(var_expr("loadedStub"), BinOp::StrictNotEq, string_expr("")),
+            vec![property_assign_stmt(this_expr(), "stub", var_expr("loadedStub"))],
+            Some(vec![property_assign_stmt(
+                this_expr(),
+                "stub",
+                string_expr("<?php __HALT_COMPILER(); ?>"),
+            )]),
+        ),
+        // Load and unserialize the persisted global metadata when present.
+        assign_stmt(
+            "loadedMeta",
+            function_call("__elephc_phar_get_metadata", vec![var_expr("filename")]),
+        ),
+        if_stmt(
+            binary_expr(var_expr("loadedMeta"), BinOp::StrictNotEq, string_expr("")),
+            vec![
+                property_assign_stmt(
+                    this_expr(),
+                    "metadata",
+                    function_call("unserialize", vec![var_expr("loadedMeta")]),
+                ),
+                property_assign_stmt(this_expr(), "hasMetadata", bool_expr(true)),
+            ],
+            None,
+        ),
         property_assign_stmt(
             this_expr(),
             "entries",
@@ -290,6 +387,14 @@ fn phar_set_metadata_body() -> Vec<crate::parser::ast::Stmt> {
     vec![
         property_assign_stmt(this_expr(), "metadata", var_expr("metadata")),
         property_assign_stmt(this_expr(), "hasMetadata", bool_expr(true)),
+        // Persist the serialized metadata into the archive.
+        expr_stmt(function_call(
+            "__elephc_phar_set_metadata",
+            vec![
+                property_access(this_expr(), "path"),
+                function_call("serialize", vec![var_expr("metadata")]),
+            ],
+        )),
     ]
 }
 
@@ -302,20 +407,138 @@ fn phar_get_metadata_body() -> Vec<crate::parser::ast::Stmt> {
     )]
 }
 
-/// Builds `delMetadata()` by clearing the per-object metadata state.
+/// Builds `delMetadata()` by clearing the per-object metadata state and the archive's
+/// persisted global metadata.
 fn phar_del_metadata_body() -> Vec<crate::parser::ast::Stmt> {
     vec![
         property_assign_stmt(this_expr(), "metadata", null_expr()),
         property_assign_stmt(this_expr(), "hasMetadata", bool_expr(false)),
+        // Clear the persisted metadata by writing an empty blob.
+        expr_stmt(function_call(
+            "__elephc_phar_set_metadata",
+            vec![property_access(this_expr(), "path"), string_expr("")],
+        )),
         return_stmt(bool_expr(true)),
     ]
 }
 
-/// Builds `setStub()` as per-object stub storage.
+/// Reads an entry's persisted serialized metadata via the bridge, keyed by the
+/// `PharFileInfo`'s inherited `phar://` pathname.
+fn phar_file_info_read_metadata_expr() -> Expr {
+    function_call(
+        "__elephc_phar_get_file_metadata",
+        vec![property_access(this_expr(), "path")],
+    )
+}
+
+/// Builds `PharFileInfo::setMetadata()` as a write-through to the entry's persisted
+/// per-file metadata (no object-local copy; reads go straight back to the archive).
+fn phar_file_info_set_metadata_body() -> Vec<crate::parser::ast::Stmt> {
+    vec![expr_stmt(function_call(
+        "__elephc_phar_set_file_metadata",
+        vec![
+            property_access(this_expr(), "path"),
+            function_call("serialize", vec![var_expr("metadata")]),
+        ],
+    ))]
+}
+
+/// Builds `PharFileInfo::getMetadata()`: reads the persisted blob and unserializes it,
+/// returning `null` when the entry carries no metadata.
+fn phar_file_info_get_metadata_body() -> Vec<crate::parser::ast::Stmt> {
+    vec![
+        assign_stmt("rawMeta", phar_file_info_read_metadata_expr()),
+        if_stmt(
+            binary_expr(var_expr("rawMeta"), BinOp::StrictEq, string_expr("")),
+            vec![return_stmt(null_expr())],
+            None,
+        ),
+        return_stmt(function_call("unserialize", vec![var_expr("rawMeta")])),
+    ]
+}
+
+/// Builds `PharFileInfo::hasMetadata()`: true when the entry's persisted metadata blob
+/// is non-empty.
+fn phar_file_info_has_metadata_body() -> Vec<crate::parser::ast::Stmt> {
+    return_body(binary_expr(
+        phar_file_info_read_metadata_expr(),
+        BinOp::StrictNotEq,
+        string_expr(""),
+    ))
+}
+
+/// Builds `PharFileInfo::delMetadata()`: clears the entry's persisted per-file
+/// metadata and reports success.
+fn phar_file_info_del_metadata_body() -> Vec<crate::parser::ast::Stmt> {
+    vec![
+        expr_stmt(function_call(
+            "__elephc_phar_set_file_metadata",
+            vec![property_access(this_expr(), "path"), string_expr("")],
+        )),
+        return_stmt(bool_expr(true)),
+    ]
+}
+
+/// Builds `setSignatureAlgorithm()`: `Phar::OPENSSL` (16) routes to RSA-SHA1 signing
+/// with the supplied private key; the hash algorithms (MD5/SHA1/SHA256/SHA512) route to
+/// the hash-signing bridge. The archive trailer is rewritten in place.
+fn phar_set_signature_algorithm_body() -> Vec<crate::parser::ast::Stmt> {
+    vec![if_stmt(
+        binary_expr(var_expr("algo"), BinOp::StrictEq, int_expr(16)),
+        vec![expr_stmt(function_call(
+            "__elephc_phar_sign_openssl",
+            vec![property_access(this_expr(), "path"), var_expr("privateKey")],
+        ))],
+        Some(vec![expr_stmt(function_call(
+            "__elephc_phar_sign_hash",
+            vec![property_access(this_expr(), "path"), var_expr("algo")],
+        ))]),
+    )]
+}
+
+/// Builds `setZipPassword()`: stores the password (a compiler extension) used to
+/// read and write traditional-PKWARE (ZipCrypto) encrypted ZIP entries. Once set,
+/// later reads decrypt encrypted entries and zip writes encrypt their entries.
+fn phar_set_zip_password_body() -> Vec<crate::parser::ast::Stmt> {
+    vec![return_stmt(function_call(
+        "__elephc_phar_set_zip_password",
+        vec![var_expr("password")],
+    ))]
+}
+
+/// Builds `getSignature()` returning `['hash' => <uppercase hex>, 'hash_type' => <name>]`
+/// read from the archive's signature trailer.
+fn phar_get_signature_body() -> Vec<crate::parser::ast::Stmt> {
+    vec![
+        assign_stmt(
+            "sigHash",
+            function_call(
+                "__elephc_phar_get_signature_hash",
+                vec![property_access(this_expr(), "path")],
+            ),
+        ),
+        assign_stmt(
+            "sigType",
+            function_call(
+                "__elephc_phar_get_signature_type",
+                vec![property_access(this_expr(), "path")],
+            ),
+        ),
+        return_stmt(expr(ExprKind::ArrayLiteralAssoc(vec![
+            (string_expr("hash"), var_expr("sigHash")),
+            (string_expr("hash_type"), var_expr("sigType")),
+        ]))),
+    ]
+}
+
+/// Builds `setStub()` as per-object storage plus a write-through to the archive.
 fn phar_set_stub_body() -> Vec<crate::parser::ast::Stmt> {
     vec![
         property_assign_stmt(this_expr(), "stub", var_expr("stub")),
-        return_stmt(bool_expr(true)),
+        return_stmt(function_call(
+            "__elephc_phar_set_stub",
+            vec![property_access(this_expr(), "path"), var_expr("stub")],
+        )),
     ]
 }
 
@@ -401,6 +624,69 @@ fn phar_decompress_files_body() -> Vec<crate::parser::ast::Stmt> {
         "__elephc_phar_set_compression",
         vec![property_access(this_expr(), "path"), int_expr(0)],
     ))
+}
+
+/// Builds `compress()` as a whole-archive gzip/bzip2 rewrite: produces a new
+/// `<base>.gz` / `<base>.bz2` file and returns a fresh `PharData` for it (`null` on
+/// failure or an unsupported compression constant). `Phar::GZ` = 4096, `Phar::BZ2` = 8192.
+fn phar_compress_body() -> Vec<crate::parser::ast::Stmt> {
+    vec![
+        assign_stmt("dest", string_expr("")),
+        if_stmt(
+            binary_expr(var_expr("compression"), BinOp::StrictEq, int_expr(4096)),
+            vec![assign_stmt(
+                "dest",
+                function_call(
+                    "__elephc_phar_gzip_archive",
+                    vec![property_access(this_expr(), "path")],
+                ),
+            )],
+            Some(vec![if_stmt(
+                binary_expr(var_expr("compression"), BinOp::StrictEq, int_expr(8192)),
+                vec![assign_stmt(
+                    "dest",
+                    function_call(
+                        "__elephc_phar_bzip2_archive",
+                        vec![property_access(this_expr(), "path")],
+                    ),
+                )],
+                None,
+            )]),
+        ),
+        if_stmt(
+            binary_expr(var_expr("dest"), BinOp::StrictEq, string_expr("")),
+            vec![throw_stmt(new_object_expr(
+                "RuntimeException",
+                vec![string_expr("Unable to compress phar archive")],
+            ))],
+            None,
+        ),
+        return_stmt(new_object_expr("PharData", vec![var_expr("dest")])),
+    ]
+}
+
+/// Builds `decompress()` as a whole-archive decompression: produces the plain
+/// `<base>` archive (stripping a `.gz`/`.bz2` suffix) and returns a fresh `PharData`
+/// for it (`null` when the archive is not compressed or the write fails).
+fn phar_decompress_body() -> Vec<crate::parser::ast::Stmt> {
+    vec![
+        assign_stmt(
+            "dest",
+            function_call(
+                "__elephc_phar_decompress_archive",
+                vec![property_access(this_expr(), "path")],
+            ),
+        ),
+        if_stmt(
+            binary_expr(var_expr("dest"), BinOp::StrictEq, string_expr("")),
+            vec![throw_stmt(new_object_expr(
+                "RuntimeException",
+                vec![string_expr("Unable to decompress phar archive")],
+            ))],
+            None,
+        ),
+        return_stmt(new_object_expr("PharData", vec![var_expr("dest")])),
+    ]
 }
 
 /// Builds `delete()` as an archive-entry `unlink()`.
