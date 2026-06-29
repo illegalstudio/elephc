@@ -80,10 +80,70 @@ pub(in crate::interpreter) fn eval_builtin_fsockopen(
     }
     let host = eval_expr(&args[0], context, scope, values)?;
     let port = eval_expr(&args[1], context, scope, values)?;
-    for arg in &args[2..] {
-        let _ = eval_expr(arg, context, scope, values)?;
+    let error_code_target = args
+        .get(2)
+        .map(|error_code| eval_socket_output_ref_target(error_code, context, scope, values))
+        .transpose()?;
+    let error_message_target = args
+        .get(3)
+        .map(|error_message| eval_socket_output_ref_target(error_message, context, scope, values))
+        .transpose()?;
+    if let Some(timeout) = args.get(4) {
+        let _ = eval_expr(timeout, context, scope, values)?;
     }
-    eval_fsockopen_result(host, port, context, values)
+    let (result, error_code, error_message) =
+        eval_fsockopen_with_error_result(host, port, context, values)?;
+    eval_write_socket_int_output_ref_target(
+        error_code_target.as_ref(),
+        error_code,
+        context,
+        values,
+    )?;
+    eval_write_socket_output_ref_target(
+        error_message_target.as_ref(),
+        Some(error_message),
+        context,
+        values,
+    )?;
+    Ok(result)
+}
+
+/// Evaluates `fsockopen()` or `pfsockopen()` over full eval call metadata.
+pub(in crate::interpreter) fn eval_builtin_fsockopen_call(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["hostname", "port", "error_code", "error_message", "timeout"],
+        &evaluated_args,
+        false,
+    )?;
+    let host = required_evaluated_ref_arg(&bound, 0)?;
+    let port = required_evaluated_ref_arg(&bound, 1)?;
+    let error_code_target = optional_evaluated_ref_arg(&bound, 2)
+        .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
+        .transpose()?;
+    let error_message_target = optional_evaluated_ref_arg(&bound, 3)
+        .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
+        .transpose()?;
+    let (result, error_code, error_message) =
+        eval_fsockopen_with_error_result(host.value, port.value, context, values)?;
+    eval_write_socket_int_output_ref_target(
+        error_code_target.as_ref(),
+        error_code,
+        context,
+        values,
+    )?;
+    eval_write_socket_output_ref_target(
+        error_message_target.as_ref(),
+        Some(error_message),
+        context,
+        values,
+    )?;
+    Ok(result)
 }
 
 /// Opens a connected TCP stream from host and port cells.
@@ -101,6 +161,27 @@ pub(in crate::interpreter) fn eval_fsockopen_result(
     {
         Some(id) => values.resource(id),
         None => values.bool_value(false),
+    }
+}
+
+/// Opens a host/port TCP stream and returns PHP `fsockopen()` error outputs.
+pub(in crate::interpreter) fn eval_fsockopen_with_error_result(
+    host: RuntimeCellHandle,
+    port: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, i64, String), EvalStatus> {
+    let host = eval_path_string(host, values)?;
+    let port = eval_int_value(port, values)?;
+    match context
+        .stream_resources_mut()
+        .open_tcp_stream_host_port_result(&host, port)
+    {
+        Ok(id) => Ok((values.resource(id)?, 0, String::new())),
+        Err(error) => {
+            let error_code = i64::from(error.raw_os_error().unwrap_or(0));
+            Ok((values.bool_value(false)?, error_code, error.to_string()))
+        }
     }
 }
 
@@ -404,6 +485,26 @@ fn eval_write_socket_output_ref_target(
     )
 }
 
+/// Writes a socket output integer to a captured by-reference target when available.
+fn eval_write_socket_int_output_ref_target(
+    target: Option<&EvalReferenceTarget>,
+    value: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(target) = target else {
+        return Ok(());
+    };
+    let value = values.int(value)?;
+    eval_write_direct_ref_target(
+        target,
+        value,
+        context,
+        values,
+        Some(ScopeCellOwnership::Owned),
+    )
+}
+
 /// Evaluates `stream_socket_pair(domain, type, protocol)`.
 pub(in crate::interpreter) fn eval_builtin_stream_socket_pair(
     args: &[EvalExpr],
@@ -448,10 +549,49 @@ pub(in crate::interpreter) fn eval_builtin_stream_select(
         return Err(EvalStatus::RuntimeFatal);
     }
     let mut evaluated_args = Vec::with_capacity(args.len());
-    for arg in args {
+    let mut targets = Vec::with_capacity(3);
+    for arg in args.iter().take(3) {
+        let (value, target) = eval_call_arg_value(arg, context, scope, values)?;
+        evaluated_args.push(value);
+        targets.push(target.ok_or(EvalStatus::RuntimeFatal)?);
+    }
+    for arg in args.iter().skip(3) {
         evaluated_args.push(eval_expr(arg, context, scope, values)?);
     }
-    eval_stream_select_result(&evaluated_args, context, values)
+    let result = eval_stream_select_result(&evaluated_args, context, values)?;
+    eval_write_stream_select_empty_arrays(&targets, context, values)?;
+    Ok(result)
+}
+
+/// Evaluates `stream_select()` over full eval call metadata.
+pub(in crate::interpreter) fn eval_builtin_stream_select_call(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["read", "write", "except", "seconds", "microseconds"],
+        &evaluated_args,
+        false,
+    )?;
+    let read = required_evaluated_ref_arg(&bound, 0)?;
+    let write = required_evaluated_ref_arg(&bound, 1)?;
+    let except = required_evaluated_ref_arg(&bound, 2)?;
+    let seconds = required_evaluated_ref_arg(&bound, 3)?;
+    let targets = vec![
+        read.ref_target.clone().ok_or(EvalStatus::RuntimeFatal)?,
+        write.ref_target.clone().ok_or(EvalStatus::RuntimeFatal)?,
+        except.ref_target.clone().ok_or(EvalStatus::RuntimeFatal)?,
+    ];
+    let mut selected_args = vec![read.value, write.value, except.value, seconds.value];
+    if let Some(microseconds) = optional_evaluated_ref_arg(&bound, 4) {
+        selected_args.push(microseconds.value);
+    }
+    let result = eval_stream_select_result(&selected_args, context, values)?;
+    eval_write_stream_select_empty_arrays(&targets, context, values)?;
+    Ok(result)
 }
 
 /// Evaluates materialized `stream_select(...)` arguments.
@@ -467,6 +607,25 @@ pub(in crate::interpreter) fn eval_stream_select_result(
         eval_stream_select_cast_array(*array, context, values)?;
     }
     values.int(0)
+}
+
+/// Writes conservative empty readiness arrays back to `stream_select()` lvalues.
+fn eval_write_stream_select_empty_arrays(
+    targets: &[EvalReferenceTarget],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for target in targets {
+        let value = values.array_new(0)?;
+        eval_write_direct_ref_target(
+            target,
+            value,
+            context,
+            values,
+            Some(ScopeCellOwnership::Owned),
+        )?;
+    }
+    Ok(())
 }
 
 /// Invokes `stream_cast(STREAM_CAST_FOR_SELECT)` for wrapper resources in an array.

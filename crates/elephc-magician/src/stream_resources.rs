@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::fs::{File, Metadata, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 #[cfg(unix)]
@@ -151,18 +151,34 @@ impl EvalStreamResources {
 
     /// Opens a connected TCP stream resource.
     pub(crate) fn open_tcp_stream(&mut self, address: &str) -> Option<i64> {
-        let stream = TcpStream::connect(eval_tcp_address(address)).ok()?;
-        self.insert_tcp_stream(stream)
+        self.open_tcp_stream_result(address).ok()
+    }
+
+    /// Opens a connected TCP stream resource and preserves the host I/O error on failure.
+    pub(crate) fn open_tcp_stream_result(&mut self, address: &str) -> io::Result<i64> {
+        let stream = TcpStream::connect(eval_tcp_address(address))?;
+        self.insert_tcp_stream(stream).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Other, "failed to track eval TCP stream")
+        })
     }
 
     /// Opens a connected TCP stream from separate host and port arguments.
     pub(crate) fn open_tcp_stream_host_port(&mut self, host: &str, port: i64) -> Option<i64> {
+        self.open_tcp_stream_host_port_result(host, port).ok()
+    }
+
+    /// Opens a connected TCP stream from host and port while preserving I/O errors.
+    pub(crate) fn open_tcp_stream_host_port_result(
+        &mut self,
+        host: &str,
+        port: i64,
+    ) -> io::Result<i64> {
         let host = host
             .strip_prefix("tcp://")
             .or_else(|| host.strip_prefix("ssl://"))
             .or_else(|| host.strip_prefix("tls://"))
             .unwrap_or(host);
-        self.open_tcp_stream(&format!("{host}:{port}"))
+        self.open_tcp_stream_result(&format!("{host}:{port}"))
     }
 
     /// Accepts one TCP connection from a listener resource.

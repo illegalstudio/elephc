@@ -39,6 +39,10 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
         "preg_match" => eval_dynamic_preg_match_call(evaluated_args, context, values)?,
         "preg_match_all" => eval_dynamic_preg_match_all_call(evaluated_args, context, values)?,
         "flock" => eval_dynamic_flock_call(evaluated_args, context, values)?,
+        "fsockopen" | "pfsockopen" => {
+            eval_dynamic_fsockopen_call(evaluated_args, context, values)?
+        }
+        "stream_select" => eval_dynamic_stream_select_call(evaluated_args, context, values)?,
         "stream_socket_accept" => {
             eval_dynamic_stream_socket_accept_call(evaluated_args, context, values)?
         }
@@ -284,6 +288,89 @@ fn eval_dynamic_flock_call(
     values.bool_value(success).map(Some)
 }
 
+/// Evaluates a dynamic `fsockopen()`/`pfsockopen()` call when error outputs are writable.
+fn eval_dynamic_fsockopen_call(
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["hostname", "port", "error_code", "error_message", "timeout"],
+        evaluated_args,
+        false,
+    )?;
+    let host = required_evaluated_ref_arg(&bound, 0)?;
+    let port = required_evaluated_ref_arg(&bound, 1)?;
+    let error_code = optional_evaluated_ref_arg(&bound, 2);
+    let error_message = optional_evaluated_ref_arg(&bound, 3);
+    if error_code.is_none() && error_message.is_none() {
+        return Ok(None);
+    }
+    let error_code_target = optional_dynamic_ref_target(error_code)?;
+    let error_message_target = optional_dynamic_ref_target(error_message)?;
+    let (result, error_code, error_message) =
+        eval_fsockopen_with_error_result(host.value, port.value, context, values)?;
+    if let Some(target) = error_code_target {
+        let error_code = values.int(error_code)?;
+        eval_write_direct_ref_target(
+            target,
+            error_code,
+            context,
+            values,
+            Some(ScopeCellOwnership::Owned),
+        )?;
+    }
+    if let Some(target) = error_message_target {
+        let error_message = values.string(&error_message)?;
+        eval_write_direct_ref_target(
+            target,
+            error_message,
+            context,
+            values,
+            Some(ScopeCellOwnership::Owned),
+        )?;
+    }
+    Ok(Some(result))
+}
+
+/// Evaluates a dynamic `stream_select()` call and writes conservative empty arrays.
+fn eval_dynamic_stream_select_call(
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["read", "write", "except", "seconds", "microseconds"],
+        evaluated_args,
+        false,
+    )?;
+    let read = required_evaluated_ref_arg(&bound, 0)?;
+    let write = required_evaluated_ref_arg(&bound, 1)?;
+    let except = required_evaluated_ref_arg(&bound, 2)?;
+    let seconds = required_evaluated_ref_arg(&bound, 3)?;
+    let targets = [
+        read.ref_target.as_ref().ok_or(EvalStatus::RuntimeFatal)?,
+        write.ref_target.as_ref().ok_or(EvalStatus::RuntimeFatal)?,
+        except.ref_target.as_ref().ok_or(EvalStatus::RuntimeFatal)?,
+    ];
+    let mut selected_args = vec![read.value, write.value, except.value, seconds.value];
+    if let Some(microseconds) = optional_evaluated_ref_arg(&bound, 4) {
+        selected_args.push(microseconds.value);
+    }
+    let result = eval_stream_select_result(&selected_args, context, values)?;
+    for target in targets {
+        let value = values.array_new(0)?;
+        eval_write_direct_ref_target(
+            target,
+            value,
+            context,
+            values,
+            Some(ScopeCellOwnership::Owned),
+        )?;
+    }
+    Ok(Some(result))
+}
+
 /// Evaluates a dynamic `stream_socket_accept()` call when `$peer_name` is writable.
 fn eval_dynamic_stream_socket_accept_call(
     evaluated_args: &[EvaluatedCallArg],
@@ -349,6 +436,16 @@ fn eval_dynamic_stream_socket_recvfrom_call(
         )?;
     }
     Ok(Some(result))
+}
+
+/// Returns a writable target for an optional dynamic by-reference argument.
+fn optional_dynamic_ref_target(
+    arg: Option<&EvaluatedCallArg>,
+) -> Result<Option<&EvalReferenceTarget>, EvalStatus> {
+    match arg {
+        Some(arg) => arg.ref_target.as_ref().map(Some).ok_or(EvalStatus::RuntimeFatal),
+        None => Ok(None),
+    }
 }
 
 /// Binds already evaluated arguments while preserving by-reference target metadata.

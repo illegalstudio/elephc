@@ -38,17 +38,28 @@ fclose($peer); fclose($client); fclose($server);
 $server = stream_socket_server("tcp://127.0.0.1:0");
 $addr = stream_socket_get_name($server, false);
 $parts = explode(":", $addr);
-$fs = fsockopen("127.0.0.1", intval($parts[1]));
+$errno = 9; $errstr = "x";
+$fs = fsockopen("127.0.0.1", intval($parts[1]), $errno, $errstr);
 $peer = stream_socket_accept($server);
-echo is_resource($fs) && is_resource($peer) ? "fsock" : "bad"; echo ":";
+echo is_resource($fs) && is_resource($peer) && $errno === 0 && $errstr === "" ? "fsock" : "bad"; echo ":";
 fclose($fs); fclose($peer); fclose($server);
 $server = stream_socket_server("tcp://127.0.0.1:0");
 $addr = call_user_func("stream_socket_get_name", $server, false);
 $parts = explode(":", $addr);
-$pfs = pfsockopen("127.0.0.1", intval($parts[1]));
+$perrno = 9; $perrstr = "x";
+$pfs = pfsockopen("127.0.0.1", intval($parts[1]), $perrno, $perrstr);
 $peer = stream_socket_accept($server);
-echo is_resource($pfs) && is_resource($peer) ? "pfsock" : "bad"; echo ":";
+echo is_resource($pfs) && is_resource($peer) && $perrno === 0 && $perrstr === "" ? "pfsock" : "bad"; echo ":";
 fclose($pfs); fclose($peer); fclose($server);
+$server = stream_socket_server("tcp://127.0.0.1:0");
+$addr = stream_socket_get_name($server, false);
+$parts = explode(":", $addr);
+$open = "fsockopen";
+$dynErrno = 9; $dynErrstr = "x";
+$fs = $open("127.0.0.1", intval($parts[1]), $dynErrno, $dynErrstr);
+$peer = stream_socket_accept($server);
+echo is_resource($fs) && is_resource($peer) && $dynErrno === 0 && $dynErrstr === "" ? "dynfsock" : "bad"; echo ":";
+fclose($fs); fclose($peer); fclose($server);
 $server = stream_socket_server("tcp://127.0.0.1:0");
 $addr = stream_socket_get_name($server, false);
 $accept = "stream_socket_accept";
@@ -65,6 +76,11 @@ $pair = stream_socket_pair(1, 1, 0);
 echo is_array($pair) && is_resource($pair[0]) && is_resource($pair[1]) ? "pair" : "bad"; echo ":";
 fwrite($pair[0], "xy");
 echo fread($pair[1], 2) === "xy" ? "pairio" : "bad"; echo ":";
+$read = [$pair[1]]; $write = [$pair[0]]; $except = [$pair[0]];
+echo stream_select($read, $write, $except, 0) === 0 && count($read) === 0 && count($write) === 0 && count($except) === 0 ? "selectclear" : "bad"; echo ":";
+$read = [$pair[1]]; $write = []; $except = [];
+$select = "stream_select";
+echo $select($read, $write, $except, 0) === 0 && count($read) === 0 ? "dynselect" : "bad"; echo ":";
 fclose($pair[0]); fclose($pair[1]);
 $read = []; $write = []; $except = [];
 echo stream_select($read, $write, $except, 0) === 0 ? "select" : "bad"; echo ":";
@@ -86,8 +102,8 @@ return true;"#,
         values.output,
         concat!(
             "server:name:client:accept:peerout:peername:send:recv:addrout:",
-            "roundtrip:cryptooff:shutdown:fsock:pfsock:dynaccept:dynrecv:",
-            "pair:pairio:select:111111111111"
+            "roundtrip:cryptooff:shutdown:fsock:pfsock:dynfsock:dynaccept:dynrecv:",
+            "pair:pairio:selectclear:dynselect:select:111111111111"
         )
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
