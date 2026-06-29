@@ -1796,6 +1796,9 @@ fn write_back_native_function_ref_args(
                 }
                 let value = values.raw_string_value(words[0], words[1]);
                 values.release_raw_string_words(words[0], words[1])?;
+                if words[0] != original[0] {
+                    values.release_raw_string_words(original[0], original[1])?;
+                }
                 let value = value?;
                 eval_write_direct_ref_target(
                     target,
@@ -1817,6 +1820,7 @@ fn write_back_native_function_ref_args(
                 }
                 let value = values.raw_heap_word_value(word);
                 values.release_raw_heap_word(word)?;
+                values.release_raw_heap_word(*original)?;
                 let value = value?;
                 eval_write_direct_ref_target(
                     target,
