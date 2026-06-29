@@ -38,6 +38,8 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x19, #8]");                                   // x0 = activation record that should survive this catch
     emitter.instruction("bl __rt_exception_cleanup_frames");                    // run cleanup callbacks for every unwound activation frame
     abi::emit_store_reg_to_symbol(emitter, "xzr", "_concat_off", 0);
+    emitter.instruction("bl __rt_eh_drain");                                    // release all owning temporaries on the cleanup stack
+    abi::emit_store_reg_to_symbol(emitter, "xzr", "_eh_cleanup_top", 0);         // reset the cleanup stack top after draining
     emitter.instruction(&format!("add x0, x19, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // x0 = jmp_buf base stored inside the active handler record
     emitter.instruction("mov x1, #1");                                          // longjmp return value = 1 to indicate exceptional control flow
     emitter.bl_c("longjmp");                                         // transfer control directly back to the saved catch resume point
@@ -73,6 +75,8 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [r12 + 8]");                        // rdi = activation record that should survive this catch
     emitter.instruction("call __rt_exception_cleanup_frames");                  // run cleanup callbacks for every unwound activation frame
     abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
+    emitter.instruction("call __rt_eh_drain");                                  // release all owning temporaries on the cleanup stack
+    abi::emit_store_zero_to_symbol(emitter, "_eh_cleanup_top", 0);              // reset the cleanup stack top after draining
     emitter.instruction(&format!("lea rdi, [r12 + {}]", TRY_HANDLER_JMP_BUF_OFFSET)); // rdi = jmp_buf base stored inside the active handler record
     emitter.instruction("mov esi, 1");                                          // longjmp return value = 1 to indicate exceptional control flow
     emitter.bl_c("longjmp");                                                    // transfer control directly back to the saved catch resume point

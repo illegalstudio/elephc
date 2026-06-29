@@ -353,7 +353,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
         | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | ConcatReset
-        | GcCollect | Nop => {
+        | GcCollect | EhPop | Nop => {
             check_count(inst_id, inst, 0, "0")
         }
         ClosureNew => Ok(()),
@@ -395,7 +395,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
             check_count(inst_id, inst, 0, "0")
         }
         StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty | ExternGlobalStore
-        | StoreRefCell | BindRefCellPtr | Acquire | Release | Move | Borrow | EnsureOwned
+        | StoreRefCell | BindRefCellPtr | Acquire | Release | Move | Borrow | EnsureOwned | EhPush
         | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR
         | ThrowException | GeneratorReturn | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")

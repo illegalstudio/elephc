@@ -472,3 +472,94 @@ fn test_sequential_try_catch_does_not_blow_up_codegen() {
     let out = compile_and_run(&php);
     assert_eq!(out, expected);
 }
+
+/// Verifies that an owning method-call-receiver temporary is released when a
+/// subsequent method call throws an exception (#399).
+///
+/// `$t->make()->boom()` creates an intermediate `N` from `make()` that is an
+/// owning temporary. When `boom()` throws, the `longjmp` bypasses the
+/// straight-line release code for that temporary. The exception cleanup stack
+/// must drain it so its destructor runs before `end` is printed.
+#[test]
+fn test_chained_method_call_throws_releases_intermediate_temporary() {
+    let out = compile_and_run(
+        r#"<?php
+class N {
+    public function __destruct() { echo "dtor\n"; }
+    public function make(): N { return new N(); }
+    public function boom(): void { throw new Exception("x"); }
+}
+function run(): void {
+    $t = new N();
+    try {
+        $t->make()->boom();
+    } catch (Exception $e) {}
+    echo "caught\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "dtor\ncaught\ndtor\nend\n");
+}
+
+/// Verifies that owning argument temporaries are released when a method call
+/// throws an exception (#399).
+///
+/// `f(new S("a"))` passes a string temporary as an argument. When `boom()`
+/// throws, the string temporary must be released by the cleanup stack drain.
+#[test]
+fn test_method_call_throws_releases_owning_arg_temporary() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    public string $v;
+    public function __construct(string $v) { $this->v = $v; }
+    public function __destruct() { echo "dtor:{$this->v}\n"; }
+}
+class C {
+    public function take(S $s): void { throw new Exception("x"); }
+}
+function run(): void {
+    $c = new C();
+    try {
+        $c->take(new S("a"));
+    } catch (Exception $e) {}
+    echo "caught\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "dtor:a\ncaught\nend\n");
+}
+
+/// Verifies that the cleanup stack does not leak temporaries on the normal
+/// (non-throwing) path. The `eh_pop` must remove the entry so that a
+/// subsequent throw does not drain an already-released value (#399).
+#[test]
+fn test_cleanup_stack_balanced_on_normal_path() {
+    let out = compile_and_run(
+        r#"<?php
+class N {
+    public function __destruct() { echo "dtor\n"; }
+    public function make(): N { return new N(); }
+    public function ok(): int { return 42; }
+}
+function run(): void {
+    $t = new N();
+    $r = 0;
+    try {
+        $r = $t->make()->ok();
+    } catch (Exception $e) {}
+    echo "r=$r\n";
+}
+run();
+echo "end\n";
+"#,
+    );
+    // On the normal path: make() temp is released (first dtor), then $t is
+    // released at scope end (second dtor). If eh_pop failed to remove the
+    // entry, a subsequent throw would double-free the make() temp.
+    assert_eq!(out, "dtor\nr=42\ndtor\nend\n");
+}
