@@ -2024,7 +2024,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_basename",
-      "codegen_line": 4530,
+      "codegen_line": 4536,
       "notes": [
         "Lowers `basename(path, suffix?)` through the target-aware runtime helper."
       ],
@@ -2458,7 +2458,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_disk_free_space",
-      "codegen_line": 3368,
+      "codegen_line": 3370,
       "notes": [
         "Lowers `disk_free_space(path)` through the shared disk-space runtime helper."
       ],
@@ -2497,7 +2497,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_disk_total_space",
-      "codegen_line": 3376,
+      "codegen_line": 3378,
       "notes": [
         "Lowers `disk_total_space(path)` through the shared disk-space runtime helper."
       ],
@@ -2796,7 +2796,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_chgrp",
-      "codegen_line": 4472,
+      "codegen_line": 4478,
       "notes": [
         "Lowers `chgrp(path, group)` for integer GIDs and string group names."
       ],
@@ -2842,7 +2842,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_chmod",
-      "codegen_line": 4462,
+      "codegen_line": 4468,
       "notes": [
         "Lowers `chmod(path, mode)` through the target-aware runtime helper."
       ],
@@ -2928,7 +2928,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_chown",
-      "codegen_line": 4467,
+      "codegen_line": 4473,
       "notes": [
         "Lowers `chown(path, owner)` for integer UIDs and string user names."
       ],
@@ -2974,7 +2974,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_chdir",
-      "codegen_line": 4432,
+      "codegen_line": 4438,
       "notes": [
         "Lowers `chdir(path)` through the target-aware runtime helper."
       ],
@@ -3113,7 +3113,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_clearstatcache",
-      "codegen_line": 5572,
+      "codegen_line": 5578,
       "notes": [
         "Lowers `clearstatcache(...)` as an ordered no-op after EIR operand evaluation."
       ],
@@ -3210,7 +3210,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_copy",
-      "codegen_line": 4437,
+      "codegen_line": 4443,
       "notes": [
         "Lowers `copy(source, dest)` through the target-aware runtime helper."
       ],
@@ -3858,7 +3858,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_dirname",
-      "codegen_line": 4569,
+      "codegen_line": 4575,
       "notes": [
         "Lowers `dirname(path, levels?)` through the target-aware runtime helper."
       ],
@@ -4156,7 +4156,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fdatasync",
-      "codegen_line": 3302,
+      "codegen_line": 3304,
       "notes": [
         "Lowers `fdatasync(stream)` through the shared fd data-sync runtime helper."
       ],
@@ -4239,7 +4239,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_feof",
-      "codegen_line": 3119,
+      "codegen_line": 3121,
       "notes": [
         "Lowers `feof(stream)` through the runtime EOF-flag table helper."
       ],
@@ -4279,7 +4279,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fflush",
-      "codegen_line": 3264,
+      "codegen_line": 3266,
       "notes": [
         "Lowers `fflush(stream)` through the shared fd flush runtime helper."
       ],
@@ -4318,7 +4318,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fgetc",
-      "codegen_line": 2978,
+      "codegen_line": 2980,
       "notes": [
         "Lowers `fgetc(stream)` and boxes the one-byte string or PHP false result."
       ],
@@ -4358,7 +4358,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fgetcsv",
-      "codegen_line": 2991,
+      "codegen_line": 2993,
       "notes": [
         "Lowers `fgetcsv(stream, separator?, enclosure?)` through the CSV row runtime helper."
       ],
@@ -4426,7 +4426,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fgets",
-      "codegen_line": 2965,
+      "codegen_line": 2967,
       "notes": [
         "Lowers `fgets(stream)` through the shared line-read runtime helper."
       ],
@@ -4473,7 +4473,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fscanf",
-      "codegen_line": 2936,
+      "codegen_line": 2938,
       "notes": [
         "Lowers `fscanf(stream, format)` through `__rt_fgets` and `__rt_sscanf`."
       ],
@@ -4520,7 +4520,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_flock",
-      "codegen_line": 3307,
+      "codegen_line": 3309,
       "notes": [
         "Lowers `flock(stream, operation, would_block?)` through the libc flock wrapper."
       ],
@@ -4571,7 +4571,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_file",
-      "codegen_line": 3679,
+      "codegen_line": 3685,
       "notes": [
         "Lowers `file(path)` through the target-aware runtime line-array helper."
       ],
@@ -4625,7 +4625,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fileatime",
-      "codegen_line": 5462,
+      "codegen_line": 5468,
       "notes": [
         "Lowers `fileatime(path)` and boxes the runtime integer-or-false result."
       ],
@@ -4667,7 +4667,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_filectime",
-      "codegen_line": 5470,
+      "codegen_line": 5476,
       "notes": [
         "Lowers `filectime(path)` and boxes the runtime integer-or-false result."
       ],
@@ -4709,7 +4709,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_file_exists",
-      "codegen_line": 4393,
+      "codegen_line": 4399,
       "notes": [
         "Lowers `file_exists(path)` through the target-aware runtime stat helper."
       ],
@@ -4749,7 +4749,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_filegroup",
-      "codegen_line": 5494,
+      "codegen_line": 5500,
       "notes": [
         "Lowers `filegroup(path)` and boxes the runtime integer-or-false result."
       ],
@@ -4859,7 +4859,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fileinode",
-      "codegen_line": 5502,
+      "codegen_line": 5508,
       "notes": [
         "Lowers `fileinode(path)` and boxes the runtime integer-or-false result."
       ],
@@ -4901,7 +4901,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_file_put_contents",
-      "codegen_line": 3721,
+      "codegen_line": 3727,
       "notes": [
         "Lowers `file_put_contents(path, data)` through the target-aware runtime writer."
       ],
@@ -4962,7 +4962,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fileowner",
-      "codegen_line": 5486,
+      "codegen_line": 5492,
       "notes": [
         "Lowers `fileowner(path)` and boxes the runtime integer-or-false result."
       ],
@@ -5003,7 +5003,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fileperms",
-      "codegen_line": 5478,
+      "codegen_line": 5484,
       "notes": [
         "Lowers `fileperms(path)` and boxes the runtime integer-or-false result."
       ],
@@ -5045,7 +5045,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_filetype",
-      "codegen_line": 5510,
+      "codegen_line": 5516,
       "notes": [
         "Lowers `filetype(path)` and boxes the runtime string-or-false result."
       ],
@@ -5086,7 +5086,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_filemtime",
-      "codegen_line": 5426,
+      "codegen_line": 5432,
       "notes": [
         "Lowers `filemtime(path)` through the target-aware runtime stat helper."
       ],
@@ -5129,7 +5129,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_filesize",
-      "codegen_line": 5418,
+      "codegen_line": 5424,
       "notes": [
         "Lowers `filesize(path)` through the target-aware runtime stat helper."
       ],
@@ -5247,7 +5247,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fnmatch",
-      "codegen_line": 4597,
+      "codegen_line": 4603,
       "notes": [
         "Lowers `fnmatch(pattern, filename, flags?)` through the target-aware runtime helper."
       ],
@@ -5402,7 +5402,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fpassthru",
-      "codegen_line": 3025,
+      "codegen_line": 3027,
       "notes": [
         "Lowers `fpassthru(stream)` through the remaining-bytes stream runtime helper."
       ],
@@ -5442,7 +5442,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fprintf",
-      "codegen_line": 2860,
+      "codegen_line": 2862,
       "notes": [
         "Lowers `fprintf(stream, format, values...)` as `sprintf()` plus stream write."
       ],
@@ -5488,7 +5488,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fputcsv",
-      "codegen_line": 3003,
+      "codegen_line": 3005,
       "notes": [
         "Lowers `fputcsv(stream, fields, separator?, enclosure?)` for string arrays."
       ],
@@ -5562,7 +5562,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fread",
-      "codegen_line": 2814,
+      "codegen_line": 2816,
       "notes": [
         "Lowers `fread(stream, length)` using the shared runtime file-read helper."
       ],
@@ -5659,7 +5659,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fstat",
-      "codegen_line": 5533,
+      "codegen_line": 5539,
       "notes": [
         "Lowers `fstat(stream)` and boxes the runtime stat array or PHP false result."
       ],
@@ -5698,7 +5698,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fseek",
-      "codegen_line": 3170,
+      "codegen_line": 3172,
       "notes": [
         "Lowers `fseek(stream, offset, whence?)` and clears EOF state on success."
       ],
@@ -5749,7 +5749,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fsync",
-      "codegen_line": 3259,
+      "codegen_line": 3261,
       "notes": [
         "Lowers `fsync(stream)` through the shared fd sync runtime helper."
       ],
@@ -5789,7 +5789,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_ftell",
-      "codegen_line": 3131,
+      "codegen_line": 3133,
       "notes": [
         "Lowers `ftell(stream)` as `lseek(fd, 0, SEEK_CUR)`."
       ],
@@ -5828,7 +5828,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_ftruncate",
-      "codegen_line": 3208,
+      "codegen_line": 3210,
       "notes": [
         "Lowers `ftruncate(stream, size)` through the shared fd truncate runtime helper."
       ],
@@ -6602,7 +6602,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_fwrite",
-      "codegen_line": 2836,
+      "codegen_line": 2838,
       "notes": [
         "Lowers `fwrite(stream, data)` and returns the number of bytes written."
       ],
@@ -6655,7 +6655,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_getcwd",
-      "codegen_line": 5390,
+      "codegen_line": 5396,
       "notes": [
         "Lowers `getcwd()` through the target-aware runtime helper."
       ],
@@ -6814,7 +6814,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_glob",
-      "codegen_line": 4457,
+      "codegen_line": 4463,
       "notes": [
         "Lowers `glob(pattern)` through the target-aware runtime glob expansion helper."
       ],
@@ -8293,7 +8293,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_is_dir",
-      "codegen_line": 5594,
+      "codegen_line": 5600,
       "notes": [
         "Lowers `is_dir(path)` through the target-aware runtime stat helper."
       ],
@@ -8334,7 +8334,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_is_executable",
-      "codegen_line": 5626,
+      "codegen_line": 5632,
       "notes": [
         "Lowers `is_executable(path)` through the target-aware runtime access helper."
       ],
@@ -8376,7 +8376,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_is_file",
-      "codegen_line": 5586,
+      "codegen_line": 5592,
       "notes": [
         "Lowers `is_file(path)` through the target-aware runtime stat helper."
       ],
@@ -8958,7 +8958,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_is_readable",
-      "codegen_line": 5602,
+      "codegen_line": 5608,
       "notes": [
         "Lowers `is_readable(path)` through the target-aware runtime access helper."
       ],
@@ -9034,7 +9034,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_is_link",
-      "codegen_line": 5634,
+      "codegen_line": 5640,
       "notes": [
         "Lowers `is_link(path)` through the target-aware runtime lstat helper."
       ],
@@ -9076,7 +9076,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_is_writeable",
-      "codegen_line": 5618,
+      "codegen_line": 5624,
       "notes": [
         "Lowers `is_writeable(path)`, PHP's alias of `is_writable(path)`."
       ],
@@ -9117,7 +9117,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_is_writable",
-      "codegen_line": 5610,
+      "codegen_line": 5616,
       "notes": [
         "Lowers `is_writable(path)` through the target-aware runtime access helper."
       ],
@@ -9558,7 +9558,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_link",
-      "codegen_line": 5447,
+      "codegen_line": 5453,
       "notes": [
         "Lowers `link(oldpath, newpath)` through the target-aware libc wrapper."
       ],
@@ -9607,7 +9607,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_linkinfo",
-      "codegen_line": 5434,
+      "codegen_line": 5440,
       "notes": [
         "Lowers `linkinfo(path)` through the target-aware runtime lstat helper."
       ],
@@ -9649,7 +9649,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_lchgrp",
-      "codegen_line": 4482,
+      "codegen_line": 4488,
       "notes": [
         "Lowers `lchgrp(path, group)` for integer GIDs and string group names without following symlinks."
       ],
@@ -9695,7 +9695,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_lchown",
-      "codegen_line": 4477,
+      "codegen_line": 4483,
       "notes": [
         "Lowers `lchown(path, owner)` for integer UIDs and string user names without following symlinks."
       ],
@@ -9907,7 +9907,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_lstat",
-      "codegen_line": 5528,
+      "codegen_line": 5534,
       "notes": [
         "Lowers `lstat(path)` and boxes the runtime lstat array or PHP false result."
       ],
@@ -10161,7 +10161,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_mkdir",
-      "codegen_line": 4422,
+      "codegen_line": 4428,
       "notes": [
         "Lowers `mkdir(path)` through the target-aware runtime helper."
       ],
@@ -10613,7 +10613,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_pathinfo",
-      "codegen_line": 4638,
+      "codegen_line": 4644,
       "notes": [
         "Lowers `pathinfo(path, flags?)` through string, array, or boxed dynamic helpers."
       ],
@@ -12127,7 +12127,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_readlink",
-      "codegen_line": 5452,
+      "codegen_line": 5458,
       "notes": [
         "Lowers `readlink(path)` and boxes the owned runtime string-or-false result."
       ],
@@ -12169,7 +12169,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_realpath",
-      "codegen_line": 3684,
+      "codegen_line": 3690,
       "notes": [
         "Lowers `realpath(path)` and boxes the owned runtime string-or-false result."
       ],
@@ -12208,7 +12208,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_realpath_cache_get",
-      "codegen_line": 3694,
+      "codegen_line": 3700,
       "notes": [
         "Lowers `realpath_cache_get()` to elephc's empty realpath-cache view."
       ],
@@ -12237,7 +12237,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_realpath_cache_size",
-      "codegen_line": 3704,
+      "codegen_line": 3710,
       "notes": [
         "Lowers `realpath_cache_size()` to zero because elephc has no realpath cache."
       ],
@@ -12266,7 +12266,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_rename",
-      "codegen_line": 4442,
+      "codegen_line": 4448,
       "notes": [
         "Lowers `rename(from, to)` through the target-aware runtime helper."
       ],
@@ -12321,7 +12321,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_rewind",
-      "codegen_line": 3194,
+      "codegen_line": 3196,
       "notes": [
         "Lowers `rewind(stream)` as `lseek(fd, 0, SEEK_SET)` and clears EOF state on success."
       ],
@@ -12358,7 +12358,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_rmdir",
-      "codegen_line": 4427,
+      "codegen_line": 4433,
       "notes": [
         "Lowers `rmdir(path)` through the target-aware runtime helper."
       ],
@@ -12546,7 +12546,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_scandir",
-      "codegen_line": 4452,
+      "codegen_line": 4458,
       "notes": [
         "Lowers `scandir(path)` through the target-aware runtime directory listing helper."
       ],
@@ -13438,7 +13438,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_stat",
-      "codegen_line": 5523,
+      "codegen_line": 5529,
       "notes": [
         "Lowers `stat(path)` and boxes the runtime stat array or PHP false result."
       ],
@@ -14489,7 +14489,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_sys_get_temp_dir",
-      "codegen_line": 5397,
+      "codegen_line": 5403,
       "notes": [
         "Lowers `sys_get_temp_dir()` as the project's hardcoded `/tmp` string."
       ],
@@ -14520,7 +14520,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_symlink",
-      "codegen_line": 5442,
+      "codegen_line": 5448,
       "notes": [
         "Lowers `symlink(target, link)` through the target-aware libc wrapper."
       ],
@@ -14685,7 +14685,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_tempnam",
-      "codegen_line": 4447,
+      "codegen_line": 4453,
       "notes": [
         "Lowers `tempnam(directory, prefix)` through the target-aware runtime helper."
       ],
@@ -14764,7 +14764,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_tmpfile",
-      "codegen_line": 5410,
+      "codegen_line": 5416,
       "notes": [
         "Lowers `tmpfile()` and boxes the anonymous stream descriptor or PHP false."
       ],
@@ -14797,7 +14797,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_touch",
-      "codegen_line": 4517,
+      "codegen_line": 4523,
       "notes": [
         "Lowers `touch(path, mtime?, atime?)` through the target-aware runtime helper."
       ],
@@ -16621,7 +16621,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_popen",
-      "codegen_line": 3598,
+      "codegen_line": 3602,
       "notes": [
         "Lowers `popen(command, mode)` and boxes the process pipe as `resource|false`."
       ],
@@ -16667,7 +16667,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_pclose",
-      "codegen_line": 3626,
+      "codegen_line": 3630,
       "notes": [
         "Lowers `pclose(handle)` and returns the child process status."
       ],
@@ -16706,7 +16706,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_opendir",
-      "codegen_line": 3545,
+      "codegen_line": 3547,
       "notes": [
         "Lowers `opendir(path)` and boxes the directory stream as `resource|false`."
       ],
@@ -16747,7 +16747,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_readdir",
-      "codegen_line": 3555,
+      "codegen_line": 3557,
       "notes": [
         "Lowers `readdir(dir_handle)` for libc, glob, and userspace-wrapper handles."
       ],
@@ -16789,7 +16789,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_closedir",
-      "codegen_line": 3570,
+      "codegen_line": 3572,
       "notes": [
         "Lowers `closedir(dir_handle)` for libc, glob, and userspace-wrapper handles."
       ],
@@ -16831,7 +16831,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_rewinddir",
-      "codegen_line": 3584,
+      "codegen_line": 3588,
       "notes": [
         "Lowers `rewinddir(dir_handle)` for libc, glob, and userspace-wrapper handles."
       ],
@@ -16871,7 +16871,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_gethostname",
-      "codegen_line": 3407,
+      "codegen_line": 3409,
       "notes": [
         "Lowers `gethostname()` through the shared runtime helper."
       ],
@@ -16904,7 +16904,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_gethostbyname",
-      "codegen_line": 3417,
+      "codegen_line": 3419,
       "notes": [
         "Lowers `gethostbyname(hostname)` through the shared runtime resolver."
       ],
@@ -16944,7 +16944,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_gethostbyaddr",
-      "codegen_line": 3429,
+      "codegen_line": 3431,
       "notes": [
         "Lowers `gethostbyaddr(address)` and boxes malformed addresses as PHP `false`."
       ],
@@ -16984,7 +16984,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_getprotobyname",
-      "codegen_line": 3442,
+      "codegen_line": 3444,
       "notes": [
         "Lowers `getprotobyname(protocol)` and boxes a missing entry as PHP `false`."
       ],
@@ -17023,7 +17023,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_getprotobynumber",
-      "codegen_line": 3465,
+      "codegen_line": 3467,
       "notes": [
         "Lowers `getprotobynumber(number)` and boxes a missing entry as PHP `false`."
       ],
@@ -17062,7 +17062,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_getservbyname",
-      "codegen_line": 3484,
+      "codegen_line": 3486,
       "notes": [
         "Lowers `getservbyname(service, protocol)` and boxes a missing entry as PHP `false`."
       ],
@@ -17108,7 +17108,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_getservbyport",
-      "codegen_line": 3515,
+      "codegen_line": 3517,
       "notes": [
         "Lowers `getservbyport(port, protocol)` and boxes a missing entry as PHP `false`."
       ],
@@ -17744,7 +17744,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_umask",
-      "codegen_line": 4487,
+      "codegen_line": 4493,
       "notes": [
         "Lowers `umask(mask?)` through the target-aware runtime helper."
       ],
@@ -17783,7 +17783,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_unlink",
-      "codegen_line": 4401,
+      "codegen_line": 4407,
       "notes": [
         "Lowers `unlink(path)` through the target-aware runtime helper."
       ],
@@ -18104,7 +18104,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_vfprintf",
-      "codegen_line": 2896,
+      "codegen_line": 2898,
       "notes": [
         "Lowers `vfprintf(stream, format, values)` through `__rt_vsprintf` then fwrite."
       ],
@@ -18311,7 +18311,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_elephc_phar_bzip2_archive",
-      "codegen_line": 4114,
+      "codegen_line": 4120,
       "notes": [
         "Lowers `__elephc_phar_bzip2_archive(src)` into the whole-archive bzip2 bridge,",
         "returning the written destination path (or an empty string on failure)."
@@ -18419,7 +18419,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_elephc_phar_get_metadata",
-      "codegen_line": 3853,
+      "codegen_line": 3859,
       "notes": [
         "Lowers `__elephc_phar_get_metadata()` into the metadata-read bridge call."
       ],
@@ -18526,7 +18526,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_elephc_phar_get_stub",
-      "codegen_line": 3867,
+      "codegen_line": 3873,
       "notes": [
         "Lowers `__elephc_phar_get_stub()` into the stub-read bridge call."
       ],
@@ -18563,7 +18563,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_elephc_phar_gzip_archive",
-      "codegen_line": 4099,
+      "codegen_line": 4105,
       "notes": [
         "Lowers `__elephc_phar_gzip_archive(src)` into the whole-archive gzip bridge,",
         "returning the written destination path (or an empty string on failure)."
@@ -18601,7 +18601,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_elephc_phar_list_entries",
-      "codegen_line": 4271,
+      "codegen_line": 4277,
       "notes": [
         "Internal helper used by the built-in Phar / PharData support to enumerate archive entries.",
         "Calls the native PHAR listing bridge and returns the entries as an array."
@@ -18639,7 +18639,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_elephc_phar_set_compression",
-      "codegen_line": 3795,
+      "codegen_line": 3801,
       "notes": [
         "Internal helper used by the built-in Phar / PharData support to change archive compression.",
         "Calls the native PHAR compression-control bridge and returns whether the update succeeded."
@@ -18726,7 +18726,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_elephc_phar_set_metadata",
-      "codegen_line": 3876,
+      "codegen_line": 3882,
       "notes": [
         "Lowers `__elephc_phar_set_metadata()` into the metadata-write bridge call."
       ],
@@ -18770,7 +18770,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_elephc_phar_set_stub",
-      "codegen_line": 3890,
+      "codegen_line": 3896,
       "notes": [
         "Lowers `__elephc_phar_set_stub()` into the stub-write bridge call."
       ],
@@ -18814,7 +18814,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_elephc_phar_set_zip_password",
-      "codegen_line": 4172,
+      "codegen_line": 4178,
       "notes": [
         "Lowers `__elephc_phar_set_zip_password(password)` into the ZipCrypto password",
         "bridge that lets later reads decrypt encrypted ZIP entries."
@@ -18852,7 +18852,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_elephc_phar_sign_hash",
-      "codegen_line": 4157,
+      "codegen_line": 4163,
       "notes": [
         "Lowers `__elephc_phar_sign_hash(path, algo)` into the hash-based signing bridge."
       ],
@@ -18896,7 +18896,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
       "codegen_function": "lower_elephc_phar_sign_openssl",
-      "codegen_line": 4143,
+      "codegen_line": 4149,
       "notes": [
         "Lowers `__elephc_phar_sign_openssl(path, keyPem)` into the RSA-SHA1 signing bridge."
       ],
