@@ -158,6 +158,7 @@ pub(crate) fn supported_dynamic_new_builtin_class_names() -> &'static [&'static 
         "UnderflowException",
         "UnexpectedValueException",
         "ValueError",
+        "ArithmeticError",
         "stdClass",
     ]
 }
@@ -240,6 +241,7 @@ pub(crate) fn known_dynamic_new_builtin_class_names() -> &'static [&'static str]
         "UnderflowException",
         "UnexpectedValueException",
         "ValueError",
+        "ArithmeticError",
         "stdClass",
     ]
 }

@@ -202,6 +202,7 @@ const SPL_CLASS_NAMES: &[&str] = &[
     "UnderflowException",
     "UnexpectedValueException",
     "ValueError",
+    "ArithmeticError",
 ];
 
 /// Evaluate all arguments for their side effects, discarding results.

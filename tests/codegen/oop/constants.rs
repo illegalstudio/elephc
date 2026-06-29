@@ -176,3 +176,48 @@ echo Cfg::TIMEOUT;
     );
     assert_eq!(out, "30");
 }
+
+/// Verifies `static::CONST` uses late static binding to resolve the constant
+/// from the actual runtime class (not the declaring class).
+#[test]
+fn test_static_constant_late_static_binding() {
+    let out = compile_and_run(
+        r#"<?php
+class A { const X = 'A'; public static function show() { echo static::X; } }
+class B extends A { const X = 'B'; }
+B::show();
+"#,
+    );
+    assert_eq!(out, "B");
+}
+
+/// Verifies `static::CONST` falls back to the declaring-class value when the
+/// runtime class does not override the constant.
+#[test]
+fn test_static_constant_late_static_binding_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+class A { const X = 'A'; public static function show() { echo static::X . "\n"; } }
+class B extends A { const X = 'B'; }
+class C extends A { }
+A::show();
+B::show();
+C::show();
+"#,
+    );
+    assert_eq!(out, "A\nB\nA\n");
+}
+
+/// Verifies `static::CONST` works with integer constants and multiple overrides.
+#[test]
+fn test_static_constant_integer_override() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { const VAL = 10; public static function get() { return static::VAL; } }
+class Derived extends Base { const VAL = 20; }
+echo Base::get() . "\n";
+echo Derived::get() . "\n";
+"#,
+    );
+    assert_eq!(out, "10\n20\n");
+}

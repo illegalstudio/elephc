@@ -805,6 +805,7 @@ fn is_builtin_throwable_payload_class(class_name: &str) -> bool {
         "Error"
             | "TypeError"
             | "ValueError"
+            | "ArithmeticError"
             | "Exception"
             | "RuntimeException"
             | "JsonException"
@@ -1237,6 +1238,7 @@ fn supported_dynamic_new_builtin_class_names() -> &'static [&'static str] {
         "CallbackFilterIterator",
         "DomainException",
         "Error",
+        "ArithmeticError",
         "Exception",
         "Fiber",
         "FiberError",
@@ -1262,6 +1264,7 @@ fn supported_dynamic_new_builtin_class_names() -> &'static [&'static str] {
         "UnderflowException",
         "UnexpectedValueException",
         "ValueError",
+        "ArithmeticError",
         "stdClass",
     ]
 }
@@ -1333,6 +1336,7 @@ fn known_dynamic_new_builtin_class_names() -> &'static [&'static str] {
         "UnderflowException",
         "UnexpectedValueException",
         "ValueError",
+        "ArithmeticError",
         "stdClass",
     ]
 }

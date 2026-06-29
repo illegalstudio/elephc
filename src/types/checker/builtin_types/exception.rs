@@ -338,6 +338,7 @@ pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
         "Error",
         "TypeError",
         "ValueError",
+        "ArithmeticError",
         "Exception",
         "RuntimeException",
         "JsonException",

@@ -71,6 +71,7 @@ pub(crate) fn inject_builtin_throwables(
         "Error",
         "TypeError",
         "ValueError",
+        "ArithmeticError",
         "Exception",
         "RuntimeException",
         "JsonException",
@@ -217,6 +218,22 @@ pub(crate) fn inject_builtin_throwables(
         "ValueError".to_string(),
         FlattenedClass {
             name: "ValueError".to_string(),
+            extends: Some("Error".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+        },
+    );
+    class_map.insert(
+        "ArithmeticError".to_string(),
+        FlattenedClass {
+            name: "ArithmeticError".to_string(),
             extends: Some("Error".to_string()),
             implements: Vec::new(),
             is_abstract: false,

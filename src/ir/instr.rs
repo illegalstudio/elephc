@@ -161,6 +161,7 @@ pub enum Op {
     ConstBool,
     ConstClassName,
     ConstEnumCase,
+    LoadCalledClassId,
     DataAddr,
     LoadLocal,
     StoreLocal,
@@ -377,6 +378,7 @@ impl Op {
             | PtrOffset | Move | Borrow | Nop => E::PURE,
             IDiv | ISDiv | ISMod | PtrCheckNonnull => E::MAY_FATAL,
             ConstEnumCase => E::ALLOC_HEAP,
+            LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | CatchBind | FinallyEnter
             | FinallyExit => E::WRITES_LOCAL,
@@ -477,6 +479,7 @@ impl Op {
             ConstBool => "const_bool",
             ConstClassName => "const_class_name",
             ConstEnumCase => "const_enum_case",
+            LoadCalledClassId => "load_called_class_id",
             DataAddr => "data_addr",
             LoadLocal => "load_local",
             StoreLocal => "store_local",

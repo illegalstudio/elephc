@@ -103,3 +103,44 @@ echo intdiv($a["n"], $b["d"]);
     );
     assert_eq!(out, "2");
 }
+
+/// Regression for #356: `intdiv(PHP_INT_MIN, -1)` must throw `ArithmeticError`
+/// instead of wrapping to a negative result.
+#[test]
+fn test_intdiv_overflow_throws_arithmetic_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo intdiv(PHP_INT_MIN, -1);
+} catch (Throwable $e) {
+    echo get_class($e) . ':' . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "ArithmeticError:Division of PHP_INT_MIN by -1 is not an integer");
+}
+
+/// Regression for #356: variable-fed `intdiv($a, $b)` with PHP_INT_MIN and -1
+/// must also throw `ArithmeticError` (overflow check must not be optimized away).
+#[test]
+fn test_intdiv_overflow_variable_form() {
+    let out = compile_and_run(
+        r#"<?php
+$a = PHP_INT_MIN;
+$b = -1;
+try {
+    echo intdiv($a, $b);
+} catch (ArithmeticError $e) {
+    echo "caught: " . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "caught: Division of PHP_INT_MIN by -1 is not an integer");
+}
+
+/// Verifies that `intdiv(PHP_INT_MIN, -2)` does NOT overflow (valid result within range).
+#[test]
+fn test_intdiv_int_min_div_neg_two_no_overflow() {
+    let out = compile_and_run("<?php echo intdiv(PHP_INT_MIN, -2);");
+    assert_eq!(out, "4611686018427387904");
+}
