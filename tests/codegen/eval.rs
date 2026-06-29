@@ -6426,6 +6426,38 @@ echo (new EvalAotNullableScalarReturnBox())->run();
     assert_eq!(out, "S:SN:BF:BN:F15:FN:SS:SSN:SBT:SBN:SF25:SFN");
 }
 
+/// Verifies eval dispatch uses inherited AOT metadata for complex signatures.
+#[test]
+fn test_eval_fragment_dispatches_inherited_aot_complex_signatures() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalAotComplexLeft {}
+interface EvalAotComplexRight {}
+class EvalAotComplexBoth implements EvalAotComplexLeft, EvalAotComplexRight {}
+
+class EvalAotComplexParent {
+    public function choose(int|string $value = "D", string $suffix = "S"): int|string {
+        return is_int($value) ? $value + 10 : $value . $suffix;
+    }
+
+    public static function chooseStatic(int|string $value = "D", string $suffix = "S"): int|string {
+        return is_int($value) ? $value + 10 : $value . $suffix;
+    }
+
+    public function both(EvalAotComplexLeft&EvalAotComplexRight $value): string {
+        return "both";
+    }
+}
+
+class EvalAotComplexChild extends EvalAotComplexParent {}
+
+echo eval('$child = new EvalAotComplexChild();
+return $child->choose(suffix: "X") . ":" . $child->choose(value: 2) . ":" . EvalAotComplexChild::chooseStatic(suffix: "Y") . ":" . EvalAotComplexChild::chooseStatic(value: 3) . ":" . $child->both(new EvalAotComplexBoth());');
+"#,
+    );
+    assert_eq!(out, "DX:12:DY:13:both");
+}
+
 /// Verifies eval fragments can read iterable return values from AOT methods.
 #[test]
 fn test_eval_fragment_dispatches_aot_method_with_iterable_return() {

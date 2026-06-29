@@ -1334,13 +1334,14 @@ pub(super) fn eval_native_function(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args =
         eval_native_function_call_args(&function, args, context, caller_scope, values)?;
-    eval_native_function_with_values(function, evaluated_args, values)
+    eval_native_function_with_values(function, evaluated_args, context, values)
 }
 
 /// Invokes a registered AOT function after its positional arguments are prepared.
 pub(super) fn eval_native_function_with_values(
     function: NativeFunction,
     evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !function.bridge_supported() {
@@ -1359,5 +1360,5 @@ pub(super) fn eval_native_function_with_values(
     if result.is_null() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    Ok(result)
+    eval_declared_native_return_value(function.return_type(), None, None, result, context, values)
 }

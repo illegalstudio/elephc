@@ -28,6 +28,30 @@ fn execute_program_calls_registered_native_function() {
 
     assert_eq!(result, expected);
 }
+
+/// Verifies registered native AOT function return types are enforced after dispatch.
+#[test]
+fn execute_program_checks_registered_native_function_return_type() {
+    let program = parse_fragment(br#"return native_answer();"#).expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let expected = values.string("not-an-int").expect("allocate fake result");
+    let mut native = NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 0);
+    native.set_return_type(EvalParameterType::new(
+        vec![EvalParameterTypeVariant::Int],
+        false,
+    ));
+    assert!(context
+        .define_native_function("native_answer", native)
+        .is_ok());
+
+    let err = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect_err("native return type mismatch should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies direct eval calls can bind registered native parameters by name.
 #[test]
 fn execute_program_calls_registered_native_function_with_named_args() {

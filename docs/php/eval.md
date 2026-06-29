@@ -74,9 +74,9 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Variables and properties | Variable reads, `$this->property` reads/writes from native methods including public/protected/private scalar including string, nullable scalar, Mixed, array, and object AOT property slots when eval is executing in a PHP-visible native class scope, dynamic `stdClass` properties, eval object property access including `__get()` / `__set()` fallback for missing or inaccessible eval properties, `isset()`, `empty()`, and `unset()` magic property dispatch through `__isset()` / `__unset()`, `instanceof` over static and dynamic class/interface targets, eval-declared static property access, runtime-valued static receivers for `$class::$property` reads/writes, increment/decrement, and `isset()` / `empty()` probes, expression-valued static receivers for `($expr)::$property` reads/writes, array writes/appends, and increment/decrement, dynamic static property names (`ClassName::${expr}` / `$class::${expr}` / `($expr)::${expr}`) for reads/writes, `isset()` / `empty()` probes, array writes/appends, array-element unsets, and increment/decrement, static-property unset attempts including dynamic names as PHP-compatible catchable errors, public/protected/private scalar including string, nullable scalar, Mixed, array, and object AOT static property access from PHP-visible native class scopes, and public/protected/private generated/AOT class-like constant fetches through the bridge. |
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, string-key reads/writes, object-property and static-property array writes/appends/unsets, and eval-declared or generated/AOT `ArrayAccess` object reads, writes, appends, `isset()`, `empty()`, and `unset()` through `offsetGet()`, `offsetSet()`, `offsetExists()`, and `offsetUnset()`. |
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, first-class callable syntax for supported function, method, and invokable-object targets, invokable eval and generated/AOT objects, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
-| Object construction | `new ClassName`, `new ClassName(...)`, `new $className`, `new $className(...)`, and parenthesized class-name expressions (`new ($expr)` / `new ($expr)(...)`) for eval-declared classes, including constructor named arguments and unpacking; runtime class-name expressions may hold strings or objects whose runtime class is used as the construction target. `new self()`, `new static()`, and `new parent()` work inside eval-declared methods; anonymous `new [readonly] class [(args)] [extends Parent] [implements Iface, ...] { ... }` expressions are supported. `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, positional variadic tails, array-typed arguments, iterable-typed arguments, object-typed arguments, registered by-reference lvalue validation, and registered scalar, null, empty-array, supported array-valued, or supported object-valued default arguments for public/protected/private scalar/nullable scalar/Mixed/array/iterable/object constructor signatures when the current eval class scope satisfies PHP visibility. Generated AOT constructor bridge dispatch can invoke visibility-checked non-by-reference signatures plus `mixed`/untyped, scalar including string, nullable scalar, array, iterable, and object by-reference constructor parameters. |
+| Object construction | `new ClassName`, `new ClassName(...)`, `new $className`, `new $className(...)`, and parenthesized class-name expressions (`new ($expr)` / `new ($expr)(...)`) for eval-declared classes, including constructor named arguments and unpacking; runtime class-name expressions may hold strings or objects whose runtime class is used as the construction target. `new self()`, `new static()`, and `new parent()` work inside eval-declared methods; anonymous `new [readonly] class [(args)] [extends Parent] [implements Iface, ...] { ... }` expressions are supported. `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, positional variadic tails, array-typed arguments, iterable-typed arguments, object-typed arguments, union/nullable registered type validation, intersection object type validation, registered by-reference lvalue validation, and registered scalar, null, empty-array, supported array-valued, or supported object-valued default arguments when the current eval class scope satisfies PHP visibility. Generated AOT constructor bridge dispatch can invoke visibility-checked non-by-reference signatures plus `mixed`/untyped, scalar including string, nullable scalar, array, iterable, object, and supported union/intersection object shapes, with by-reference constructor parameters limited to the staged scalar/nullable scalar/Mixed/array/iterable/object slice. |
 | Object cloning | `clone $object` shallow-copies eval-declared objects, `stdClass` storage, and ordinary emitted/AOT object storage. Eval-declared and emitted/AOT `__clone()` hooks run after the copy and obey public/protected/private visibility. |
-| Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, variadic tails, dynamic static receivers (`$class::method()`, `$class::$method()`, and `($expr)::method()`), variable static method names on named receivers (`ClassName::$method()`), braced dynamic static method names (`ClassName::{$method}()` / `$class::{$method}()` / `($expr)::{$method}()`), and by-reference parameters for direct variable, array-element, object-property including dynamic property names, object-property array-element, static-property, and static-property array-element arguments including dynamic receivers and dynamic property names. Missing or inaccessible eval methods dispatch through `__call()` / `__callStatic()` when those hooks are available. Runtime/AOT object-method and static-method fallback supports the same fixed-parameter binding plus positional variadic tails, registered by-reference lvalue validation and writeback target preservation, plus registered scalar, null, empty-array, supported array-valued, or supported object-valued default arguments for public/protected/private scalar/nullable scalar/Mixed/array/iterable/object parameters when the current eval class scope satisfies PHP visibility; scalar/nullable scalar/Mixed/array/iterable/object return values are boxed back to eval. Generated AOT method bridge dispatch can invoke visibility-checked non-by-reference signatures plus `mixed`/untyped, scalar including string, nullable scalar, array, iterable, and object by-reference parameters. |
+| Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, variadic tails, dynamic static receivers (`$class::method()`, `$class::$method()`, and `($expr)::method()`), variable static method names on named receivers (`ClassName::$method()`), braced dynamic static method names (`ClassName::{$method}()` / `$class::{$method}()` / `($expr)::{$method}()`), and by-reference parameters for direct variable, array-element, object-property including dynamic property names, object-property array-element, static-property, and static-property array-element arguments including dynamic receivers and dynamic property names. Missing or inaccessible eval methods dispatch through `__call()` / `__callStatic()` when those hooks are available. Runtime/AOT object-method and static-method fallback supports the same fixed-parameter binding plus positional variadic tails, registered by-reference lvalue validation and writeback target preservation, plus registered scalar, null, empty-array, supported array-valued, or supported object-valued default arguments for public/protected/private parameters when the current eval class scope satisfies PHP visibility; scalar, nullable, callable, Mixed, array, iterable, object, union, and intersection-object return values are checked and boxed back to eval. Generated AOT method bridge dispatch can invoke visibility-checked non-by-reference signatures plus `mixed`/untyped, scalar including string, nullable scalar, array, iterable, object, and supported union/intersection object shapes, with by-reference parameters limited to the staged scalar/nullable scalar/Mixed/array/iterable/object slice. |
 | Includes | `include`, `include_once`, `require`, and `require_once` are expressions. |
 | Magic constants | `__LINE__`, call-site `__FILE__` / `__DIR__`, empty top-level eval-scope `__CLASS__` / `__TRAIT__`, namespace-aware `__NAMESPACE__`, eval-declared-function `__FUNCTION__` / `__METHOD__`, eval-declared-method `__FUNCTION__` / `__METHOD__` / `__CLASS__` / `__TRAIT__`, eval class-like constant/property initializers for `__CLASS__` / `__TRAIT__`, and reflected parameter defaults using the declaring callable scope, including trait-origin names for imported trait members. |
 | Constants | Predefined eval-visible constants, dynamic constants from `define()`, namespaced constant fallback, bare constant fetches, `$class::CONST`, expression-valued static receivers for `($expr)::CONST`, braced dynamic class constant names (`ClassName::{$constant}` / `$class::{$constant}` / `($expr)::{$constant}`), and `$object::class` are supported. |
@@ -142,11 +142,14 @@ parents inherit bridge-supported parent instance-method callable probes and
 `call_user_func_array()`. Eval-declared static methods also support string-keyed
 named arguments through `call_user_func_array()`; generated/AOT static method
 fallback supports the same named-argument and positional variadic-tail binding
-for public/protected/private scalar/nullable scalar/Mixed/array/iterable/object
-parameter signatures, including registered by-reference lvalue validation, when
-the current eval class scope satisfies PHP visibility. Generated AOT bridge
-dispatch can invoke `mixed`/untyped, scalar including string, nullable scalar, array, iterable, and object by-reference method
-and constructor parameters.
+for public/protected/private scalar, nullable, callable, Mixed, array, iterable,
+object, union, and intersection-object parameter signatures, including
+registered by-reference lvalue validation, when the current eval class scope
+satisfies PHP visibility. Generated AOT bridge dispatch can invoke
+`mixed`/untyped, scalar including string, nullable scalar, array, iterable,
+object, and supported union/intersection object shapes, with by-reference method
+and constructor parameters limited to the staged scalar/nullable
+scalar/Mixed/array/iterable/object slice.
 
 Post-barrier native direct calls and string-literal `call_user_func()` callbacks
 currently accept simple positional arguments. Post-barrier
@@ -716,7 +719,8 @@ method parameters through `$this->method(...)` and `Class::method(...)` are
 supported by the native method bridge when the eval fragment runs inside a
 native class scope that satisfies PHP visibility for the declaring class,
 including registered named arguments and string-keyed unpacking; method returns
-may be scalar/nullable scalar/Mixed/array/iterable/object values.
+may be scalar, nullable, callable, Mixed, array, iterable, object, union, and
+intersection-object values.
 
 ## Namespaces and constants
 
@@ -808,13 +812,14 @@ PHP's by-value callback behavior: the return value is computed from the
 supplied array, a by-reference warning is emitted where PHP would emit one, and
 the caller's original array is not mutated.
 
-Eval regex dispatch uses Rust's `regex` engine for common PCRE-style delimited
-patterns. It strips PHP delimiters, supports the `i`, `m`, `s`, `u`, and `U`
-modifiers, supports common capture array shapes and replacement references, and
-supports `PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_DELIM_CAPTURE`, and
-`PREG_SPLIT_OFFSET_CAPTURE`. PCRE constructs unsupported by Rust `regex` fail
-as eval runtime fatals. Native non-eval regex codegen remains PCRE2-backed as
-documented in [Regex](regex.md).
+Eval regex dispatch uses PCRE2 through the POSIX wrapper for common PCRE-style
+delimited patterns. It strips PHP delimiters, supports the `i`, `m`, `s`, `u`,
+and `U` modifiers, supports common capture array shapes and replacement
+references, and supports `PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_DELIM_CAPTURE`, and
+`PREG_SPLIT_OFFSET_CAPTURE`. Patterns, delimiters, modifiers, or subject bytes
+that the eval bridge cannot pass through this wrapper fail as eval runtime
+fatals. Native non-eval regex codegen remains PCRE2-backed as documented in
+[Regex](regex.md).
 
 Eval JSON support covers null, booleans, integers, floats, strings, indexed
 arrays, associative arrays, and `stdClass` dynamic properties. `json_encode()`
@@ -855,17 +860,21 @@ fail at runtime with an eval fatal diagnostic.
 
 The fragment subset is broad but not the full elephc language surface. In
 particular, advanced native callable descriptors and full `Closure` object
-semantics for callback values are still outside eval fragments. Runtime/AOT object-method, static-method, and
-constructor fallback from eval can bind registered names, defaults, positional
-variadic tails, and by-reference lvalue metadata. Generated AOT bridge dispatch
-is limited to visibility-checked
-non-by-reference scalar/nullable scalar/Mixed/array/iterable/object parameter
-signatures plus `mixed`/untyped, scalar including string, nullable scalar,
-array, iterable, and object by-reference method and constructor parameters,
-including the generated positional variadic array slot when present. Those
-supported method and constructor shapes use normal target ABI materialization
-for arguments beyond the register set instead of a fixed eval arity cap. Broader
-parameter/return ABI shapes are still outside those bridge paths.
+semantics for callback values are still outside eval fragments. Runtime/AOT
+object-method, static-method, and constructor fallback from eval can bind
+registered names, defaults, positional variadic tails, and by-reference lvalue
+metadata. Generated AOT bridge dispatch supports visibility-checked
+non-by-reference signatures whose generated ABI storage is scalar/string,
+callable descriptor, boxed Mixed/union, array/hash, iterable, or object.
+Registered type specs validate nullable and union members, intersection object
+parameters, and intersection object returns before or after the generated AOT
+call. By-reference method and constructor parameters remain limited to the
+staged scalar/nullable scalar/Mixed/array/iterable/object slice, including the
+generated positional variadic array slot when present. These supported method
+and constructor shapes use normal target ABI materialization for arguments
+beyond the register set instead of a fixed eval arity cap. Layouts such as
+pointer, buffer, packed, resource, and other specialized native-only ABI shapes
+remain outside those bridge paths.
 
 Eval class support is still smaller than the full static class system.
 Eval-declared `__destruct()` hooks run when an eval-owned dynamic object reaches
@@ -877,17 +886,18 @@ class-system gaps are
 broader reflection APIs beyond the supported
 ReflectionClass/Object/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
 and Enum/attribute slice, Reflection type APIs beyond retained parameter, generated
-property, and function/method return metadata, broader
-parameter and generated property default-value materialization beyond scalar,
-null, empty-array, supported array-valued defaults, and supported object-valued parameter defaults during generated/AOT invocation,
-and broader generated/AOT method and constructor bridge signatures beyond the current visibility-checked
-scalar/nullable scalar/Mixed/array/iterable/object parameter slice plus scalar/nullable scalar/Mixed/array/iterable/object returns and
-`__clone()` hooks; the remaining limit there is the supported type slice rather
-than a fixed parameter count. Generated/AOT free-function and method type metadata,
-return metadata, by-reference and variadic parameter flags, and generated/AOT
+property, and function/method return metadata, broader parameter and generated
+property default-value materialization beyond scalar, null, empty-array,
+supported array-valued defaults, and supported object-valued parameter defaults
+during generated/AOT invocation, and generated/AOT method and constructor
+bridge signatures beyond the current visibility-checked by-reference parameter
+slice, specialized native-only ABI shapes, and `__clone()` hooks; the remaining
+limit there is the supported type slice rather than a fixed parameter count.
+Generated/AOT free-function and method type metadata, return metadata,
+by-reference and variadic parameter flags, and generated/AOT
 class/method/property/class-constant attributes are exposed for registered
-metadata slices, while other unsupported bridge shapes remain metadata-only
-rather than invocable through eval.
+metadata slices, while unsupported native-only bridge shapes remain
+metadata-only rather than invocable through eval.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`
