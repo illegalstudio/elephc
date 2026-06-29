@@ -330,6 +330,14 @@ pub(in crate::interpreter) fn bind_evaluated_native_function_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    if native_function_variadic_index(function).is_some() {
+        return bind_evaluated_native_variadic_function_args(
+            function,
+            evaluated_args,
+            context,
+            values,
+        );
+    }
     let mut bound_args = vec![None; function.param_count()];
     let has_param_names = function.param_names().len() == function.param_count();
     let mut next_positional = 0;
@@ -358,10 +366,114 @@ pub(in crate::interpreter) fn bind_evaluated_native_function_args(
         *value = Some(materialize_native_callable_default(default, context, values)?);
     }
 
-    bound_args
+    let mut bound_args = bound_args
         .into_iter()
         .collect::<Option<Vec<_>>>()
-        .ok_or(EvalStatus::RuntimeFatal)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    apply_native_function_arg_types(function, None, &mut bound_args, context, values)?;
+    Ok(bound_args)
+}
+
+/// Binds a native AOT variadic function while keeping the raw invoker argument layout.
+fn bind_evaluated_native_variadic_function_args(
+    function: &NativeFunction,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let variadic_index = native_function_variadic_index(function).ok_or(EvalStatus::RuntimeFatal)?;
+    let has_param_names = function.param_names().len() == function.param_count();
+    let mut regular_args = vec![None; variadic_index];
+    let mut variadic_args = Vec::new();
+    let mut next_positional = 0;
+
+    for arg in evaluated_args {
+        if let Some(name) = arg.name {
+            if !has_param_names {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let Some(param_index) =
+                native_function_regular_param_index(function, variadic_index, &name)
+            else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            if regular_args[param_index].is_some() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            regular_args[param_index] = Some(arg.value);
+        } else if next_positional < variadic_index {
+            bind_dynamic_positional_arg(&mut regular_args, &mut next_positional, arg.value)?;
+        } else {
+            variadic_args.push(arg.value);
+        }
+    }
+
+    for (position, value) in regular_args.iter_mut().enumerate() {
+        if value.is_some() {
+            continue;
+        }
+        if position < function.required_param_count() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let Some(default) = function.param_default(position) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        *value = Some(materialize_native_callable_default(default, context, values)?);
+    }
+
+    let mut bound_args = regular_args
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    bound_args.extend(variadic_args);
+    apply_native_function_arg_types(
+        function,
+        Some(variadic_index),
+        &mut bound_args,
+        context,
+        values,
+    )?;
+    Ok(bound_args)
+}
+
+/// Applies registered native AOT function parameter types after argument binding.
+fn apply_native_function_arg_types(
+    function: &NativeFunction,
+    variadic_index: Option<usize>,
+    bound_args: &mut [RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for (position, value) in bound_args.iter_mut().enumerate() {
+        let param_index = if variadic_index.is_some_and(|index| position >= index) {
+            variadic_index.ok_or(EvalStatus::RuntimeFatal)?
+        } else {
+            position
+        };
+        let Some(param_type) = function.param_type(param_index) else {
+            continue;
+        };
+        *value = eval_method_parameter_value(param_type, *value, context, values)?;
+    }
+    Ok(())
+}
+
+/// Returns the variadic parameter index for a native AOT function, if registered.
+fn native_function_variadic_index(function: &NativeFunction) -> Option<usize> {
+    (0..function.param_count()).find(|index| function.param_variadic(*index))
+}
+
+/// Returns the non-variadic native function parameter index for one named argument.
+fn native_function_regular_param_index(
+    function: &NativeFunction,
+    variadic_index: usize,
+    name: &str,
+) -> Option<usize> {
+    function
+        .param_names()
+        .iter()
+        .enumerate()
+        .position(|(index, param)| index < variadic_index && param == name)
 }
 
 /// Binds evaluated method arguments and fills omitted parameters from defaults.
@@ -1347,8 +1459,14 @@ pub(super) fn eval_native_function_with_values(
     if !function.bridge_supported() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if evaluated_args.len() != function.param_count() {
+    let variadic_index = native_function_variadic_index(&function);
+    if variadic_index.is_none() && evaluated_args.len() != function.param_count() {
         return Err(EvalStatus::RuntimeFatal);
+    }
+    if let Some(variadic_index) = variadic_index {
+        if evaluated_args.len() < function.required_param_count().min(variadic_index) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
     }
     let arg_array = values.array_new(evaluated_args.len())?;
     for (index, value) in evaluated_args.into_iter().enumerate() {

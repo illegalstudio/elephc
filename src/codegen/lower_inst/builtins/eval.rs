@@ -2393,7 +2393,7 @@ fn function_signature_can_bridge_with_eval(function: &Function) -> bool {
     function
         .params
         .iter()
-        .all(|param| !param.by_ref && !param.variadic)
+        .all(|param| !param.by_ref)
 }
 
 /// Returns true when eval can dispatch a native method through the generated bridge.
