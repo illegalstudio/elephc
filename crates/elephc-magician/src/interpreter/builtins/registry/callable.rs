@@ -442,6 +442,11 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
         let evaluated_args = evaluated_args.into_iter().map(|arg| arg.value).collect();
         return eval_callable_with_values(name, evaluated_args, context, values);
     }
+    if let Some(result) =
+        eval_mutating_builtin_with_call_array_args(name, &evaluated_args, context, values)?
+    {
+        return Ok(result);
+    }
     if eval_php_visible_builtin_exists(name) {
         let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args, values)?;
         let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? else {

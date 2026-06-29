@@ -273,6 +273,21 @@ $sortOriginal = [3, 1];
 $sortCopy = $sortOriginal;
 sort($sortCopy);
 echo $sortOriginal[0] . ":" . $sortCopy[0] . ":";
+$popFn = array_pop(...);
+$callableCopy = [7, 8];
+echo $popFn($callableCopy) . ":" . count($callableCopy) . ":";
+$sortFn = sort(...);
+$callableSort = [9, 7];
+$sortFn($callableSort);
+echo $callableSort[0] . ":";
+function eval_mutator_walk(&$value, $key) { $value = $value + $key + 1; }
+$walkFn = array_walk(...);
+$walked = [2];
+$walkFn($walked, "eval_mutator_walk");
+echo $walked[0] . ":";
+$setFn = settype(...);
+$typed = 10;
+echo $setFn($typed, "string") ? gettype($typed) . ":" . $typed . ":" : "bad:";
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -281,7 +296,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "3:3:2:3:6:3:1:");
+    assert_eq!(values.output, "3:3:2:3:6:3:1:8:1:7:3:string:10:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval `array_splice()` returns removed values and writes back writable lvalue calls.
