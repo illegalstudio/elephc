@@ -44,6 +44,7 @@ fn test_eliminate_dead_code_rebuilds_empty_elseif_tail_as_needed_guard() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: touch.clone(),
@@ -101,6 +102,7 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_cumulative_fal
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::var("flag"),
@@ -166,6 +168,7 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_negated_compos
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: disjunction,
@@ -239,6 +242,7 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_demorgan_equiv
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: negated_conjunction,

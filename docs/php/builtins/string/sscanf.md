@@ -2,7 +2,7 @@
 title: "sscanf()"
 description: "Lowers `sscanf(string, format)` into the shared scanner helper."
 sidebar:
-  order: 359
+  order: 361
 ---
 
 ## sscanf()

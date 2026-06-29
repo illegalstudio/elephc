@@ -14,6 +14,11 @@ echo "Moved to: " . $user["city"] . "\n";
 $user["age"] = "30";
 echo "Age: " . $user["age"] . "\n";
 
+// Remove a key with unset(): count drops and isset() reports it gone
+unset($user["age"]);
+echo "After unset, has age: " . (isset($user["age"]) ? "yes" : "no") . "\n";
+echo "Field count: " . count($user) . "\n";
+
 // PHP key normalization: "1" and 1 are the same key, but "01" stays a string key
 $codes = [1 => "one", "2" => "two", "01" => "leading"];
 $codes["1"] = "ONE";

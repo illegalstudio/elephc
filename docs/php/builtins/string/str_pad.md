@@ -2,7 +2,7 @@
 title: "str_pad()"
 description: "Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper."
 sidebar:
-  order: 363
+  order: 365
 ---
 
 ## str_pad()

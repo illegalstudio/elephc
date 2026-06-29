@@ -34,6 +34,7 @@ fn test_eliminate_dead_code_drops_trailing_empty_switch_cases() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Switch {
                     subject: touch.clone(),
@@ -92,6 +93,7 @@ fn test_eliminate_dead_code_sinks_tail_into_switch_exit_paths() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Switch {
@@ -141,6 +143,7 @@ fn test_eliminate_dead_code_sinks_tail_into_switch_break_paths() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Switch {

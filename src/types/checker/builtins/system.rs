@@ -497,6 +497,35 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Bool))
         }
+        "serialize" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "serialize() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
+        "unserialize" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(
+                    span,
+                    "unserialize() takes 1 or 2 arguments",
+                ));
+            }
+            let data_ty = checker.infer_type(&args[0], env)?;
+            if !is_json_string_arg_type(&data_ty) {
+                return Err(CompileError::new(
+                    args[0].span,
+                    "unserialize() data argument must be string-compatible",
+                ));
+            }
+            if let Some(options) = args.get(1) {
+                checker.infer_type(options, env)?;
+            }
+            Ok(Some(PhpType::Mixed))
+        }
         "json_last_error" => {
             if !args.is_empty() {
                 return Err(CompileError::new(
@@ -658,7 +687,38 @@ fn class_attribute_args_unsupported(checker: &Checker, class_name: &str, attr_na
         .iter()
         .enumerate()
         .find(|(_, name)| php_symbol_key(name.trim_start_matches('\\')) == attr_key)
-        .is_some_and(|(idx, _)| !matches!(class_info.attribute_args.get(idx), Some(Some(_))))
+        .is_some_and(|(idx, _)| match class_info.attribute_args.get(idx) {
+            // The flat `class_attribute_args()` helper returns a positional
+            // array of materialized scalars, so it cannot faithfully echo keyed
+            // arguments (named arguments or associative arrays, at any depth) or
+            // deferred symbolic references (global/class constants, enum cases).
+            // Reject them and direct users to
+            // `ReflectionClass::getAttributes()->getArguments()` instead.
+            Some(Some(entries)) => attr_entries_unsupported_by_flat_helper(entries),
+            _ => true,
+        })
+}
+
+/// Returns true when the flat `class_attribute_args()` helper cannot faithfully
+/// echo the captured entries: keyed arguments (named arguments or
+/// associative-array keys, at any depth) would lose their keys, and deferred
+/// symbolic references (global/class constants, enum cases) are not materialized
+/// on this echo path. Both are supported through
+/// `ReflectionClass::getAttributes()->getArguments()` instead.
+fn attr_entries_unsupported_by_flat_helper(entries: &[crate::types::AttrArgEntry]) -> bool {
+    entries.iter().any(|entry| {
+        entry.key.is_some()
+            || matches!(
+                &entry.value,
+                crate::types::AttrArgValue::ConstRef(_)
+                    | crate::types::AttrArgValue::ScopedConst(..)
+            )
+            || matches!(
+                &entry.value,
+                crate::types::AttrArgValue::Array(inner)
+                    if attr_entries_unsupported_by_flat_helper(inner)
+            )
+    })
 }
 
 /// Returns `true` if the class has any attribute whose argument metadata is not

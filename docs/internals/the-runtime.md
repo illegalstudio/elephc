@@ -184,6 +184,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_hash` | Hash with algorithm | algo + data | `x1`/`x2` |
 | `__rt_hash_init` / `__rt_hash_update` / `__rt_hash_final` | Incremental hash-context API backing `hash_init()` and friends | context + data | context / `x1`/`x2` |
 | `__rt_hash_copy` | Clone an incremental hash context | context | context |
+| `__rt_hash_ctx_free` | Free a HashContext via `elephc_crypto_free`; the sole destructor, called by `__rt_mixed_free_deep` when a Mixed(tag=9, kind=2) cell is released at scope exit (`hash_final` no longer frees) | context | — |
 | `__rt_hash_hmac` | Keyed HMAC over a message | algo + key + data | `x1`/`x2` |
 | `__rt_hash_equals` | Constant-time string comparison | two strings | `x0` (0 or 1) |
 | `__rt_hash_algos_list` | Build the `hash_algos()` array of supported algorithm names | — | `x0` (array ptr) |
@@ -348,7 +349,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_gc_note_child_ref` | Add one transient incoming edge to a heap child during cycle counting | `x0` = child pointer | — |
 | `__rt_gc_mark_reachable` | Recursively mark array/hash/object blocks reachable from external roots | `x0` = pointer | — |
 | `__rt_gc_collect_cycles` | Run the targeted cycle collector over heap-backed arrays/hashes/objects | — | — |
-| `__rt_mixed_free_deep` | Free a mixed cell and release any nested heap-backed payload | `x0` = mixed pointer | — |
+| `__rt_mixed_free_deep` | Free a mixed cell and release any nested heap-backed payload; for tag-9 resources, dispatch the kind-specific destructor (kind 1 `close`, kind 2 `__rt_hash_ctx_free`, kind 3 `__rt_pclose`, kind 4 `__rt_closedir`) | `x0` = mixed pointer | — |
 | `__rt_object_free_deep` | Free an object and release heap-backed properties using runtime/class metadata | `x0` = object pointer | — |
 
 Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[user_ptr - 12]`. Each heap allocation starts with refcount 1. When a reference is shared (e.g., assigned to another variable or passed to a function), `__rt_incref` bumps it. When the reference goes away, `__rt_decref_any` can dispatch through the uniform heap-kind tag to the concrete string/array/hash/object/mixed release path. Arrays, hashes, objects, and boxed mixed cells still use ordinary reference counting first, but when a decref sees a container/object graph that can contain nested heap-backed values, the runtime can invoke `__rt_gc_collect_cycles` to clear transient metadata, count heap-only incoming edges, mark externally reachable blocks, and deep-free the remaining unreachable array/hash/object/mixed island.

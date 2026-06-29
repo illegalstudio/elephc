@@ -114,8 +114,19 @@ pub(crate) struct LoweringContext<'m, 'f> {
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
+    /// foreach loop-key locals whose source is a concretely-indexed array
+    /// (`Array` of a non-Mixed element type), so the runtime key is always an
+    /// integer even though `Op::IterCurrentKey` lowers it as Mixed. Used by
+    /// `lower_array_assign` to avoid promoting a `$dst[$key] = ...` write to the
+    /// hash path (and coercing the key to int) for these int-valued keys, while
+    /// still promoting for keys that may be strings (generic `Array(Mixed)`,
+    /// `AssocArray`, `Mixed`, `Union` sources).
+    foreach_int_key_locals: HashSet<String>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
+    /// `true` when the function/closure being lowered returns by reference (`function &f()`),
+    /// so a `return $obj->prop` yields the property's ref-cell pointer instead of a value copy.
+    pub by_ref_return: bool,
     pub in_main: bool,
     pub all_global_var_names: HashSet<String>,
     owner_name: String,
@@ -174,8 +185,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
+            foreach_int_key_locals: HashSet::new(),
             return_type,
             return_php_type,
+            by_ref_return: false,
             in_main,
             all_global_var_names,
             owner_name,
@@ -240,6 +253,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns the current known PHP type for a local or `Mixed` when unknown.
     pub(crate) fn local_type(&self, name: &str) -> PhpType {
         self.local_types.get(name).cloned().unwrap_or(PhpType::Mixed)
+    }
+
+    /// Records a foreach loop-key local whose source is a concretely-indexed
+    /// array, so its runtime key is always an integer (see `foreach_int_key_locals`).
+    pub(crate) fn mark_foreach_int_key(&mut self, name: &str) {
+        self.foreach_int_key_locals.insert(name.to_string());
+    }
+
+    /// Returns true when `name` is a foreach loop key known to hold an integer at
+    /// runtime despite its Mixed EIR type, so an indexed write can safely coerce it
+    /// to int instead of promoting the destination to a hash.
+    pub(crate) fn is_foreach_int_key(&self, name: &str) -> bool {
+        self.foreach_int_key_locals.contains(name)
     }
 
     /// Returns the checker-known top-level type for a `global` alias name.
@@ -651,7 +677,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             _ => Op::StoreLocal,
         };
         if is_ref_bound {
-            self.store_ref_cell_slot(slot, value, previous_type, span);
+            let value = self.box_typed_array_for_mixed_ref_cell(value, &previous_type, span);
+            self.store_ref_cell_slot(slot, value, previous_type.clone(), span);
         } else {
             self.store_slot_with_op(slot, value, op, span);
         }
@@ -662,6 +689,35 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
         }
         value
+    }
+
+    /// Boxes a typed-array source to `Array(Mixed)` before it is stored through a reference
+    /// cell whose element type is `Mixed`.
+    ///
+    /// `$ref = [1, 2]` where `$ref` aliases an object's `array` (Mixed-element) property stores
+    /// the literal's pointer into the shared cell. Without conversion the cell would hold an
+    /// `Array(Int)` payload but every read goes through the property's `Array(Mixed)` view, so
+    /// element reads (`implode`, `$prop[0]`) would misinterpret the raw scalar slots. Converting
+    /// with `ArrayToMixed` boxes each element so the stored array matches the cell's element
+    /// type. Empty / `Never`-element sources are left untouched (no elements to box).
+    fn box_typed_array_for_mixed_ref_cell(
+        &mut self,
+        value: LoweredValue,
+        cell_ty: &PhpType,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let value_ty = self.builder.value_php_type(value.value);
+        if !ref_cell_needs_mixed_array_conversion(cell_ty, &value_ty) {
+            return value;
+        }
+        self.emit_value(
+            Op::ArrayToMixed,
+            vec![value.value],
+            None,
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            Op::ArrayToMixed.default_effects(),
+            span,
+        )
     }
 
     /// Returns the declared PHP type for an extern global visible as a variable.
@@ -843,6 +899,40 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots.insert(target_slot);
     }
 
+    /// Binds `target` as a NON-owning reference alias to an already-materialized ref-cell
+    /// pointer (`cell_ptr`), e.g. the cell behind an object reference property (`$x = &$obj->prop`)
+    /// or returned by a by-reference call (`$x = &f()`). `value_type` is the PHP type the cell
+    /// holds, used to type the target and to dereference it on later loads/stores.
+    ///
+    /// Unlike `alias_local_ref_cell`, no hidden owner slot is created and no `ReleaseLocalRefCell`
+    /// is emitted for `target` at scope exit: the cell is owned by the source (the object), so the
+    /// alias must not free it.
+    pub(crate) fn bind_local_ref_cell_ptr(
+        &mut self,
+        target: &str,
+        cell_ptr: LoweredValue,
+        value_type: PhpType,
+        span: Option<Span>,
+    ) {
+        self.clear_static_callable_local(target);
+        self.clear_fiber_start_sig(target);
+        self.release_replaced_local_before_ref_alias(target, span);
+        let target_slot = self.declare_local(target, value_type.clone());
+        self.set_local_type(target, value_type.clone());
+        self.builder.emit_with_effects(
+            Op::BindRefCellPtr,
+            vec![cell_ptr.value],
+            Some(Immediate::LocalSlot(target_slot)),
+            IrType::Void,
+            value_type,
+            Ownership::NonHeap,
+            Op::BindRefCellPtr.default_effects(),
+            span,
+        );
+        self.mark_ref_bound_local(target);
+        self.initialized_slots.insert(target_slot);
+    }
+
     /// Releases storage currently owned by a local before rebinding it as a ref alias.
     fn release_replaced_local_before_ref_alias(&mut self, name: &str, span: Option<Span>) {
         if self.is_ref_bound_local(name) {
@@ -937,6 +1027,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::CallableArrayNew
                     | Op::BufferNew
                     | Op::GeneratorNew
+                    // `yield`/`yield from` return owned Mixed cells (the sent
+                    // value from `__rt_gen_suspend`, the delegated return from
+                    // `__rt_gen_delegate`); a discarded result must be released.
+                    | Op::GeneratorYield
+                    | Op::GeneratorYieldFrom
                     | Op::Call
                     | Op::FunctionVariantCall
                     | Op::RuntimeCall
@@ -1328,5 +1423,28 @@ fn named_type_expr_to_php_type(name: &str) -> PhpType {
         "callable" => PhpType::Callable,
         "mixed" => PhpType::Mixed,
         _ => PhpType::Object(name.to_string()),
+    }
+}
+
+/// Returns true when a typed-array source must be boxed to `Array(Mixed)` before being stored
+/// through a reference cell.
+///
+/// The cell's element type is `Mixed` (the property is declared `array`) but the source array's
+/// elements are a concrete non-`Mixed` type, so each element must be boxed for the property's
+/// `Array(Mixed)` reads to interpret the slots correctly. Empty / `Never`-element sources have
+/// no element descriptors to box and are excluded.
+fn ref_cell_needs_mixed_array_conversion(cell_ty: &PhpType, value_ty: &PhpType) -> bool {
+    ref_cell_array_element_type(cell_ty)
+        .is_some_and(|elem| elem == PhpType::Mixed)
+        && ref_cell_array_element_type(value_ty)
+            .is_some_and(|elem| !matches!(elem, PhpType::Mixed | PhpType::Never))
+}
+
+/// Returns the element type of an array-shaped PHP type (indexed or associative), if any.
+fn ref_cell_array_element_type(ty: &PhpType) -> Option<PhpType> {
+    match ty.codegen_repr() {
+        PhpType::Array(elem) => Some(elem.codegen_repr()),
+        PhpType::AssocArray { value, .. } => Some(value.codegen_repr()),
+        _ => None,
     }
 }

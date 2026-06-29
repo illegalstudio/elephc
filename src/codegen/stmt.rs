@@ -24,7 +24,7 @@ use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
 use super::expr::{emit_expr, expr_result_heap_ownership};
-use crate::parser::ast::{Stmt, StmtKind};
+use crate::parser::ast::{ExprKind, Stmt, StmtKind};
 use crate::types::PhpType;
 
 pub(crate) use null_coalesce_assign::{
@@ -151,7 +151,11 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             assignments::emit_assign_stmt(name, value, emitter, ctx, data);
         }
         StmtKind::RefAssign { target, source } => {
-            assignments::emit_ref_assign_stmt(target, source, emitter, ctx);
+            // The frozen legacy backend only supports aliasing a plain variable;
+            // property/call reference sources are EIR-only.
+            if let ExprKind::Variable(source_name) = &source.kind {
+                assignments::emit_ref_assign_stmt(target, source_name, emitter, ctx);
+            }
         }
         StmtKind::TypedAssign {
             type_expr,

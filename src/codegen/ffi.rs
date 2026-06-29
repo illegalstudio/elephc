@@ -48,6 +48,7 @@ pub fn emit_extern_call(
             defaults: vec![None; sig.params.len()],
             return_type: sig.return_type.clone(),
             declared_return: true,
+            by_ref_return: false,
             ref_params: vec![false; sig.params.len()],
             declared_params: vec![true; sig.params.len()],
             variadic: None,

@@ -29,6 +29,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_demorgan_equivalent_gua
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: negated_conjunction,
@@ -76,6 +77,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_loose_comparison_guard(
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: loose_eq,
@@ -122,6 +124,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_relational_guard() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: greater_than,
@@ -168,6 +171,7 @@ fn test_eliminate_dead_code_prunes_nested_elseif_from_composite_guard_refinement
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: outer,
@@ -230,6 +234,7 @@ fn test_eliminate_dead_code_prunes_nested_subexpr_from_composite_guard_refinemen
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: outer,

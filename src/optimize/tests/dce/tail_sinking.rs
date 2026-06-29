@@ -45,6 +45,7 @@ fn test_eliminate_dead_code_reduces_empty_if_chain_to_needed_condition_checks() 
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: touch.clone(),
@@ -92,6 +93,7 @@ fn test_eliminate_dead_code_sinks_tail_into_if_fallthrough_branch() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::If {
@@ -145,6 +147,7 @@ fn test_eliminate_dead_code_sinks_tail_into_implicit_else_path() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::If {
@@ -199,6 +202,7 @@ fn test_eliminate_dead_code_sinks_tail_into_ifdef_fallthrough_paths() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::IfDef {
@@ -264,6 +268,7 @@ fn test_eliminate_dead_code_reduces_empty_if_to_effectful_condition_eval() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: touch.clone(),

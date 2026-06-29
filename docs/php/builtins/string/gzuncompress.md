@@ -2,7 +2,7 @@
 title: "gzuncompress()"
 description: "Lowers `gzuncompress(data, max_length?)` and boxes zlib failures as PHP false."
 sidebar:
-  order: 329
+  order: 331
 ---
 
 ## gzuncompress()

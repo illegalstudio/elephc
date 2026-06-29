@@ -25,6 +25,8 @@ mod builtins_misc;
 mod concat_buffer_args;
 #[path = "regressions/param_inference.rs"]
 mod param_inference;
+#[path = "regressions/method_array_assoc_param.rs"]
+mod method_array_assoc_param;
 #[path = "regressions/mixed_method_dispatch.rs"]
 mod mixed_method_dispatch;
 #[path = "regressions/switch_and_float_params.rs"]

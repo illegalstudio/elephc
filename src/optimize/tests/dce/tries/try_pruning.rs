@@ -21,6 +21,7 @@ fn test_eliminate_dead_code_drops_statements_after_exhaustive_try_catch() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Try {
@@ -84,6 +85,7 @@ fn test_eliminate_dead_code_drops_empty_try_shell_created_by_branch_dce() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Try {
                     try_body: vec![Stmt::new(StmtKind::ExprStmt(pure_builtin.clone()), Span::dummy())],
@@ -120,6 +122,7 @@ fn test_eliminate_dead_code_keeps_unknown_truthy_switch_entry_before_matching_ca
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::var("flag"),
@@ -185,6 +188,7 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::var("flag"),
@@ -266,6 +270,7 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body_from_switc
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::var("flag"),
@@ -352,6 +357,7 @@ fn test_eliminate_dead_code_ignores_unreachable_switch_throw_path_writes_before_
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::binop(Expr::var("value"), BinOp::StrictEq, Expr::int_lit(1)),
@@ -442,6 +448,7 @@ fn test_eliminate_dead_code_preserves_outer_guard_for_catch_when_only_non_throw_
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::var("flag"),

@@ -37,6 +37,7 @@ pub(super) fn resolve_decl_stmt(
     let stmt_attributes = resolve_attribute_groups(&stmt.attributes, namespace, imports, symbols);
     match &stmt.kind {
         StmtKind::FunctionDecl {
+            by_ref_return,
             name,
             params,
             variadic,
@@ -47,6 +48,7 @@ pub(super) fn resolve_decl_stmt(
             let body = resolve_stmt_list(body, namespace, imports, symbols)?;
             Ok(Some(Stmt::with_attributes(
                 StmtKind::FunctionDecl {
+                    by_ref_return: *by_ref_return,
                     name: canonical_name_for_decl(namespace, name),
                     params: resolve_params(params, namespace, imports, symbols),
                     variadic: variadic.clone(),

@@ -277,6 +277,32 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Per-class serialize-magic symbol tables — consulted by __rt_serialize_object
+    // and __rt_unser_at_object. Each is a dense class_id-indexed table whose entry
+    // resolves through the implementing class (so an inherited magic method
+    // dispatches to the ancestor's emitted symbol); `0` means the class and its
+    // ancestors declare no such method. `__serialize`/`__sleep` customise how an
+    // object is written; `__unserialize`/`__wakeup` customise how it is restored.
+    for (table, method) in [
+        ("_class_serialize_ptrs", "__serialize"),
+        ("_class_unserialize_ptrs", "__unserialize"),
+        ("_class_sleep_ptrs", "__sleep"),
+        ("_class_wakeup_ptrs", "__wakeup"),
+    ] {
+        out.push_str(&format!(".globl {table}\n{table}:\n"));
+        if let Some(max_class_id) = max_class_id {
+            let method_key = php_symbol_key(method);
+            for class_id in 0..=max_class_id {
+                let entry = class_info_by_id
+                    .get(&class_id)
+                    .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
+                    .map(|impl_class| method_symbol(impl_class, &method_key))
+                    .unwrap_or_else(|| "0".to_string());
+                out.push_str(&format!("    .quad {}\n", entry));
+            }
+        }
+    }
+
     // _class_propinit_ptrs: dense class_id-indexed table of property-default
     // init thunks. Entry = _class_propinit_<id> when the class has any property
     // default, else 0 (null = nothing to init). __rt_new_by_name indexes this
@@ -290,6 +316,22 @@ pub(crate) fn emit_runtime_data_user(
                     out.push_str(&format!("    .quad _class_propinit_{}\n", class_id));
                 }
                 _ => out.push_str("    .quad 0\n"),
+            }
+        }
+    }
+
+    // _class_serprop_ptrs: dense class_id-indexed table of serialize property-info
+    // tables. Entry = _class_serprop_<id> for an existing class, else
+    // _class_serprop_missing. __rt_serialize_object / __rt_unserialize_object index
+    // this by class_id to walk an object's properties (PHP-mangled key bytes, byte
+    // offset within the object, runtime value tag).
+    out.push_str(".globl _class_serprop_ptrs\n_class_serprop_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_serprop_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_serprop_missing\n");
             }
         }
     }
@@ -350,6 +392,10 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .quad 0\n");
     out.push_str(".globl _class_gc_desc_missing\n_class_gc_desc_missing:\n");
     out.push_str("    .byte 0\n");
+    // _class_serprop_missing: zero properties (a class with no serialize metadata).
+    out.push_str("    .p2align 3\n");
+    out.push_str(".globl _class_serprop_missing\n_class_serprop_missing:\n");
+    out.push_str("    .quad 0\n"); // property count = 0
     // _class_json_desc_missing: zero flags, zero properties, no jsonSerialize.
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_json_desc_missing\n_class_json_desc_missing:\n");
@@ -453,8 +499,8 @@ pub(crate) fn emit_runtime_data_user(
                     // table can reference it by label, then emit the tagged
                     // (tag, lo, hi) rows in source order.
                     let mut arg_rows = Vec::with_capacity(args.len());
-                    for arg in args {
-                        match arg {
+                    for entry in args {
+                        match &entry.value {
                             crate::types::AttrArgValue::Str(value) => {
                                 let label = format!("_attr_arg_str_{}", arg_str_id);
                                 arg_str_id += 1;
@@ -469,10 +515,24 @@ pub(crate) fn emit_runtime_data_user(
                             crate::types::AttrArgValue::Int(value) => {
                                 arg_rows.push((0u64, format!("{}", *value as u64), 0u64));
                             }
+                            crate::types::AttrArgValue::Float(bits) => {
+                                arg_rows.push((2u64, format!("{}", *bits), 0u64));
+                            }
                             crate::types::AttrArgValue::Bool(value) => {
                                 arg_rows.push((3u64, format!("{}", *value as u64), 0u64));
                             }
                             crate::types::AttrArgValue::Null => {
+                                arg_rows.push((8u64, "0".to_string(), 0u64));
+                            }
+                            crate::types::AttrArgValue::Array(_)
+                            | crate::types::AttrArgValue::ConstRef(_)
+                            | crate::types::AttrArgValue::ScopedConst(..) => {
+                                // This legacy flat (tag, lo, hi) table cannot
+                                // represent a nested array or a deferred symbolic
+                                // reference (global/class constant, enum case),
+                                // and no runtime routine reads it; emit a null
+                                // placeholder. The active EIR path materializes
+                                // the real value from class metadata instead.
                                 arg_rows.push((8u64, "0".to_string(), 0u64));
                             }
                         }
@@ -523,7 +583,7 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
-    for (_, class_info) in sorted_classes {
+    for (class_name, class_info) in sorted_classes {
         out.push_str(&format!(".globl _class_interfaces_{}\n_class_interfaces_{}:\n", class_info.class_id, class_info.class_id));
         out.push_str(&format!("    .quad {}\n", class_info.interfaces.len()));
         for interface_name in &class_info.interfaces {
@@ -685,6 +745,48 @@ pub(crate) fn emit_runtime_data_user(
                 out.push_str(&tag.to_string());
             }
             out.push('\n');
+        }
+
+        // Serialize property-info table: one row per declared property in
+        // declaration order with the PHP-mangled serialize key bytes, the
+        // property's byte offset within the object, and its runtime value tag.
+        // __rt_serialize_object / __rt_unserialize_object walk this by class id.
+        for (prop_index, (prop_name, _)) in class_info.properties.iter().enumerate() {
+            let mangled = mangled_property_name(class_info, class_name, prop_name);
+            out.push_str(&format!(
+                ".globl _class_serpname_{}_{}\n_class_serpname_{}_{}:\n",
+                class_info.class_id, prop_index, class_info.class_id, prop_index,
+            ));
+            out.push_str("    .byte ");
+            for (i, byte) in mangled.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&byte.to_string());
+            }
+            out.push('\n');
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_serprop_{}\n_class_serprop_{}:\n",
+            class_info.class_id, class_info.class_id,
+        ));
+        out.push_str(&format!("    .quad {}\n", class_info.properties.len()));
+        for (prop_index, (prop_name, prop_ty)) in class_info.properties.iter().enumerate() {
+            let mangled_len = mangled_property_name(class_info, class_name, prop_name).len();
+            let offset = class_info
+                .property_offsets
+                .get(prop_name)
+                .copied()
+                .unwrap_or(8 + prop_index * 16);
+            let tag = prop_value_tag(class_info, prop_name, prop_ty);
+            out.push_str(&format!(
+                "    .quad _class_serpname_{}_{}\n",
+                class_info.class_id, prop_index
+            ));
+            out.push_str(&format!("    .quad {}\n", mangled_len)); // mangled key byte length
+            out.push_str(&format!("    .quad {}\n", offset)); // byte offset within the object
+            out.push_str(&format!("    .quad {}\n", tag)); // runtime value tag
         }
 
         out.push_str("    .p2align 3\n");
@@ -1162,6 +1264,52 @@ fn interface_method_needs_return_wrapper(
         && !matches!(actual_sig.return_type.codegen_repr(), PhpType::Mixed)
 }
 
+/// Returns a property's PHP-mangled `serialize()` key bytes: `name` for a public
+/// property, `\0*\0name` for protected, and `\0DeclaringClass\0name` for private
+/// (matching the keys the PHP interpreter emits inside `O:...{...}`).
+fn mangled_property_name(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> Vec<u8> {
+    match class_info.property_visibilities.get(prop_name) {
+        Some(Visibility::Protected) => {
+            let mut out = vec![0u8, b'*', 0u8];
+            out.extend_from_slice(prop_name.as_bytes());
+            out
+        }
+        Some(Visibility::Private) => {
+            let declaring = class_info
+                .property_declaring_classes
+                .get(prop_name)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            let mut out = vec![0u8];
+            out.extend_from_slice(declaring.as_bytes());
+            out.push(0u8);
+            out.extend_from_slice(prop_name.as_bytes());
+            out
+        }
+        _ => prop_name.as_bytes().to_vec(),
+    }
+}
+
+/// Maps a declared property's static type to the runtime value tag consumed by
+/// `__rt_serialize_value` when serializing that property's 16-byte object slot.
+/// Mirrors the gc-descriptor tag mapping; reference and untyped/nullable
+/// properties are stored as boxed `Mixed` cells (tag 7).
+fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {
+    if class_info.reference_properties.contains(prop_name) {
+        return 7;
+    }
+    match prop_ty {
+        PhpType::Int => 0,
+        PhpType::Str => 1,
+        PhpType::Float => 2,
+        PhpType::Bool => 3,
+        PhpType::Array(_) => 4,
+        PhpType::AssocArray { .. } => 5,
+        PhpType::Object(_) => 6,
+        _ => 7,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
@@ -1204,6 +1352,7 @@ mod tests {
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
             reference_properties: HashSet::new(),
+            owned_reference_properties: HashSet::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
             static_properties: Vec::new(),

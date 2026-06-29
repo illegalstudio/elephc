@@ -223,7 +223,24 @@ fn is_regex_builtin_name(name: &str) -> bool {
 fn is_phar_archive_builtin_name(name: &str) -> bool {
     matches!(
         crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
-        "__elephc_phar_list_entries" | "file_get_contents" | "file_put_contents" | "fopen"
+        "__elephc_phar_list_entries"
+            | "__elephc_phar_get_metadata"
+            | "__elephc_phar_get_stub"
+            | "__elephc_phar_set_metadata"
+            | "__elephc_phar_set_stub"
+            | "__elephc_phar_get_file_metadata"
+            | "__elephc_phar_set_file_metadata"
+            | "__elephc_phar_gzip_archive"
+            | "__elephc_phar_bzip2_archive"
+            | "__elephc_phar_decompress_archive"
+            | "__elephc_phar_sign_openssl"
+            | "__elephc_phar_sign_hash"
+            | "__elephc_phar_set_zip_password"
+            | "__elephc_phar_get_signature_hash"
+            | "__elephc_phar_get_signature_type"
+            | "file_get_contents"
+            | "file_put_contents"
+            | "fopen"
     )
 }
 
@@ -417,6 +434,7 @@ fn lower_function_declarations(
     for stmt in statements {
         match &stmt.kind {
             StmtKind::FunctionDecl {
+                by_ref_return: _,
                 name,
                 params,
                 variadic: _,
@@ -631,6 +649,9 @@ fn lower_builtin_reflection_methods(
         "ReflectionClass",
         "ReflectionMethod",
         "ReflectionProperty",
+        "ReflectionFunction",
+        "ReflectionParameter",
+        "ReflectionNamedType",
     ] {
         lower_builtin_reflection_class_methods(class_name, module, check_result, constants, fiber_return_sigs);
     }
@@ -652,11 +673,17 @@ fn lower_builtin_reflection_class_methods(
             continue;
         }
         let generated_body;
-        let body = if class_name == "ReflectionAttribute"
-            && crate::names::php_symbol_key(&method.name) == "newinstance"
-        {
+        let method_key = crate::names::php_symbol_key(&method.name);
+        let body = if class_name == "ReflectionAttribute" && method_key == "newinstance" {
             generated_body =
                 crate::codegen::reflection::build_attribute_new_instance_body(&check_result.classes);
+            generated_body.as_slice()
+        } else if class_name == "ReflectionAttribute" && method_key == "getarguments" {
+            // Materialize captured attribute arguments through the normal array
+            // lowering (named arguments and associative arrays included) rather
+            // than a bespoke codegen path.
+            generated_body =
+                crate::codegen::reflection::build_attribute_get_arguments_body(&check_result.classes);
             generated_body.as_slice()
         } else {
             &method.body
@@ -772,20 +799,41 @@ fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, String)> {
                     else {
                         continue;
                     };
-                    let PhpType::Object(class_name) = receiver_ty else {
-                        continue;
-                    };
-                    let normalized = class_name.trim_start_matches('\\');
                     let Some(method_name) = string_data_name(module, inst) else {
                         continue;
                     };
                     let method_key = php_method_key(method_name);
-                    push_supported_builtin_spl_method_for_receiver(
-                        &mut methods,
-                        module,
-                        normalized,
-                        &method_key,
-                    );
+                    match receiver_ty {
+                        PhpType::Object(class_name) => {
+                            let normalized = class_name.trim_start_matches('\\');
+                            push_supported_builtin_spl_method_for_receiver(
+                                &mut methods,
+                                module,
+                                normalized,
+                                &method_key,
+                            );
+                        }
+                        // A Mixed/Union receiver dispatches at runtime over every class whose
+                        // flattened method set contains this name (mirrors `mixed_method_candidates`
+                        // in the EIR backend). Register the builtin SPL implementation behind each
+                        // candidate so its vtable slot is emitted; otherwise the runtime class-id
+                        // dispatch jumps through a null vtable slot and segfaults. This covers
+                        // method calls on a `mixed` value and on foreach values from object
+                        // iterators (e.g. DirectoryIterator), which the EIR lowers as Mixed locals.
+                        PhpType::Mixed | PhpType::Union(_) => {
+                            for (candidate_class, class_info) in &module.class_infos {
+                                if class_info.methods.contains_key(&method_key) {
+                                    push_supported_builtin_spl_method_for_receiver(
+                                        &mut methods,
+                                        module,
+                                        candidate_class,
+                                        &method_key,
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             }
@@ -1498,12 +1546,21 @@ fn is_supported_builtin_spl_method(class_name: &str, method_key: &str) -> bool {
                 | "count"
                 | "compressfiles"
                 | "decompressfiles"
+                | "compress"
+                | "decompress"
+                | "setsignaturealgorithm"
+                | "getsignature"
+                | "setzippassword"
                 | "delete"
         ),
         "PharFileInfo" => matches!(
             method_key,
             "__construct"
                 | "getcontent"
+                | "setmetadata"
+                | "getmetadata"
+                | "hasmetadata"
+                | "delmetadata"
                 | "__tostring"
                 | "getpath"
                 | "getfilename"

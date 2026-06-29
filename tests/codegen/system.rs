@@ -1506,6 +1506,24 @@ fn test_json_encode_float() {
     assert!(out.starts_with("3.14"), "Got: {}", out);
 }
 
+/// Regression: `json_encode` of floats needing exponential notation keeps PHP's
+/// json layout — a lowercase `e` exponent (`1.0e+20`). The shared
+/// `__rt_json_ftoa` now takes the exponent marker as a parameter so `serialize`
+/// can emit `'E'`; this guards json's lowercase `'e'` against regressing.
+/// Covers positive/negative mantissa, negative exponent, and a 3-digit exponent.
+#[test]
+fn test_json_encode_float_exponential_lowercase_e() {
+    let out = compile_and_run(
+        r#"<?php
+echo json_encode(1e20), "\n";
+echo json_encode(1.5e-10), "\n";
+echo json_encode(-2.5e-8), "\n";
+echo json_encode(1e100), "\n";
+"#,
+    );
+    assert_eq!(out, "1.0e+20\n1.5e-10\n-2.5e-8\n1.0e+100\n");
+}
+
 /// Verifies `json_last_error()` returns 0 (JSON_ERROR_NONE) after a successful encode with no errors.
 #[test]
 fn test_json_last_error() {

@@ -539,6 +539,7 @@ fn install_preg_callback_expected_sig(
         defaults: vec![None],
         return_type: PhpType::Str,
         declared_return: false,
+        by_ref_return: false,
         ref_params: vec![false],
         declared_params: vec![false],
         variadic: None,

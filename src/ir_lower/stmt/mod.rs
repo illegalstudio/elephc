@@ -212,7 +212,11 @@ fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) {
 
 /// Lowers a plain PHP local assignment.
 fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
-    let direct_closure = matches!(value.kind, ExprKind::Closure { .. });
+    // A by-reference `Closure::bind(fn &() => $this->prop, $obj, $obj)` assigned to a variable is
+    // tracked as a static callable, like a closure literal, so a later `$b()` lowers to a direct
+    // call that carries the property's reference-cell pointer instead of boxing it.
+    let bound_closure = crate::ir_lower::expr::is_bound_closure_assignment_shape(ctx, value);
+    let direct_closure = matches!(value.kind, ExprKind::Closure { .. }) || bound_closure;
     ctx.clear_pending_static_callable_result();
     let static_callable = static_callable_binding_for_expr(ctx, value);
     let fiber_start_sig = crate::ir_lower::fibers::start_sig_for_expr(ctx, value);
@@ -221,6 +225,7 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
         .as_ref()
         .map(|assignment| assignment.value)
         .or_else(|| lower_closure_for_assignment(ctx, name, value))
+        .or_else(|| bound_closure.then(|| crate::ir_lower::expr::lower_bound_closure_for_assignment(ctx, value)).flatten())
         .unwrap_or_else(|| lower_expr(ctx, value));
     let (lowered, php_type) = contextualize_array_assignment(ctx, name, value, lowered, span);
     ctx.store_local(name, lowered, php_type, Some(span));
@@ -272,12 +277,35 @@ fn contextualize_array_assignment(
     (hash, contextual_ty)
 }
 
-/// Lowers a by-reference assignment by binding both variables to one ref-cell.
-fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &str, span: Span) {
-    let fiber_start_sig = ctx.fiber_start_sig_for_local(source);
-    ctx.alias_local_ref_cell(target, source, Some(span));
-    if let Some(sig) = fiber_start_sig {
-        ctx.bind_fiber_start_sig(target, sig);
+/// Lowers a by-reference assignment, dispatching on the kind of reference source.
+///
+/// - `$a = &$b` aliases two locals to one ref-cell.
+/// - `$a = &$obj->prop` binds the local to the object's reference-property cell (write-through).
+/// - `$a = &call()` binds the local to the cell returned by a by-reference callee.
+fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &Expr, span: Span) {
+    match &source.kind {
+        ExprKind::Variable(source_name) => {
+            let fiber_start_sig = ctx.fiber_start_sig_for_local(source_name);
+            ctx.alias_local_ref_cell(target, source_name, Some(span));
+            if let Some(sig) = fiber_start_sig {
+                ctx.bind_fiber_start_sig(target, sig);
+            }
+        }
+        ExprKind::PropertyAccess { .. } => {
+            crate::ir_lower::expr::lower_ref_assign_property(ctx, target, source, span);
+        }
+        ExprKind::FunctionCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. } => {
+            crate::ir_lower::expr::lower_ref_assign_call(ctx, target, source, span);
+        }
+        _ => {
+            // Other source shapes (e.g. array elements) are rejected by the checker;
+            // evaluate for side effects to keep lowering total.
+            lower_expr(ctx, source);
+        }
     }
 }
 
@@ -589,8 +617,25 @@ fn lower_array_assign(
     let mut index_value = lower_expr(ctx, index);
     let mut value_value = lower_expr(ctx, value);
     let op = array_set_op(array_value.ir_type);
+    // A literal string index always means a hash key, so promote the destination
+    // to associative storage like PHP. A boxed Mixed/Union index may hold either
+    // an integer or a string key (foreach loop keys are always Mixed in EIR via
+    // `Op::IterCurrentKey`), so it goes through `Op::ArraySetMixedKey`, whose
+    // runtime helper keeps integer keys on indexed storage (preserving indexed
+    // consumers like `implode`) and promotes only string keys to a hash. This
+    // stops a `foreach($arr as $k=>$v) $dst[$k]=$v` rebuild from collapsing a
+    // string key onto int 0. A foreach key over a concretely-indexed array is
+    // known to be int-valued, so it is left on the coerce path to avoid
+    // needlessly dispatching.
     if op == Op::ArraySet && index_value.ir_type == IrType::Str {
         lower_string_key_array_promotion(ctx, array, array_value, index_value, value_value, span);
+        return;
+    }
+    if op == Op::ArraySet
+        && index_is_boxed_mixed_key(index_value.ir_type)
+        && !index_is_foreach_int_key(ctx, index)
+    {
+        lower_mixed_key_array_set(ctx, array, array_value, index_value, value_value, span);
         return;
     }
     if op == Op::ArraySet {
@@ -648,6 +693,34 @@ fn lower_string_key_array_promotion(
     release_persisted_string_operand(ctx, index, span);
     release_persisted_string_operand(ctx, value, span);
     ctx.store_mutated_local(array, hash, assoc_ty, Some(span));
+}
+
+/// Writes `value` into the indexed local `array` under a boxed Mixed/Union key.
+///
+/// The destination stays statically `Array(Mixed)` (so indexed consumers such as
+/// `implode` keep routing to the indexed path) while `Op::ArraySetMixedKey`
+/// dispatches the key tag at runtime: integer keys stay on indexed storage and
+/// string keys promote the destination to a hash. This is the Mixed-key analogue
+/// of `lower_string_key_array_promotion`, which unconditionally promotes because
+/// a literal string key is always a hash key.
+fn lower_mixed_key_array_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    index: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+) {
+    let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let result = ctx.emit_value(
+        Op::ArraySetMixedKey,
+        vec![array_value.value, index.value, value.value],
+        None,
+        mixed_array_ty.clone(),
+        Op::ArraySetMixedKey.default_effects(),
+        Some(span),
+    );
+    ctx.store_mutated_local(array, result, mixed_array_ty, Some(span));
 }
 
 /// Returns the associative type produced by a string-key write to an indexed array.
@@ -951,9 +1024,23 @@ fn lower_foreach(
     body: &[Stmt],
 ) {
     let source = lower_expr(ctx, array);
-    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    let source_php_ty = ctx.builder.value_php_type(source.value);
+    let source_ty = source_php_ty.codegen_repr();
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
     let value_needs_null_init = !ctx.local_slots.contains_key(value_var);
+    // A foreach over a concretely-indexed array (`Array` of a non-Mixed element
+    // type) always yields integer keys, even though `Op::IterCurrentKey` lowers
+    // the key as Mixed. Tag the key local so a `$dst[$key] = ...` write coerces
+    // the int-valued Mixed key to int instead of promoting the destination to a
+    // hash. Generic `Array(Mixed)`, `AssocArray`, `Mixed`, and `Union` sources
+    // may carry string keys and are left untagged so the write promotes.
+    if let Some(key_var) = key_var {
+        if let PhpType::Array(elem_ty) = &source_php_ty {
+            if !matches!(elem_ty.as_ref(), PhpType::Mixed) {
+                ctx.mark_foreach_int_key(key_var);
+            }
+        }
+    }
     let iterator = ctx.emit_value(
         Op::IterStart,
         vec![source.value],
@@ -1642,6 +1729,27 @@ fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
 
 /// Lowers a return statement using the current function return contract.
 fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, span: Span) {
+    // A by-reference-returning function hands the caller the ref-cell pointer of the
+    // returned property (`function &f() { return $obj->prop; }`), so `$x = &f()` aliases
+    // it. The cell pointer is materialized as the declared return type so the ABI return
+    // convention matches the caller's expectation for pointer-sized property types.
+    if ctx.by_ref_return {
+        if let Some(Expr { kind: ExprKind::PropertyAccess { object, property }, .. }) = value_expr {
+            let object = lower_expr(ctx, object);
+            let data = ctx.intern_string(property);
+            let result_ty = ctx.return_php_type.clone();
+            let cell_ptr = ctx.emit_value(
+                Op::LoadPropRefCell,
+                vec![object.value],
+                Some(Immediate::Data(data)),
+                result_ty,
+                Op::LoadPropRefCell.default_effects(),
+                Some(span),
+            );
+            terminate_return(ctx, Some(cell_ptr.value));
+            return;
+        }
+    }
     if ctx.return_type == IrType::Void {
         if let Some(value_expr) = value_expr {
             lower_expr(ctx, value_expr);
@@ -2510,6 +2618,30 @@ fn array_set_op(ir_type: IrType) -> Op {
         IrType::Heap(crate::ir::IrHeapKind::Buffer) => Op::BufferSet,
         _ => Op::RuntimeCall,
     }
+}
+
+/// Returns true when a lowered index value is a boxed `Mixed`/`Union` cell that
+/// may hold either an integer or a string array key (e.g. a foreach loop key,
+/// which `Op::IterCurrentKey` always produces as Mixed). Such writes go through
+/// `Op::ArraySetMixedKey` so the key tag is dispatched at runtime instead of
+/// coercing it to int (which would collapse a string key onto int 0).
+fn index_is_boxed_mixed_key(ir_type: IrType) -> bool {
+    matches!(
+        ir_type,
+        IrType::Heap(crate::ir::IrHeapKind::Mixed)
+            | IrType::Heap(crate::ir::IrHeapKind::Union)
+    )
+}
+
+/// Returns true when the index expression is a foreach loop key known to hold an
+/// integer at runtime (its source was a concretely-indexed array), so the
+/// destination write can keep the indexed `ArraySet` path with int coercion
+/// instead of promoting to a hash. See `LoweringContext::mark_foreach_int_key`.
+fn index_is_foreach_int_key(ctx: &LoweringContext<'_, '_>, index: &Expr) -> bool {
+    if let ExprKind::Variable(name) = &index.kind {
+        return ctx.is_foreach_int_key(name);
+    }
+    false
 }
 
 /// Extracts an integer switch case value from literal cases.

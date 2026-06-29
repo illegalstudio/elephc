@@ -129,6 +129,7 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
             is_static,
             captures,
             capture_refs,
+            by_ref_return,
         } => ExprKind::Closure {
             params: params
                 .into_iter()
@@ -144,6 +145,7 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
             is_static,
             captures,
             capture_refs,
+            by_ref_return,
         },
         ExprKind::Spread(inner) => ExprKind::Spread(Box::new(rewrite_expr(*inner, defines))),
         ExprKind::ClosureCall { var, args } => ExprKind::ClosureCall {

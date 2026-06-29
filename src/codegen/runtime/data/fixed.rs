@@ -36,6 +36,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".data\n");
     out.push_str(".comm _concat_buf, 65536, 3\n");
     out.push_str(".comm _concat_off, 8, 3\n");
+    // serialize()/unserialize() reference tracking (PHP r:/R: back-references).
+    // serialize: a global value counter (every serialized value consumes the next
+    // index, keys excluded) plus a pointer->index map of already-serialized objects
+    // (parallel arrays, linear scan) so a repeated object emits r:<index>. unserialize:
+    // a registry of created value boxes indexed by the same pre-order counter so r:<N>
+    // resolves to the existing value. Capacity bounds the per-call object/value count;
+    // overflow degrades gracefully (serialize stops deduping, unserialize fails the ref).
+    out.push_str(".comm _ser_value_counter, 8, 3\n");
+    out.push_str(".comm _ser_obj_count, 8, 3\n");
+    out.push_str(".comm _ser_obj_ptrs, 524288, 3\n");
+    out.push_str(".comm _ser_obj_idxs, 524288, 3\n");
+    out.push_str(".comm _unser_count, 8, 3\n");
+    out.push_str(".comm _unser_values, 524288, 3\n");
     out.push_str(".comm _strtotime_clock, 8, 3\n");
     // Default-timezone state: the "TZ=<id>" env buffer (kept alive for putenv), the stored
     // identifier length (0 = none set → date_default_timezone_get returns "UTC"), and the
@@ -117,6 +130,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _arr_cap_err_msg\n_arr_cap_err_msg:\n    .ascii \"Fatal error: array capacity exceeded\\n\"\n");
     out.push_str(".globl _buffer_bounds_msg\n_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
     out.push_str(".globl _buffer_uaf_msg\n_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
+    out.push_str(".globl _closure_bind_unsupported_msg\n_closure_bind_unsupported_msg:\n    .ascii \"Fatal error: Closure::bind requires a closure that captures only $this\\n\"\n");
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
     out.push_str(".globl _match_unhandled_msg\n_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
@@ -337,6 +351,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _elephc_crypto_update_fn, 8, 3\n");
     out.push_str(".comm _elephc_crypto_final_fn, 8, 3\n");
     out.push_str(".comm _elephc_crypto_clone_fn, 8, 3\n");
+    // _elephc_crypto_free_fn: indirect pointer to elephc_crypto_free, published
+    // at hash_init/hash_copy call sites and used by __rt_hash_ctx_free so the
+    // shared runtime can release unfinalized HashContext handles without naming
+    // elephc-crypto directly.
+    out.push_str(".comm _elephc_crypto_free_fn, 8, 3\n");
     // _elephc_phar_extract_url_fn: indirect pointer to the elephc-phar bridge
     // reader. Dynamic phar:// paths publish it before calling the runtime
     // reader; literal phar:// paths are still decoded at compile time.
@@ -357,6 +376,27 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // _elephc_phar_list_entries_fn: indirect pointer to the elephc-phar archive
     // listing bridge used by Phar/PharData constructors to seed iteration.
     out.push_str(".p2align 3\n.globl _elephc_phar_list_entries_fn\n_elephc_phar_list_entries_fn:\n    .quad 0\n");
+    // _elephc_phar_get/set_metadata_fn and _elephc_phar_get/set_stub_fn: indirect
+    // pointers to the elephc-phar global-metadata and stub read/write bridges used
+    // by the Phar/PharData metadata and stub accessors.
+    out.push_str(".p2align 3\n.globl _elephc_phar_get_metadata_fn\n_elephc_phar_get_metadata_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_set_metadata_fn\n_elephc_phar_set_metadata_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_get_stub_fn\n_elephc_phar_get_stub_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_set_stub_fn\n_elephc_phar_set_stub_fn:\n    .quad 0\n");
+    // Per-file (PharFileInfo) metadata read/write bridges.
+    out.push_str(".p2align 3\n.globl _elephc_phar_get_file_metadata_fn\n_elephc_phar_get_file_metadata_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_set_file_metadata_fn\n_elephc_phar_set_file_metadata_fn:\n    .quad 0\n");
+    // Whole-archive (tar) compression bridges.
+    out.push_str(".p2align 3\n.globl _elephc_phar_gzip_archive_fn\n_elephc_phar_gzip_archive_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_bzip2_archive_fn\n_elephc_phar_bzip2_archive_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_decompress_archive_fn\n_elephc_phar_decompress_archive_fn:\n    .quad 0\n");
+    // PHAR signature bridges (OpenSSL RSA + hash algorithms + signature read).
+    out.push_str(".p2align 3\n.globl _elephc_phar_sign_openssl_fn\n_elephc_phar_sign_openssl_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_sign_hash_fn\n_elephc_phar_sign_hash_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_get_signature_hash_fn\n_elephc_phar_get_signature_hash_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_get_signature_type_fn\n_elephc_phar_get_signature_type_fn:\n    .quad 0\n");
+    // PHAR ZipCrypto password bridge (read encrypted ZIP entries).
+    out.push_str(".p2align 3\n.globl _elephc_phar_set_zip_password_fn\n_elephc_phar_set_zip_password_fn:\n    .quad 0\n");
     // _elephc_phar_stream_*_fn: indirect pointers to the elephc-phar buffered
     // write-stream bridge. These allow multiple phar:// write descriptors to
     // stay open at once while the old assembly single-entry writer remains as

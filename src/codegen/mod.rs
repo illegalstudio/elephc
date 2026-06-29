@@ -145,7 +145,7 @@ pub(crate) use driver_support::{
     runtime_value_tag,
 };
 pub(crate) use expr::arrays::emit_array_value_type_stamp;
-pub(crate) use functions::{emit_fiber_wrapper, emit_generator_with_label};
+pub(crate) use functions::emit_fiber_wrapper;
 pub(crate) use sentinels::{NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL};
 pub use sentinels::{set_null_repr, NullRepr};
 #[allow(unused_imports)]
@@ -618,7 +618,11 @@ fn collect_emitted_class_names(
         names.insert(builtin.to_string());
     }
     for factory in reflection::collect_attribute_factories(classes) {
-        names.insert(factory.class_name);
+        // Only resolvable attribute classes are emitted; non-class attributes
+        // are registered solely so `getArguments()` can return their arguments.
+        if factory.resolvable {
+            names.insert(factory.class_name);
+        }
     }
     collect_dynamic_object_factory_classes(program, classes, &mut names);
     expand_emitted_class_dependencies(&mut names, classes);

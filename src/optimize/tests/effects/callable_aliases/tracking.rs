@@ -22,6 +22,7 @@ fn test_program_function_effects_track_closure_alias_locals() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Assign {
@@ -32,6 +33,7 @@ fn test_program_function_effects_track_closure_alias_locals() {
                                 variadic: None,
                                 variadic_type: None,
                                 return_type: None,
+                                by_ref_return: false,
                                 body: vec![Stmt::new(
                                     StmtKind::Return(Some(Expr::new(
                                         ExprKind::FunctionCall {
@@ -87,6 +89,7 @@ fn test_program_function_effects_track_callable_alias_through_ternary() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Assign {
@@ -147,6 +150,7 @@ fn test_program_function_effects_track_callable_alias_through_match() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Assign {
@@ -210,6 +214,7 @@ fn test_program_function_effects_track_callable_alias_through_null_coalesce() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Assign {
@@ -269,6 +274,7 @@ fn test_program_function_effects_track_callable_alias_locals() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Assign {

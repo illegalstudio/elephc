@@ -20,6 +20,7 @@ fn test_eliminate_dead_code_drops_switch_case_shadowed_by_terminating_duplicate_
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Switch {
                     subject: Expr::var("x"),
@@ -77,6 +78,7 @@ fn test_eliminate_dead_code_merges_fallthrough_body_from_fully_shadowed_switch_c
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Switch {
                     subject: Expr::var("x"),
@@ -129,6 +131,7 @@ fn test_eliminate_dead_code_prunes_dead_label_inside_live_mixed_switch_case() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::var("value"),

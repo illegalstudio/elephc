@@ -103,6 +103,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
             body,
             captures,
             capture_refs,
+            is_static,
             ..
         } => lower_closure(
             ctx,
@@ -113,6 +114,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
             captures,
             capture_refs,
             expr,
+            *is_static,
         ),
         ExprKind::NamedArg { value, .. } => lower_expr(ctx, value),
         ExprKind::Spread(inner) => lower_expr(ctx, inner),
@@ -1611,6 +1613,9 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     if let Some(value) = lower_lazy_isset(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_lazy_empty(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_static_call_user_func(ctx, canonical, args, expr) {
         return value;
     }
@@ -1717,10 +1722,10 @@ fn lower_lazy_isset(
         return None;
     }
     if args.is_empty() {
-        return Some(lower_int_literal(ctx, 0, expr));
+        return Some(lower_bool_literal(ctx, false, expr));
     }
 
-    let temp_name = ctx.declare_hidden_temp(PhpType::Int);
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let false_block = ctx.builder.create_named_block("isset.lazy_false", Vec::new());
     let merge = ctx.builder.create_named_block("isset.lazy_merge", Vec::new());
     for (idx, arg) in args.iter().enumerate() {
@@ -1743,13 +1748,13 @@ fn lower_lazy_isset(
         ctx.builder.position_at_end(then_target);
     }
 
-    let true_value = lower_int_literal(ctx, 1, expr);
-    store_value_into_temp(ctx, &temp_name, PhpType::Int, true_value, expr.span);
+    let true_value = lower_bool_literal(ctx, true, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, true_value, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(false_block);
-    let false_value = lower_int_literal(ctx, 0, expr);
-    store_value_into_temp(ctx, &temp_name, PhpType::Int, false_value, expr.span);
+    let false_value = lower_bool_literal(ctx, false, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
@@ -1761,24 +1766,186 @@ fn lower_lazy_isset_operand(
     ctx: &mut LoweringContext<'_, '_>,
     arg: &Expr,
 ) -> Option<LoweredValue> {
-    let ExprKind::ArrayAccess { array, index } = &arg.kind else {
-        return None;
-    };
-    if array_access_expr_satisfies_array_access(ctx, array) {
-        let synthetic = Expr::new(
-            ExprKind::MethodCall {
-                object: array.clone(),
-                method: "offsetExists".to_string(),
-                args: vec![(**index).clone()],
-            },
-            arg.span,
-        );
-        return Some(lower_expr(ctx, &synthetic));
+    match &arg.kind {
+        ExprKind::ArrayAccess { array, index } => {
+            if array_access_expr_satisfies_array_access(ctx, array) {
+                let synthetic = Expr::new(
+                    ExprKind::MethodCall {
+                        object: array.clone(),
+                        method: "offsetExists".to_string(),
+                        args: vec![(**index).clone()],
+                    },
+                    arg.span,
+                );
+                return Some(lower_expr(ctx, &synthetic));
+            }
+            if !array_access_expr_supports_native_isset_probe(ctx, array) {
+                return None;
+            }
+            Some(lower_native_isset_offset_probe(ctx, array, index, arg))
+        }
+        // `isset($obj->prop)` on an undeclared property dispatches to `__isset`.
+        ExprKind::PropertyAccess { object, property } => {
+            property_existence_magic_class(ctx, object, property, "__isset")?;
+            let synthetic = Expr::new(
+                ExprKind::MethodCall {
+                    object: object.clone(),
+                    method: "__isset".to_string(),
+                    args: vec![Expr::new(ExprKind::StringLiteral(property.clone()), arg.span)],
+                },
+                arg.span,
+            );
+            Some(lower_expr(ctx, &synthetic))
+        }
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            property_existence_magic_class(ctx, object, property, "__isset")?;
+            let synthetic = Expr::new(
+                ExprKind::NullsafeMethodCall {
+                    object: object.clone(),
+                    method: "__isset".to_string(),
+                    args: vec![Expr::new(ExprKind::StringLiteral(property.clone()), arg.span)],
+                },
+                arg.span,
+            );
+            Some(lower_expr(ctx, &synthetic))
+        }
+        _ => None,
     }
-    if !array_access_expr_supports_native_isset_probe(ctx, array) {
+}
+
+/// Lowers `empty($obj->magicProp)` with PHP's overloaded-property semantics:
+/// `empty` consults `__isset` first and only evaluates `__get` when `__isset`
+/// is truthy, so an unset virtual property is empty without ever reading it.
+/// Returns `None` for operands the eager `empty` builtin already handles (plain
+/// variables, declared properties, array elements), letting that path run.
+fn lower_lazy_empty(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "empty" {
         return None;
     }
-    Some(lower_native_isset_offset_probe(ctx, array, index, arg))
+    if args.len() != 1
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let (exists_call, get_call) = lazy_empty_magic_property_calls(ctx, &args[0])?;
+
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let present_block = ctx.builder.create_named_block("empty.present", Vec::new());
+    let absent_block = ctx.builder.create_named_block("empty.absent", Vec::new());
+    let merge = ctx.builder.create_named_block("empty.merge", Vec::new());
+
+    // `__isset(prop)` decides whether the property is considered set at all.
+    let exists = lower_expr(ctx, &exists_call);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: exists.value,
+        then_target: present_block,
+        then_args: Vec::new(),
+        else_target: absent_block,
+        else_args: Vec::new(),
+    });
+
+    // Set: empty is the emptiness of the `__get` value (reuses the eager builtin).
+    ctx.builder.position_at_end(present_block);
+    let get_value = lower_expr(ctx, &get_call);
+    let empty_name = ctx.intern_function_name(name);
+    let empty_value = ctx.emit_value(
+        Op::BuiltinCall,
+        vec![get_value.value],
+        Some(Immediate::Data(empty_name)),
+        PhpType::Bool,
+        effects_lookup::builtin_effects(name),
+        Some(expr.span),
+    );
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, empty_value, expr.span);
+    branch_to(ctx, merge);
+
+    // Not set: empty is true and `__get` is never called.
+    ctx.builder.position_at_end(absent_block);
+    let true_value = lower_bool_literal(ctx, true, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, true_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    Some(ctx.load_local(&temp_name, Some(expr.span)))
+}
+
+/// For an `empty()` operand that is an overloaded (magic) property access,
+/// returns the `(__isset, __get)` synthetic call expressions PHP would evaluate.
+/// The property name is a string literal, so reusing it for both calls is
+/// side-effect free. Returns `None` for any other operand shape.
+fn lazy_empty_magic_property_calls(
+    ctx: &LoweringContext<'_, '_>,
+    arg: &Expr,
+) -> Option<(Expr, Expr)> {
+    match &arg.kind {
+        ExprKind::PropertyAccess { object, property } => {
+            property_existence_magic_class(ctx, object, property, "__isset")?;
+            let key = Expr::new(ExprKind::StringLiteral(property.clone()), arg.span);
+            let exists = Expr::new(
+                ExprKind::MethodCall {
+                    object: object.clone(),
+                    method: "__isset".to_string(),
+                    args: vec![key.clone()],
+                },
+                arg.span,
+            );
+            let get = Expr::new(
+                ExprKind::MethodCall {
+                    object: object.clone(),
+                    method: "__get".to_string(),
+                    args: vec![key],
+                },
+                arg.span,
+            );
+            Some((exists, get))
+        }
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            property_existence_magic_class(ctx, object, property, "__isset")?;
+            let key = Expr::new(ExprKind::StringLiteral(property.clone()), arg.span);
+            let exists = Expr::new(
+                ExprKind::NullsafeMethodCall {
+                    object: object.clone(),
+                    method: "__isset".to_string(),
+                    args: vec![key.clone()],
+                },
+                arg.span,
+            );
+            let get = Expr::new(
+                ExprKind::NullsafeMethodCall {
+                    object: object.clone(),
+                    method: "__get".to_string(),
+                    args: vec![key],
+                },
+                arg.span,
+            );
+            Some((exists, get))
+        }
+        _ => None,
+    }
+}
+
+/// Returns the class whose `magic` method (`__isset`/`__unset`) should handle
+/// `isset($obj->prop)` / `unset($obj->prop)`: an undeclared property on an
+/// object whose class declares the magic method. Returns `None` (normal
+/// handling) for declared properties or classes without the hook.
+fn property_existence_magic_class(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    magic: &str,
+) -> Option<String> {
+    let class_name = instance_callable_object_class(ctx, object)?;
+    let class_info = ctx.classes.get(&class_name)?;
+    if class_info.properties.iter().any(|(name, _)| name == property) {
+        return None;
+    }
+    class_info.methods.contains_key(magic).then_some(class_name)
 }
 
 /// Lowers native array/hash `isset($array[$key])` without reading the element value.
@@ -2174,6 +2341,7 @@ fn function_sig_from_extern_for_descriptor(sig: &ExternFunctionSig) -> FunctionS
         defaults: vec![None; sig.params.len()],
         return_type: sig.return_type.clone(),
         declared_return: true,
+        by_ref_return: false,
         ref_params: vec![false; sig.params.len()],
         declared_params: vec![true; sig.params.len()],
         variadic: None,
@@ -3182,6 +3350,157 @@ fn direct_static_callable_binding(target: StaticCallableBinding) -> Option<Stati
 }
 
 /// Resolves the concrete class for an object expression used in an instance FCC.
+/// Returns the property type referenced by a `Closure::bind(fn () => $this->prop, $newThis, …)`
+/// when the closure body is exactly `return $this->prop`: the bound object's property type.
+/// The closure's own `$this` is Mixed (it is bound dynamically), so the type comes from the
+/// bind's receiver argument.
+fn closure_bind_property_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    callee: &Expr,
+) -> Option<PhpType> {
+    let ExprKind::StaticMethodCall { receiver, method, args } = &callee.kind else {
+        return None;
+    };
+    if !method.eq_ignore_ascii_case("bind") {
+        return None;
+    }
+    let crate::parser::ast::StaticReceiver::Named(name) = receiver else {
+        return None;
+    };
+    if !name
+        .as_str()
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("Closure")
+    {
+        return None;
+    }
+    let ExprKind::Closure { body, .. } = &args.first()?.kind else {
+        return None;
+    };
+    let new_this_class = instance_callable_object_class(ctx, args.get(1)?)?;
+    let [stmt] = body.as_slice() else {
+        return None;
+    };
+    let StmtKind::Return(Some(ret)) = &stmt.kind else {
+        return None;
+    };
+    let ExprKind::PropertyAccess { object, property } = &ret.kind else {
+        return None;
+    };
+    if !matches!(object.kind, ExprKind::This) {
+        return None;
+    }
+    let info = ctx.classes.get(new_this_class.trim_start_matches('\\'))?;
+    info.properties
+        .iter()
+        .find(|(name, _)| name == property)
+        .map(|(_, ty)| ty.clone())
+}
+
+/// Lowers `Closure::bind(fn &() => $this->prop, $newThis, scope)()` as a direct call to the
+/// closure with `$newThis` boxed as its `$this` capture.
+///
+/// `Closure::bind` rebinds the closure's receiver; invoking the result through the generic
+/// runtime descriptor invoker boxes the closure's return value as Mixed, which cannot carry a
+/// by-reference property cell pointer. Calling the closure directly (as `$f()` does) passes the
+/// cell pointer through. The call result is typed from the bound receiver's property so a
+/// by-reference array return binds correctly. Only the auto-captured `$this` shape (the
+/// `fn &() => $this->prop` form) is handled; other captures fall back to the generic path.
+fn lower_bound_closure_immediate_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    callee: &Expr,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let (bound, _closure_value) = build_bound_closure_binding(ctx, callee, expr)?;
+    lower_static_callable_call(ctx, bound, args, expr)
+}
+
+/// Builds the static-callable binding for `Closure::bind(fn &() => $this->prop, $newThis, scope)`.
+///
+/// Lowers the closure literal (once), boxes `$newThis` as the closure's `$this` capture, and
+/// overrides the binding's return type with the bound receiver's property type so a
+/// by-reference return binds correctly. Returns the binding together with the lowered closure
+/// descriptor value (the still-unbound `closure_new`), which callers may store in the assigned
+/// variable. `None` unless the call is the single auto-captured `$this` shape — the only form
+/// whose `$this` is fully known at compile time. Shared by the immediate-invoke path
+/// (`Closure::bind(...)()`) and the variable-assignment path (`$b = Closure::bind(...)`).
+fn build_bound_closure_binding(
+    ctx: &mut LoweringContext<'_, '_>,
+    callee: &Expr,
+    expr: &Expr,
+) -> Option<(StaticCallableBinding, LoweredValue)> {
+    let result_type = closure_bind_property_return_type(ctx, callee)?;
+    let ExprKind::StaticMethodCall { args: bind_args, .. } = &callee.kind else {
+        return None;
+    };
+    let closure_lit = bind_args.first()?;
+    if !matches!(closure_lit.kind, ExprKind::Closure { .. }) {
+        return None;
+    }
+    let new_this = bind_args.get(1)?.clone();
+    // Lower the closure literal to obtain its static binding (function name + captures).
+    let closure_value = lower_expr(ctx, closure_lit);
+    let Some(StaticCallableBinding::Closure {
+        name,
+        mut signature,
+        captures,
+    }) = ctx.take_pending_static_callable_result()
+    else {
+        return None;
+    };
+    // Only the single auto-captured `$this` shape is supported here.
+    if captures.len() != 1 {
+        return None;
+    }
+    let new_this_value = lower_expr(ctx, &new_this);
+    let boxed_this = ctx.emit_value(
+        Op::MixedBox,
+        vec![new_this_value.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(expr.span),
+    );
+    signature.return_type = result_type;
+    let bound = StaticCallableBinding::Closure {
+        name,
+        signature,
+        captures: vec![ClosureCapture {
+            value: boxed_this.value,
+        }],
+    };
+    Some((bound, closure_value))
+}
+
+/// Returns true when an assignment value is a by-reference `Closure::bind` of the auto-`$this`
+/// shape, so the assignment should track the result as a static callable (routing a later
+/// `$b()` through the direct-call path that carries the by-reference cell pointer).
+///
+/// Read-only structural check (no IR emitted) used to set `direct_closure` before lowering.
+pub(crate) fn is_bound_closure_assignment_shape(ctx: &LoweringContext<'_, '_>, value: &Expr) -> bool {
+    let ExprKind::StaticMethodCall { args, .. } = &value.kind else {
+        return false;
+    };
+    let Some(ExprKind::Closure { by_ref_return, .. }) = args.first().map(|arg| &arg.kind) else {
+        return false;
+    };
+    *by_ref_return && closure_bind_property_return_type(ctx, value).is_some()
+}
+
+/// Lowers `$b = Closure::bind(fn &() => $this->prop, $newThis, scope)` for assignment: builds
+/// the bound-closure binding, publishes it as the pending static callable so the assignment
+/// registers `$b` for later direct `$b()` calls, and returns the closure descriptor to store
+/// in `$b`. `None` for any non-matching shape so normal assignment lowering applies.
+pub(crate) fn lower_bound_closure_for_assignment(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: &Expr,
+) -> Option<LoweredValue> {
+    let (bound, closure_value) = build_bound_closure_binding(ctx, value, value)?;
+    ctx.set_pending_static_callable_result(bound);
+    Some(closure_value)
+}
+
 fn instance_callable_object_class(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
@@ -3280,6 +3599,29 @@ fn lower_unset_locals(
             ExprKind::ArrayAccess { array, index } => {
                 lower_unset_array_access(ctx, array, index, arg);
             }
+            // `unset($obj->prop)` on an undeclared property dispatches to `__unset`.
+            ExprKind::PropertyAccess { object, property } => {
+                let synthetic = Expr::new(
+                    ExprKind::MethodCall {
+                        object: object.clone(),
+                        method: "__unset".to_string(),
+                        args: vec![Expr::new(ExprKind::StringLiteral(property.clone()), arg.span)],
+                    },
+                    arg.span,
+                );
+                lower_expr(ctx, &synthetic);
+            }
+            ExprKind::NullsafePropertyAccess { object, property } => {
+                let synthetic = Expr::new(
+                    ExprKind::NullsafeMethodCall {
+                        object: object.clone(),
+                        method: "__unset".to_string(),
+                        args: vec![Expr::new(ExprKind::StringLiteral(property.clone()), arg.span)],
+                    },
+                    arg.span,
+                );
+                lower_expr(ctx, &synthetic);
+            }
             _ => {}
         }
     }
@@ -3291,9 +3633,39 @@ fn lower_unset_locals(
 fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
     match &arg.kind {
         ExprKind::Variable(_) => true,
-        ExprKind::ArrayAccess { array, .. } => unset_array_access_has_object_receiver(ctx, array),
+        ExprKind::ArrayAccess { array, .. } => {
+            unset_array_access_has_object_receiver(ctx, array)
+                || unset_array_access_has_local_array_receiver(ctx, array)
+        }
+        ExprKind::PropertyAccess { object, property }
+        | ExprKind::NullsafePropertyAccess { object, property } => {
+            property_existence_magic_class(ctx, object, property, "__unset").is_some()
+        }
         _ => false,
     }
+}
+
+/// Returns true when an array-access unset receiver is a plain array/hash local whose element the
+/// EIR backend can remove.
+///
+/// Associative arrays remove the element directly; packed indexed arrays are converted to a hash at
+/// the unset site (PHP `unset()` leaves a sparse array). By-reference locals are excluded: their
+/// storage is aliased to a caller whose static type would no longer match after a representation
+/// change.
+fn unset_array_access_has_local_array_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ExprKind::Variable(name) = &array.kind else {
+        return false;
+    };
+    if ctx.is_ref_bound_local(name) {
+        return false;
+    }
+    matches!(
+        ctx.local_type(name).codegen_repr(),
+        PhpType::AssocArray { .. } | PhpType::Array(_)
+    )
 }
 
 /// Returns true when an array-access unset receiver is a static ArrayAccess object.
@@ -3312,13 +3684,33 @@ fn unset_array_access_has_object_receiver(
     type_satisfies_array_access_for_ir(ctx, &ty)
 }
 
-/// Lowers `unset($object[$key])` as `ArrayAccess::offsetUnset($key)`.
+/// Lowers `unset($array[$key])`, dispatching on the receiver kind.
+///
+/// An associative-array local removes the element in place through `Op::HashUnset`. A packed
+/// indexed-array local is first converted to a hash (PHP keeps the surviving keys without
+/// renumbering) and then removed. An `ArrayAccess` object dispatches to its `offsetUnset($key)`
+/// method like before. By-reference array locals fall through to the object path.
 fn lower_unset_array_access(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
     index: &Expr,
     expr: &Expr,
 ) {
+    if let ExprKind::Variable(name) = &array.kind {
+        if !ctx.is_ref_bound_local(name) {
+            match ctx.local_type(name).codegen_repr() {
+                PhpType::AssocArray { .. } => {
+                    lower_unset_hash_element(ctx, name, array.span, index, expr);
+                    return;
+                }
+                PhpType::Array(elem_ty) => {
+                    lower_unset_indexed_element(ctx, name, *elem_ty, array.span, index, expr);
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
     let synthetic = Expr::new(
         ExprKind::MethodCall {
             object: Box::new(array.clone()),
@@ -3328,6 +3720,60 @@ fn lower_unset_array_access(
         expr.span,
     );
     lower_expr(ctx, &synthetic);
+}
+
+/// Lowers `unset($hash[$key])` for an associative-array local as a `HashUnset` instruction.
+///
+/// Loads the array local, lowers the key, and emits the removal. The backend (`lower_hash_unset`)
+/// copy-on-write splits the table, releases the removed key/value payloads, and stores the unique
+/// table pointer back into the local slot, so no explicit store-back is needed here.
+fn lower_unset_hash_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    array_span: Span,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let array_value = ctx.load_local(name, Some(array_span));
+    let index_value = lower_expr(ctx, index);
+    ctx.emit_void(
+        Op::HashUnset,
+        vec![array_value.value, index_value.value],
+        None,
+        Op::HashUnset.default_effects(),
+        Some(expr.span),
+    );
+}
+
+/// Lowers `unset($arr[$key])` for a packed indexed-array local.
+///
+/// PHP's `unset()` removes a key without renumbering, so the array can no longer be a contiguous
+/// packed list (e.g. `unset([1,2,3][1])` leaves keys `0` and `2`). The local is converted to a hash
+/// (`Op::ArrayToHash`) and retyped as `AssocArray<Int, T>`, after which the element is removed
+/// through `HashUnset`. Subsequent uses of the local therefore see the associative representation.
+fn lower_unset_indexed_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    elem_ty: PhpType,
+    array_span: Span,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let array_value = ctx.load_local(name, Some(array_span));
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: Box::new(elem_ty),
+    };
+    let hash = ctx.emit_value(
+        Op::ArrayToHash,
+        vec![array_value.value],
+        None,
+        assoc_ty.clone(),
+        Op::ArrayToHash.default_effects(),
+        Some(array_span),
+    );
+    ctx.store_mutated_local(name, hash, assoc_ty, Some(array_span));
+    lower_unset_hash_element(ctx, name, array_span, index, expr);
 }
 
 /// Lowers `array_push($local, $value)` as a direct indexed-array mutation.
@@ -3476,6 +3922,7 @@ fn lower_value_sort_comparator_closure(
         body,
         captures,
         capture_refs,
+        is_static,
         ..
     } = &callback.kind
     else {
@@ -3492,6 +3939,7 @@ fn lower_value_sort_comparator_closure(
         callback,
         &[elem_ty.clone(), elem_ty],
         None,
+        *is_static,
     )
     .value
 }
@@ -3644,6 +4092,7 @@ fn lower_preg_replace_callback_closure(
         body,
         captures,
         capture_refs,
+        is_static,
         ..
     } = &callback.kind
     else {
@@ -3660,6 +4109,7 @@ fn lower_preg_replace_callback_closure(
         callback,
         &[PhpType::Array(Box::new(PhpType::Str))],
         None,
+        *is_static,
     ))
 }
 
@@ -5618,6 +6068,10 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "is_resource" | "hash_equals" | "hash_update" | "spl_autoload_register"
         | "spl_autoload_unregister" | "stream_context_set_option" | "stream_context_set_params"
         | "stream_filter_register" | "stream_filter_remove" | "__elephc_phar_set_compression"
+        | "__elephc_phar_set_metadata" | "__elephc_phar_set_stub"
+        | "__elephc_phar_set_file_metadata"
+        | "__elephc_phar_sign_openssl" | "__elephc_phar_sign_hash"
+        | "__elephc_phar_set_zip_password"
         | "stream_wrapper_register" | "stream_wrapper_restore" | "stream_wrapper_unregister"
         | "stream_isatty" | "stream_is_local" | "stream_set_blocking" | "stream_set_timeout"
         | "stream_socket_enable_crypto" | "stream_socket_shutdown" | "stream_supports_lock" | "symlink" | "touch"
@@ -5628,7 +6082,12 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "getcwd" | "getenv" | "gethostname" | "gethostbyname" | "php_uname"
         | "readline" | "shell_exec" | "sys_get_temp_dir"
         | "fread" | "get_resource_type" | "gzcompress" | "gzdeflate" | "hash" | "hash_final" | "hash_hmac" | "long2ip"
-        | "stream_get_line" | "system" | "spl_autoload_extensions" | "tempnam" | "vsprintf" => {
+        | "stream_get_line" | "system" | "spl_autoload_extensions" | "tempnam" | "vsprintf"
+        | "__elephc_phar_get_metadata" | "__elephc_phar_get_stub"
+        | "__elephc_phar_get_file_metadata"
+        | "__elephc_phar_gzip_archive" | "__elephc_phar_bzip2_archive"
+        | "__elephc_phar_decompress_archive"
+        | "__elephc_phar_get_signature_hash" | "__elephc_phar_get_signature_type" => {
             Some(PhpType::Str)
         }
         "disk_free_space" | "disk_total_space" => Some(PhpType::Float),
@@ -5988,6 +6447,12 @@ fn assoc_array_literal_value_type_for_ir(
             .constant_value(name.as_str())
             .map(|(_, ty)| ir_array_storage_type(ty))
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
+        // A class constant or enum case must be typed the way `lower_scoped_constant`
+        // resolves it, not by the syntactic `::class`-is-string default, or the hash
+        // value-type stamp would diverge from the lowered value and corrupt reads.
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            scoped_constant_value_type_for_ir(ctx, receiver, name, value)
+        }
         ExprKind::Variable(name) => ir_array_storage_type(
             ctx.local_types
                 .get(name)
@@ -6014,6 +6479,34 @@ fn assoc_array_literal_value_type_for_ir(
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
         _ => ir_array_storage_type(infer_expr_type_syntactic(value)),
     }
+}
+
+/// Returns the EIR storage value type for a scoped-constant array value,
+/// resolving a class/interface constant the same way `lower_scoped_constant`
+/// lowers it so the hash value-type stamp matches the value actually stored
+/// (rather than the syntactic `::class`-is-string default). Falls back to the
+/// syntactic guess when the constant cannot be resolved.
+fn scoped_constant_value_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    member: &str,
+    value: &Expr,
+) -> PhpType {
+    let class_name = scoped_constant_receiver_name(ctx, receiver);
+    let normalized = class_name.trim_start_matches('\\');
+    // An enum case lowers to the case *object* singleton (see `lower_scoped_constant`),
+    // so the hash must box it as a Mixed cell — stamp the value type Mixed to match.
+    if ctx
+        .enums
+        .get(normalized)
+        .is_some_and(|enum_info| enum_info.cases.iter().any(|case| case.name == member))
+    {
+        return PhpType::Mixed;
+    }
+    if let Some(const_expr) = ctx.scoped_constant_value(&class_name, member) {
+        return ir_array_storage_type(infer_expr_type_syntactic(&const_expr));
+    }
+    ir_array_storage_type(infer_expr_type_syntactic(value))
 }
 
 /// Returns the element/value type for an array-access expression used inside a literal.
@@ -6540,6 +7033,7 @@ fn lower_closure(
     captures: &[String],
     capture_refs: &[String],
     expr: &Expr,
+    is_static: bool,
 ) -> LoweredValue {
     lower_closure_with_context(
         ctx,
@@ -6552,6 +7046,7 @@ fn lower_closure(
         expr,
         &[],
         None,
+        is_static,
     )
 }
 
@@ -6568,6 +7063,7 @@ pub(crate) fn lower_closure_for_assignment(
         body,
         captures,
         capture_refs,
+        is_static,
         ..
     } = &value.kind
     else {
@@ -6587,6 +7083,7 @@ pub(crate) fn lower_closure_for_assignment(
         value,
         &[],
         Some(assigned_name),
+        *is_static,
     ))
 }
 
@@ -6602,16 +7099,51 @@ fn lower_closure_with_context(
     expr: &Expr,
     contextual_arg_types: &[PhpType],
     self_ref_callable_capture: Option<&str>,
+    is_static: bool,
 ) -> LoweredValue {
+    // PHP auto-binds `$this` to non-static closures (including arrow functions)
+    // defined inside an instance method, with no `use($this)` needed. The parser
+    // never lists `$this` as a capture, so thread it through the existing capture
+    // machinery here: load the enclosing `this` and append it to the captures so
+    // the closure body gets a `this` local. Only capture when the body actually
+    // references `$this` (directly or in a nested closure) — adding an unused
+    // capture would push otherwise capture-free closures through capture-only
+    // runtime paths. Nested closures compose: each level captures `this` from the
+    // level above.
+    // A method-defined closure loads the enclosing `this`; a top-level closure
+    // that uses `$this` (bound later via `Closure::bind`) gets a null `this`
+    // slot the bind fills, typed `Mixed` for runtime-dispatched member access.
+    let with_this;
+    let captures: &[String] = if !is_static
+        && !captures.iter().any(|name| name == "this")
+        && crate::types::checker::closure_body_uses_this(body)
+    {
+        with_this = captures
+            .iter()
+            .cloned()
+            .chain(std::iter::once("this".to_string()))
+            .collect::<Vec<_>>();
+        &with_this
+    } else {
+        captures
+    };
     let mut captured_values = Vec::with_capacity(captures.len());
     let mut capture_params = Vec::with_capacity(captures.len());
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
-        let captured = ctx.load_local(capture, Some(expr.span));
-        let php_type = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
-            PhpType::Callable
+        let (captured, php_type) = if capture == "this" && !ctx.local_slots.contains_key("this") {
+            // Top-level closure: no enclosing `$this`. Start with a null receiver
+            // that `Closure::bind` overwrites; `Mixed` so members dispatch at
+            // runtime against the bound object's class.
+            (lower_null(ctx, expr), PhpType::Mixed)
         } else {
-            ctx.builder.value_php_type(captured.value)
+            let captured = ctx.load_local(capture, Some(expr.span));
+            let php_type = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
+                PhpType::Callable
+            } else {
+                ctx.builder.value_php_type(captured.value)
+            };
+            (captured, php_type)
         };
         let immediate = by_ref.then_some(Immediate::I64(1));
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
@@ -6619,6 +7151,7 @@ fn lower_closure_with_context(
         capture_params.push((capture.clone(), php_type, by_ref));
     }
     let name = ctx.next_closure_name();
+    let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
     let signature = if contextual_arg_types.is_empty() {
         function::lower_closure_function(
             ctx,
@@ -6629,6 +7162,7 @@ fn lower_closure_with_context(
             body,
             &capture_params,
             self_ref_callable_capture,
+            by_ref_return,
         )
     } else {
         function::lower_closure_function_with_context(
@@ -6641,6 +7175,7 @@ fn lower_closure_with_context(
             &capture_params,
             contextual_arg_types,
             self_ref_callable_capture,
+            by_ref_return,
         )
     };
     let data = ctx.intern_string(&name);
@@ -6751,7 +7286,24 @@ fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Exp
             return value;
         }
     }
+    // `Closure::bind(fn &() => $this->prop, $obj, $obj)()` invokes the bound closure. Lower it
+    // as a direct call to the closure with `$obj` boxed as its `$this` capture, so a
+    // by-reference return passes the property's ref-cell pointer through (the generic runtime
+    // descriptor invoker boxes results and cannot).
+    if let Some(value) = lower_bound_closure_immediate_call(ctx, callee, args, expr) {
+        return value;
+    }
     let lowered_callee = lower_expr(ctx, callee);
+    // An immediately-invoked closure literal (`(fn &() => …)()`) registers its static
+    // callable binding while lowering. Call it directly through the static-callable path
+    // (as `$f()` does) so the closure body's signature — including a by-reference return —
+    // drives the call instead of the generic descriptor-invoke path, which cannot return
+    // every result type.
+    if let Some(target) = ctx.take_pending_static_callable_result() {
+        if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
+            return value;
+        }
+    }
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
     if let Some(arg_container) = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span) {
         return emit_callable_descriptor_invoke(
@@ -7211,6 +7763,47 @@ fn lower_property_get(
     lower_property_get_from_value(ctx, object, property, op, expr)
 }
 
+/// Lowers `$target = &$obj->prop`: binds the local `$target` to the reference cell
+/// stored in the object's reference-property slot, so reads/writes of either side go
+/// through the same cell (write-through). The property was promoted to a reference
+/// property by the checker, so its slot holds a live cell pointer.
+pub(crate) fn lower_ref_assign_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let ExprKind::PropertyAccess { object, property } = &source.kind else {
+        return;
+    };
+    let object = lower_expr(ctx, object);
+    let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
+    let data = ctx.intern_string(property);
+    let cell_ptr = ctx.emit_value(
+        Op::LoadPropRefCell,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        value_type.clone(),
+        Op::LoadPropRefCell.default_effects(),
+        Some(span),
+    );
+    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+}
+
+/// Lowers `$target = &call()`: binds `$target` to the reference cell returned by a
+/// by-reference-returning callee. The call yields the cell pointer; the target shares it
+/// non-owning (the owner is the object property the callee returned a reference to).
+pub(crate) fn lower_ref_assign_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let cell_ptr = lower_expr(ctx, source);
+    let value_type = ctx.builder.value_php_type(cell_ptr.value);
+    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+}
+
 /// Lowers a named property read once the receiver is already evaluated.
 fn lower_property_get_from_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -7591,6 +8184,14 @@ fn lower_method_call(
     if op == Op::MethodCall && value_is_nullable(ctx, object.value) {
         return lower_nullable_regular_method_call(ctx, object, method, args, expr);
     }
+    if matches!(
+        ctx.builder.value_php_type(object.value).codegen_repr(),
+        PhpType::Callable
+    ) {
+        if let Some(result) = lower_closure_bind_method(ctx, &object, method, args, expr) {
+            return result;
+        }
+    }
     let magic_args;
     let (dispatch_method, args) = if let Some(args) =
         magic_call_dispatch_args(ctx, object.value, method, args, object_expr.span)
@@ -7617,6 +8218,69 @@ fn lower_method_call(
     release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
+}
+
+/// Lowers the `Closure` rebinding methods on a closure (`Callable`) receiver:
+/// `$closure->bindTo($newThis [, $scope])` and `$closure->call($newThis, ...$args)`.
+/// Returns `None` for any other method so normal dispatch (and its diagnostics)
+/// still apply. The `$scope` argument is accepted and ignored — visibility is
+/// resolved at compile time in elephc's closed-world model.
+fn lower_closure_bind_method(
+    ctx: &mut LoweringContext<'_, '_>,
+    closure: &LoweredValue,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    match php_symbol_key(method).as_str() {
+        "bindto" => {
+            let new_this = match args.first() {
+                Some(arg) => lower_expr(ctx, arg),
+                None => lower_null(ctx, expr),
+            };
+            Some(emit_closure_bind(ctx, closure.value, new_this.value, expr))
+        }
+        "call" => {
+            // `$closure->call($newThis, ...$args)`: bind `$this` then invoke the
+            // bound closure with the remaining arguments in one step.
+            let new_this = match args.first() {
+                Some(arg) => lower_expr(ctx, arg),
+                None => lower_null(ctx, expr),
+            };
+            let bound = emit_closure_bind(ctx, closure.value, new_this.value, expr);
+            let call_args = &args[args.len().min(1)..];
+            let arg_container =
+                lower_untyped_descriptor_invoker_arg_container(ctx, call_args, expr.span)?;
+            Some(ctx.emit_value(
+                Op::CallableDescriptorInvoke,
+                vec![bound.value, arg_container.value],
+                None,
+                PhpType::Mixed,
+                Op::CallableDescriptorInvoke.default_effects(),
+                Some(expr.span),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Emits the `closure_bind` runtime call that rebinds a closure's captured
+/// `$this`, yielding a new closure (`Callable`) descriptor.
+fn emit_closure_bind(
+    ctx: &mut LoweringContext<'_, '_>,
+    closure: crate::ir::ValueId,
+    new_this: crate::ir::ValueId,
+    expr: &Expr,
+) -> LoweredValue {
+    let data = ctx.intern_function_name("closure_bind");
+    ctx.emit_value(
+        Op::BuiltinCall,
+        vec![closure, new_this],
+        Some(Immediate::Data(data)),
+        PhpType::Callable,
+        Op::BuiltinCall.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Builds synthetic `__call` arguments when a class lacks the requested method.
@@ -8020,11 +8684,85 @@ fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    // `Closure::bind($closure, $newThis [, $scope])` — static form of bindTo.
+    if let StaticReceiver::Named(name) = receiver {
+        if name.trim_start_matches('\\') == "Closure"
+            && php_symbol_key(method) == "bind"
+            && !args.is_empty()
+        {
+            let closure = lower_expr(ctx, &args[0]);
+            let new_this = match args.get(1) {
+                Some(arg) => lower_expr(ctx, arg),
+                None => lower_null(ctx, expr),
+            };
+            return emit_closure_bind(ctx, closure.value, new_this.value, expr);
+        }
+    }
     let sig = static_method_implementation_signature(ctx, receiver, method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
         .cloned();
+    // PHP `__callStatic`: an undefined static method forwards to the class's
+    // `__callStatic($name, $args)` when the class declares one.
+    if sig.is_none() {
+        if let Some(class_name) = magic_callstatic_receiver_class(ctx, receiver, method) {
+            return lower_magic_callstatic(ctx, &class_name, method, args, expr);
+        }
+    }
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let name = format!("{}::{}", receiver_name(receiver), method);
+    let data = ctx.intern_string(&name);
+    let result_type = sig
+        .as_ref()
+        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .unwrap_or_else(|| fallback_expr_type(expr));
+    ctx.emit_value(
+        Op::StaticMethodCall,
+        operands,
+        Some(Immediate::Data(data)),
+        result_type,
+        Op::StaticMethodCall.default_effects(),
+        Some(expr.span),
+    )
+}
+
+/// Resolves the class whose `__callStatic` should handle an otherwise-undefined
+/// static call `Receiver::method(...)`. Returns `None` when the receiver already
+/// has a real static method of that name or declares no `__callStatic`.
+fn magic_callstatic_receiver_class(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) -> Option<String> {
+    let class_name = static_receiver_class_name(ctx, receiver)?;
+    let class_info = ctx.classes.get(class_name.as_str())?;
+    if class_info.static_methods.contains_key(&php_symbol_key(method)) {
+        return None;
+    }
+    class_info
+        .static_methods
+        .contains_key("__callstatic")
+        .then_some(class_name)
+}
+
+/// Lowers `Class::method(args)` as a forward to `Class::__callStatic("method", [args])`.
+fn lower_magic_callstatic(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let sig = ctx
+        .classes
+        .get(class_name)
+        .and_then(|info| info.static_methods.get("__callstatic"))
+        .cloned();
+    let magic_args = vec![
+        Expr::new(ExprKind::StringLiteral(method.to_string()), expr.span),
+        Expr::new(ExprKind::ArrayLiteral(args.to_vec()), expr.span),
+    ];
+    let operands = lower_args_with_signature(ctx, sig.as_ref(), &magic_args);
+    let name = format!("{}::__callStatic", class_name);
     let data = ctx.intern_string(&name);
     let result_type = sig
         .as_ref()
@@ -8315,15 +9053,138 @@ fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>, value: Opt
 }
 
 /// Lowers `yield from`.
+///
+/// `yield from <generator|Traversable>` lowers to `Op::GeneratorYieldFrom`, which
+/// the backend delegates to `__rt_gen_delegate` (forwarding sent values and
+/// producing the inner generator's return value). `yield from <array>` is
+/// desugared here into an iterator loop that re-yields each key/value pair,
+/// reusing the foreach iterator opcodes; its result is PHP null.
 fn lower_yield_from(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
-    ctx.emit_value(
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return lower_yield_from_array(ctx, value, expr);
+    }
+    let result = ctx.emit_value(
         Op::GeneratorYieldFrom,
         vec![value.value],
         None,
         PhpType::Mixed,
         Op::GeneratorYieldFrom.default_effects(),
         Some(expr.span),
+    );
+    // `__rt_gen_delegate` borrows the inner generator. When it is a fresh owning
+    // temporary (`yield from inner()`) nothing else frees it once delegation
+    // ends, so release it here; a borrowed local (`yield from $g`) keeps its
+    // owner and must not be released (it would double-free at scope end).
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+    }
+    result
+}
+
+/// Desugars `yield from <array>` into an iterator loop that re-yields each
+/// key/value pair, returning a boxed PHP null (arrays have no delegated return
+/// value). Reuses the foreach iterator opcodes so every array kind (indexed,
+/// associative, by-element-type) is handled by the existing iterator lowering.
+fn lower_yield_from_array(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let span = expr.span;
+    let iterator = ctx.emit_value(
+        Op::IterStart,
+        vec![source.value],
+        None,
+        PhpType::Iterable,
+        Op::IterStart.default_effects(),
+        Some(span),
+    );
+    let header = ctx.builder.create_named_block("yieldfrom.next", Vec::new());
+    let body = ctx.builder.create_named_block("yieldfrom.body", Vec::new());
+    let exit = ctx.builder.create_named_block("yieldfrom.exit", Vec::new());
+    if !ctx.builder.insertion_block_is_terminated() {
+        ctx.builder
+            .terminate(Terminator::Br { target: header, args: Vec::new() });
+    }
+
+    ctx.builder.position_at_end(header);
+    let has_next = ctx.emit_value(
+        Op::IterNext,
+        vec![iterator.value],
+        None,
+        PhpType::Bool,
+        Op::IterNext.default_effects(),
+        Some(span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: has_next.value,
+        then_target: body,
+        then_args: Vec::new(),
+        else_target: exit,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(body);
+    let key = ctx.emit_value(
+        Op::IterCurrentKey,
+        vec![iterator.value],
+        None,
+        PhpType::Mixed,
+        Op::IterCurrentKey.default_effects(),
+        Some(span),
+    );
+    let element = ctx.emit_value(
+        Op::IterCurrentValue,
+        vec![iterator.value],
+        None,
+        PhpType::Mixed,
+        Op::IterCurrentValue.default_effects(),
+        Some(span),
+    );
+    // Re-yield the inner key/value pair through the outer generator. The sent
+    // value is discarded (arrays ignore it), exactly like a `yield $k => $v;`
+    // statement.
+    ctx.emit_value(
+        Op::GeneratorYield,
+        vec![key.value, element.value],
+        None,
+        PhpType::Mixed,
+        Op::GeneratorYield.default_effects(),
+        Some(span),
+    );
+    if !ctx.builder.insertion_block_is_terminated() {
+        ctx.builder
+            .terminate(Terminator::Br { target: header, args: Vec::new() });
+    }
+
+    ctx.builder.position_at_end(exit);
+    // The iterator borrows a freshly-created array (e.g. a literal): release it
+    // once iteration ends, mirroring `lower_foreach`.
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+    let null_value = ctx
+        .builder
+        .emit_with_effects(
+            Op::ConstNull,
+            Vec::new(),
+            None,
+            IrType::I64,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::ConstNull.default_effects(),
+            Some(span),
+        )
+        .expect("const_null produces a value");
+    ctx.emit_value(
+        Op::MixedBox,
+        vec![null_value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(span),
     )
 }
 

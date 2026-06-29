@@ -314,6 +314,7 @@ fn regex_capture_closure_expr(
         body,
         is_arrow: false,
         is_static: false,
+        by_ref_return: false,
         captures,
         capture_refs,
     })

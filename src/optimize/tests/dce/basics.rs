@@ -31,6 +31,7 @@ fn test_eliminate_dead_code_invalidates_outer_strict_bool_guard_after_local_writ
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: strict_true.clone(),

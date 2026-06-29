@@ -22,6 +22,16 @@ pub(super) fn body_must_not_use_this(body: &[Stmt], span: Span) -> Result<(), Co
     Ok(())
 }
 
+/// Returns true if a closure body references `$this` anywhere, including inside
+/// nested closures (which capture `$this` transitively from the enclosing
+/// scope). Reuses the static-closure `$this` walker, so it stays in lockstep
+/// with the constructs that walker covers. Used by EIR lowering to decide
+/// whether a non-static closure defined in an instance method must implicitly
+/// capture `$this`.
+pub(crate) fn closure_body_uses_this(body: &[Stmt]) -> bool {
+    body_must_not_use_this(body, Span::dummy()).is_err()
+}
+
 /// Recursively checks a statement and its children, rejecting any `$this` usage.
 /// Used to enforce the PHP rule that static closures cannot capture `$this`.
 fn stmt_must_not_use_this(stmt: &Stmt, span: Span) -> Result<(), CompileError> {

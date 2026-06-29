@@ -2,7 +2,7 @@
 title: "get_resource_id()"
 description: "Lowers `get_resource_id(resource)` by unboxing the native handle and making it one-based."
 sidebar:
-  order: 394
+  order: 396
 ---
 
 ## get_resource_id()

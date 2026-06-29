@@ -17,9 +17,11 @@ sidebar:
 | [`empty()`](./misc/empty.md) | `(mixed $value): bool` | `bool` |
 | [`header()`](./misc/header.md) | `(mixed $header, mixed $replace, mixed $response_code): void` | `void` |
 | [`http_response_code()`](./misc/http_response_code.md) | `(mixed $response_code): int` | `int` |
-| [`isset()`](./misc/isset.md) | `(mixed $var, ...$vars): int` | `int` |
+| [`isset()`](./misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` |
 | [`php_uname()`](./misc/php_uname.md) | `(string $mode): string` | `string` |
 | [`phpversion()`](./misc/phpversion.md) | `(string $extension = null): string` | `string` |
 | [`print_r()`](./misc/print_r.md) | `(...$values): void` | `void` |
+| [`serialize()`](./misc/serialize.md) | `(mixed $value): string` | `string` |
+| [`unserialize()`](./misc/unserialize.md) | `(mixed $data, mixed $options): mixed` | `mixed` |
 | [`unset()`](./misc/unset.md) | `(mixed $var, ...$vars): void` | `void` |
 | [`var_dump()`](./misc/var_dump.md) | `(...$values): void` | `void` |

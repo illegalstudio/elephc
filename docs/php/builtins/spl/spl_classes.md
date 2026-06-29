@@ -2,7 +2,7 @@
 title: "spl_classes()"
 description: "Lowers `spl_classes()` to the static compiler-shipped SPL/core type snapshot."
 sidebar:
-  order: 308
+  order: 310
 ---
 
 ## spl_classes()

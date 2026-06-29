@@ -25,6 +25,7 @@ fn test_eliminate_dead_code_drops_statements_after_try_finally_exit() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Try {
@@ -72,6 +73,7 @@ fn test_eliminate_dead_code_preserves_outer_guard_for_finally_when_only_other_lo
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::var("flag"),
@@ -130,6 +132,7 @@ fn test_eliminate_dead_code_sinks_tail_into_safe_finally_path() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Try {

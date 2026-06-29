@@ -119,6 +119,99 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
         }
+        "__elephc_phar_get_metadata" | "__elephc_phar_get_stub" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "__elephc_phar_get_metadata()/__elephc_phar_get_stub() take exactly 1 argument",
+                ));
+            }
+            checker.require_builtin_library("elephc_phar");
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "__elephc_phar_set_metadata" | "__elephc_phar_set_stub" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    "__elephc_phar_set_metadata()/__elephc_phar_set_stub() take exactly 2 arguments",
+                ));
+            }
+            checker.require_builtin_library("elephc_phar");
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "__elephc_phar_get_file_metadata" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "__elephc_phar_get_file_metadata() takes exactly 1 argument",
+                ));
+            }
+            checker.require_builtin_library("elephc_phar");
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "__elephc_phar_set_file_metadata" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    "__elephc_phar_set_file_metadata() takes exactly 2 arguments",
+                ));
+            }
+            checker.require_builtin_library("elephc_phar");
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "__elephc_phar_gzip_archive"
+        | "__elephc_phar_bzip2_archive"
+        | "__elephc_phar_decompress_archive"
+        | "__elephc_phar_get_signature_hash"
+        | "__elephc_phar_get_signature_type" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "phar archive (de)compression/signature-read intrinsics take exactly 1 argument",
+                ));
+            }
+            checker.require_builtin_library("elephc_phar");
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "__elephc_phar_sign_openssl" | "__elephc_phar_sign_hash" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    "phar signing intrinsics take exactly 2 arguments",
+                ));
+            }
+            checker.require_builtin_library("elephc_phar");
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "__elephc_phar_set_zip_password" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "__elephc_phar_set_zip_password takes exactly 1 argument",
+                ));
+            }
+            checker.require_builtin_library("elephc_phar");
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Bool))
+        }
         "file" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "file() takes exactly 1 argument"));

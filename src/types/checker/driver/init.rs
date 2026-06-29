@@ -93,6 +93,8 @@ impl Checker {
             current_class: None,
             current_method: None,
             current_method_is_static: false,
+            current_by_ref_return: false,
+            closure_depth: 0,
             extern_functions: HashMap::new(),
             extern_classes: HashMap::new(),
             packed_classes: HashMap::new(),
@@ -102,9 +104,11 @@ impl Checker {
             active_ref_params: HashSet::new(),
             active_globals: HashSet::new(),
             active_statics: HashSet::new(),
+            foreach_key_locals: HashSet::new(),
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
             warnings: Vec::new(),
+            reference_property_promotions: HashSet::new(),
         }
     }
 }

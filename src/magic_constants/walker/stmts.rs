@@ -238,6 +238,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             finally_body: finally_body.map(|b| walk_program(b, pass)),
         },
         StmtKind::FunctionDecl {
+            by_ref_return,
             name,
             params,
             variadic,
@@ -255,6 +256,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             let new_body = walk_program(body, pass);
             pass.leave_function();
             StmtKind::FunctionDecl {
+                by_ref_return,
                 name,
                 params: new_params,
                 variadic,

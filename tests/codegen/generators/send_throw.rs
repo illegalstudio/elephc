@@ -114,6 +114,54 @@ try {
     assert_eq!(out, "1 caught: boom");
 }
 
+/// Issue #329: `Generator::throw($exc)` must resume the generator and raise the
+/// exception at the suspended `yield` so a `try/catch` *inside* the generator body
+/// can handle it, instead of terminating the generator and propagating to the caller.
+/// PHP 8.4 prints `in,boom,done`.
+#[test]
+fn test_generator_throw_enters_internal_catch() {
+    let out = compile_and_run(
+        r#"<?php
+function g() {
+    try {
+        yield 1;
+    } catch (Exception $e) {
+        echo "in,", $e->getMessage();
+    }
+}
+$g = g();
+$g->current();
+$g->throw(new Exception("boom"));
+echo ",done";
+"#,
+    );
+    assert_eq!(out, "in,boom,done");
+}
+
+/// Issue #329: after an injected exception is caught inside the generator, execution
+/// resumes to the next `yield` and `throw()` returns that next yielded value.
+/// PHP 8.4 prints `1|boom2|2`.
+#[test]
+fn test_generator_throw_internal_catch_then_resumes() {
+    let out = compile_and_run(
+        r#"<?php
+function gen() {
+    try {
+        yield 1;
+    } catch (Exception $e) {
+        echo $e->getMessage();
+    }
+    yield 2;
+}
+$g = gen();
+echo $g->current() . '|';
+echo $g->throw(new Exception('boom')) . '|';
+echo $g->current();
+"#,
+    );
+    assert_eq!(out, "1|boom2|2");
+}
+
 /// Verifies `Generator::send(string)` lands in a Mixed-typed local via refcount transfer
 /// (no unboxing to int). The generator alternates `yield <prompt>` / `yield $reply` and
 /// the sent string value propagates through the assignment chain.

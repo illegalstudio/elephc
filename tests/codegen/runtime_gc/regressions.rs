@@ -896,6 +896,30 @@ run();
     );
 }
 
+/// Regression test for the x86_64 Mixed-property string-read aliasing bug.
+///
+/// Reading a string-typed property off an object retrieved from a Mixed-valued
+/// hash (`$arr['a']->v`) goes through `emit_property_load`'s two-word string
+/// path. On x86_64 the string-pointer result register is `rax`, which also
+/// serves as the object base register in the Mixed-property dispatch, so loading
+/// the pointer word first clobbered the base; the length word was then read from
+/// the string payload instead of the object. That garbage length drove
+/// `__rt_str_persist` to copy an enormous span and exhaust the heap. The fix
+/// reads the length word first when the pointer register aliases the base. ARM64
+/// was always correct (its result registers never alias the base). A plain
+/// object (not an enum) reproduces it, so this guards the general lowering.
+#[test]
+fn test_regression_mixed_hash_object_string_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public string $v = 'hi'; }
+$arr = ['a' => new Box(), 'b' => 1];
+echo $arr['a']->v;
+"#,
+    );
+    assert_eq!(out, "hi");
+}
+
 /// Regression test: assigning a by-value foreach element into another local should
 /// release the target slot using its widened Mixed storage representation.
 #[test]

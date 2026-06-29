@@ -16,7 +16,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::{AttrArgValue, PhpType};
+use crate::types::{AttrArgEntry, AttrArgValue, PhpType};
 
 /// Emits code for `class_attribute_args($class, $attr_name)`.
 ///
@@ -44,7 +44,7 @@ pub fn emit(
     };
 
     let attr_key = php_symbol_key(attr_name.trim_start_matches('\\'));
-    let attr_args: Vec<AttrArgValue> = ctx
+    let attr_args: Vec<AttrArgEntry> = ctx
         .classes
         .get(super::resolve_class_name(ctx, &class_name)?)
         .and_then(|info| {
@@ -91,7 +91,8 @@ pub fn emit(
     );
 
     // -- box each captured arg as a mixed cell and push the boxed pointer --
-    for arg in &attr_args {
+    for entry in &attr_args {
+        let arg = &entry.value;
         match emitter.target.arch {
             Arch::AArch64 => {
                 abi::emit_push_reg(emitter, result_reg);                        // save the array pointer across the boxing helper call
@@ -138,6 +139,11 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
             emitter.instruction(&format!("mov x1, #{}", value));                // x1 = int value (low word)
             emitter.instruction("mov x2, xzr");                                 // integer mixed payloads do not use the high word
         }
+        AttrArgValue::Float(bits) => {
+            emitter.instruction("mov x0, #2");                                  // runtime tag 2 = float payload
+            abi::emit_load_int_immediate(emitter, "x1", *bits as i64);          // x1 = IEEE-754 bit pattern
+            emitter.instruction("mov x2, xzr");                                 // float mixed payloads do not use the high word
+        }
         AttrArgValue::Bool(value) => {
             emitter.instruction("mov x0, #3");                                  // runtime tag 3 = boolean payload
             emitter.instruction(&format!("mov x1, #{}", *value as u64));        // x1 = 0 or 1 boolean low word
@@ -149,6 +155,15 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
             emitter.instruction("mov x0, #1");                                  // runtime tag 1 = string payload
             abi::emit_symbol_address(emitter, "x1", &sym);                      // x1 = string data address
             emitter.instruction(&format!("mov x2, #{}", len));                  // x2 = string length
+        }
+        AttrArgValue::Array(_) | AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(..) => {
+            // Frozen legacy AST backend: nested arrays and deferred symbolic
+            // references (global/class constants, enum cases) are not
+            // materialized here; emit a null placeholder. The active EIR path
+            // builds the real value.
+            emitter.instruction("mov x0, #8");                                  // runtime tag 8 = null placeholder
+            emitter.instruction("mov x1, xzr");                                 // null carries no low word
+            emitter.instruction("mov x2, xzr");                                 // null carries no high word
         }
     }
     emitter.instruction("bl __rt_mixed_from_value");                            // box the captured payload into an owned mixed cell
@@ -174,6 +189,11 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
             emitter.instruction(&format!("mov rdi, {}", value));                // rdi = int value (low word)
             emitter.instruction("xor rsi, rsi");                                // integer mixed payloads do not use the high word
         }
+        AttrArgValue::Float(bits) => {
+            emitter.instruction("mov rax, 2");                                  // runtime tag 2 = float payload
+            abi::emit_load_int_immediate(emitter, "rdi", *bits as i64);         // rdi = IEEE-754 bit pattern
+            emitter.instruction("xor rsi, rsi");                                // float mixed payloads do not use the high word
+        }
         AttrArgValue::Bool(value) => {
             emitter.instruction("mov rax, 3");                                  // runtime tag 3 = boolean payload
             emitter.instruction(&format!("mov rdi, {}", *value as u64));        // rdi = 0 or 1 boolean low word
@@ -185,6 +205,15 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
             emitter.instruction("mov rax, 1");                                  // runtime tag 1 = string payload
             abi::emit_symbol_address(emitter, "rdi", &sym);                     // rdi = string data address
             emitter.instruction(&format!("mov rsi, {}", len));                  // rsi = string length
+        }
+        AttrArgValue::Array(_) | AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(..) => {
+            // Frozen legacy AST backend: nested arrays and deferred symbolic
+            // references (global/class constants, enum cases) are not
+            // materialized here; emit a null placeholder. The active EIR path
+            // builds the real value.
+            emitter.instruction("mov rax, 8");                                  // runtime tag 8 = null placeholder
+            emitter.instruction("xor rdi, rdi");                                // null carries no low word
+            emitter.instruction("xor rsi, rsi");                                // null carries no high word
         }
     }
     emitter.instruction("call __rt_mixed_from_value");                          // box the captured payload into an owned mixed cell

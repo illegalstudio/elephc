@@ -217,6 +217,9 @@ pub struct ClassMethod {
     pub variadic_type: Option<TypeExpr>,
     #[allow(dead_code)] // Will be used for return type checking in future phases
     pub return_type: Option<TypeExpr>,
+    /// `true` when declared with `function &m()` — calls return a reference (alias)
+    /// to the returned lvalue rather than a copy.
+    pub by_ref_return: bool,
     pub body: Vec<Stmt>,
     #[allow(dead_code)] // Used for error reporting in future phases
     pub span: Span,

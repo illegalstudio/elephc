@@ -56,6 +56,7 @@ impl Checker {
                 variadic,
                 variadic_type,
                 return_type,
+                by_ref_return,
                 body,
                 ..
             } = &stmt.kind
@@ -93,6 +94,7 @@ impl Checker {
                         variadic: variadic.clone(),
                         variadic_type: variadic_type.clone(),
                         return_type: return_type.clone(),
+                        by_ref_return: *by_ref_return,
                         span: stmt.span,
                         body: body.clone(),
                         attributes: stmt.attributes.clone(),
@@ -271,6 +273,7 @@ impl Checker {
             defaults: decl.defaults,
             return_type: crate::types::PhpType::Int,
             declared_return: decl.return_type.is_some(),
+            by_ref_return: false,
             ref_params: decl.ref_params,
             declared_params: decl
                 .param_types

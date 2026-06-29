@@ -23,6 +23,7 @@ fn test_effect_analysis_tracks_pure_iife_expr_calls() {
                     variadic: None,
                     variadic_type: None,
                     return_type: None,
+                    by_ref_return: false,
                     body: vec![Stmt::new(
                         StmtKind::Return(Some(Expr::new(
                             ExprKind::FunctionCall {
@@ -83,6 +84,7 @@ fn test_program_function_effects_merge_callable_aliases_across_if_paths() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::If {
@@ -150,6 +152,7 @@ fn test_program_function_effects_merge_callable_aliases_across_try_paths() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Try {
@@ -223,6 +226,7 @@ fn test_program_function_effects_merge_callable_aliases_across_switch_paths() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Switch {

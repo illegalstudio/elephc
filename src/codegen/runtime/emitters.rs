@@ -108,6 +108,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // Callable introspection runtime functions
     callables::emit_is_callable_runtime(emitter);
     callables::emit_callable_descriptor_release(emitter);
+    callables::emit_closure_bind(emitter);
 
     // System runtime functions
     system::emit_build_argv(emitter);
@@ -146,6 +147,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_json_decode_mixed(emitter);
     system::emit_json_last_error_msg(emitter);
     system::emit_json_validate(emitter);
+    system::emit_serialize(emitter);
+    system::emit_unserialize(emitter);
     if features.regex {
         system::emit_preg_strip(emitter);
         system::emit_pcre_to_posix(emitter);
@@ -186,6 +189,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_push_str(emitter);
     arrays::emit_array_set_int(emitter);
     arrays::emit_array_set_mixed(emitter);
+    arrays::emit_array_set_mixed_key(emitter);
     arrays::emit_array_set_refcounted(emitter);
     arrays::emit_array_set_str(emitter);
     arrays::emit_array_union(emitter);
@@ -207,6 +211,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_hash_grow(emitter);
     arrays::emit_hash_may_have_cyclic_values(emitter);
     arrays::emit_hash_set(emitter);
+    arrays::emit_hash_unset(emitter);
     arrays::emit_hash_append(emitter);
     arrays::emit_hash_insert_owned(emitter);
     arrays::emit_hash_get(emitter);

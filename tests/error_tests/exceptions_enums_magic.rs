@@ -228,6 +228,76 @@ fn test_error_magic_invoke_must_be_public() {
     );
 }
 
+/// Verifies that a non-static `__callStatic` reports
+/// "Magic method must be static: Api::__callStatic".
+#[test]
+fn test_error_magic_callstatic_must_be_static() {
+    expect_error(
+        "<?php class Api { public function __callStatic($name, $args) { return 1; } }",
+        "Magic method must be static: Api::__callStatic",
+    );
+}
+
+/// Verifies that `__callStatic` with only one parameter reports
+/// "Magic method must take 2 arguments: Api::__callStatic".
+#[test]
+fn test_error_magic_callstatic_must_take_two_arguments() {
+    expect_error(
+        "<?php class Api { public static function __callStatic($name) { return 1; } }",
+        "Magic method must take 2 arguments: Api::__callStatic",
+    );
+}
+
+/// Verifies that a private `__callStatic` method reports
+/// "Magic method must be public: Api::__callStatic".
+#[test]
+fn test_error_magic_callstatic_must_be_public() {
+    expect_error(
+        "<?php class Api { private static function __callStatic($name, $args) { return 1; } }",
+        "Magic method must be public: Api::__callStatic",
+    );
+}
+
+/// Verifies that a `static` `__isset` reports
+/// "Magic method must be non-static: Bag::__isset".
+#[test]
+fn test_error_magic_isset_must_be_non_static() {
+    expect_error(
+        "<?php class Bag { public static function __isset($name) { return true; } }",
+        "Magic method must be non-static: Bag::__isset",
+    );
+}
+
+/// Verifies that `__isset` with no parameters reports
+/// "Magic method must take 1 argument: Bag::__isset".
+#[test]
+fn test_error_magic_isset_must_take_one_argument() {
+    expect_error(
+        "<?php class Bag { public function __isset() { return true; } }",
+        "Magic method must take 1 argument: Bag::__isset",
+    );
+}
+
+/// Verifies that a `static` `__unset` reports
+/// "Magic method must be non-static: Bag::__unset".
+#[test]
+fn test_error_magic_unset_must_be_non_static() {
+    expect_error(
+        "<?php class Bag { public static function __unset($name) { } }",
+        "Magic method must be non-static: Bag::__unset",
+    );
+}
+
+/// Verifies that `__unset` with two parameters reports
+/// "Magic method must take 1 argument: Bag::__unset".
+#[test]
+fn test_error_magic_unset_must_take_one_argument() {
+    expect_error(
+        "<?php class Bag { public function __unset($name, $extra) { } }",
+        "Magic method must take 1 argument: Bag::__unset",
+    );
+}
+
 /// Verifies that `catch (MissingException $e)` with an undefined class
 /// reports "Undefined class: MissingException".
 #[test]

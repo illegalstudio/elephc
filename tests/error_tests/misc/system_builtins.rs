@@ -403,3 +403,24 @@ fn test_include_path_with_undefined_const_errors() {
         err.message
     );
 }
+
+/// serialize() requires exactly one argument.
+#[test]
+fn test_error_serialize_wrong_args() {
+    expect_error("<?php serialize();", "serialize() takes exactly 1 argument");
+}
+
+/// unserialize() accepts one or two arguments.
+#[test]
+fn test_error_unserialize_wrong_args() {
+    expect_error("<?php unserialize();", "unserialize() takes 1 or 2 arguments");
+}
+
+/// unserialize()'s data argument must be string-compatible.
+#[test]
+fn test_error_unserialize_non_string_data() {
+    expect_error(
+        "<?php unserialize([1, 2]);",
+        "unserialize() data argument must be string-compatible",
+    );
+}

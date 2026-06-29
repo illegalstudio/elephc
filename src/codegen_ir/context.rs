@@ -341,6 +341,24 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// Stores the integer result register as a single machine word into the SSA value's home.
+    ///
+    /// Reference-cell pointers are always one pointer-sized word regardless of the element
+    /// type they alias (a `string` cell pointer is still one word, not a `{ptr,len}` pair).
+    /// `LoadPropRefCell` and by-reference call results materialize the cell pointer into the
+    /// integer result register, so it must be stored single-word; the type-driven
+    /// `store_result_value` would otherwise split a `Str`/`Float` result across the string or
+    /// float result registers and drop the pointer.
+    pub(super) fn store_int_result_value(&mut self, value: ValueId) -> Result<()> {
+        if let Some(reg) = self.allocation.register_of(value) {
+            abi::emit_reg_move(self.emitter, reg, abi::int_result_reg(self.emitter));
+        } else {
+            let offset = self.value_offset(value)?;
+            abi::store_at_offset(self.emitter, abi::int_result_reg(self.emitter), offset);
+        }
+        Ok(())
+    }
+
     /// Stores an SSA value into an addressable local slot.
     pub(super) fn store_value_to_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
         if self.local_stores_ref_cell_pointer(slot) {

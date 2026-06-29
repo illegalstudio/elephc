@@ -17,14 +17,14 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
-use crate::types::{AttrArgValue, PhpType};
+use crate::types::{AttrArgEntry, PhpType};
 
 /// Compile-time metadata used to populate a freshly allocated reflection owner
 /// object before it is returned to user code.
 struct ReflectionOwnerMetadata {
     reflected_name: Option<String>,
     attr_names: Vec<String>,
-    attr_args: Vec<Option<Vec<AttrArgValue>>>,
+    attr_args: Vec<Option<Vec<AttrArgEntry>>>,
 }
 
 /// Returns true if `class_name` is one of the builtin reflection types
@@ -184,7 +184,7 @@ fn reflection_lookup(
 fn overwrite_attrs_property(
     class_name: &str,
     attr_names: &[String],
-    attr_args: &[Option<Vec<AttrArgValue>>],
+    attr_args: &[Option<Vec<AttrArgEntry>>],
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,

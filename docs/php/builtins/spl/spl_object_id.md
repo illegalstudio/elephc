@@ -2,7 +2,7 @@
 title: "spl_object_id()"
 description: "Lowers `spl_object_id(object)` by returning the loaded object pointer as an integer."
 sidebar:
-  order: 310
+  order: 312
 ---
 
 ## spl_object_id()

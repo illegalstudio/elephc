@@ -890,6 +890,7 @@ fn callback_filter_callable_sig() -> FunctionSig {
         defaults: vec![None, None, None],
         return_type: PhpType::Bool,
         declared_return: false,
+        by_ref_return: false,
         ref_params: vec![false, false, false],
         declared_params: vec![false, false, false],
         variadic: None,

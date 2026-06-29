@@ -24,6 +24,7 @@ use super::context::FunctionContext;
 use super::{CodegenIrError, Result};
 
 /// Literal default value that the EIR backend can write directly.
+#[derive(Clone)]
 pub(crate) enum LiteralDefaultValue {
     Int(i64),
     Bool(bool),
@@ -51,6 +52,7 @@ pub(crate) enum LiteralDefaultValue {
 }
 
 /// Literal indexed-array element that can be materialized without evaluating code.
+#[derive(Clone)]
 pub(crate) enum LiteralArrayElement {
     Int(i64),
     Bool(bool),
@@ -62,6 +64,7 @@ pub(crate) enum LiteralArrayElement {
 /// Literal associative-array key that can be materialized without evaluating code. Positional
 /// literals stored into hash slots use integer keys; `ArrayLiteralAssoc` keys may be integer or
 /// string. String keys are normalized at emit time so PHP numeric-string keys become integer keys.
+#[derive(Clone)]
 pub(crate) enum LiteralArrayKey {
     Int(i64),
     Str(String),
@@ -69,6 +72,7 @@ pub(crate) enum LiteralArrayKey {
 
 /// One literal associative-array entry: a constant key paired with a constant value, ready to be
 /// inserted into a freshly allocated hash without evaluating any runtime expression.
+#[derive(Clone)]
 pub(crate) struct LiteralAssocEntry {
     key: LiteralArrayKey,
     value: LiteralArrayElement,

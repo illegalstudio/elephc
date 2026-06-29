@@ -2,7 +2,7 @@
 title: "spl_autoload_register()"
 description: "Lowers autoload registration stubs by preserving arg effects and returning true."
 sidebar:
-  order: 306
+  order: 308
 ---
 
 ## spl_autoload_register()

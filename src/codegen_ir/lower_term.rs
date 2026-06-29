@@ -36,6 +36,16 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             Ok(())
         }
         Terminator::Return { value: Some(value) } => {
+            if ctx.function.flags.by_ref_return {
+                // A by-reference-returning function hands back the reference-cell pointer
+                // (`$x = &f()` aliases it). The pointer is a single machine word regardless of
+                // the aliased element type, so place it in the integer result register rather
+                // than splitting a `Str`/`Float` declared return across the string/float regs.
+                let int_reg = abi::int_result_reg(ctx.emitter);
+                ctx.load_value_to_reg(*value, int_reg)?;
+                jump_to_function_epilogue(ctx)?;
+                return Ok(());
+            }
             let source_ty = ctx.load_value_to_result(*value)?;
             if ctx.is_main {
                 // The top-level script's return value is discarded (PHP only uses

@@ -23,6 +23,7 @@ fn test_eliminate_dead_code_drops_unreachable_catches_after_non_throwing_try() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Try {
                     try_body: vec![Stmt::echo(Expr::int_lit(7))],
@@ -61,6 +62,7 @@ fn test_eliminate_dead_code_drops_unreachable_catches_before_finally() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Try {
                     try_body: vec![Stmt::echo(Expr::int_lit(7))],
@@ -99,6 +101,7 @@ fn test_eliminate_dead_code_drops_catches_shadowed_by_throwable() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Try {
                     try_body: vec![Stmt::new(
@@ -153,6 +156,7 @@ fn test_eliminate_dead_code_drops_duplicate_shadowed_catch_types() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Try {
                     try_body: vec![Stmt::new(
@@ -209,6 +213,7 @@ fn test_eliminate_dead_code_merges_identical_catches_exposed_by_shadow_drop() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Try {
                     try_body: vec![Stmt::new(

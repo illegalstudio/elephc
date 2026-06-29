@@ -362,7 +362,8 @@ $json = $fixed->jsonSerialize();
 echo count($json);
 "#,
     );
-    assert_eq!(out, "2|2\na|3\n10\n3|c\n3|3|c\n3");
+    // The post-unset `echo isset($fixed[0])` is false → "" in PHP (not "0").
+    assert_eq!(out, "2|2\na|3\n1\n3|c\n3|3|c\n3");
 }
 
 // Tests that negative size to SplFixedArray constructor throws ValueError, out-of-bounds

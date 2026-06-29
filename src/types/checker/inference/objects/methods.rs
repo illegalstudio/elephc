@@ -21,8 +21,11 @@ impl Checker {
     ///
     /// Dispatches to `infer_method_call_on_class_type` for `Object` types,
     /// `infer_method_call_on_interface_type` for interface types, and
-    /// handles nullable union receivers. Returns `PhpType::Int` as a fallback
-    /// for unhandled types (e.g. `Mixed` without specific handler).
+    /// handles nullable union receivers. A `Mixed` receiver dispatches at
+    /// runtime over the classes that declare the method, so its result is the
+    /// union of those candidates' return types (see
+    /// `mixed_receiver_method_return_type`). Other unhandled receiver types fall
+    /// back to `PhpType::Int`.
     pub(crate) fn infer_method_call_type(
         &mut self,
         object: &Expr,
@@ -85,7 +88,82 @@ impl Checker {
             // diagnostic.
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?;
         }
+        // Closure rebinding methods on a callable receiver. `bindTo` rebinds
+        // `$this` and returns a new closure; `call` binds `$this` and invokes the
+        // closure in one step, returning its result. `$scope` is accepted and
+        // ignored (visibility is resolved at compile time).
+        if matches!(obj_ty, PhpType::Callable) {
+            match php_symbol_key(method).as_str() {
+                "bindto" => {
+                    for arg in args {
+                        self.infer_type(arg, env)?;
+                    }
+                    return Ok(PhpType::Callable);
+                }
+                "call" => {
+                    for arg in args {
+                        self.infer_type(arg, env)?;
+                    }
+                    return Ok(PhpType::Mixed);
+                }
+                _ => {}
+            }
+        }
+        // A method call on a `mixed` receiver dispatches on the runtime class id
+        // over exactly the classes that declare the method (see
+        // `mixed_method_candidates` / `lower_mixed_method_call` and the
+        // Mixed-receiver method emission in `ir_lower::program`). The static
+        // result is therefore the union of those candidates' return types. When
+        // they all agree on one type, codegen stores the call result raw (no
+        // boxing), so the precise type is correct; when they differ it is a
+        // union, which codegen boxes like the two-class union dispatch. Returning
+        // the historical `Int` fallback here instead made an *inferred* function
+        // return type silently coerce a boxed result: an un-annotated
+        // `function f($x) { return $x->name(); }` rendered the returned string as
+        // `0`. With no declaring class the runtime would fatal, so `mixed` is the
+        // safe static result.
+        if matches!(obj_ty, PhpType::Mixed) {
+            return Ok(self
+                .mixed_receiver_method_return_type(method, args.len())
+                .unwrap_or(PhpType::Mixed));
+        }
         Ok(PhpType::Int)
+    }
+
+    /// Computes the static return type of a method call on a `mixed` receiver as
+    /// the normalized union of the declared return types of every class that
+    /// declares `method` with a matching arity. This mirrors the runtime
+    /// candidate set used by `mixed_method_candidates` in codegen, so the
+    /// inferred type stays consistent with how each candidate branch stores its
+    /// result. Falls back to the name-only candidate set when arity filtering
+    /// finds nothing (e.g. methods with default parameters), and returns `None`
+    /// when no class declares the method at all.
+    fn mixed_receiver_method_return_type(&self, method: &str, arg_count: usize) -> Option<PhpType> {
+        let method_key = php_symbol_key(method);
+        let mut arity_matched: Vec<PhpType> = Vec::new();
+        let mut any_matched: Vec<PhpType> = Vec::new();
+        for class_info in self.classes.values() {
+            let Some(sig) = class_info.methods.get(&method_key) else {
+                continue;
+            };
+            let ty = sig.return_type.clone();
+            if !any_matched.contains(&ty) {
+                any_matched.push(ty.clone());
+            }
+            if sig.params.len() == arg_count && !arity_matched.contains(&ty) {
+                arity_matched.push(ty);
+            }
+        }
+        let candidates = if arity_matched.is_empty() {
+            any_matched
+        } else {
+            arity_matched
+        };
+        if candidates.is_empty() {
+            None
+        } else {
+            Some(self.normalize_union_type(candidates))
+        }
     }
 
     /// Infers the type of a nullsafe method call expression (`$obj?->method(...)`).
@@ -353,6 +431,16 @@ impl Checker {
                 };
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
+                        && declared_flags.get(i).copied().unwrap_or(false)
+                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    {
+                        // Sharpen a declared generic `array` parameter to the call-site array
+                        // shape so method `array` params keep their associative shape, matching
+                        // how free-function `array` parameters are specialized (issue #406).
+                        sig.params[i].1 = Self::specialize_generic_array_hint(&sig.params[i].1, arg_ty);
+                    }
+                    if i < regular_param_count
                         && !declared_flags.get(i).copied().unwrap_or(false)
                         && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
                     {
@@ -415,6 +503,34 @@ impl Checker {
         args: &[Expr],
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
+        self.specialize_magic_dispatch_signature(class_name, "__call", false, args, env)
+    }
+
+    /// Refines a `__callStatic($name, $args)` signature's array parameter from
+    /// the actual static-call arguments, the static counterpart of
+    /// `specialize_magic_call_signature`.
+    fn specialize_magic_callstatic_signature(
+        &mut self,
+        class_name: &str,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        self.specialize_magic_dispatch_signature(class_name, "__callstatic", true, args, env)
+    }
+
+    /// Shared body for `__call`/`__callStatic` argument-array specialization.
+    ///
+    /// Merges all argument types into an element type, then updates the magic
+    /// method signature's params[1] (the array parameter) on its implementing
+    /// class, selecting the instance or static method tables via `is_static`.
+    fn specialize_magic_dispatch_signature(
+        &mut self,
+        class_name: &str,
+        method_key: &str,
+        is_static: bool,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
         let mut elem_ty = PhpType::Never;
         for arg in args {
             let arg_ty = self.infer_type(arg, env)?;
@@ -424,19 +540,28 @@ impl Checker {
         let impl_class_name = self
             .classes
             .get(class_name)
-            .and_then(|class_info| class_info.method_impl_classes.get("__call"))
+            .and_then(|class_info| {
+                if is_static {
+                    class_info.static_method_impl_classes.get(method_key)
+                } else {
+                    class_info.method_impl_classes.get(method_key)
+                }
+            })
             .cloned()
             .unwrap_or_else(|| class_name.to_string());
         let declared_flags = self
             .classes
             .get(&impl_class_name)
-            .map(|class_info| Self::declared_method_param_flags(class_info, "__call", false))
+            .map(|class_info| Self::declared_method_param_flags(class_info, method_key, is_static))
             .unwrap_or_default();
-        if let Some(sig) = self
-            .classes
-            .get_mut(&impl_class_name)
-            .and_then(|class_info| class_info.methods.get_mut("__call"))
-        {
+        let sig_slot = self.classes.get_mut(&impl_class_name).and_then(|class_info| {
+            if is_static {
+                class_info.static_methods.get_mut(method_key)
+            } else {
+                class_info.methods.get_mut(method_key)
+            }
+        });
+        if let Some(sig) = sig_slot {
             if !sig.params.is_empty() {
                 sig.params[0].1 = PhpType::Str;
             }
@@ -560,6 +685,15 @@ impl Checker {
             }
         };
         let class_name = resolved_class_name.as_str();
+        // `Closure::bind($closure, $newThis [, $scope])` is the static form of
+        // `$closure->bindTo(...)`: it returns a new closure with `$this` rebound.
+        // `$scope` is accepted and ignored (closed-world visibility).
+        if class_name.trim_start_matches('\\') == "Closure" && php_symbol_key(method) == "bind" {
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            return Ok(PhpType::Callable);
+        }
         if let Some(enum_info) = self.enums.get(class_name).cloned() {
             return self
                 .check_enum_static_call(&enum_info, class_name, method, args, env, expr.span);
@@ -699,6 +833,22 @@ impl Checker {
                         ),
                     )?;
                 }
+            } else if let Some(callstatic_sig) =
+                class_info.static_methods.get("__callstatic").cloned()
+            {
+                // Forward `Foo::missing(...)` to `Foo::__callStatic("missing", [...])`.
+                let magic_args = Self::magic_call_args(method, args, expr.span);
+                let mut validation_sig = callstatic_sig.clone();
+                Self::relax_magic_call_validation_sig(&mut validation_sig);
+                self.check_known_callable_call(
+                    &validation_sig,
+                    &magic_args,
+                    expr.span,
+                    env,
+                    &format!("Static method {}::__callStatic", class_name),
+                )?;
+                self.specialize_magic_callstatic_signature(class_name, args, env)?;
+                return Ok(callstatic_sig.return_type.clone());
             } else if class_info.methods.contains_key(method) {
                 return Err(CompileError::new(
                     expr.span,
@@ -746,6 +896,16 @@ impl Checker {
                     sig.params.len()
                 };
                 for (i, arg_ty) in arg_types.iter().enumerate() {
+                    if i < regular_param_count
+                        && static_declared_flags.get(i).copied().unwrap_or(false)
+                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    {
+                        // Sharpen a declared generic `array` parameter to the call-site array
+                        // shape so static-method `array` params keep their associative shape,
+                        // matching free-function specialization (issue #406).
+                        sig.params[i].1 = Self::specialize_generic_array_hint(&sig.params[i].1, arg_ty);
+                    }
                     if i < regular_param_count
                         && !static_declared_flags.get(i).copied().unwrap_or(false)
                         && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
@@ -799,6 +959,16 @@ impl Checker {
                     sig.params.len()
                 };
                 for (i, arg_ty) in arg_types.iter().enumerate() {
+                    if i < regular_param_count
+                        && instance_declared_flags.get(i).copied().unwrap_or(false)
+                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    {
+                        // Sharpen a declared generic `array` parameter to the call-site array
+                        // shape on `parent::`/`self::` instance dispatch, matching free-function
+                        // specialization (issue #406).
+                        sig.params[i].1 = Self::specialize_generic_array_hint(&sig.params[i].1, arg_ty);
+                    }
                     if i < regular_param_count
                         && !instance_declared_flags.get(i).copied().unwrap_or(false)
                         && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)

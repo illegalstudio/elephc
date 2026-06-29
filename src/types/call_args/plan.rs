@@ -364,6 +364,7 @@ mod tests {
             defaults,
             return_type: PhpType::Int,
             declared_return: true,
+            by_ref_return: false,
             ref_params: vec![false; 3],
             declared_params: vec![true; 3],
             variadic: None,

@@ -170,6 +170,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         },
         StmtKind::UseDecl { imports } => StmtKind::UseDecl { imports },
         StmtKind::FunctionDecl {
+            by_ref_return,
             name,
             params,
             variadic,
@@ -177,6 +178,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             return_type,
             body,
         } => StmtKind::FunctionDecl {
+            by_ref_return,
             name,
             params: fold_params(params),
             variadic,

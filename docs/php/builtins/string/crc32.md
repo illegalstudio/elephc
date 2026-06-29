@@ -2,7 +2,7 @@
 title: "crc32()"
 description: "Lowers `crc32(string)` through the shared checksum runtime helper."
 sidebar:
-  order: 323
+  order: 325
 ---
 
 ## crc32()

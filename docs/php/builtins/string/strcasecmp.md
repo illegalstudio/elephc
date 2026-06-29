@@ -2,7 +2,7 @@
 title: "strcasecmp()"
 description: "strcasecmp() — string builtin supported by Elephc."
 sidebar:
-  order: 368
+  order: 370
 ---
 
 ## strcasecmp()

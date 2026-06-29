@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3223](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3223) (`lower_getprotobyname`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3444](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3444) (`lower_getprotobyname`)
 - **Function symbol**: `lower_getprotobyname()`
 
 

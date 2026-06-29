@@ -59,6 +59,10 @@ pub(super) fn emit_class_methods(
         let epilogue_label = format!("{}_epilogue", label);
         let generated_body = if class_name == "ReflectionAttribute" && method_key == "newinstance" {
             Some(crate::codegen::reflection::build_attribute_new_instance_body(classes))
+        } else if class_name == "ReflectionAttribute" && method_key == "getarguments" {
+            // Mirror the EIR backend: materialize captured attribute arguments
+            // through the normal array lowering so the two backends agree.
+            Some(crate::codegen::reflection::build_attribute_get_arguments_body(classes))
         } else {
             None
         };
@@ -161,6 +165,7 @@ fn build_static_method_codegen_sig(
             defaults,
             return_type,
             declared_return,
+            by_ref_return: method.by_ref_return,
             ref_params,
             declared_params,
             variadic: method.variadic.clone(),
@@ -241,6 +246,7 @@ fn build_instance_method_codegen_sig(
             defaults,
             return_type,
             declared_return,
+            by_ref_return: method.by_ref_return,
             ref_params,
             declared_params,
             variadic: method.variadic.clone(),

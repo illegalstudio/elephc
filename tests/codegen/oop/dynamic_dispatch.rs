@@ -139,3 +139,47 @@ fn test_dynamic_static_call_on_literal_class_with_args() {
     );
     assert_eq!(out, "9");
 }
+
+/// Regression: a function with *no* return type annotation whose body returns a
+/// method call on a `mixed` receiver must infer a `mixed` return type, not `int`.
+/// Previously the method-call-on-`mixed` inference fell back to `int`, so the
+/// inferred function return type coerced the boxed string result to `0`.
+#[test]
+fn test_inferred_return_of_mixed_receiver_method_keeps_string() {
+    let out = compile_and_run(
+        "<?php
+        class Foo { public function hi(): string { return \"hi\"; } }
+        function call_it(mixed $x) { return $x->hi(); }
+        echo \"[\", call_it(new Foo()), \"]\";
+        ",
+    );
+    assert_eq!(out, "[hi]");
+}
+
+/// Regression: the same inferred-return path must still carry integer results
+/// correctly (the `mixed` widening must not break the scalar case).
+#[test]
+fn test_inferred_return_of_mixed_receiver_method_keeps_int() {
+    let out = compile_and_run(
+        "<?php
+        class Counter { public function n(): int { return 7; } }
+        function get_n(mixed $x) { return $x->n(); }
+        echo get_n(new Counter()) + 1;
+        ",
+    );
+    assert_eq!(out, "8");
+}
+
+/// Regression: an inferred `mixed` return flowing into string concatenation must
+/// materialize the boxed string, not a coerced scalar.
+#[test]
+fn test_inferred_mixed_receiver_method_in_concat() {
+    let out = compile_and_run(
+        "<?php
+        class Foo { public function name(): string { return \"world\"; } }
+        function call_it(mixed $x) { return $x->name(); }
+        echo \"hello \" . call_it(new Foo());
+        ",
+    );
+    assert_eq!(out, "hello world");
+}

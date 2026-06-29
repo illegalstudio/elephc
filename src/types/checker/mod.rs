@@ -44,6 +44,7 @@ use crate::types::{
 };
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
+pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 use builtin_types::validate_magic_method_contracts;
 use schema::propagate_abstract_return_types;
@@ -108,6 +109,14 @@ pub(crate) struct Checker {
     pub current_method: Option<String>,
     /// Whether the current method being type-checked is static.
     pub current_method_is_static: bool,
+    /// Whether the function/method/closure body currently being checked returns by
+    /// reference (`function &f()`). A `return $obj->prop` in such a body promotes the
+    /// property to a reference property (see `reference_property_promotions`).
+    pub current_by_ref_return: bool,
+    /// Nesting depth of closure bodies currently being type-checked. A non-zero
+    /// depth means `$this` is allowed even outside a class method: such a
+    /// closure can be bound to an object later via `Closure::bind` / `bindTo`.
+    pub closure_depth: usize,
     /// Extern function declarations (e.g. `extern "C" { function foo(): void; }`).
     pub extern_functions: HashMap<String, ExternFunctionSig>,
     /// Extern class (C struct) declarations keyed by canonical name.
@@ -127,6 +136,14 @@ pub(crate) struct Checker {
     pub active_globals: HashSet<String>,
     /// Names introduced via `static` declarations in the current local scope.
     pub active_statics: HashSet<String>,
+    /// Names bound as `foreach` loop keys in the current function/closure scope.
+    /// A foreach key is a boxed `Mixed` cell at runtime (`Op::IterCurrentKey`)
+    /// even when the checker types it as `Int`/`Str` from the source array, so an
+    /// `$dst[$k] = $v` write under such a key must defer the indexed-vs-hash
+    /// decision to `Op::ArraySetMixedKey` (destination `Array(Mixed)`) instead of
+    /// promoting to `AssocArray` like a statically-known string key would. Mirrors
+    /// the lowering's `foreach_int_key_locals` lifetime (per function, not popped).
+    pub foreach_key_locals: HashSet<String>,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
     /// Stacks of break/continue depths at each enclosing `finally` block boundary,
@@ -136,6 +153,11 @@ pub(crate) struct Checker {
     /// Merged with AST-only warnings from `collect_warnings` before being returned
     /// in `CheckResult`.
     pub warnings: Vec<crate::errors::CompileWarning>,
+    /// `(class, property)` pairs for regular properties that had a reference taken
+    /// (`$x = &$obj->prop`, by-reference return of `$obj->prop`). Recorded while
+    /// checking bodies and applied to `classes` after checking so every access lowers
+    /// through the property's ref-cell. See `apply_reference_property_promotions`.
+    pub reference_property_promotions: HashSet<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -151,6 +173,8 @@ pub(crate) struct FnDecl {
     /// Declared element type hint on the variadic parameter (`int ...$xs`), if any.
     pub variadic_type: Option<TypeExpr>,
     pub return_type: Option<TypeExpr>,
+    /// `true` when declared with `function &f()` — the function returns a reference.
+    pub by_ref_return: bool,
     pub span: crate::span::Span,
     pub body: Vec<crate::parser::ast::Stmt>,
     /// Attribute groups attached to the original `function` declaration.
@@ -166,6 +190,7 @@ pub fn check_types(program: &Program, target_platform: Platform) -> Result<Check
     let (mut checker, global_env) = driver::check_types_impl(program, target_platform)?;
 
     propagate_abstract_return_types(&mut checker);
+    apply_reference_property_promotions(&mut checker);
     validate_magic_method_contracts(&checker)?;
 
     let mut warnings = crate::types::warnings::collect_warnings(program);
@@ -187,4 +212,69 @@ pub fn check_types(program: &Program, target_platform: Platform) -> Result<Check
         required_libraries: checker.required_libraries,
         warnings,
     })
+}
+
+/// Returns the single object class named by a type, ignoring a nullable arm.
+///
+/// `Foo` or `Foo|null` yields `Foo`; unions of multiple classes, `Mixed`, or non-object
+/// types yield `None` (so reference promotion only applies to a statically known class).
+pub(crate) fn single_object_class_name(ty: &PhpType) -> Option<String> {
+    match ty {
+        PhpType::Object(name) => Some(name.trim_start_matches('\\').to_string()),
+        PhpType::Union(members) => {
+            let mut found: Option<String> = None;
+            for member in members {
+                match member {
+                    PhpType::Void => {}
+                    PhpType::Object(name) => {
+                        let name = name.trim_start_matches('\\').to_string();
+                        if found.as_ref().is_some_and(|existing| existing != &name) {
+                            return None;
+                        }
+                        found = Some(name);
+                    }
+                    _ => return None,
+                }
+            }
+            found
+        }
+        _ => None,
+    }
+}
+
+/// Applies recorded reference-property promotions to the class table after body checking.
+///
+/// A regular property that had a reference taken (`$x = &$obj->prop`, or returned by
+/// reference) must be treated as a reference property by codegen so every access lowers
+/// through its ref-cell. Promotion is applied to the declaring class and every class that
+/// inherits the property, keeping the runtime representation consistent across the
+/// hierarchy. Constructor-promoted `&$param` properties already are reference properties
+/// (borrowed cell) and are left untouched. Object-owned reference cells are also recorded
+/// in `owned_reference_properties` so the object allocates and frees them.
+fn apply_reference_property_promotions(checker: &mut Checker) {
+    let promotions = std::mem::take(&mut checker.reference_property_promotions);
+    for (access_class, prop) in promotions {
+        let declaring = checker
+            .classes
+            .get(&access_class)
+            .and_then(|info| info.property_declaring_classes.get(&prop).cloned())
+            .unwrap_or_else(|| access_class.clone());
+        for info in checker.classes.values_mut() {
+            if !info.properties.iter().any(|(name, _)| name == &prop) {
+                continue;
+            }
+            let same_decl = info
+                .property_declaring_classes
+                .get(&prop)
+                .is_some_and(|decl| decl == &declaring);
+            if !same_decl {
+                continue;
+            }
+            if info.reference_properties.contains(&prop) {
+                continue;
+            }
+            info.reference_properties.insert(prop.clone());
+            info.owned_reference_properties.insert(prop.clone());
+        }
+    }
 }

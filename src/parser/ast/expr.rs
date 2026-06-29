@@ -105,6 +105,9 @@ pub enum ExprKind {
         body: Vec<Stmt>,
         is_arrow: bool,
         is_static: bool,
+        /// `true` when declared with `fn &()`/`function &()` — the closure returns a
+        /// reference (alias) to the returned lvalue rather than a copy.
+        by_ref_return: bool,
         captures: Vec<String>,
         capture_refs: Vec<String>,
     },

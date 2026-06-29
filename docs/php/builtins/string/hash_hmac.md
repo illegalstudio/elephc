@@ -2,7 +2,7 @@
 title: "hash_hmac()"
 description: "Lowers `hash_hmac(algo, data, key, binary?)` through the shared HMAC runtime dispatcher."
 sidebar:
-  order: 335
+  order: 337
 ---
 
 ## hash_hmac()

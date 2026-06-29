@@ -249,6 +249,7 @@ pub enum Op {
     HashIsset,
     ArraySet,
     HashSet,
+    HashUnset,
     ArrayPush,
     MixedArrayAppend,
     HashAppend,
@@ -261,6 +262,7 @@ pub enum Op {
     ArrayHashUnion,
     HashArrayUnion,
     ArrayToHash,
+    ArraySetMixedKey,
     ArrayKeyExists,
     OffsetExists,
     OffsetUnset,
@@ -278,6 +280,14 @@ pub enum Op {
     DynamicObjectNewMixed,
     PropGet,
     PropSet,
+    /// Loads the raw reference-cell pointer stored in a reference property's slot,
+    /// without dereferencing it. Used to alias a local to `$obj->prop` and to return
+    /// `$this->prop` by reference. Operand: object; immediate: property name data id.
+    LoadPropRefCell,
+    /// Binds a local slot as a non-owning reference alias to a ref-cell pointer value.
+    /// Operand: the cell pointer (SSA value); immediate: target local slot. The local
+    /// does not own the cell (no release at scope exit); the owner is the object/source.
+    BindRefCellPtr,
     DynamicPropGet,
     DynamicPropSet,
     NullsafePropGet,
@@ -396,11 +406,15 @@ impl Op {
             }
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
             | HashCloneShallow => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
-            ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet => E::READS_HEAP,
-            ArraySet | HashSet | ArrayPush | HashAppend | OffsetUnset | PropSet
+            ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet | LoadPropRefCell => {
+                E::READS_HEAP
+            }
+            BindRefCellPtr => E::WRITES_LOCAL,
+            ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            ArraySetMixedKey => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             ArrayUnion | HashUnion | ArrayHashUnion | HashArrayUnion | ArrayToHash => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
@@ -551,6 +565,7 @@ impl Op {
             HashIsset => "hash_isset",
             ArraySet => "array_set",
             HashSet => "hash_set",
+            HashUnset => "hash_unset",
             ArrayPush => "array_push",
             MixedArrayAppend => "mixed_array_append",
             HashAppend => "hash_append",
@@ -563,6 +578,7 @@ impl Op {
             ArrayHashUnion => "array_hash_union",
             HashArrayUnion => "hash_array_union",
             ArrayToHash => "array_to_hash",
+        ArraySetMixedKey => "array_set_mixed_key",
             ArrayKeyExists => "array_key_exists",
             OffsetExists => "offset_exists",
             OffsetUnset => "offset_unset",
@@ -580,6 +596,8 @@ impl Op {
             DynamicObjectNewMixed => "dynamic_object_new_mixed",
             PropGet => "prop_get",
             PropSet => "prop_set",
+            LoadPropRefCell => "load_prop_ref_cell",
+            BindRefCellPtr => "bind_ref_cell_ptr",
             DynamicPropGet => "dynamic_prop_get",
             DynamicPropSet => "dynamic_prop_set",
             NullsafePropGet => "nullsafe_prop_get",

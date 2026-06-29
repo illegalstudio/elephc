@@ -2,7 +2,7 @@
 title: "usleep()"
 description: "Lowers `usleep(microseconds)` through the target's C library symbol."
 sidebar:
-  order: 293
+  order: 295
 ---
 
 ## usleep()

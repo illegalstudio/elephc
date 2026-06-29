@@ -12,3 +12,4 @@ mod indexed;
 mod assoc_helpers;
 mod nested;
 mod callbacks;
+mod foreach_key_write;

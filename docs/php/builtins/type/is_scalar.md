@@ -2,7 +2,7 @@
 title: "is_scalar()"
 description: "Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed"
 sidebar:
-  order: 408
+  order: 410
 ---
 
 ## is_scalar()

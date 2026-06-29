@@ -11,7 +11,11 @@
 //! Key details:
 //! - All ABI functions are `#[no_mangle] pub extern "C"`; raw digests are written
 //!   into a caller-provided 64-byte buffer (max digest size across supported algos).
-//! - `ctx` handles are thin pointers to a boxed `HashCtx`; `final`/`free` own them.
+//! - `ctx` handles are thin pointers to a boxed `HashCtx`. The boxed `Mixed`
+//!   resource cell owns the handle for its whole lifetime: `free` is the sole
+//!   destructor (driven by compiler scope-cleanup), while `final` finalizes a
+//!   *clone* and leaves the original handle live. This keeps a context that is
+//!   finalized and then dropped at scope exit a single, safe free.
 
 mod algos;
 mod hmac;
@@ -191,18 +195,26 @@ pub unsafe extern "C" fn elephc_crypto_update(
     ctx.update(slice(data_ptr, data_len));
 }
 
-/// Finalizes the context into `out`, consuming and freeing it. Returns the
-/// digest length, or -1 for a null handle.
+/// Finalizes a *clone* of the context into `out`, leaving the original handle
+/// live and owned by its boxed `Mixed` resource cell. Returns the digest length,
+/// or -1 for a null handle.
+///
+/// The handle is intentionally NOT freed here: ownership stays with the boxed
+/// resource cell, whose scope-cleanup destructor calls `elephc_crypto_free`
+/// exactly once when the box is released. Finalizing a clone keeps the handle
+/// valid afterwards, so a redundant `hash_final()`/`hash_update()` on the same
+/// handle (which PHP rejects) stays memory-safe instead of being a use-after-free
+/// or a double-free against scope cleanup.
 ///
 /// # Safety
-/// `ctx` must be a live handle (invalid after this call); `out` must hold 64 bytes.
+/// `ctx` must be a live handle; `out` must hold 64 bytes.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_crypto_final(ctx: *mut c_void, out_ptr: *mut u8) -> isize {
     if ctx.is_null() {
         return -1;
     }
-    let ctx = Box::from_raw(ctx as *mut HashCtx);
-    let digest = ctx.finalize();
+    let ctx = &*(ctx as *mut HashCtx);
+    let digest = ctx.clone_box().finalize();
     std::ptr::copy_nonoverlapping(digest.as_ptr(), out_ptr, digest.len());
     digest.len() as isize
 }
@@ -220,12 +232,14 @@ pub unsafe extern "C" fn elephc_crypto_clone(ctx: *mut c_void) -> *mut c_void {
     Box::into_raw(Box::new(ctx.clone_box())) as *mut c_void
 }
 
-/// Frees a context without finalizing (scope-exit / error cleanup).
+/// Frees a context (scope-exit / error cleanup) without finalizing.
 ///
-/// Currently UNWIRED on the compiler side by design: elephc has no Resource
-/// scope-cleanup yet, so nothing calls this and an unfinalized context leaks
-/// until process exit (like an unclosed `fopen()` stream). Kept in the ABI for
-/// the planned cleanup pass — see ROADMAP.md (v0.26.x, "Resource scope-cleanup").
+/// This is the single owner that frees a `HashContext`: the compiler's Resource
+/// scope-cleanup boxes the handle as a `Mixed` resource cell (tag 9, kind 2) and
+/// releases it here through `__rt_mixed_free_deep` → `__rt_hash_ctx_free` when the
+/// owning variable leaves scope. Because `elephc_crypto_final` no longer frees,
+/// finalizing a context and then dropping it at scope exit is a single free with
+/// no double-free.
 ///
 /// # Safety
 /// `ctx` must be a live handle and must not be used afterwards.

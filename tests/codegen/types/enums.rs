@@ -132,11 +132,12 @@ fn test_enum_from_string_failure_throws_value_error() {
 }
 
 /// Compiles and runs the checked-in `examples/enums/main.php` fixture and asserts stdout includes
-/// both user-declared enum output and the builtin `SortDirection` helper result.
+/// user-declared enum output, the `->name`/`->value` case introspection loop, and the builtin
+/// `SortDirection` helper result.
 #[test]
 fn test_example_enums_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/enums/main.php"));
-    assert_eq!(out, "1\n2\n3\nDESC");
+    assert_eq!(out, "1\n2\n3\nRed=1 Green=2 Blue=3 \nDESC");
 }
 
 /// Verifies `Color::tryFrom(2)` returns a non-null value and `Color::tryFrom(99)` returns `null`,
@@ -408,6 +409,27 @@ fn test_enum_implements_interface() {
     assert_eq!(out, "hearts");
 }
 
+/// Verifies that an enum instance method can read `$this->name` (and `$this->value`), dispatching
+/// on the case singleton. Previously `$this->name` inside a method was unsupported.
+#[test]
+fn test_enum_method_reads_this_name() {
+    let out = compile_and_run(
+        "<?php
+        enum Suit: string {
+            case Hearts = \"h\";
+            case Spades = \"s\";
+            public function describe(): string {
+                return $this->name . \"=\" . $this->value;
+            }
+        }
+        echo Suit::Hearts->describe();
+        echo PHP_EOL;
+        echo Suit::Spades->describe();
+        ",
+    );
+    assert_eq!(out, "Hearts=h\nSpades=s");
+}
+
 /// Verifies that an enum method can reference a class constant via `self::`.
 #[test]
 fn test_enum_method_uses_self_constant() {
@@ -430,4 +452,86 @@ fn test_enum_method_uses_self_constant() {
 fn test_example_enum_methods_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/enum-methods/main.php"));
     assert_eq!(out, "red/black\ndiamonds\nblack\n52\nclubs\n");
+}
+
+/// Verifies a pure (unit) enum case exposes the read-only `->name` property holding the
+/// case identifier (issue #330). This is the minimal reproduction from the bug report.
+#[test]
+fn test_pure_enum_name_property() {
+    let out = compile_and_run(
+        "<?php
+        enum E { case A; }
+        echo E::A->name;
+        ",
+    );
+    assert_eq!(out, "A");
+}
+
+/// Verifies a backed enum case exposes both `->name` (case identifier) and `->value`
+/// (backing value), and that the two are distinct properties.
+#[test]
+fn test_backed_enum_name_and_value() {
+    let out = compile_and_run(
+        "<?php
+        enum Code: int {
+            case Ok = 1;
+            case Err = 2;
+        }
+        echo Code::Err->name;
+        echo PHP_EOL;
+        echo Code::Err->value;
+        ",
+    );
+    assert_eq!(out, "Err\n2");
+}
+
+/// Verifies a string-backed enum case `->name` returns the case identifier, not the
+/// backing string value (`Status::Live->name` is `"Live"`, not `"live"`).
+#[test]
+fn test_string_backed_enum_name_distinct_from_value() {
+    let out = compile_and_run(
+        "<?php
+        enum Status: string {
+            case Draft = \"draft\";
+            case Live = \"live\";
+        }
+        echo Status::Live->name;
+        echo PHP_EOL;
+        echo Status::Live->value;
+        ",
+    );
+    assert_eq!(out, "Live\nlive");
+}
+
+/// Verifies `->name` reads correctly when the case singleton is aliased through a local
+/// variable and when retrieved from the `cases()` array, exercising the string property
+/// through assignment and array storage of the shared singleton.
+#[test]
+fn test_enum_name_through_variable_and_cases() {
+    let out = compile_and_run(
+        "<?php
+        enum Suit { case Hearts; case Clubs; }
+        $x = Suit::Clubs;
+        echo $x->name;
+        echo PHP_EOL;
+        $cases = Suit::cases();
+        echo $cases[0]->name;
+        echo $cases[1]->name;
+        ",
+    );
+    assert_eq!(out, "Clubs\nHeartsClubs");
+}
+
+/// Verifies `->name` works inside string interpolation alongside `->value`, matching PHP's
+/// `"{$case->name}"` behavior.
+#[test]
+fn test_enum_name_in_interpolation() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 9; }
+        $l = Level::High;
+        echo \"name={$l->name} value={$l->value}\";
+        ",
+    );
+    assert_eq!(out, "name=High value=9");
 }

@@ -319,6 +319,7 @@ fn function_sig_from_extern(sig: &ExternFunctionSig) -> FunctionSig {
         defaults: vec![None; sig.params.len()],
         return_type: sig.return_type.clone(),
         declared_return: true,
+        by_ref_return: false,
         ref_params: vec![false; sig.params.len()],
         declared_params: vec![true; sig.params.len()],
         variadic: None,
@@ -561,6 +562,12 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
         name,
         "iterator_apply" | "preg_replace_callback"
             | "__elephc_mktime_raw" | "__elephc_gmmktime_raw"
+            // serialize/unserialize are EIR-only builtins with no legacy-backend
+            // emitter, so the deferred runtime callable wrapper cannot dispatch them
+            // (it would emit a `_fn_serialize` user-function reference). Exclude them
+            // from runtime string-callable dispatch; direct and first-class-callable
+            // use still work through the EIR path.
+            | "serialize" | "unserialize"
     )
 }
 

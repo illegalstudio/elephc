@@ -2,7 +2,7 @@
 title: "ord()"
 description: "Lowers `ord()` by returning the first byte of a string or zero for empty input."
 sidebar:
-  order: 352
+  order: 354
 ---
 
 ## ord()

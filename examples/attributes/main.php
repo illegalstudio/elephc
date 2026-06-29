@@ -106,6 +106,72 @@ echo $attrs[0]->getName();
 echo "\n";
 $attrs[0]->newInstance();
 
+// Attribute arguments can be floats (and negated numeric literals), not just
+// strings and ints. They round-trip through getArguments() unchanged.
+#[Threshold(0.9, -1.5)]
+class Sensor {}
+
+$thresholds = (new ReflectionClass('Sensor'))->getAttributes()[0]->getArguments();
+echo "Sensor thresholds:";
+foreach ($thresholds as $value) {
+    echo " ";
+    echo $value;
+}
+echo "\n";
+
+// Array arguments (including nested arrays) are materialized too.
+#[Roles(['admin', 'editor', 'viewer'])]
+class Account {}
+
+$roles = (new ReflectionClass('Account'))->getAttributes()[0]->getArguments()[0];
+echo "Account roles:";
+foreach ($roles as $role) {
+    echo " ";
+    echo $role;
+}
+echo "\n";
+
+// Named arguments are returned under their string keys, like in PHP.
+#[\Attribute]
+class Endpoint
+{
+    public function __construct(public string $path, public array $methods = []) {}
+}
+
+#[Endpoint('/users', methods: ['GET', 'POST'])]
+class UserApi {}
+
+$endpoint = (new ReflectionClass('UserApi'))->getAttributes()[0];
+$endpointArgs = $endpoint->getArguments();
+echo "Endpoint path: ", $endpointArgs[0], "\n";
+echo "Endpoint methods: ", $endpointArgs['methods'][0], " ", $endpointArgs['methods'][1], "\n";
+
+$endpointInstance = $endpoint->newInstance();
+echo "Endpoint instance path: ", $endpointInstance->path, "\n";
+
+// Arguments can also be symbolic references — a global constant, a class /
+// interface constant, or an enum case — resolved when reflection reads them back.
+// A global/class constant resolves to its value; an enum case resolves to the
+// case object (just like PHP's ReflectionAttribute::getArguments()).
+const DEFAULT_LIMIT = 100;
+
+class Bounds {
+    const CEILING = 999;
+}
+
+enum Tier: string {
+    case Free = 'free';
+    case Pro = 'pro';
+}
+
+#[Policy(DEFAULT_LIMIT, Bounds::CEILING, Tier::Pro)]
+class Quota {}
+
+$policyArgs = (new ReflectionClass('Quota'))->getAttributes()[0]->getArguments();
+echo "Policy limit: ", $policyArgs[0], "\n";
+echo "Policy ceiling: ", $policyArgs[1], "\n";
+echo "Policy tier: ", $policyArgs[2]->value, "\n";
+
 $method = new ReflectionMethod('Greeter', 'greet');
 echo "ReflectionMethod attrs:";
 foreach ($method->getAttributes() as $attr) {

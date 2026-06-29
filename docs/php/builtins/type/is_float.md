@@ -2,7 +2,7 @@
 title: "is_float()"
 description: "is_float() — type builtin supported by Elephc."
 sidebar:
-  order: 401
+  order: 403
 ---
 
 ## is_float()

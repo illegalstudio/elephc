@@ -118,6 +118,13 @@ impl Checker {
                         "foreach requires an array, iterable, or an object implementing Iterator/IteratorAggregate",
                     ));
                 }
+                // A foreach key is a boxed `Mixed` cell at runtime regardless of
+                // the source array's key type, so record the bound name so that a
+                // `$dst[$k] = $v` write under it defers to `Op::ArraySetMixedKey`
+                // instead of promoting the destination to `AssocArray`.
+                if let Some(k) = key_var {
+                    self.foreach_key_locals.insert(k.clone());
+                }
                 if *value_by_ref && matches!(arr_ty, PhpType::Object(_) | PhpType::Iterable) {
                     return Err(CompileError::new(
                         stmt.span,

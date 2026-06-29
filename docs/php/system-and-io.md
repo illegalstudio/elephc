@@ -182,6 +182,47 @@ Encoding rules for objects:
 - Floats encode at PHP's `serialize_precision = -1` — the shortest decimal that round-trips back to the same `double` (so `json_encode(1.0/3.0)` is `0.3333333333333333`, not the 14-digit `echo`/`(string)` form, and `json_encode(0.1 + 0.2)` is `0.30000000000000004`). The JSON number layout differs from `var_export`: integer-valued floats drop the fraction (`json_encode(100.0)` is `100`, not `100.0`) unless `JSON_PRESERVE_ZERO_FRACTION` is set, and exponential magnitudes use a lowercase `e` with a `d.d` mantissa and a no-leading-zero exponent (`1.0e+17`, `1.0e-6`). The decimal/exponential boundary matches PHP (`zend_gcvt`): exponential when `decpt < -3` or `decpt > 17`. The dedicated `__rt_json_ftoa` runtime helper finds the shortest precision by probing `snprintf("%.*e", p, x)` against a `strtod` re-parse, independent of the default `precision` used elsewhere.
 - JSON helpers are emitted through the shared runtime surface on every supported target. Structural decode into `Mixed`, stdClass dynamic-property helpers, JsonSerializable-aware object encoding, validation, pretty-printing, depth tracking, and JSON error-message lookup are all part of that target-aware runtime path.
 
+## Serialization
+
+| Function | Signature | Notes |
+|---|---|---|
+| `serialize()` | `serialize($value): string` | Produces PHP's `serialize()` wire format, byte-for-byte: `N;` (null), `b:0;`/`b:1;` (bool), `i:<int>;` (int), `d:<float>;` (float, shortest round-trip at `serialize_precision = -1`, with `INF`/`-INF`/`NAN` for non-finite values), `s:<bytelen>:"<raw>";` (string, raw bytes with the exact byte length and no escaping), `a:<count>:{<key><value>...}` (indexed and associative arrays, nested, with int keys as `i:K;` and string keys as `s:N:"...";`, in insertion order), and `O:<len>:"<Class>":<count>:{...}` (objects). |
+| `unserialize()` | `unserialize($data, $options = []): mixed` | Parses the `serialize()` wire format back into a boxed `Mixed` value. Scalars, arrays, and objects round-trip exactly. Malformed or unsupported input returns `false`, matching PHP's failure indicator. The `$options` argument is accepted for signature compatibility and currently ignored. |
+
+`serialize()`/`unserialize()` round-trip the scalar, array, and object subset exactly,
+and the produced bytes are interchangeable with the PHP interpreter. They share the same
+runtime walker family as `json_encode`/`json_decode` and reuse the shortest-float
+formatter, so float output matches `json_encode`'s precision.
+
+### Objects
+
+Objects serialize as `O:<len>:"<Class>":<count>:{...}` with PHP's exact property-key
+mangling: public properties use the bare name, protected use `\0*\0name`, and private
+use `\0Class\0name`. Properties are emitted in declaration order (inherited first).
+
+Serialization magic methods are honoured:
+
+- **`__serialize(): array`** — when defined, the object body is the returned array's
+  `key;value;` pairs instead of the raw properties.
+- **`__unserialize(array $data): void`** — when defined, the parsed body is passed to it
+  to restore the object (instead of injecting properties by name). Its `$data` parameter
+  is treated as a string/int-keyed array so `$data['key']` works (a bare `array` hint
+  otherwise resolves to an integer-indexed array).
+- **`__sleep(): array`** — serializes only the named properties, in `__sleep()`'s order,
+  using their mangled keys.
+- **`__wakeup(): void`** — runs after properties are injected (when `__unserialize()` is
+  not defined).
+
+Repeated objects within a single `serialize()` call are emitted as `r:<index>;`
+back-references (PHP's global value counter: every value consumes the next index, array
+keys do not), and `unserialize()` rebuilds them as a single shared instance so `===`
+identity is preserved. This is the same machinery used to persist `Phar` global metadata
+(see [Streams](streams.md)).
+
+**Limitations:** a cyclic reference *inside an object's own properties* resolves to
+`null` on `unserialize()` (serialization itself handles cycles correctly), and the
+deprecated `Serializable` interface (`C:` wire form) is not supported.
+
 ## Regex
 
 Regex functions and SPL regex iterators are documented in [Regex](regex.md),

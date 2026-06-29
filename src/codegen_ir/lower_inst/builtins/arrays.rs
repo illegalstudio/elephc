@@ -1719,7 +1719,7 @@ fn array_map_callback_array_element_type(ty: PhpType) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
-            if matches!(elem, PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Void | PhpType::Never) {
+            if matches!(elem, PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Void | PhpType::Never | PhpType::Mixed) {
                 return Ok(elem);
             }
             Err(CodegenIrError::unsupported(format!(

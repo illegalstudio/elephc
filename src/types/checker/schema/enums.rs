@@ -289,6 +289,18 @@ pub(crate) fn insert_enum_metadata(
         declared_properties.insert("value".to_string());
         readonly_properties.insert("value".to_string());
     }
+    // Every enum case (pure or backed) exposes a readonly public `name` string holding the case
+    // identifier, mirroring PHP's `UnitEnum::$name`. Append it after any backing `value` so backed
+    // enums keep `value` at offset 8; the offset matches the singleton property slot layout used by
+    // EIR codegen (`8 + index * 16`).
+    let name_offset = 8 + properties.len() * 16;
+    properties.push(("name".to_string(), PhpType::Str));
+    property_offsets.insert("name".to_string(), name_offset);
+    property_declaring_classes.insert("name".to_string(), name.to_string());
+    defaults.push(None);
+    property_visibilities.insert("name".to_string(), Visibility::Public);
+    declared_properties.insert("name".to_string());
+    readonly_properties.insert("name".to_string());
 
     let mut static_methods = HashMap::new();
     let mut static_method_visibilities = HashMap::new();
@@ -301,6 +313,7 @@ pub(crate) fn insert_enum_metadata(
             defaults: Vec::new(),
             return_type: PhpType::Array(Box::new(PhpType::Object(name.to_string()))),
             declared_return: true,
+            by_ref_return: false,
             ref_params: Vec::new(),
             declared_params: Vec::new(),
             variadic: None,
@@ -326,6 +339,7 @@ pub(crate) fn insert_enum_metadata(
                         ])
                     },
                     declared_return: true,
+                    by_ref_return: false,
                     ref_params: vec![false],
                     declared_params: vec![true],
                     variadic: None,
@@ -407,6 +421,7 @@ pub(crate) fn insert_enum_metadata(
             final_properties,
             readonly_properties,
             reference_properties,
+            owned_reference_properties: HashSet::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
             static_properties: Vec::new(),

@@ -28,6 +28,7 @@ fn test_eliminate_dead_code_prunes_negated_strict_switch_true_case() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::binop(Expr::var("value"), BinOp::StrictNotEq, Expr::int_lit(1)),
@@ -82,6 +83,7 @@ fn test_eliminate_dead_code_prunes_exhaustive_negated_and_switch_true_default() 
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Switch {
                     subject: Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
@@ -127,6 +129,7 @@ fn test_eliminate_dead_code_prunes_exhaustive_negated_or_switch_true_default() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Switch {
                     subject: Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
@@ -174,6 +177,7 @@ fn test_eliminate_dead_code_prunes_switch_true_suffix_after_exhaustive_multi_pat
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Switch {
                     subject: Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
@@ -220,6 +224,7 @@ fn test_eliminate_dead_code_prunes_scalar_switch_suffix_after_exhaustive_multi_p
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::new(

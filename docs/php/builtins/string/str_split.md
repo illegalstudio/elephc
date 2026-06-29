@@ -2,7 +2,7 @@
 title: "str_split()"
 description: "Lowers `str_split(string, length?)` into the fixed-width string-array splitter."
 sidebar:
-  order: 366
+  order: 368
 ---
 
 ## str_split()

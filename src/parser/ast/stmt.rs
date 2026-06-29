@@ -12,7 +12,7 @@ use crate::names::Name;
 use crate::span::Span;
 
 use super::{
-    AttributeGroup, CType, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr,
+    AttributeGroup, CType, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
     ExternField, ExternParam, PackedField, StaticReceiver, TraitUse, TypeExpr,
 };
 
@@ -80,7 +80,10 @@ pub enum StmtKind {
     },
     RefAssign {
         target: String,
-        source: String,
+        /// The reference source lvalue: a plain `Variable`, a `PropertyAccess`
+        /// (`$obj->prop`), an `ArrayAccess` (`$arr[$k]`), or a call to a
+        /// by-reference-returning callee (`f()`, `$o->m()`, `($c)()`).
+        source: Expr,
     },
     If {
         condition: Expr,
@@ -177,6 +180,9 @@ pub enum StmtKind {
         /// argument collected into the variadic is checked against this type.
         variadic_type: Option<TypeExpr>,
         return_type: Option<TypeExpr>,
+        /// `true` when declared with `function &f()` — calls return a reference (alias)
+        /// to the returned lvalue rather than a copy.
+        by_ref_return: bool,
         body: Vec<Stmt>,
     },
     FunctionVariantGroup {
@@ -318,12 +324,12 @@ impl Stmt {
         )
     }
 
-    /// Creates a `RefAssign` statement for `$target =& $source`.
+    /// Creates a `RefAssign` statement for `$target =& $source` aliasing a plain variable.
     pub fn ref_assign(target: impl Into<String>, source: impl Into<String>) -> Self {
         Self::new(
             StmtKind::RefAssign {
                 target: target.into(),
-                source: source.into(),
+                source: Expr::new(ExprKind::Variable(source.into()), Span::dummy()),
             },
             Span::dummy(),
         )

@@ -57,6 +57,52 @@ echo $map[2];    // two
 echo $map["02"]; // leading
 ```
 
+## Removing elements with unset
+
+`unset($map[$key])` removes a single entry from an associative array. The removed key's owned
+key and value storage is released, the live `count()` drops by one, and `isset()`, `foreach`,
+and re-insertion all observe the entry as gone. Iteration order follows PHP: surviving entries
+keep their original order, and re-adding a removed key appends it at the end.
+
+```php
+<?php
+$map = ["a" => 1, "b" => 2, "c" => 3];
+unset($map["b"]);
+
+echo count($map);          // 2
+echo isset($map["b"]) ? "y" : "n"; // n
+$map["b"] = 9;             // re-added at the end
+foreach ($map as $k => $v) { echo "$k=$v "; } // a=1 c=3 b=9
+```
+
+`unset()` also works on indexed arrays. PHP removes the key **without renumbering** the survivors,
+so the array becomes sparse (a hole is left). The remaining keys keep their original values, and a
+later `$arr[] = ...` append continues at `max_key + 1`.
+
+```php
+<?php
+$arr = [1, 2, 3];
+unset($arr[1]);
+foreach ($arr as $k => $v) { echo "$k=$v "; } // 0=1 2=3 (no key 1)
+$arr[] = 9;                                    // appended at key 3
+echo isset($arr[1]) ? "y" : "n";               // n
+```
+
+`unset()` respects copy-on-write: removing a key from one array never mutates another array that
+was assigned from it. Unsetting a key that is not present is a no-op.
+
+```php
+<?php
+$a = ["x" => 1, "y" => 2];
+$b = $a;
+unset($b["x"]);
+echo count($a); // 2 — original is untouched
+echo count($b); // 1
+```
+
+> Removing an element from an array passed **by reference** (`function f(array &$a)`) is not yet
+> supported and reports a compile error.
+
 ## Array union
 
 `+` between arrays follows PHP union semantics: keys from the left operand win, and only keys that are missing from the left are copied from the right.
@@ -198,7 +244,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 
 `array_filter()` accepts `ARRAY_FILTER_USE_VALUE` (`0`), `ARRAY_FILTER_USE_BOTH` (`1`), and `ARRAY_FILTER_USE_KEY` (`2`). Invalid mode values throw `ValueError`.
 
-> Callback arguments can be string literals, runtime string names for user functions, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()` resolve runtime string callback variables through descriptor dispatch. `array_map()` stores mixed result elements when the selected callback return shape is only known at runtime.
+> Callback arguments can be string literals, runtime string names for user functions, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()` resolve runtime string callback variables through descriptor dispatch. `array_map()` stores mixed result elements when the selected callback return shape is only known at runtime. `array_map()` also runs over a heterogeneous (boxed `mixed`) input array: each element is passed to the callback as a `mixed` value, so a callback with a `mixed` (or untyped) parameter sees and can return each element with its original runtime type.
 > `call_user_func_array()` also accepts dynamic indexed and associative argument arrays for callbacks with a known signature, including userland variadic callbacks. When a callable value has no single static signature at the call site, elephc emits an AOT runtime dispatch over user functions and closure/FCC wrappers available in that codegen context, then applies the matched target's descriptor metadata: parameter names, defaults, by-reference flags, variadic position, return shape, captures, hidden receiver arguments, and callable shape. Runtime string callback names dispatch over user functions, supported builtins, and public static-method strings by case-insensitive name matching, materialize the matched descriptor, and invoke its generated descriptor invoker. Descriptor invokers receive a temporary boxed Mixed clone of the argument container and inspect its runtime tag to handle indexed arrays and associative hashes through the same signature-level wrapper, so the source `$args` remains usable with its original static layout after the call. String keys bind named parameters; unconsumed string and numeric keys are copied into `...$rest` for variadic callbacks. Dynamic arrays passed to by-reference callback parameters use temporary reference cells, so callback writes do not mutate the source argument array.
 
 `usort()` and `uasort()` sort arrays of **objects** as well as scalars. The comparator receives each element as its object handle, so an unannotated comparator's parameters are typed from the array element automatically — `usort($items, fn($a, $b) => $a->weight <=> $b->weight)` works without writing `($a, $b)` type hints, and `usort($dates, fn($a, $b) => $a <=> $b)` over `DateTime`/`DateTimeImmutable` compares by instant. Explicit hints (`function (Item $a, Item $b)`) are equally accepted. Sorting an array of **strings** with a user comparator is not yet supported and reports a clear unsupported-feature error.

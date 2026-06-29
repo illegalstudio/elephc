@@ -130,6 +130,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             is_static,
             captures,
             capture_refs,
+            by_ref_return,
         } => ExprKind::Closure {
             params,
             variadic,
@@ -140,6 +141,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             is_static,
             captures,
             capture_refs,
+            by_ref_return,
         },
         ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
             name,

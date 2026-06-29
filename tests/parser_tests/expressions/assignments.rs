@@ -49,7 +49,7 @@ fn test_parse_reference_assignment() {
     match &stmts[0].kind {
         StmtKind::RefAssign { target, source } => {
             assert_eq!(target, "b");
-            assert_eq!(source, "a");
+            assert!(matches!(&source.kind, ExprKind::Variable(name) if name == "a"));
         }
         other => panic!("expected RefAssign, got {:?}", other),
     }

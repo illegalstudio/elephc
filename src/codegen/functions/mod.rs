@@ -41,7 +41,6 @@ pub(crate) use self::callback_wrapper::{
     emit_callback_wrapper, emit_extern_callback_trampoline,
 };
 pub(crate) use self::fiber_wrapper::emit_fiber_wrapper;
-pub(crate) use self::generator::emit_generator_with_label;
 pub use self::types::{infer_contextual_type, infer_local_type_with_ctx};
 pub(crate) use self::types::singular_object_class;
 

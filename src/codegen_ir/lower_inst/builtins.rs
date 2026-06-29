@@ -34,6 +34,7 @@ mod json;
 mod math;
 mod pointers;
 mod regex;
+mod serialize;
 mod spl;
 mod system;
 mod strings;
@@ -74,6 +75,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "phpversion" => lower_phpversion(ctx, inst),
         "strlen" => lower_strlen(ctx, inst),
         "count" => lower_count(ctx, inst),
+        "closure_bind" => lower_closure_bind(ctx, inst),
         "buffer_len" => buffers::lower_buffer_len(ctx, inst),
         "buffer_free" => buffers::lower_buffer_free(ctx, inst),
         "ptr" => pointers::lower_ptr(ctx, inst),
@@ -242,6 +244,30 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "file_put_contents" => io::lower_file_put_contents(ctx, inst),
         "__elephc_phar_set_compression" => io::lower_elephc_phar_set_compression(ctx, inst),
         "__elephc_phar_list_entries" => io::lower_elephc_phar_list_entries(ctx, inst),
+        "__elephc_phar_get_metadata" => io::lower_elephc_phar_get_metadata(ctx, inst),
+        "__elephc_phar_get_stub" => io::lower_elephc_phar_get_stub(ctx, inst),
+        "__elephc_phar_set_metadata" => io::lower_elephc_phar_set_metadata(ctx, inst),
+        "__elephc_phar_set_stub" => io::lower_elephc_phar_set_stub(ctx, inst),
+        "__elephc_phar_get_file_metadata" => {
+            io::lower_elephc_phar_get_file_metadata(ctx, inst)
+        }
+        "__elephc_phar_set_file_metadata" => {
+            io::lower_elephc_phar_set_file_metadata(ctx, inst)
+        }
+        "__elephc_phar_gzip_archive" => io::lower_elephc_phar_gzip_archive(ctx, inst),
+        "__elephc_phar_bzip2_archive" => io::lower_elephc_phar_bzip2_archive(ctx, inst),
+        "__elephc_phar_decompress_archive" => {
+            io::lower_elephc_phar_decompress_archive(ctx, inst)
+        }
+        "__elephc_phar_sign_openssl" => io::lower_elephc_phar_sign_openssl(ctx, inst),
+        "__elephc_phar_sign_hash" => io::lower_elephc_phar_sign_hash(ctx, inst),
+        "__elephc_phar_set_zip_password" => io::lower_elephc_phar_set_zip_password(ctx, inst),
+        "__elephc_phar_get_signature_hash" => {
+            io::lower_elephc_phar_get_signature_hash(ctx, inst)
+        }
+        "__elephc_phar_get_signature_type" => {
+            io::lower_elephc_phar_get_signature_type(ctx, inst)
+        }
         "file_exists" => io::lower_file_exists(ctx, inst),
         "copy" => io::lower_copy(ctx, inst),
         "rename" => io::lower_rename(ctx, inst),
@@ -328,6 +354,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "json_last_error" => json::lower_json_last_error(ctx, inst),
         "json_last_error_msg" => json::lower_json_last_error_msg(ctx, inst),
         "json_validate" => json::lower_json_validate(ctx, inst),
+        "serialize" => serialize::lower_serialize(ctx, inst),
+        "unserialize" => serialize::lower_unserialize(ctx, inst),
         "function_exists" => lower_function_exists(ctx, inst),
         "class_exists" | "interface_exists" | "trait_exists" | "enum_exists" => {
             lower_class_like_exists(ctx, inst, key.as_str())
@@ -943,6 +971,27 @@ fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> 
             other
         ))),
     }
+}
+
+/// Lowers the synthetic `closure_bind` call: rebinds a closure's captured
+/// `$this` to a new receiver via `__rt_closure_bind(descriptor, new_this)`,
+/// returning the rebound closure descriptor.
+fn lower_closure_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "closure_bind", 2)?;
+    let descriptor = expect_operand(inst, 0)?;
+    let new_this = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(descriptor, "x0")?;
+            ctx.load_value_to_reg(new_this, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(descriptor, "rdi")?;
+            ctx.load_value_to_reg(new_this, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_closure_bind");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `strlen()` by coercing string-like values and returning the byte length.

@@ -130,7 +130,9 @@ echo $product->label();
 #[test]
 fn test_example_interfaces_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/interfaces/main.php"));
-    assert_eq!(out, "WIDGET\nA-42\n1\n0\n");
+    // `isset(...) . "\n"`: a bool false stringifies to "" (not "0") in PHP, so the
+    // post-unset isset line is empty.
+    assert_eq!(out, "WIDGET\nA-42\n1\n\n");
 }
 
 /// Verifies an interface with a read-only property (`get;`) can be satisfied by a concrete property.

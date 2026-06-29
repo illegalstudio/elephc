@@ -232,6 +232,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         StmtKind::Continue(levels) => StmtKind::Continue(levels),
         StmtKind::ExprStmt(expr) => StmtKind::ExprStmt(rewrite_expr(expr, defines)),
         StmtKind::FunctionDecl {
+            by_ref_return,
             name,
             params,
             variadic,
@@ -239,6 +240,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             return_type,
             body,
         } => StmtKind::FunctionDecl {
+            by_ref_return,
             name,
             params: params
                 .into_iter()

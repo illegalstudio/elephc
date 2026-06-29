@@ -389,6 +389,7 @@ fn fiber_start_call_sig(arg_count: usize) -> FunctionSig {
         defaults: vec![None; arg_count],
         return_type: PhpType::Mixed,
         declared_return: false,
+        by_ref_return: false,
         ref_params: vec![false; arg_count],
         declared_params: vec![false; arg_count],
         variadic: None,

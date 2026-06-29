@@ -2,7 +2,7 @@
 title: "md5()"
 description: "Lowers `md5(data, binary?)` through the shared crypto-backed runtime helper."
 sidebar:
-  order: 349
+  order: 351
 ---
 
 ## md5()
