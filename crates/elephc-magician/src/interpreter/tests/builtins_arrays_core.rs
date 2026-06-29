@@ -117,9 +117,31 @@ return function_exists("array_reduce");"#,
 fn execute_program_dispatches_array_walk_builtin() {
     let program = parse_fragment(
             br#"function eval_walk_show($value, $key) { echo $key . "=" . $value . ";"; }
-echo array_walk(["a" => 2, "b" => 3], "eval_walk_show") ? "T:" : "F:";
+$show = ["a" => 2, "b" => 3];
+echo array_walk($show, "eval_walk_show") ? "T:" : "F:";
 $call = call_user_func("array_walk", [4, 5], "eval_walk_show");
 $spread = call_user_func_array("array_walk", ["array" => ["z" => 6], "callback" => "eval_walk_show"]);
+function eval_walk_add_key(&$value, $key) { $value = $value + $key + 1; }
+$items = [10, 20];
+array_walk($items, "eval_walk_add_key");
+echo $items[0] . ":" . $items[1] . ":";
+$aliased = [3, 4];
+$alias =& $aliased;
+array_walk($alias, "eval_walk_add_key");
+echo $aliased[0] . ":" . $alias[1] . ":";
+$original = [5, 6];
+$copy = $original;
+array_walk($copy, "eval_walk_add_key");
+echo $original[0] . ":" . $original[1] . ":" . $copy[0] . ":" . $copy[1] . ":";
+class EvalArrayWalkByRefCallbackBox {
+    public function tag(&$value, $key) { $value = $value . $key; }
+}
+$letters = ["a" => "X", "b" => "Y"];
+array_walk($letters, [new EvalArrayWalkByRefCallbackBox(), "tag"]);
+echo $letters["a"] . ":" . $letters["b"] . ":";
+$named = [1];
+array_walk(callback: "eval_walk_add_key", array: $named);
+echo $named[0] . ":";
 return function_exists("array_walk");"#,
         )
         .expect("parse eval fragment");
@@ -128,7 +150,17 @@ return function_exists("array_walk");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "a=2;b=3;T:0=4;1=5;z=6;");
+    assert_eq!(
+        values.output,
+        "a=2;b=3;T:0=4;1=5;z=6;11:22:4:6:5:6:6:8:Xa:Yb:2:"
+    );
+    assert_eq!(
+        values.warnings,
+        vec![
+            "array_walk(): Argument #1 ($array) must be passed by reference, value given",
+            "array_walk(): Argument #1 ($array) must be passed by reference, value given",
+        ]
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval `array_pop()` and `array_shift()` write back writable lvalue calls.
@@ -223,6 +255,33 @@ return function_exists("array_push") && function_exists("array_unshift");"#,
             "array_unshift(): Argument #1 ($array) must be passed by reference, value given",
         ]
     );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+/// Verifies eval array mutators write aliases and preserve copied array sources.
+#[test]
+fn execute_program_array_mutators_preserve_aliases_and_cow() {
+    let program = parse_fragment(
+        br#"$original = [1, 2, 3];
+$copy = $original;
+array_pop($copy);
+echo count($original) . ":" . $original[2] . ":" . count($copy) . ":";
+$aliased = [4, 5];
+$alias =& $aliased;
+array_push($alias, 6);
+echo count($aliased) . ":" . $aliased[2] . ":";
+$sortOriginal = [3, 1];
+$sortCopy = $sortOriginal;
+sort($sortCopy);
+echo $sortOriginal[0] . ":" . $sortCopy[0] . ":";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "3:3:2:3:6:3:1:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval `array_splice()` returns removed values and writes back writable lvalue calls.

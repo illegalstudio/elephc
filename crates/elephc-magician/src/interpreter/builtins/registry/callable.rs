@@ -435,7 +435,10 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if evaluated_args.iter().all(|arg| arg.name.is_none()) {
+    if evaluated_args
+        .iter()
+        .all(|arg| arg.name.is_none() && arg.ref_target.is_none())
+    {
         let evaluated_args = evaluated_args.into_iter().map(|arg| arg.value).collect();
         return eval_callable_with_values(name, evaluated_args, context, values);
     }

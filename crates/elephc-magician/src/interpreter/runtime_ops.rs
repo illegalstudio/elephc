@@ -64,6 +64,25 @@ pub trait RuntimeValueOps {
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Creates a shallow array copy before writeback paths perform PHP COW writes.
+    fn array_clone_shallow(
+        &mut self,
+        array: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let len = self.array_len(array)?;
+        let mut result = match self.type_tag(array)? {
+            EVAL_TAG_ARRAY => self.array_new(len)?,
+            EVAL_TAG_ASSOC => self.assoc_new(len)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        };
+        for position in 0..len {
+            let key = self.array_iter_key(array, position)?;
+            let value = self.array_get(array, key)?;
+            result = self.array_set(result, key, value)?;
+        }
+        Ok(result)
+    }
+
     /// Reads a named property from a runtime object held in a boxed Mixed cell.
     fn property_get(
         &mut self,

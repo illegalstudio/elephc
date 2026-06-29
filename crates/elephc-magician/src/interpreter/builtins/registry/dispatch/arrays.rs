@@ -80,6 +80,9 @@ pub(in crate::interpreter) fn eval_arrays_builtin_with_values(
             let [array, callback] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
+            values.warning(
+                "array_walk(): Argument #1 ($array) must be passed by reference, value given",
+            )?;
             eval_array_walk_result(*array, *callback, context, values)?
         }
         "array_pop" | "array_shift" => {

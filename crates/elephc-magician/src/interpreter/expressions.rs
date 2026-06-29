@@ -715,6 +715,7 @@ pub(in crate::interpreter) fn eval_call(
             | "array_shift"
             | "array_splice"
             | "array_unshift"
+            | "array_walk"
             | "arsort"
             | "asort"
             | "krsort"
