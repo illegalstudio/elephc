@@ -18,9 +18,9 @@ use crate::codegen::platform::Arch;
 use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed};
 use crate::codegen_ir::eval_ref_arg_helpers::eval_signature_ref_params_supported;
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Op, ValueId};
+use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Module, Op, ValueId};
 use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
-use crate::parser::ast::{Expr, ExprKind, TypeExpr, Visibility};
+use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
 use crate::types::{
     is_php_integer_array_key, AttrArgValue, ClassInfo, FunctionSig, InterfaceInfo, PhpType,
     PropertyHookContract,
@@ -90,6 +90,7 @@ const NATIVE_ARRAY_DEFAULT_KEY_AUTO: u8 = 0;
 const NATIVE_ARRAY_DEFAULT_KEY_INT: u8 = 1;
 const NATIVE_ARRAY_DEFAULT_KEY_STRING: u8 = 2;
 const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
+const MAX_NATIVE_DEFAULT_CONSTANT_DEPTH: usize = 16;
 
 /// Local slot metadata needed for conservative eval scope synchronization.
 #[derive(Clone)]
@@ -134,6 +135,30 @@ struct EvalNativeConstructorRegistration {
     class_name: String,
     signature: FunctionSig,
     bridge_supported: bool,
+}
+
+/// Static metadata used while converting AOT defaults into eval bridge values.
+struct EvalNativeDefaultContext<'a> {
+    module: &'a Module,
+    current_class: Option<&'a str>,
+}
+
+impl<'a> EvalNativeDefaultContext<'a> {
+    /// Builds a default-materialization context for global function defaults.
+    fn global(module: &'a Module) -> Self {
+        Self {
+            module,
+            current_class: None,
+        }
+    }
+
+    /// Builds a default-materialization context for class-like member defaults.
+    fn for_class(module: &'a Module, class_name: &'a str) -> Self {
+        Self {
+            module,
+            current_class: Some(class_name),
+        }
+    }
 }
 
 /// A module-local property type that can be registered with the eval context.
@@ -1908,8 +1933,19 @@ fn eval_native_property_default_registrations(
     let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
-        collect_eval_native_instance_property_defaults(class_name, class_info, &mut registrations);
-        collect_eval_native_static_property_defaults(class_name, class_info, &mut registrations);
+        let default_context = EvalNativeDefaultContext::for_class(ctx.module, class_name);
+        collect_eval_native_instance_property_defaults(
+            class_name,
+            class_info,
+            &default_context,
+            &mut registrations,
+        );
+        collect_eval_native_static_property_defaults(
+            class_name,
+            class_info,
+            &default_context,
+            &mut registrations,
+        );
     }
     registrations
 }
@@ -2096,13 +2132,16 @@ fn collect_eval_native_member_attributes(
 fn collect_eval_native_instance_property_defaults(
     class_name: &str,
     class_info: &ClassInfo,
+    default_context: &EvalNativeDefaultContext<'_>,
     registrations: &mut Vec<EvalNativePropertyDefaultRegistration>,
 ) {
     for (slot, (property_name, _)) in class_info.properties.iter().enumerate() {
         let default = class_info.defaults.get(slot).and_then(Option::as_ref);
         let is_declared = class_info.property_slot_is_declared(slot, property_name);
         let is_abstract = class_info.abstract_properties.contains(property_name);
-        let Some(default) = eval_native_property_default(default, is_declared, is_abstract) else {
+        let Some(default) =
+            eval_native_property_default(default, is_declared, is_abstract, default_context)
+        else {
             continue;
         };
         registrations.push(EvalNativePropertyDefaultRegistration {
@@ -2122,6 +2161,7 @@ fn collect_eval_native_instance_property_defaults(
 fn collect_eval_native_static_property_defaults(
     class_name: &str,
     class_info: &ClassInfo,
+    default_context: &EvalNativeDefaultContext<'_>,
     registrations: &mut Vec<EvalNativePropertyDefaultRegistration>,
 ) {
     for (slot, (property_name, _)) in class_info.static_properties.iter().enumerate() {
@@ -2132,7 +2172,9 @@ fn collect_eval_native_static_property_defaults(
         let is_declared = class_info
             .declared_static_properties
             .contains(property_name);
-        let Some(default) = eval_native_property_default(default, is_declared, false) else {
+        let Some(default) =
+            eval_native_property_default(default, is_declared, false, default_context)
+        else {
             continue;
         };
         registrations.push(EvalNativePropertyDefaultRegistration {
@@ -2596,10 +2638,318 @@ fn eval_native_php_type_member_specs(members: &[PhpType]) -> Option<String> {
 }
 
 /// Converts a PHP signature default into the compact eval bridge default ABI.
-fn eval_native_callable_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
+fn eval_native_callable_default(
+    expr: &Expr,
+    default_context: &EvalNativeDefaultContext<'_>,
+) -> Option<EvalNativeCallableDefault> {
+    eval_native_callable_default_at(expr, default_context, 0)
+}
+
+/// Converts a PHP default expression while preserving a recursion limit for constants.
+fn eval_native_callable_default_at(
+    expr: &Expr,
+    default_context: &EvalNativeDefaultContext<'_>,
+    depth: usize,
+) -> Option<EvalNativeCallableDefault> {
+    if depth > MAX_NATIVE_DEFAULT_CONSTANT_DEPTH {
+        return None;
+    }
     eval_native_literal_default(expr)
-        .or_else(|| eval_native_object_default(expr))
-        .or_else(|| eval_native_array_default(expr))
+        .or_else(|| eval_native_object_default(expr, default_context, depth))
+        .or_else(|| eval_native_array_default(expr, default_context, depth))
+        .or_else(|| eval_native_constant_expression_default(expr, default_context, depth))
+}
+
+/// Converts representable pure constant expressions into native eval defaults.
+fn eval_native_constant_expression_default(
+    expr: &Expr,
+    default_context: &EvalNativeDefaultContext<'_>,
+    depth: usize,
+) -> Option<EvalNativeCallableDefault> {
+    match &expr.kind {
+        ExprKind::ConstRef(name) => {
+            eval_native_global_constant_default(default_context, name, depth + 1)
+        }
+        ExprKind::ClassConstant { receiver } => {
+            eval_native_static_receiver_name(default_context, receiver)
+                .map(EvalNativeCallableDefault::String)
+        }
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            eval_native_scoped_constant_default(default_context, receiver, name, depth + 1)
+        }
+        ExprKind::BinaryOp { left, op, right } => {
+            eval_native_binary_expression_default(left, op, right, default_context, depth + 1)
+        }
+        ExprKind::Not(inner) => {
+            eval_native_default_truthy(&eval_native_callable_default_at(
+                inner,
+                default_context,
+                depth + 1,
+            )?)
+            .map(|value| eval_native_bool_default(!value))
+        }
+        ExprKind::BitNot(inner) => eval_native_default_int(inner, default_context, depth + 1)
+            .map(|value| eval_native_int_default(!value)),
+        ExprKind::NullCoalesce { value, default } => {
+            let value = eval_native_callable_default_at(value, default_context, depth + 1)?;
+            if eval_native_default_is_null(&value) {
+                eval_native_callable_default_at(default, default_context, depth + 1)
+            } else {
+                Some(value)
+            }
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            if eval_native_default_truthy(&eval_native_callable_default_at(
+                condition,
+                default_context,
+                depth + 1,
+            )?)? {
+                eval_native_callable_default_at(then_expr, default_context, depth + 1)
+            } else {
+                eval_native_callable_default_at(else_expr, default_context, depth + 1)
+            }
+        }
+        ExprKind::ShortTernary { value, default } => {
+            let value = eval_native_callable_default_at(value, default_context, depth + 1)?;
+            if eval_native_default_truthy(&value)? {
+                Some(value)
+            } else {
+                eval_native_callable_default_at(default, default_context, depth + 1)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Converts one supported binary constant expression into a native eval default.
+fn eval_native_binary_expression_default(
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    default_context: &EvalNativeDefaultContext<'_>,
+    depth: usize,
+) -> Option<EvalNativeCallableDefault> {
+    match op {
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow => {
+            eval_native_numeric_binary_default(left, op, right, default_context, depth + 1)
+        }
+        BinOp::Mod => {
+            let left = eval_native_default_int(left, default_context, depth + 1)?;
+            let right = eval_native_default_int(right, default_context, depth + 1)?;
+            (right != 0).then(|| eval_native_int_default(left % right))
+        }
+        BinOp::Concat => {
+            let left = eval_native_default_string(left, default_context, depth + 1)?;
+            let right = eval_native_default_string(right, default_context, depth + 1)?;
+            Some(EvalNativeCallableDefault::String(format!("{left}{right}")))
+        }
+        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
+            let left = eval_native_default_int(left, default_context, depth + 1)?;
+            let right = eval_native_default_int(right, default_context, depth + 1)?;
+            let value = match op {
+                BinOp::BitAnd => left & right,
+                BinOp::BitOr => left | right,
+                BinOp::BitXor => left ^ right,
+                _ => unreachable!("bitwise default operator was prefiltered"),
+            };
+            Some(eval_native_int_default(value))
+        }
+        BinOp::ShiftLeft | BinOp::ShiftRight => {
+            let left = eval_native_default_int(left, default_context, depth + 1)?;
+            let right =
+                u32::try_from(eval_native_default_int(right, default_context, depth + 1)?).ok()?;
+            let value = match op {
+                BinOp::ShiftLeft => left.checked_shl(right),
+                BinOp::ShiftRight => left.checked_shr(right),
+                _ => unreachable!("shift default operator was prefiltered"),
+            }?;
+            Some(eval_native_int_default(value))
+        }
+        BinOp::And | BinOp::Or | BinOp::Xor => {
+            let left = eval_native_default_truthy(&eval_native_callable_default_at(
+                left,
+                default_context,
+                depth + 1,
+            )?)?;
+            let right = eval_native_default_truthy(&eval_native_callable_default_at(
+                right,
+                default_context,
+                depth + 1,
+            )?)?;
+            let value = match op {
+                BinOp::And => left && right,
+                BinOp::Or => left || right,
+                BinOp::Xor => left ^ right,
+                _ => unreachable!("logical default operator was prefiltered"),
+            };
+            Some(eval_native_bool_default(value))
+        }
+        BinOp::NullCoalesce => {
+            let left = eval_native_callable_default_at(left, default_context, depth + 1)?;
+            if eval_native_default_is_null(&left) {
+                eval_native_callable_default_at(right, default_context, depth + 1)
+            } else {
+                Some(left)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Converts one supported arithmetic expression into a native eval default.
+fn eval_native_numeric_binary_default(
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    default_context: &EvalNativeDefaultContext<'_>,
+    depth: usize,
+) -> Option<EvalNativeCallableDefault> {
+    if let (Some(left), Some(right)) = (
+        eval_native_default_int(left, default_context, depth + 1),
+        eval_native_default_int(right, default_context, depth + 1),
+    ) {
+        return match op {
+            BinOp::Add => left.checked_add(right).map(eval_native_int_default),
+            BinOp::Sub => left.checked_sub(right).map(eval_native_int_default),
+            BinOp::Mul => left.checked_mul(right).map(eval_native_int_default),
+            BinOp::Div if right != 0 => {
+                Some(eval_native_float_default(left as f64 / right as f64))
+            }
+            BinOp::Pow => {
+                let value = (left as f64).powf(right as f64);
+                value.is_finite().then(|| eval_native_float_default(value))
+            }
+            _ => None,
+        };
+    }
+
+    let left = eval_native_default_numeric(left, default_context, depth + 1)?;
+    let right = eval_native_default_numeric(right, default_context, depth + 1)?;
+    let value = match op {
+        BinOp::Add => left + right,
+        BinOp::Sub => left - right,
+        BinOp::Mul => left * right,
+        BinOp::Div if right != 0.0 => left / right,
+        BinOp::Pow => left.powf(right),
+        _ => return None,
+    };
+    value.is_finite().then(|| eval_native_float_default(value))
+}
+
+/// Builds one bool default metadata value.
+fn eval_native_bool_default(value: bool) -> EvalNativeCallableDefault {
+    EvalNativeCallableDefault::Scalar {
+        kind: NATIVE_DEFAULT_BOOL,
+        payload: i64::from(value),
+    }
+}
+
+/// Builds one int default metadata value.
+fn eval_native_int_default(value: i64) -> EvalNativeCallableDefault {
+    EvalNativeCallableDefault::Scalar {
+        kind: NATIVE_DEFAULT_INT,
+        payload: value,
+    }
+}
+
+/// Builds one float default metadata value.
+fn eval_native_float_default(value: f64) -> EvalNativeCallableDefault {
+    EvalNativeCallableDefault::Scalar {
+        kind: NATIVE_DEFAULT_FLOAT,
+        payload: value.to_bits() as i64,
+    }
+}
+
+/// Returns true when one default metadata value is PHP `null`.
+fn eval_native_default_is_null(default: &EvalNativeCallableDefault) -> bool {
+    matches!(
+        default,
+        EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_NULL,
+            ..
+        }
+    )
+}
+
+/// Returns PHP truthiness for one representable native eval default.
+fn eval_native_default_truthy(default: &EvalNativeCallableDefault) -> Option<bool> {
+    match default {
+        EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_NULL,
+            ..
+        } => Some(false),
+        EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_BOOL,
+            payload,
+        } => Some(*payload != 0),
+        EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_INT,
+            payload,
+        } => Some(*payload != 0),
+        EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_FLOAT,
+            payload,
+        } => Some(f64::from_bits(*payload as u64) != 0.0),
+        EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_EMPTY_ARRAY,
+            ..
+        } => Some(false),
+        EvalNativeCallableDefault::String(value) => {
+            Some(!value.is_empty() && value != "0")
+        }
+        EvalNativeCallableDefault::Array(_) | EvalNativeCallableDefault::Object { .. } => None,
+        EvalNativeCallableDefault::Scalar { .. } => None,
+    }
+}
+
+/// Extracts an int value from one representable default expression.
+fn eval_native_default_int(
+    expr: &Expr,
+    default_context: &EvalNativeDefaultContext<'_>,
+    depth: usize,
+) -> Option<i64> {
+    match eval_native_callable_default_at(expr, default_context, depth)? {
+        EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_INT,
+            payload,
+        } => Some(payload),
+        _ => None,
+    }
+}
+
+/// Extracts a numeric value from one representable default expression.
+fn eval_native_default_numeric(
+    expr: &Expr,
+    default_context: &EvalNativeDefaultContext<'_>,
+    depth: usize,
+) -> Option<f64> {
+    match eval_native_callable_default_at(expr, default_context, depth)? {
+        EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_INT,
+            payload,
+        } => Some(payload as f64),
+        EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_FLOAT,
+            payload,
+        } => Some(f64::from_bits(payload as u64)),
+        _ => None,
+    }
+}
+
+/// Extracts a string value from one representable default expression.
+fn eval_native_default_string(
+    expr: &Expr,
+    default_context: &EvalNativeDefaultContext<'_>,
+    depth: usize,
+) -> Option<String> {
+    match eval_native_callable_default_at(expr, default_context, depth)? {
+        EvalNativeCallableDefault::String(value) => Some(value),
+        _ => None,
+    }
 }
 
 /// Converts scalar/string/empty-array defaults into the compact eval bridge default ABI.
@@ -2634,7 +2984,11 @@ fn eval_native_literal_default(expr: &Expr) -> Option<EvalNativeCallableDefault>
 }
 
 /// Converts supported object-valued defaults into compact eval bridge metadata.
-fn eval_native_object_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
+fn eval_native_object_default(
+    expr: &Expr,
+    default_context: &EvalNativeDefaultContext<'_>,
+    depth: usize,
+) -> Option<EvalNativeCallableDefault> {
     let ExprKind::NewObject { class_name, args } = &expr.kind else {
         return None;
     };
@@ -2643,7 +2997,11 @@ fn eval_native_object_default(expr: &Expr) -> Option<EvalNativeCallableDefault> 
     }
     let mut default_args = Vec::with_capacity(args.len());
     for arg in args {
-        default_args.push(eval_native_object_default_arg(arg)?);
+        default_args.push(eval_native_object_default_arg(
+            arg,
+            default_context,
+            depth + 1,
+        )?);
     }
     Some(EvalNativeCallableDefault::Object {
         class_name: class_name.as_canonical(),
@@ -2652,22 +3010,30 @@ fn eval_native_object_default(expr: &Expr) -> Option<EvalNativeCallableDefault> 
 }
 
 /// Converts one object-valued default constructor argument into bridge metadata.
-fn eval_native_object_default_arg(expr: &Expr) -> Option<EvalNativeCallableObjectDefaultArg> {
+fn eval_native_object_default_arg(
+    expr: &Expr,
+    default_context: &EvalNativeDefaultContext<'_>,
+    depth: usize,
+) -> Option<EvalNativeCallableObjectDefaultArg> {
     match &expr.kind {
         ExprKind::NamedArg { name, value } => Some(EvalNativeCallableObjectDefaultArg {
             name: Some(name.clone()),
-            default: eval_native_callable_default(value)?,
+            default: eval_native_callable_default_at(value, default_context, depth + 1)?,
         }),
         ExprKind::Spread(_) => None,
         _ => Some(EvalNativeCallableObjectDefaultArg {
             name: None,
-            default: eval_native_callable_default(expr)?,
+            default: eval_native_callable_default_at(expr, default_context, depth + 1)?,
         }),
     }
 }
 
 /// Converts supported array-valued defaults into compact eval bridge metadata.
-fn eval_native_array_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
+fn eval_native_array_default(
+    expr: &Expr,
+    default_context: &EvalNativeDefaultContext<'_>,
+    depth: usize,
+) -> Option<EvalNativeCallableDefault> {
     match &expr.kind {
         ExprKind::ArrayLiteral(elements) => {
             let mut default_elements = Vec::with_capacity(elements.len());
@@ -2677,7 +3043,11 @@ fn eval_native_array_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
                 }
                 default_elements.push(EvalNativeCallableArrayDefaultElement {
                     key: None,
-                    default: eval_native_callable_default(element)?,
+                    default: eval_native_callable_default_at(
+                        element,
+                        default_context,
+                        depth + 1,
+                    )?,
                 });
             }
             Some(EvalNativeCallableDefault::Array(default_elements))
@@ -2686,8 +3056,16 @@ fn eval_native_array_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
             let mut default_elements = Vec::with_capacity(elements.len());
             for (key, value) in elements {
                 default_elements.push(EvalNativeCallableArrayDefaultElement {
-                    key: Some(eval_native_array_default_key(key)?),
-                    default: eval_native_callable_default(value)?,
+                    key: Some(eval_native_array_default_key(
+                        key,
+                        default_context,
+                        depth + 1,
+                    )?),
+                    default: eval_native_callable_default_at(
+                        value,
+                        default_context,
+                        depth + 1,
+                    )?,
                 });
             }
             Some(EvalNativeCallableDefault::Array(default_elements))
@@ -2697,7 +3075,208 @@ fn eval_native_array_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
 }
 
 /// Converts one supported static array key into bridge metadata.
-fn eval_native_array_default_key(expr: &Expr) -> Option<EvalNativeCallableArrayDefaultKey> {
+fn eval_native_array_default_key(
+    expr: &Expr,
+    default_context: &EvalNativeDefaultContext<'_>,
+    depth: usize,
+) -> Option<EvalNativeCallableArrayDefaultKey> {
+    if let Some(key) = eval_native_literal_array_default_key(expr) {
+        return Some(key);
+    }
+    match eval_native_callable_default_at(expr, default_context, depth + 1)? {
+        EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_NULL,
+            ..
+        } => Some(EvalNativeCallableArrayDefaultKey::String(String::new())),
+        EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_BOOL,
+            payload,
+        } => Some(EvalNativeCallableArrayDefaultKey::Int((payload != 0) as i64)),
+        EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_INT,
+            payload,
+        } => Some(EvalNativeCallableArrayDefaultKey::Int(payload)),
+        EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_FLOAT,
+            payload,
+        } => Some(EvalNativeCallableArrayDefaultKey::Int(
+            f64::from_bits(payload as u64) as i64,
+        )),
+        EvalNativeCallableDefault::String(value) => {
+            eval_native_string_array_default_key(&value)
+        }
+        _ => None,
+    }
+}
+
+/// Resolves and materializes one global constant default expression.
+fn eval_native_global_constant_default(
+    default_context: &EvalNativeDefaultContext<'_>,
+    name: &str,
+    depth: usize,
+) -> Option<EvalNativeCallableDefault> {
+    let expr_kind = default_context
+        .module
+        .global_constants
+        .get(name)
+        .or_else(|| {
+            default_context
+                .module
+                .global_constants
+                .get(name.trim_start_matches('\\'))
+        })
+        .map(|(expr_kind, _)| expr_kind.clone())?;
+    let expr = Expr::new(expr_kind, crate::span::Span::dummy());
+    eval_native_callable_default_at(&expr, default_context, depth + 1)
+}
+
+/// Resolves and materializes one class-like constant default expression.
+fn eval_native_scoped_constant_default(
+    default_context: &EvalNativeDefaultContext<'_>,
+    receiver: &StaticReceiver,
+    constant_name: &str,
+    depth: usize,
+) -> Option<EvalNativeCallableDefault> {
+    let class_name = eval_native_static_receiver_name(default_context, receiver)?;
+    if let Some((declaring_name, value)) =
+        eval_native_class_constant_expr(default_context.module, &class_name, constant_name)
+    {
+        let nested_context =
+            EvalNativeDefaultContext::for_class(default_context.module, declaring_name);
+        return eval_native_callable_default_at(value, &nested_context, depth + 1);
+    }
+    if let Some((declaring_name, value)) =
+        eval_native_interface_constant_expr(default_context.module, &class_name, constant_name)
+    {
+        let nested_context =
+            EvalNativeDefaultContext::for_class(default_context.module, declaring_name);
+        return eval_native_callable_default_at(value, &nested_context, depth + 1);
+    }
+    if let Some((declaring_name, value)) =
+        eval_native_trait_constant_expr(default_context.module, &class_name, constant_name)
+    {
+        let nested_context =
+            EvalNativeDefaultContext::for_class(default_context.module, declaring_name);
+        return eval_native_callable_default_at(value, &nested_context, depth + 1);
+    }
+    None
+}
+
+/// Resolves `self`, `static`, `parent`, or a named receiver for default constants.
+fn eval_native_static_receiver_name(
+    default_context: &EvalNativeDefaultContext<'_>,
+    receiver: &StaticReceiver,
+) -> Option<String> {
+    match receiver {
+        StaticReceiver::Named(name) => {
+            Some(name.as_canonical().trim_start_matches('\\').to_string())
+        }
+        StaticReceiver::Self_ | StaticReceiver::Static => {
+            default_context.current_class.map(str::to_string)
+        }
+        StaticReceiver::Parent => {
+            let current = default_context.current_class?;
+            resolve_eval_native_default_class(default_context.module, current)
+                .and_then(|(_, class_info)| class_info.parent.clone())
+        }
+    }
+}
+
+/// Looks up a class constant expression, including inherited parent classes.
+fn eval_native_class_constant_expr<'a>(
+    module: &'a Module,
+    class_name: &str,
+    constant_name: &str,
+) -> Option<(&'a str, &'a Expr)> {
+    let (resolved_name, class_info) = resolve_eval_native_default_class(module, class_name)?;
+    if let Some(value) = class_info.constants.get(constant_name) {
+        return Some((resolved_name, value));
+    }
+    for interface_name in &class_info.interfaces {
+        if let Some(value) =
+            eval_native_interface_constant_expr(module, interface_name, constant_name)
+        {
+            return Some(value);
+        }
+    }
+    if let Some(parent_name) = class_info.parent.as_deref() {
+        return eval_native_class_constant_expr(module, parent_name, constant_name);
+    }
+    None
+}
+
+/// Looks up an interface constant expression, including inherited interfaces.
+fn eval_native_interface_constant_expr<'a>(
+    module: &'a Module,
+    interface_name: &str,
+    constant_name: &str,
+) -> Option<(&'a str, &'a Expr)> {
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = vec![interface_name.to_string()];
+    while let Some(name) = queue.pop() {
+        let Some((resolved_name, interface_info)) =
+            resolve_eval_native_default_interface(module, &name)
+        else {
+            continue;
+        };
+        if !visited.insert(php_symbol_key(resolved_name.trim_start_matches('\\'))) {
+            continue;
+        }
+        if let Some(value) = interface_info.constants.get(constant_name) {
+            return Some((resolved_name, value));
+        }
+        queue.extend(interface_info.parents.iter().cloned());
+    }
+    None
+}
+
+/// Looks up a direct trait constant expression by PHP-style trait name.
+fn eval_native_trait_constant_expr<'a>(
+    module: &'a Module,
+    trait_name: &str,
+    constant_name: &str,
+) -> Option<(&'a str, &'a Expr)> {
+    let trait_key = php_symbol_key(trait_name.trim_start_matches('\\'));
+    let resolved_name = module
+        .trait_table
+        .names
+        .iter()
+        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == trait_key)?;
+    let value = module
+        .declared_trait_constants
+        .get(resolved_name)
+        .and_then(|constants| constants.get(constant_name))?;
+    Some((resolved_name.as_str(), value))
+}
+
+/// Looks up class metadata by PHP-style case-insensitive name.
+fn resolve_eval_native_default_class<'a>(
+    module: &'a Module,
+    class_name: &str,
+) -> Option<(&'a str, &'a ClassInfo)> {
+    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    module
+        .class_infos
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
+        .map(|(name, info)| (name.as_str(), info))
+}
+
+/// Looks up interface metadata by PHP-style case-insensitive name.
+fn resolve_eval_native_default_interface<'a>(
+    module: &'a Module,
+    interface_name: &str,
+) -> Option<(&'a str, &'a InterfaceInfo)> {
+    let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
+    module
+        .interface_infos
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == interface_key)
+        .map(|(name, info)| (name.as_str(), info))
+}
+
+/// Converts one literal static array key into bridge metadata.
+fn eval_native_literal_array_default_key(expr: &Expr) -> Option<EvalNativeCallableArrayDefaultKey> {
     match &expr.kind {
         ExprKind::IntLiteral(value) => Some(EvalNativeCallableArrayDefaultKey::Int(*value)),
         ExprKind::BoolLiteral(value) => {
@@ -2738,9 +3317,11 @@ fn eval_native_property_default(
     default: Option<&Expr>,
     is_declared: bool,
     is_abstract: bool,
+    default_context: &EvalNativeDefaultContext<'_>,
 ) -> Option<EvalNativeCallableDefault> {
     if let Some(default) = default {
-        return eval_native_literal_default(default).or_else(|| eval_native_array_default(default));
+        return eval_native_literal_default(default)
+            .or_else(|| eval_native_array_default(default, default_context, 0));
     }
     (!is_declared && !is_abstract).then_some(EvalNativeCallableDefault::Scalar {
         kind: NATIVE_DEFAULT_NULL,
@@ -2982,8 +3563,12 @@ fn register_eval_native_function(
             );
         }
     }
+    let default_context = EvalNativeDefaultContext::global(ctx.module);
     for (index, default) in registration.signature.defaults.iter().enumerate() {
-        let Some(default) = default.as_ref().and_then(eval_native_callable_default) else {
+        let Some(default) = default
+            .as_ref()
+            .and_then(|expr| eval_native_callable_default(expr, &default_context))
+        else {
             continue;
         };
         register_eval_native_function_param_default(
@@ -3087,8 +3672,13 @@ fn register_eval_native_method(
             );
         }
     }
+    let default_context =
+        EvalNativeDefaultContext::for_class(ctx.module, &registration.class_name);
     for (index, default) in registration.signature.defaults.iter().enumerate() {
-        let Some(default) = default.as_ref().and_then(eval_native_callable_default) else {
+        let Some(default) = default
+            .as_ref()
+            .and_then(|expr| eval_native_callable_default(expr, &default_context))
+        else {
             continue;
         };
         register_eval_native_method_param_default(
@@ -3531,8 +4121,13 @@ fn register_eval_native_constructor(
             );
         }
     }
+    let default_context =
+        EvalNativeDefaultContext::for_class(ctx.module, &registration.class_name);
     for (index, default) in registration.signature.defaults.iter().enumerate() {
-        let Some(default) = default.as_ref().and_then(eval_native_callable_default) else {
+        let Some(default) = default
+            .as_ref()
+            .and_then(|expr| eval_native_callable_default(expr, &default_context))
+        else {
             continue;
         };
         register_eval_native_constructor_param_default(
