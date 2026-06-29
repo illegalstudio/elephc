@@ -114,7 +114,7 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "min" | "max" => variadic(params, &[]),
         "json_encode" | "json_decode" | "json_validate" => optional(params, 1),
 
-        "preg_match" => optional_by_ref(params, 2, &["matches"]),
+        "preg_match" | "preg_match_all" => optional_by_ref(params, 2, &["matches"]),
         "preg_split" => optional(params, 2),
         "print_r" => optional(params, 1),
         "var_dump" => variadic(params, &[]),
@@ -227,7 +227,8 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("json_validate", 1) => Int(512),
         ("json_validate", 2) => Int(0),
 
-        ("preg_match", 2) => EmptyArray,
+        ("preg_match" | "preg_match_all", 2) => EmptyArray,
+        ("preg_match" | "preg_match_all", 3) => Int(0),
         ("preg_split", 2) => Int(-1),
         ("preg_split", 3) => Int(0),
         ("print_r", 1) => Bool(false),

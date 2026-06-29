@@ -318,8 +318,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         }
         "ptr_write_string" => Some(&["pointer", "string"]),
         "ptr_sizeof" => Some(&["type"]),
-        "preg_match" => Some(&["pattern", "subject", "matches"]),
-        "preg_match_all" => Some(&["pattern", "subject"]),
+        "preg_match" | "preg_match_all" => Some(&["pattern", "subject", "matches", "flags"]),
         "preg_replace" => Some(&["pattern", "replacement", "subject"]),
         "preg_replace_callback" => Some(&["pattern", "callback", "subject"]),
         "preg_split" => Some(&["pattern", "subject", "limit", "flags"]),

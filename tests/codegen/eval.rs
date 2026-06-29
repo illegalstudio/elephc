@@ -3011,6 +3011,23 @@ echo $okAgain . ":" . $firstClassMatches[0];');
     assert_eq!(out, "1:id42:id:42:2:b2:2:1:ID");
 }
 
+/// Verifies named eval preg calls write by-reference `$matches` arrays.
+#[test]
+fn test_eval_named_preg_calls_write_matches_by_ref() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$named = [];
+$ok = preg_match(pattern: "/([a-z]+)([0-9]+)/", subject: "id42", matches: $named);
+echo $ok . ":" . $named[0] . ":" . $named[1] . ":" . $named[2] . ":";
+$all = [];
+$count = preg_match_all(pattern: "/([a-z])([0-9])/", subject: "a1 b2", matches: $all, flags: PREG_SET_ORDER);
+echo $count . ":" . $all[1][0] . ":" . $all[1][2] . ":";
+echo preg_match(pattern: "/x/", subject: "x", flags: PREG_OFFSET_CAPTURE);');
+"#,
+    );
+    assert_eq!(out, "1:id42:id:42:2:b2:2:1");
+}
+
 /// Verifies eval `fnmatch()` supports wildcards, classes, flags, constants, and callables.
 #[test]
 fn test_eval_dispatches_fnmatch_builtin_call() {
