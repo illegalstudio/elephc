@@ -7541,6 +7541,121 @@ echo call_user_func("eval_aot_cuf_ref_int", $value) . ":" . $value;');
     );
 }
 
+/// Verifies eval `call_user_func()` degrades eval-declared method by-ref params to by-value.
+#[test]
+fn test_eval_call_user_func_eval_method_by_ref_args_warn_and_use_value_copy() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalCufMethodRefBox {
+    public function append(&$value) {
+        $value .= "x";
+        return $value;
+    }
+
+    public static function add(&$value) {
+        $value += 2;
+        return $value;
+    }
+
+    public function __invoke(&$value) {
+        $value .= "i";
+        return $value;
+    }
+}
+
+$box = new EvalCufMethodRefBox();
+$value = "a";
+echo call_user_func([$box, "append"], $value) . ":" . $value . "|";
+$num = 3;
+echo call_user_func(["EvalCufMethodRefBox", "add"], $num) . ":" . $num . "|";
+$inv = "q";
+echo call_user_func($box, $inv) . ":" . $inv . "|";
+$first = $box->append(...);
+$firstValue = "b";
+echo call_user_func($first, $firstValue) . ":" . $firstValue . "|";
+$staticFirst = EvalCufMethodRefBox::add(...);
+$staticValue = 4;
+echo call_user_func($staticFirst, $staticValue) . ":" . $staticValue;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "ax:a|5:3|qi:q|bx:b|6:4");
+    for warning in [
+        "EvalCufMethodRefBox::append(): Argument #1 ($value) must be passed by reference, value given",
+        "EvalCufMethodRefBox::add(): Argument #1 ($value) must be passed by reference, value given",
+        "EvalCufMethodRefBox::__invoke(): Argument #1 ($value) must be passed by reference, value given",
+    ] {
+        assert!(
+            out.stderr.contains(warning),
+            "missing by-ref warning {warning:?}: {}",
+            out.stderr
+        );
+    }
+}
+
+/// Verifies eval `call_user_func()` degrades AOT method by-ref params to by-value.
+#[test]
+fn test_eval_call_user_func_aot_method_by_ref_args_warn_and_use_value_copy() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotCufMethodRefBox {
+    public function bump(int &$value): int {
+        $value = $value + 2;
+        return $value;
+    }
+
+    public static function add(int &$value, int $delta): int {
+        $value = $value + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $delta;
+        return $value;
+    }
+}
+
+echo eval('$box = new EvalAotCufMethodRefBox();
+$value = 3;
+echo call_user_func([$box, "bump"], $value) . ":" . $value . "|";
+$staticValue = 4;
+echo call_user_func("EvalAotCufMethodRefBox::add", $staticValue, 3) . ":" . $staticValue . "|";
+$arrayStaticValue = 8;
+echo call_user_func(["EvalAotCufMethodRefBox", "add"], $arrayStaticValue, 2) . ":" . $arrayStaticValue . "|";
+$first = $box->bump(...);
+$firstValue = 5;
+echo call_user_func($first, $firstValue) . ":" . $firstValue . "|";
+$staticFirst = EvalAotCufMethodRefBox::add(...);
+$staticFirstValue = 9;
+echo call_user_func($staticFirst, $staticFirstValue, 1) . ":" . $staticFirstValue . "|";
+$invokable = new EvalAotCufMethodRefBox();
+$invokableValue = 6;
+echo call_user_func($invokable, $invokableValue, 4) . ":" . $invokableValue;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "5:3|7:4|10:8|7:5|10:9|10:6");
+    for warning in [
+        "EvalAotCufMethodRefBox::bump(): Argument #1 ($value) must be passed by reference, value given",
+        "EvalAotCufMethodRefBox::add(): Argument #1 ($value) must be passed by reference, value given",
+        "EvalAotCufMethodRefBox::__invoke(): Argument #1 ($value) must be passed by reference, value given",
+    ] {
+        assert!(
+            out.stderr.contains(warning),
+            "missing by-ref warning {warning:?}: {}",
+            out.stderr
+        );
+    }
+}
+
 /// Verifies eval `ReflectionClass::newInstanceArgs()` preserves AOT constructor by-reference writeback.
 #[test]
 fn test_eval_reflection_new_instance_args_aot_constructor_writes_back_by_ref_args() {

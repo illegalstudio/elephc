@@ -7827,7 +7827,7 @@ fn eval_throw_reflection_instantiation_error(
 }
 
 /// Resolves a static method using private-method scope rules.
-fn eval_dynamic_static_method_for_call(
+pub(in crate::interpreter) fn eval_dynamic_static_method_for_call(
     class_name: &str,
     method_name: &str,
     context: &ElephcEvalContext,
@@ -10006,16 +10006,33 @@ pub(in crate::interpreter) fn bind_native_callable_bound_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
+    bind_native_callable_bound_args_with_mode(
+        signature,
+        args,
+        EvalByRefBindingMode::RequireTarget,
+        context,
+        values,
+    )
+}
+
+/// Binds native AOT callable args using the selected by-reference degradation mode.
+fn bind_native_callable_bound_args_with_mode(
+    signature: Option<NativeCallableSignature>,
+    args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let Some(signature) = signature else {
-        return positional_evaluated_bound_args(None, args, context, values);
+        return positional_evaluated_bound_args(None, args, by_ref_mode, context, values);
     };
     if !signature.bridge_supported() {
         return Err(EvalStatus::RuntimeFatal);
     }
     if signature.param_names().len() == signature.param_count() {
-        bind_native_signature_args(&signature, args, context, values)
+        bind_native_signature_args(&signature, args, by_ref_mode, context, values)
     } else {
-        positional_evaluated_bound_args(Some(&signature), args, context, values)
+        positional_evaluated_bound_args(Some(&signature), args, by_ref_mode, context, values)
     }
 }
 
@@ -10023,6 +10040,7 @@ pub(in crate::interpreter) fn bind_native_callable_bound_args(
 fn positional_evaluated_bound_args(
     signature: Option<&NativeCallableSignature>,
     args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
@@ -10033,10 +10051,15 @@ fn positional_evaluated_bound_args(
         .into_iter()
         .enumerate()
         .map(|(index, arg)| {
-            let ref_target = if signature.is_some_and(|signature| signature.param_by_ref(index)) {
-                Some(arg.ref_target.ok_or(EvalStatus::RuntimeFatal)?)
-            } else {
-                None
+            let ref_target = match signature {
+                Some(signature) => native_parameter_ref_target(
+                    signature,
+                    Some(index),
+                    arg.ref_target,
+                    by_ref_mode,
+                    values,
+                )?,
+                None => None,
             };
             Ok(BoundMethodArg {
                 value: arg.value,
@@ -10047,6 +10070,12 @@ fn positional_evaluated_bound_args(
         .collect::<Result<Vec<_>, _>>()?;
     if let Some(signature) = signature {
         apply_native_callable_bound_arg_types(signature, &mut bound_args, context, values)?;
+        copy_native_call_user_func_by_value_ref_args(
+            signature,
+            &mut bound_args,
+            by_ref_mode,
+            values,
+        )?;
     }
     Ok(bound_args)
 }
@@ -10080,6 +10109,7 @@ pub(in crate::interpreter) fn write_back_native_callable_ref_args(
 fn bind_native_signature_args(
     signature: &NativeCallableSignature,
     args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
@@ -10106,6 +10136,8 @@ fn bind_native_signature_args(
                 &name,
                 arg.value,
                 arg.ref_target,
+                by_ref_mode,
+                values,
             )?;
         } else {
             bind_native_positional_signature_arg(
@@ -10116,6 +10148,7 @@ fn bind_native_signature_args(
                 &mut next_variadic_index,
                 arg.value,
                 arg.ref_target,
+                by_ref_mode,
                 values,
             )?;
         }
@@ -10146,6 +10179,12 @@ fn bind_native_signature_args(
         .collect::<Option<Vec<_>>>()
         .ok_or(EvalStatus::RuntimeFatal)?;
     apply_native_callable_bound_arg_types(signature, &mut bound_args, context, values)?;
+    copy_native_call_user_func_by_value_ref_args(
+        signature,
+        &mut bound_args,
+        by_ref_mode,
+        values,
+    )?;
     Ok(bound_args)
 }
 
@@ -10187,6 +10226,57 @@ fn apply_native_callable_variadic_arg_type(
     Ok(())
 }
 
+/// Copies by-value degraded by-ref native method args before the generated bridge mutates them.
+fn copy_native_call_user_func_by_value_ref_args(
+    signature: &NativeCallableSignature,
+    bound_args: &mut [BoundMethodArg],
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !matches!(by_ref_mode, EvalByRefBindingMode::WarnByValue { .. }) {
+        return Ok(());
+    }
+    let variadic_index = native_callable_variadic_index(signature);
+    for (position, bound_arg) in bound_args.iter_mut().enumerate() {
+        let param_index = if variadic_index.is_some_and(|index| position >= index) {
+            variadic_index.ok_or(EvalStatus::RuntimeFatal)?
+        } else {
+            position
+        };
+        if !signature.param_by_ref(param_index) || bound_arg.ref_target.is_some() {
+            continue;
+        }
+        bound_arg.value = copy_native_call_user_func_by_value_ref_arg(bound_arg.value, values)?;
+    }
+    Ok(())
+}
+
+/// Allocates a temporary runtime cell for one by-value degraded by-ref native method arg.
+fn copy_native_call_user_func_by_value_ref_arg(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    match tag {
+        EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL | EVAL_TAG_RESOURCE => {
+            let word = values.raw_value_word(value)?;
+            values.raw_word_value(tag, word)
+        }
+        EVAL_TAG_STRING => {
+            let bytes = values.string_bytes(value)?;
+            values.string_bytes_value(&bytes)
+        }
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => values.array_clone_shallow(value),
+        EVAL_TAG_OBJECT => {
+            let word = values.raw_value_word(value)?;
+            let retained = values.retain_raw_heap_word(word)?;
+            values.raw_heap_word_value(retained)
+        }
+        EVAL_TAG_NULL => values.null(),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
 /// Returns the native callable variadic slot, if metadata registered one.
 fn native_callable_variadic_index(signature: &NativeCallableSignature) -> Option<usize> {
     (0..signature.param_count()).find(|index| signature.param_variadic(*index))
@@ -10201,6 +10291,7 @@ fn bind_native_positional_signature_arg(
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if variadic_index.is_some_and(|index| *next_positional >= index) {
@@ -10208,14 +10299,16 @@ fn bind_native_positional_signature_arg(
         *next_variadic_index = next_variadic_index
             .checked_add(1)
             .ok_or(EvalStatus::RuntimeFatal)?;
-        let ref_target = native_parameter_ref_target(signature, variadic_index, ref_target)?;
+        let ref_target =
+            native_parameter_ref_target(signature, variadic_index, ref_target, by_ref_mode, values)?;
         return bind_native_variadic_arg(bound_args, variadic_index, key, value, ref_target, values);
     }
     let param_index = *next_positional;
     if param_index >= bound_args.len() || bound_args[param_index].is_some() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let ref_target = native_parameter_ref_target(signature, Some(param_index), ref_target)?;
+    let ref_target =
+        native_parameter_ref_target(signature, Some(param_index), ref_target, by_ref_mode, values)?;
     bound_args[param_index] = Some(BoundMethodArg {
         value,
         ref_target,
@@ -10233,12 +10326,20 @@ fn bind_native_named_signature_arg(
     name: &str,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if let Some(param_index) = native_regular_param_index(signature, variadic_index, name) {
         if bound_args[param_index].is_some() {
             return Err(EvalStatus::RuntimeFatal);
         }
-        let ref_target = native_parameter_ref_target(signature, Some(param_index), ref_target)?;
+        let ref_target = native_parameter_ref_target(
+            signature,
+            Some(param_index),
+            ref_target,
+            by_ref_mode,
+            values,
+        )?;
         bound_args[param_index] = Some(BoundMethodArg {
             value,
             ref_target,
@@ -10254,6 +10355,8 @@ fn native_parameter_ref_target(
     signature: &NativeCallableSignature,
     param_index: Option<usize>,
     ref_target: Option<EvalReferenceTarget>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalReferenceTarget>, EvalStatus> {
     let Some(param_index) = param_index else {
         return Ok(None);
@@ -10261,7 +10364,33 @@ fn native_parameter_ref_target(
     if !signature.param_by_ref(param_index) {
         return Ok(None);
     }
-    ref_target.map(Some).ok_or(EvalStatus::RuntimeFatal)
+    if let Some(ref_target) = ref_target {
+        return Ok(Some(ref_target));
+    }
+    match by_ref_mode {
+        EvalByRefBindingMode::RequireTarget => Err(EvalStatus::RuntimeFatal),
+        EvalByRefBindingMode::WarnByValue { callable_name } => {
+            let param_name = native_callable_param_warning_name(signature, param_index);
+            values.warning(&format!(
+                "{callable_name}(): Argument #{} (${param_name}) must be passed by reference, value given",
+                param_index + 1
+            ))?;
+            Ok(None)
+        }
+    }
+}
+
+/// Returns the PHP parameter name used in native method by-reference warnings.
+fn native_callable_param_warning_name(
+    signature: &NativeCallableSignature,
+    param_index: usize,
+) -> String {
+    signature
+        .param_names()
+        .get(param_index)
+        .filter(|name| !name.is_empty())
+        .cloned()
+        .unwrap_or_else(|| format!("arg{}", param_index + 1))
 }
 
 /// Returns the matching non-variadic native parameter index for one named arg.
@@ -10410,10 +10539,64 @@ pub(in crate::interpreter) fn eval_native_method_with_evaluated_args_unchecked_b
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_native_method_with_evaluated_args_unchecked_bridge_scope_with_ref_mode(
+        object,
+        class_name,
+        method_name,
+        evaluated_args,
+        bridge_scope,
+        called_class_scope,
+        EvalByRefBindingMode::RequireTarget,
+        context,
+        values,
+    )
+}
+
+/// Calls one generated/AOT instance method for `call_user_func()` by-value by-ref degradation.
+pub(in crate::interpreter) fn eval_native_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    bridge_scope: Option<&str>,
+    called_class_scope: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let signature_owner = bridge_scope.unwrap_or(class_name);
+    let callable_name = format!("{}::{}", signature_owner.trim_start_matches('\\'), method_name);
+    eval_native_method_with_evaluated_args_unchecked_bridge_scope_with_ref_mode(
+        object,
+        class_name,
+        method_name,
+        evaluated_args,
+        bridge_scope,
+        called_class_scope,
+        EvalByRefBindingMode::WarnByValue {
+            callable_name: &callable_name,
+        },
+        context,
+        values,
+    )
+}
+
+/// Calls one generated/AOT instance method with a selected by-reference binding mode.
+fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with_ref_mode(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    bridge_scope: Option<&str>,
+    called_class_scope: Option<&str>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let signature_owner = bridge_scope.unwrap_or(class_name);
     let signature = context.native_method_signature(signature_owner, method_name);
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
-    let bound_args = bind_native_callable_bound_args(signature, evaluated_args, context, values)?;
+    let bound_args =
+        bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values)?;
     let result = if let Some(scope) = bridge_scope {
         eval_native_method_call_with_scope(
             scope,
@@ -10547,10 +10730,60 @@ pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args_unch
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_native_static_method_with_evaluated_args_unchecked_bridge_scope_with_ref_mode(
+        class_name,
+        method_name,
+        evaluated_args,
+        bridge_scope,
+        called_class_scope,
+        EvalByRefBindingMode::RequireTarget,
+        context,
+        values,
+    )
+}
+
+/// Calls one generated/AOT static method for `call_user_func()` by-value by-ref degradation.
+pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    bridge_scope: Option<&str>,
+    called_class_scope: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let signature_owner = bridge_scope.unwrap_or(class_name);
+    let callable_name = format!("{}::{}", signature_owner.trim_start_matches('\\'), method_name);
+    eval_native_static_method_with_evaluated_args_unchecked_bridge_scope_with_ref_mode(
+        class_name,
+        method_name,
+        evaluated_args,
+        bridge_scope,
+        called_class_scope,
+        EvalByRefBindingMode::WarnByValue {
+            callable_name: &callable_name,
+        },
+        context,
+        values,
+    )
+}
+
+/// Calls one generated/AOT static method with a selected by-reference binding mode.
+fn eval_native_static_method_with_evaluated_args_unchecked_bridge_scope_with_ref_mode(
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    bridge_scope: Option<&str>,
+    called_class_scope: Option<&str>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let signature_owner = bridge_scope.unwrap_or(class_name);
     let signature = context.native_static_method_signature(signature_owner, method_name);
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
-    let bound_args = bind_native_callable_bound_args(signature, evaluated_args, context, values)?;
+    let bound_args =
+        bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values)?;
     let result = if let Some(scope) = bridge_scope {
         eval_native_static_method_call_with_scope(
             scope,

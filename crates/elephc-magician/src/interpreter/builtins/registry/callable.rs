@@ -344,7 +344,68 @@ fn eval_evaluated_callable_with_call_user_func_values(
         EvaluatedCallable::Named(name) => {
             eval_named_callable_with_call_user_func_values(name, evaluated_args, context, values)
         }
-        _ => eval_evaluated_callable_with_values(callback, evaluated_args, context, values),
+        EvaluatedCallable::InvokableObject { object } => {
+            eval_invokable_object_with_call_user_func_values(
+                *object,
+                evaluated_args,
+                context,
+                values,
+            )
+        }
+        EvaluatedCallable::ObjectMethod {
+            object,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        } => match native_class {
+            Some(native_class) => {
+                eval_native_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
+                    *object,
+                    native_class,
+                    method,
+                    positional_args(evaluated_args),
+                    bridge_scope.as_deref(),
+                    called_class.as_deref(),
+                    context,
+                    values,
+                )
+            }
+            None => eval_object_method_with_call_user_func_values(
+                *object,
+                method,
+                evaluated_args,
+                context,
+                values,
+            ),
+        },
+        EvaluatedCallable::StaticMethod {
+            class_name,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        } => match native_class {
+            Some(native_class) => {
+                eval_native_static_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
+                    native_class,
+                    method,
+                    positional_args(evaluated_args),
+                    bridge_scope.as_deref(),
+                    called_class.as_deref(),
+                    context,
+                    values,
+                )
+            }
+            None => eval_static_method_with_call_user_func_values(
+                class_name,
+                method,
+                called_class.as_deref(),
+                evaluated_args,
+                context,
+                values,
+            ),
+        },
     }
 }
 
@@ -388,6 +449,274 @@ fn eval_named_callable_with_call_user_func_values(
         return eval_native_function_with_values(function, evaluated_args, context, values);
     }
     Err(EvalStatus::UnsupportedConstruct)
+}
+
+/// Invokes an invokable object through `call_user_func()` by-value argument semantics.
+fn eval_invokable_object_with_call_user_func_values(
+    object: RuntimeCellHandle,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_object_method_with_call_user_func_values(
+        object,
+        "__invoke",
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Invokes an object-method callable through `call_user_func()` by-value semantics.
+fn eval_object_method_with_call_user_func_values(
+    object: RuntimeCellHandle,
+    method: &str,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let evaluated_args = positional_args(evaluated_args);
+    if let Some(result) = eval_object_method_call_user_func_result(
+        object,
+        method,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    eval_method_call_result_with_evaluated_args(object, method, evaluated_args, context, values)
+}
+
+/// Attempts call-user-func by-value dispatch for eval-declared or generated object methods.
+fn eval_object_method_call_user_func_result(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Ok(identity) = values.object_identity(object) else {
+        return eval_native_object_method_call_user_func_result(
+            object,
+            method_name,
+            evaluated_args,
+            context,
+            values,
+        );
+    };
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return eval_native_object_method_call_user_func_result(
+            object,
+            method_name,
+            evaluated_args,
+            context,
+            values,
+        );
+    };
+    let called_class_name = class.name().to_string();
+    if let Some((declaring_class, method)) =
+        eval_dynamic_method_for_call(&called_class_name, method_name, context)
+    {
+        if method.is_static() || method.is_abstract() {
+            return Ok(None);
+        }
+        let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
+            &format!("{}::{}", declaring_class.trim_start_matches('\\'), method.name()),
+            method.params(),
+            method.parameter_is_by_ref(),
+            method.parameter_is_variadic(),
+            evaluated_args.len(),
+            values,
+        )?;
+        return eval_dynamic_method_with_values_and_ref_flags(
+            &declaring_class,
+            &called_class_name,
+            &method,
+            object,
+            &parameter_is_by_ref,
+            evaluated_args,
+            context,
+            values,
+        )
+        .map(Some);
+    }
+    let Some(parent) = context.class_native_parent_name(&called_class_name) else {
+        return Ok(None);
+    };
+    eval_native_object_method_call_user_func_result_for_class(
+        object,
+        &parent,
+        method_name,
+        Some(&called_class_name),
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Attempts call-user-func by-value dispatch for a generated/AOT object method.
+fn eval_native_object_method_call_user_func_result(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let class_name = runtime_object_class_name(object, values)?;
+    eval_native_object_method_call_user_func_result_for_class(
+        object,
+        &class_name,
+        method_name,
+        Some(&class_name),
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Attempts generated/AOT object-method dispatch for one resolved receiver class.
+fn eval_native_object_method_call_user_func_result_for_class(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    method_name: &str,
+    called_class_scope: Option<&str>,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some((declaring_class, _, is_static, is_abstract)) =
+        eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?
+    else {
+        return Ok(None);
+    };
+    if is_static || is_abstract {
+        return Ok(None);
+    }
+    eval_native_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
+        object,
+        class_name,
+        method_name,
+        evaluated_args,
+        Some(&declaring_class),
+        called_class_scope,
+        context,
+        values,
+    )
+    .map(Some)
+}
+
+/// Invokes a static-method callable through `call_user_func()` by-value semantics.
+fn eval_static_method_with_call_user_func_values(
+    class_name: &str,
+    method_name: &str,
+    called_class: Option<&str>,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let evaluated_args = positional_args(evaluated_args);
+    if let Some(result) = eval_static_method_call_user_func_result(
+        class_name,
+        method_name,
+        called_class,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    match called_class {
+        Some(called_class) => eval_static_method_call_result_with_called_class(
+            class_name,
+            called_class,
+            method_name,
+            evaluated_args,
+            context,
+            values,
+        ),
+        None => eval_static_method_call_result(
+            class_name,
+            method_name,
+            evaluated_args,
+            context,
+            values,
+        ),
+    }
+}
+
+/// Attempts call-user-func by-value dispatch for eval-declared or generated static methods.
+fn eval_static_method_call_user_func_result(
+    class_name: &str,
+    method_name: &str,
+    called_class: Option<&str>,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let dispatch_class = resolve_eval_static_member_class_name(class_name, context)?;
+    let called_class = called_class.unwrap_or(&dispatch_class).to_string();
+    if let Some((declaring_class, method)) =
+        eval_dynamic_static_method_for_call(&dispatch_class, method_name, context)
+    {
+        if !method.is_static() || method.is_abstract() {
+            return Ok(None);
+        }
+        let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
+            &format!("{}::{}", declaring_class.trim_start_matches('\\'), method.name()),
+            method.params(),
+            method.parameter_is_by_ref(),
+            method.parameter_is_variadic(),
+            evaluated_args.len(),
+            values,
+        )?;
+        return eval_dynamic_static_method_with_values_and_ref_flags(
+            &declaring_class,
+            &called_class,
+            &method,
+            &parameter_is_by_ref,
+            evaluated_args,
+            context,
+            values,
+        )
+        .map(Some);
+    }
+    let native_class = if context.has_class(&dispatch_class) {
+        let Some(parent) = context.class_native_parent_name(&dispatch_class) else {
+            return Ok(None);
+        };
+        parent
+    } else if context.has_interface(&dispatch_class)
+        || context.has_trait(&dispatch_class)
+        || context.has_enum(&dispatch_class)
+    {
+        return Ok(None);
+    } else {
+        dispatch_class.clone()
+    };
+    let Some((declaring_class, _, is_static, is_abstract)) =
+        eval_aot_method_dispatch_metadata_in_hierarchy(
+            &native_class,
+            method_name,
+            context,
+            values,
+        )?
+    else {
+        return Ok(None);
+    };
+    if !is_static || is_abstract {
+        return Ok(None);
+    }
+    eval_native_static_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
+        &native_class,
+        method_name,
+        evaluated_args,
+        Some(&declaring_class),
+        Some(&called_class),
+        context,
+        values,
+    )
+    .map(Some)
 }
 
 /// Builds by-value binding flags for `call_user_func()` and emits PHP by-ref warnings.
