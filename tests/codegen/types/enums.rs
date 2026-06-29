@@ -29,6 +29,29 @@ fn test_backed_enum_value_and_from_identity() {
     assert_eq!(out, "1\n1");
 }
 
+/// Regression: an enum used as a class property / promoted-constructor-param TYPE
+/// must resolve. Previously failed with "Unknown type: Tag" because enum names were
+/// not pre-declared before the class schema pass resolved member type annotations.
+#[test]
+fn test_enum_as_promoted_constructor_param_type() {
+    let out = compile_and_run(
+        "<?php
+        enum Tag: string {
+            case Div = 'div';
+            case Span = 'span';
+        }
+        final class Element {
+            public function __construct(private Tag $tag, private string $text) {}
+            public function render(): string {
+                return '<' . $this->tag->value . '>' . $this->text . '</' . $this->tag->value . '>';
+            }
+        }
+        echo (new Element(Tag::Div, 'hi'))->render();
+        ",
+    );
+    assert_eq!(out, "<div>hi</div>");
+}
+
 /// Verifies `Color::tryFrom(99)` returns `null` for an unknown value (with null coalescing to `Color::Red`),
 /// `Color::cases()` returns all cases, and case index `1` is `Color::Green` by identity.
 #[test]
