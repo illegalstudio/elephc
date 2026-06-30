@@ -159,7 +159,10 @@ pub(in crate::interpreter) fn eval_object_callable(
 /// Converts a PHP-visible eval `Closure` object target into the shared callback enum.
 fn eval_closure_object_target_callable(target: &EvalClosureObjectTarget) -> EvaluatedCallable {
     match target {
-        EvalClosureObjectTarget::Named(name) => EvaluatedCallable::Named(name.clone()),
+        EvalClosureObjectTarget::Named(name) => EvaluatedCallable::Named {
+            name: name.clone(),
+            display_name: name.clone(),
+        },
         EvalClosureObjectTarget::BoundNamed { name, bound_this } => {
             EvaluatedCallable::BoundClosure {
                 name: name.clone(),
@@ -282,9 +285,11 @@ pub(in crate::interpreter) fn eval_string_callable(
             bridge_scope: None,
         });
     }
-    Ok(EvaluatedCallable::Named(
-        callback.trim_start_matches('\\').to_ascii_lowercase(),
-    ))
+    let display_name = callback.trim_start_matches('\\').to_string();
+    Ok(EvaluatedCallable::Named {
+        name: display_name.to_ascii_lowercase(),
+        display_name,
+    })
 }
 
 /// Invokes an already normalized callback with source-order positional values.
@@ -295,7 +300,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
-        EvaluatedCallable::Named(name) => {
+        EvaluatedCallable::Named { name, .. } => {
             if let Some(closure) = context.closure(name).cloned() {
                 return eval_closure_with_evaluated_args(
                     &closure,
@@ -393,7 +398,7 @@ fn eval_evaluated_callable_with_call_user_func_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
-        EvaluatedCallable::Named(name) => {
+        EvaluatedCallable::Named { name, .. } => {
             eval_named_callable_with_call_user_func_values(name, evaluated_args, context, values)
         }
         EvaluatedCallable::BoundClosure { name, bound_this } => {
@@ -869,7 +874,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
-        EvaluatedCallable::Named(name) => {
+        EvaluatedCallable::Named { name, .. } => {
             eval_callable_with_call_array_args(name, evaluated_args, context, values)
         }
         EvaluatedCallable::BoundClosure { name, bound_this } => {

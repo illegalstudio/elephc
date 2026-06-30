@@ -204,6 +204,99 @@ foreach ($callbacks as $index => $cb) {
     );
 }
 
+/// Verifies eval string callback APIs reject missing functions with PHP TypeErrors.
+#[test]
+fn test_eval_callable_validation_missing_string_callables_raise_type_errors() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('try {
+    call_user_func("MiSsInG_Eval_Callback");
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    call_user_func_array("OtherMissingEvalCallback", []);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    Closure::fromCallable("ThirdMissingEvalCallback");
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, function \"MiSsInG_Eval_Callback\" not found or invalid function name|\
+TypeError:call_user_func_array(): Argument #1 ($callback) must be a valid callback, function \"OtherMissingEvalCallback\" not found or invalid function name|\
+TypeError:Failed to create closure from callable: function \"ThirdMissingEvalCallback\" not found or invalid function name"
+    );
+}
+
+/// Verifies `Closure::fromCallable()` rejects invalid object and method targets.
+#[test]
+fn test_eval_callable_validation_closure_from_callable_rejects_invalid_targets() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalFromCallablePlain {}
+class EvalFromCallableMissing {}
+class EvalFromCallablePrivate {
+    private function hidden() {
+        return "bad";
+    }
+}
+class EvalFromCallableInstance {
+    public function inst() {
+        return "bad";
+    }
+}
+
+try {
+    Closure::fromCallable(new EvalFromCallablePlain());
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    Closure::fromCallable([new EvalFromCallableMissing(), "MiSsInG"]);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    Closure::fromCallable([new EvalFromCallablePrivate(), "hidden"]);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    Closure::fromCallable(["EvalFromCallableInstance", "inst"]);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "TypeError:Failed to create closure from callable: no array or string given|\
+TypeError:Failed to create closure from callable: class EvalFromCallableMissing does not have a method \"MiSsInG\"|\
+TypeError:Failed to create closure from callable: cannot access private method EvalFromCallablePrivate::hidden()|\
+TypeError:Failed to create closure from callable: non-static method EvalFromCallableInstance::inst() cannot be called statically"
+    );
+}
+
 /// Verifies `Closure::fromCallable()` preserves by-ref writeback for AOT call targets.
 #[test]
 fn test_eval_closure_from_callable_preserves_aot_by_ref_writeback() {
