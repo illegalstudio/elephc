@@ -300,3 +300,63 @@ echo "bad";');
         out.stderr
     );
 }
+
+/// Verifies first-class ref-like builtin fatals restore the eval bridge frame.
+#[test]
+fn test_eval_first_class_ref_like_builtin_fatal_cleans_up_stack() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo eval('$items = [1];
+$push = array_push(...);
+$push($items);
+echo "bad";');
+"#,
+    );
+
+    assert!(
+        !out.success,
+        "expected eval runtime fatal, stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "");
+    assert!(
+        out.stderr.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
+        "stderr leaked a Rust panic: {}",
+        out.stderr
+    );
+}
+
+/// Verifies `Closure::fromCallable()` ref-like builtin fatals restore the eval bridge frame.
+#[test]
+fn test_eval_closure_from_callable_ref_like_builtin_fatal_cleans_up_stack() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo eval('$items = [1];
+$push = Closure::fromCallable("array_push");
+$push($items);
+echo "bad";');
+"#,
+    );
+
+    assert!(
+        !out.success,
+        "expected eval runtime fatal, stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "");
+    assert!(
+        out.stderr.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
+        "stderr leaked a Rust panic: {}",
+        out.stderr
+    );
+}
