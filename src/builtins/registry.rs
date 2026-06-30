@@ -130,14 +130,17 @@ pub fn is_supported(name: &str) -> bool {
     lookup(name).is_some()
 }
 
-/// Returns an iterator over all registered canonical builtin names.
+/// Returns an iterator over all registered canonical builtin names in sorted order.
 ///
-/// Names are returned in unspecified order and with case-preserved spelling
-/// (i.e., as originally supplied to `builtin!`). Used primarily from test
-/// and documentation-generation contexts.
+/// Names are returned in stable lexicographic order (sorted by `&'static str`)
+/// with case-preserved spelling (i.e., as originally supplied to `builtin!`).
+/// Sorting ensures deterministic assembly layout across compiler builds.
+/// Used primarily from test and documentation-generation contexts.
 #[allow(dead_code)]
 pub fn names() -> impl Iterator<Item = &'static str> {
-    registry().values().map(|def| def.name)
+    let mut sorted: Vec<&str> = registry().values().map(|def| def.name).collect();
+    sorted.sort_unstable();
+    sorted.into_iter()
 }
 
 /// Derives a `FunctionSig` for the named builtin from the registry.
@@ -332,6 +335,18 @@ mod tests {
         assert!(
             all.contains(&"__macro_probe"),
             "names() must yield all registered builtins"
+        );
+    }
+
+    /// Verifies `names()` returns builtin names in sorted order for determinism.
+    #[test]
+    fn names_returns_sorted_order() {
+        let names_vec: Vec<&str> = names().collect();
+        let mut sorted_vec = names_vec.clone();
+        sorted_vec.sort();
+        assert_eq!(
+            names_vec, sorted_vec,
+            "names() must return sorted order for deterministic assembly layout"
         );
     }
 
