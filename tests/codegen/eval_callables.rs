@@ -185,6 +185,32 @@ echo call_user_func_array($local, ["cd"]);');
     assert_eq!(out, "4|local:ab|3|local:cd");
 }
 
+/// Verifies eval first-class function callables resolve namespace function imports.
+#[test]
+fn test_eval_first_class_function_callables_follow_namespace_imports() {
+    let out = compile_and_run(
+        r#"<?php
+eval('namespace EvalFirstClassImport\Lib;
+function target($value) {
+    return "target:" . $value;
+}
+
+namespace EvalFirstClassImport\App;
+use function strlen as Len;
+use function EvalFirstClassImport\Lib\target as AliasTarget;
+
+$len = Len(...);
+$target = AliasTarget(...);
+echo $len("abcd") . "|";
+echo $target("x") . "|";
+echo call_user_func($len, "yz") . "|";
+echo call_user_func_array($target, ["q"]);');
+"#,
+    );
+
+    assert_eq!(out, "4|target:x|2|target:q");
+}
+
 /// Verifies eval first-class callables reject invalid method targets at creation time.
 #[test]
 fn test_eval_first_class_callable_validation_rejects_invalid_method_targets() {
