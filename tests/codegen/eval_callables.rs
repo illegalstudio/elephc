@@ -906,6 +906,69 @@ return call_user_func_array($named, [&$d, 9]) . ":" . gettype($d) . ":" . $d;');
     );
 }
 
+/// Verifies `Closure::fromCallable()` values can cross eval into AOT callable parameters.
+#[test]
+fn test_eval_closure_from_callable_values_pass_to_aot_callable_params() {
+    let out = compile_and_run(
+        r##"<?php
+function eval_closure_bridge_suffix(string $value): string {
+    return $value . "!";
+}
+
+class EvalClosureBridgeTarget {
+    public static function suffix(string $value): string {
+        return $value . "?";
+    }
+
+    public function instanceSuffix(string $value): string {
+        return $value . "~";
+    }
+
+    public function __invoke(string $value): string {
+        return $value . "#";
+    }
+}
+
+class EvalClosureBridgeBox {
+    public $value = "";
+
+    public function __construct(callable $callback) {
+        $this->value = $callback("C");
+    }
+
+    public function apply(callable $callback) {
+        return $callback("M");
+    }
+
+    public static function applyStatic(callable $callback) {
+        return $callback("S");
+    }
+}
+
+echo eval('$target = new EvalClosureBridgeTarget();
+$cases = [
+    Closure::fromCallable("eval_closure_bridge_suffix"),
+    Closure::fromCallable([EvalClosureBridgeTarget::class, "suffix"]),
+    Closure::fromCallable("EvalClosureBridgeTarget::suffix"),
+    Closure::fromCallable([$target, "instanceSuffix"]),
+    Closure::fromCallable($target),
+];
+$out = [];
+foreach ($cases as $callback) {
+    $box = new EvalClosureBridgeBox($callback);
+    $out[] = $box->value . ":" . $box->apply($callback) . ":" .
+        EvalClosureBridgeBox::applyStatic($callback);
+}
+return implode("|", $out);');
+"##,
+    );
+
+    assert_eq!(
+        out,
+        "C!:M!:S!|C?:M?:S?|C?:M?:S?|C~:M~:S~|C#:M#:S#"
+    );
+}
+
 /// Verifies `Closure::call()` rebinds `fromCallable()` method closures to a same-class receiver.
 #[test]
 fn test_eval_closure_from_callable_call_rebinds_same_class_method_and_invokable_targets() {

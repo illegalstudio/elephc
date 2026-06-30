@@ -58,10 +58,11 @@ const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "JsonException",
     "FiberError",
 ];
-const CONSTRUCTOR_HELPER_BASE_FRAME_SIZE: usize = 64;
+const CONSTRUCTOR_HELPER_BASE_FRAME_SIZE: usize = 80;
 const CONSTRUCTOR_HELPER_HANDLER_OFFSET: usize = CONSTRUCTOR_HELPER_BASE_FRAME_SIZE;
 const CONSTRUCTOR_HELPER_FRAME_SIZE: usize =
     CONSTRUCTOR_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
+const X86_64_CONSTRUCTOR_CONTEXT_FRAME_OFFSET: usize = 64;
 
 /// Constructor metadata needed by the eval constructor bridge.
 #[derive(Clone)]
@@ -278,7 +279,7 @@ fn constructor_param_supported(ty: &PhpType) -> bool {
     )
 }
 
-/// Emits `__elephc_eval_value_construct_object(Mixed*, MixedArray*, scope, scope_len) -> bool`.
+/// Emits `__elephc_eval_value_construct_object(Mixed*, MixedArray*, scope, scope_len, ctx) -> bool`.
 fn emit_constructor_helper(
     module: &Module,
     emitter: &mut Emitter,
@@ -333,6 +334,7 @@ fn emit_constructor_aarch64(
     emitter.instruction("str x2, [sp, #0]");                                    // save the active eval class-scope pointer
     emitter.instruction("str x3, [sp, #8]");                                    // save the active eval class-scope length
     emitter.instruction("str x1, [sp, #24]");                                   // save the boxed eval argument array
+    emitter.instruction("str x4, [sp, #64]");                                   // save the active eval context for callable descriptors
     emitter.instruction(&format!("cbz x0, {}", success_label));                 // a null object pointer means there is nothing to construct
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
@@ -386,6 +388,7 @@ fn emit_constructor_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the active eval class-scope pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the active eval class-scope length
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the boxed eval argument array
+    emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the active eval context for callable descriptors
     emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver pointer is null
     emitter.instruction(&format!("jz {}", success_label));                      // a null object pointer means there is nothing to construct
     emitter.instruction("mov rax, rdi");                                        // move the receiver into the mixed-unbox input register
@@ -1464,6 +1467,7 @@ fn emit_x86_64_cast_eval_arg(
                 callable_support,
                 label_prefix,
                 fail_label,
+                X86_64_CONSTRUCTOR_CONTEXT_FRAME_OFFSET,
             );
         }
         PhpType::TaggedScalar => {
