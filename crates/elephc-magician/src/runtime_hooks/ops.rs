@@ -282,6 +282,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
                 arg_array.as_ptr(),
                 scope_ptr,
                 scope_len,
+                self.context.cast(),
             )
         };
         unsafe {
@@ -308,6 +309,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
                 arg_array.as_ptr(),
                 scope_ptr,
                 scope_len,
+                self.context.cast(),
             )
         };
         unsafe {
@@ -661,6 +663,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
                 arg_array.as_ptr(),
                 scope_ptr,
                 scope_len,
+                self.context.cast(),
             )
         };
         unsafe {

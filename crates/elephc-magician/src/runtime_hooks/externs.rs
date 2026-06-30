@@ -117,6 +117,7 @@ unsafe extern "C" {
         args: *mut RuntimeCell,
         scope_ptr: *const u8,
         scope_len: u64,
+        context: *const c_void,
     ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_static_method_call(
         class_ptr: *const u8,
@@ -126,6 +127,7 @@ unsafe extern "C" {
         args: *mut RuntimeCell,
         scope_ptr: *const u8,
         scope_len: u64,
+        context: *const c_void,
     ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_reflection_attribute_new(
         name_ptr: *const u8,
@@ -237,6 +239,7 @@ unsafe extern "C" {
         args: *mut RuntimeCell,
         scope_ptr: *const u8,
         scope_len: u64,
+        context: *const c_void,
     ) -> u64;
     pub(super) fn __elephc_eval_value_take_pending_throwable() -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_class_exists(name_ptr: *const u8, name_len: u64) -> u64;

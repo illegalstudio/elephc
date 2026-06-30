@@ -88,13 +88,15 @@ const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
 ];
 const BUILTIN_THROWABLE_GET_MESSAGE_LABEL: &str = "__elephc_eval_builtin_throwable_getmessage";
 const BUILTIN_THROWABLE_GET_CODE_LABEL: &str = "__elephc_eval_builtin_throwable_getcode";
-const METHOD_HELPER_BASE_FRAME_SIZE: usize = 64;
+const METHOD_HELPER_BASE_FRAME_SIZE: usize = 80;
 const METHOD_HELPER_HANDLER_OFFSET: usize = METHOD_HELPER_BASE_FRAME_SIZE;
 const METHOD_HELPER_FRAME_SIZE: usize = METHOD_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
-const STATIC_METHOD_HELPER_BASE_FRAME_SIZE: usize = 80;
+const STATIC_METHOD_HELPER_BASE_FRAME_SIZE: usize = 96;
 const STATIC_METHOD_HELPER_HANDLER_OFFSET: usize = STATIC_METHOD_HELPER_BASE_FRAME_SIZE;
 const STATIC_METHOD_HELPER_FRAME_SIZE: usize =
     STATIC_METHOD_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
+const X86_64_METHOD_CONTEXT_FRAME_OFFSET: usize = 64;
+const X86_64_STATIC_METHOD_CONTEXT_FRAME_OFFSET: usize = 72;
 
 /// Emits eval method-call helpers when any lowered function owns an eval context.
 pub(super) fn emit_eval_method_helpers(
@@ -427,7 +429,7 @@ fn method_return_supported(ty: &PhpType) -> bool {
     )
 }
 
-/// Emits `__elephc_eval_value_method_call(Mixed*, name, len, MixedArray*, scope, scope_len) -> Mixed*`.
+/// Emits `__elephc_eval_value_method_call(Mixed*, name, len, MixedArray*, scope, scope_len, ctx) -> Mixed*`.
 fn emit_method_call_helper(
     module: &Module,
     emitter: &mut Emitter,
@@ -463,7 +465,7 @@ fn emit_method_call_helper(
     }
 }
 
-/// Emits `__elephc_eval_value_static_method_call(class, method, MixedArray*, scope, scope_len) -> Mixed*`.
+/// Emits `__elephc_eval_value_static_method_call(class, method, MixedArray*, scope, scope_len, ctx) -> Mixed*`.
 fn emit_static_method_call_helper(
     module: &Module,
     emitter: &mut Emitter,
@@ -504,6 +506,7 @@ fn emit_static_method_call_aarch64(
     emitter.instruction("str x5, [sp, #32]");                                   // save the active eval class-scope pointer
     emitter.instruction("str x3, [sp, #40]");                                   // save the requested method-name length
     emitter.instruction("str x6, [sp, #48]");                                   // save the active eval class-scope length
+    emitter.instruction("str x7, [sp, #80]");                                   // save the active eval context for callable descriptors
     emit_aarch64_static_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("b {}", fail_label));                          // no supported static method matched the request
     emit_aarch64_static_method_bodies(
@@ -544,6 +547,8 @@ fn emit_static_method_call_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // save the active eval class-scope pointer
     emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // load the active eval class-scope length stack argument
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the active eval class-scope length
+    emitter.instruction("mov rax, QWORD PTR [rbp + 24]");                       // load the active eval context stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the active eval context for callable descriptors
     emit_x86_64_static_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported static method matched the request
     emit_x86_64_static_method_bodies(
@@ -582,6 +587,7 @@ fn emit_method_call_aarch64(
     emitter.instruction("str x3, [sp, #24]");                                   // save the boxed eval argument array
     emitter.instruction("str x4, [sp, #32]");                                   // save the active eval class-scope pointer
     emitter.instruction("str x5, [sp, #40]");                                   // save the active eval class-scope length
+    emitter.instruction("str x6, [sp, #64]");                                   // save the active eval context for callable descriptors
     emitter.instruction(&format!("cbz x0, {}", fail_label));                    // null Mixed receiver cannot dispatch a method
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
@@ -632,6 +638,8 @@ fn emit_method_call_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed eval argument array
     emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // save the active eval class-scope pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // save the active eval class-scope length
+    emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // load the active eval context stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the active eval context for callable descriptors
     emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver pointer is null
     emitter.instruction(&format!("jz {}", fail_label));                         // null Mixed receiver cannot dispatch a method
     emitter.instruction("mov rax, rdi");                                        // move the receiver into the mixed-unbox input register
@@ -1666,6 +1674,7 @@ fn emit_x86_64_prepare_method_args(
         &body_label,
         fail_label,
         callable_support,
+        X86_64_METHOD_CONTEXT_FRAME_OFFSET,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
@@ -1691,6 +1700,7 @@ fn emit_x86_64_prepare_method_args(
                 &label_prefix,
                 fail_label,
                 callable_support,
+                X86_64_METHOD_CONTEXT_FRAME_OFFSET,
             );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
@@ -1718,6 +1728,7 @@ fn emit_x86_64_prepare_static_method_args(
         &body_label,
         fail_label,
         callable_support,
+        X86_64_STATIC_METHOD_CONTEXT_FRAME_OFFSET,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     abi::emit_load_int_immediate(emitter, "rax", slot.class_id as i64);
@@ -1742,6 +1753,7 @@ fn emit_x86_64_prepare_static_method_args(
                 &label_prefix,
                 fail_label,
                 callable_support,
+                X86_64_STATIC_METHOD_CONTEXT_FRAME_OFFSET,
             );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
@@ -1825,6 +1837,7 @@ fn emit_x86_64_ref_arg_cells(
     label_prefix: &str,
     fail_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
+    context_frame_offset: usize,
 ) -> Vec<EvalRefArgSlot> {
     let ref_slots = eval_ref_arg_slots(param_types, ref_params, false);
     for slot in &ref_slots {
@@ -1844,6 +1857,7 @@ fn emit_x86_64_ref_arg_cells(
                 &arg_label,
                 fail_label,
                 callable_support,
+                context_frame_offset,
             );
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
@@ -2087,6 +2101,7 @@ fn emit_x86_64_cast_eval_arg(
     label_prefix: &str,
     fail_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
+    context_frame_offset: usize,
 ) {
     match param_ty.codegen_repr() {
         PhpType::Int => {
@@ -2113,6 +2128,7 @@ fn emit_x86_64_cast_eval_arg(
                 callable_support,
                 label_prefix,
                 fail_label,
+                context_frame_offset,
             );
         }
         PhpType::TaggedScalar => {
