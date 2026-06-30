@@ -2469,7 +2469,9 @@ if (Defaults::$b) { echo "T"; } else { echo "F"; }
     );
 }
 
-/// Verifies typed static properties still fatal when read before initialization.
+/// Verifies typed static properties throw a catchable Error when read before
+/// initialization; without a try/catch the uncaught-exception path terminates
+/// the process with a fatal diagnostic (issue #339).
 #[test]
 fn ir_backend_fatals_on_uninitialized_typed_static_property() {
     let run = compile_ir_backend_and_run(
@@ -2490,7 +2492,7 @@ echo Counter::$i;
     );
     let stderr = String::from_utf8(run.stderr).expect("fatal stderr should be utf8");
     assert!(
-        stderr.contains("Fatal error: Typed static property Counter::$i must not be accessed before initialization"),
+        stderr.contains("Fatal error: uncaught exception"),
         "unexpected fatal stderr: {stderr}"
     );
 }
@@ -3950,7 +3952,9 @@ echo $tmp->fread(10);
     );
 }
 
-/// Verifies typed declared properties still fatal when read before initialization.
+/// Verifies typed declared properties throw a catchable Error when read before
+/// initialization; without a try/catch the uncaught-exception path terminates
+/// the process with a fatal diagnostic (issue #339).
 #[test]
 fn ir_backend_fatals_on_uninitialized_typed_object_property() {
     let run = compile_ir_backend_and_run(
@@ -3972,7 +3976,7 @@ echo $box->i;
     );
     let stderr = String::from_utf8(run.stderr).expect("fatal stderr should be utf8");
     assert!(
-        stderr.contains("Fatal error: Typed property Box::$i must not be accessed before initialization"),
+        stderr.contains("Fatal error: uncaught exception"),
         "unexpected fatal stderr: {stderr}"
     );
 }

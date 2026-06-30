@@ -24,12 +24,196 @@ pub(super) fn body_must_not_use_this(body: &[Stmt], span: Span) -> Result<(), Co
 
 /// Returns true if a closure body references `$this` anywhere, including inside
 /// nested closures (which capture `$this` transitively from the enclosing
-/// scope). Reuses the static-closure `$this` walker, so it stays in lockstep
-/// with the constructs that walker covers. Used by EIR lowering to decide
-/// whether a non-static closure defined in an instance method must implicitly
-/// capture `$this`.
+/// scope) and inside `isset($this)` probes. Unlike `body_must_not_use_this`,
+/// which exempts bare `isset($this)` arguments (PHP allows the probe inside
+/// static closures), this walker counts every `$this` mention so EIR lowering
+/// captures `$this` for non-static closures that probe it via `isset`.
 pub(crate) fn closure_body_uses_this(body: &[Stmt]) -> bool {
-    body_must_not_use_this(body, Span::dummy()).is_err()
+    body_uses_this(body)
+}
+
+/// Walks statements looking for any `$this` mention, including inside `isset()`.
+fn body_uses_this(body: &[Stmt]) -> bool {
+    body.iter().any(stmt_uses_this)
+}
+
+/// Returns true if the statement references `$this` anywhere.
+fn stmt_uses_this(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Echo(e)
+        | StmtKind::Throw(e)
+        | StmtKind::ExprStmt(e)
+        | StmtKind::Include { path: e, .. }
+        | StmtKind::ConstDecl { value: e, .. }
+        | StmtKind::StaticVar { init: e, .. }
+        | StmtKind::ListUnpack { value: e, .. }
+        | StmtKind::Return(Some(e))
+        | StmtKind::Assign { value: e, .. }
+        | StmtKind::TypedAssign { value: e, .. }
+        | StmtKind::ArrayPush { value: e, .. } => expr_uses_this(e),
+        StmtKind::RefAssign { .. } => false,
+        StmtKind::ArrayAssign { index, value, .. } => {
+            expr_uses_this(index) || expr_uses_this(value)
+        }
+        StmtKind::NestedArrayAssign { target, value } => {
+            expr_uses_this(target) || expr_uses_this(value)
+        }
+        StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyArrayPush { object, value, .. } => {
+            expr_uses_this(object) || expr_uses_this(value)
+        }
+        StmtKind::PropertyArrayAssign {
+            object,
+            index,
+            value,
+            ..
+        } => expr_uses_this(object) || expr_uses_this(index) || expr_uses_this(value),
+        StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. } => expr_uses_this(value),
+        StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+            expr_uses_this(index) || expr_uses_this(value)
+        }
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            expr_uses_this(condition)
+                || body_uses_this(then_body)
+                || elseif_clauses
+                    .iter()
+                    .any(|(cond, body)| expr_uses_this(cond) || body_uses_this(body))
+                || else_body.as_deref().is_some_and(body_uses_this)
+        }
+        StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
+            expr_uses_this(condition) || body_uses_this(body)
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_deref().is_some_and(stmt_uses_this)
+                || condition.as_ref().is_some_and(expr_uses_this)
+                || update.as_deref().is_some_and(stmt_uses_this)
+                || body_uses_this(body)
+        }
+        StmtKind::Foreach { array, body, .. } => expr_uses_this(array) || body_uses_this(body),
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            expr_uses_this(subject)
+                || cases.iter().any(|(patterns, body)| {
+                    patterns.iter().any(expr_uses_this) || body_uses_this(body)
+                })
+                || default.as_deref().is_some_and(body_uses_this)
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            body_uses_this(try_body)
+                || catches.iter().any(|catch| body_uses_this(&catch.body))
+                || finally_body.as_deref().is_some_and(body_uses_this)
+        }
+        StmtKind::NamespaceBlock { body, .. } => body_uses_this(body),
+        StmtKind::FunctionDecl { .. }
+        | StmtKind::ClassDecl { .. }
+        | StmtKind::TraitDecl { .. }
+        | StmtKind::InterfaceDecl { .. } => false,
+        _ => false,
+    }
+}
+
+/// Returns true if the expression references `$this` anywhere, including
+/// inside `isset()` arguments (unlike `expr_must_not_use_this` which exempts
+/// bare `$this` inside `isset`).
+fn expr_uses_this(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::This => true,
+        ExprKind::BinaryOp { left, right, .. } => expr_uses_this(left) || expr_uses_this(right),
+        ExprKind::InstanceOf { value, target } => {
+            expr_uses_this(value) || instanceof_target_uses_this(target)
+        }
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Throw(inner)
+        | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Print(inner)
+        | ExprKind::Spread(inner)
+        | ExprKind::PtrCast { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. } => expr_uses_this(inner),
+        ExprKind::NullCoalesce { value, default }
+        | ExprKind::ShortTernary { value, default } => {
+            expr_uses_this(value) || expr_uses_this(default)
+        }
+        ExprKind::FunctionCall { name, args } => {
+            name.as_str().eq_ignore_ascii_case("isset") || args.iter().any(expr_uses_this)
+        }
+        ExprKind::ClosureCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewScopedObject { args, .. }
+        | ExprKind::StaticMethodCall { args, .. } => args.iter().any(expr_uses_this),
+        ExprKind::ExprCall { callee, args } => expr_uses_this(callee) || args.iter().any(expr_uses_this),
+        ExprKind::MethodCall { object, args, .. }
+        | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            expr_uses_this(object) || args.iter().any(expr_uses_this)
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().any(expr_uses_this),
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            pairs.iter().any(|(k, v)| expr_uses_this(k) || expr_uses_this(v))
+        }
+        ExprKind::ArrayAccess { array, index } => expr_uses_this(array) || expr_uses_this(index),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => expr_uses_this(condition) || expr_uses_this(then_expr) || expr_uses_this(else_expr),
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            expr_uses_this(subject)
+                || arms.iter().any(|(patterns, value)| {
+                    patterns.iter().any(expr_uses_this) || expr_uses_this(value)
+                })
+                || default.as_deref().is_some_and(expr_uses_this)
+        }
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. } => expr_uses_this(object),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            expr_uses_this(object) || expr_uses_this(property)
+        }
+        ExprKind::NamedArg { value, .. } => expr_uses_this(value),
+        ExprKind::BufferNew { len, .. } => expr_uses_this(len),
+        ExprKind::FirstClassCallable(target) => callable_target_uses_this(target),
+        ExprKind::Closure { body, .. } => body_uses_this(body),
+        _ => false,
+    }
+}
+
+/// Returns true if a callable target references `$this`.
+fn callable_target_uses_this(target: &CallableTarget) -> bool {
+    match target {
+        CallableTarget::Method { object, .. } => expr_uses_this(object),
+        CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => false,
+    }
+}
+
+/// Returns true if an instanceof target references `$this`.
+fn instanceof_target_uses_this(target: &InstanceOfTarget) -> bool {
+    match target {
+        InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Expr(expr) => expr_uses_this(expr),
+    }
 }
 
 /// Recursively checks a statement and its children, rejecting any `$this` usage.

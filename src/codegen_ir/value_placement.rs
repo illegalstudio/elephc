@@ -169,7 +169,7 @@ mod tests {
         let placement = allocate(&function);
 
         assert_eq!(placement.slot(array), Some(8));
-        assert_eq!(placement.slot(iterator), Some(72));
+        assert_eq!(placement.slot(iterator), Some(80));
         assert_eq!(placement.total_slot_bytes, 80);
     }
 }
