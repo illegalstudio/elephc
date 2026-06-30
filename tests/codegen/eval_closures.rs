@@ -55,3 +55,24 @@ echo $x;');
 
     assert_eq!(out, "5");
 }
+
+/// Verifies eval closure literals are visible through ReflectionFunction metadata and invocation.
+#[test]
+fn test_eval_closure_reflection_function_metadata_and_invoke() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$seed = 4;
+$fn = function($delta = 1) use ($seed) { return $seed + $delta; };
+$ref = new ReflectionFunction($fn);
+echo $ref->isClosure() ? "C" : "c"; echo ":";
+echo $ref->isAnonymous() ? "A" : "a"; echo ":";
+$vars = $ref->getClosureUsedVariables();
+echo count($vars); echo ":";
+echo $vars["seed"]; echo ":";
+echo $ref->invoke(3); echo ":";
+echo $ref->invokeArgs(["delta" => 5]);');
+"#,
+    );
+
+    assert_eq!(out, "C:A:1:4:7:9");
+}

@@ -217,10 +217,12 @@ enum EvalReflectionFunctionMethodTarget {
         name: String,
         static_key: Option<String>,
         static_variables: Vec<EvalStaticVarInitializer>,
+        closure_captures: Vec<EvalClosureCaptureBinding>,
         parameters: Vec<EvalReflectionParameterMetadata>,
         source_location: Option<EvalSourceLocation>,
         is_variadic: bool,
         is_static: bool,
+        is_closure: bool,
         is_deprecated: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     },
@@ -1300,11 +1302,15 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
                 values,
             )
         }
-        "isinternal"
-        | "isclosure"
-        | "returnsreference"
-        | "isgenerator"
-        | "hastentativereturntype" => eval_reflection_false_metadata_result(evaluated_args, values),
+        "isinternal" | "returnsreference" | "isgenerator" | "hastentativereturntype" => {
+            eval_reflection_false_metadata_result(evaluated_args, values)
+        }
+        "isclosure" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values
+                .bool_value(eval_reflection_function_method_is_closure(&target))
+                .map(Some)
+        }
         "isdeprecated" => {
             eval_reflection_bind_no_args(evaluated_args)?;
             values
@@ -1313,7 +1319,10 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
         }
         "isanonymous" => match target {
             EvalReflectionFunctionMethodTarget::Function { .. } => {
-                eval_reflection_false_metadata_result(evaluated_args, values)
+                eval_reflection_bind_no_args(evaluated_args)?;
+                values
+                    .bool_value(eval_reflection_function_method_is_closure(&target))
+                    .map(Some)
             }
             EvalReflectionFunctionMethodTarget::Method { .. } => Ok(None),
         },
@@ -1365,7 +1374,7 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
         }
         "getclosureusedvariables" => {
             eval_reflection_bind_no_args(evaluated_args)?;
-            values.array_new(0).map(Some)
+            eval_reflection_function_closure_used_variables_result(&target, values).map(Some)
         }
         "getclosurethis" | "getclosurescopeclass" | "getclosurecalledclass" => {
             eval_reflection_bind_no_args(evaluated_args)?;
@@ -3144,6 +3153,32 @@ fn eval_reflection_function_new(
     let args = bind_evaluated_function_args(&[String::from("function")], evaluated_args)?;
     let requested_name = eval_reflection_string_arg(args[0], values)?;
     let lookup_name = requested_name.trim_start_matches('\\').to_ascii_lowercase();
+    if let Some(closure) = context.closure(&requested_name).cloned() {
+        let function = closure.function();
+        let required_parameter_count = eval_reflection_required_parameter_count(
+            function.parameter_defaults(),
+            function.parameter_is_variadic(),
+        );
+        let parameters = eval_reflection_function_parameters(
+            function.name(),
+            function.params(),
+            function.attributes().to_vec(),
+            function.parameter_attributes(),
+            function.parameter_types(),
+            function.parameter_defaults(),
+            function.parameter_is_by_ref(),
+            function.parameter_is_variadic(),
+        );
+        return eval_reflection_function_object_result(
+            &requested_name,
+            function.attributes(),
+            &parameters,
+            required_parameter_count,
+            context,
+            values,
+        )
+        .map(Some);
+    }
     if let Some(function) = context.function(&lookup_name).cloned() {
         let required_parameter_count = eval_reflection_required_parameter_count(
             function.parameter_defaults(),
@@ -8418,6 +8453,9 @@ fn eval_reflection_function_invoke_dispatch(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(closure) = context.closure(function_name).cloned() {
+        return eval_closure_with_evaluated_args(&closure, function_args, context, values);
+    }
     let function_key = function_name.to_ascii_lowercase();
     if let Some(function) = context.function(&function_key).cloned() {
         let by_value_parameters = vec![false; function.params().len()];
@@ -9341,6 +9379,41 @@ fn eval_reflection_function_method_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalReflectionFunctionMethodTarget>, EvalStatus> {
     if let Some(name) = context.eval_reflection_function_name(identity) {
+        if let Some(closure) = context.closure(name) {
+            let function = closure.function();
+            let is_variadic = function.parameter_is_variadic().iter().any(|flag| *flag);
+            let parameters = eval_reflection_function_parameters(
+                function.name(),
+                function.params(),
+                function.attributes().to_vec(),
+                function.parameter_attributes(),
+                function.parameter_types(),
+                function.parameter_defaults(),
+                function.parameter_is_by_ref(),
+                function.parameter_is_variadic(),
+            );
+            let source_location = function.source_location();
+            let return_type_metadata = function
+                .return_type()
+                .and_then(eval_reflection_parameter_type_metadata);
+            let static_key = Some(function.name().to_string());
+            let static_variables = static_var_initializers(function.body());
+            let is_deprecated =
+                eval_reflection_attributes_include_deprecated(function.attributes());
+            return Ok(Some(EvalReflectionFunctionMethodTarget::Function {
+                name: name.to_string(),
+                static_key,
+                static_variables,
+                closure_captures: closure.captures().to_vec(),
+                parameters,
+                source_location,
+                is_variadic,
+                is_static: false,
+                is_closure: true,
+                is_deprecated,
+                return_type_metadata,
+            }));
+        }
         let lookup_name = name.to_ascii_lowercase();
         if let Some(function) = context.function(&lookup_name) {
             let is_variadic = function
@@ -9369,10 +9442,12 @@ fn eval_reflection_function_method_target(
                 name: name.to_string(),
                 static_key,
                 static_variables,
+                closure_captures: Vec::new(),
                 parameters,
                 source_location,
                 is_variadic,
                 is_static: false,
+                is_closure: false,
                 is_deprecated,
                 return_type_metadata,
             }));
@@ -9388,10 +9463,12 @@ fn eval_reflection_function_method_target(
                 name: name.to_string(),
                 static_key: None,
                 static_variables: Vec::new(),
+                closure_captures: Vec::new(),
                 parameters,
                 source_location: None,
                 is_variadic,
                 is_static: false,
+                is_closure: false,
                 is_deprecated: false,
                 return_type_metadata,
             }));
@@ -9400,10 +9477,12 @@ fn eval_reflection_function_method_target(
             name: name.to_string(),
             static_key: None,
             static_variables: Vec::new(),
+            closure_captures: Vec::new(),
             parameters: Vec::new(),
             source_location: None,
             is_variadic: false,
             is_static: false,
+            is_closure: false,
             is_deprecated: false,
             return_type_metadata: None,
         }));
@@ -9719,6 +9798,16 @@ fn eval_reflection_function_method_is_variadic(
     }
 }
 
+/// Returns whether the reflected function-like target is an eval closure literal.
+fn eval_reflection_function_method_is_closure(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> bool {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function { is_closure, .. } => *is_closure,
+        EvalReflectionFunctionMethodTarget::Method { .. } => false,
+    }
+}
+
 /// Returns whether the reflected function-like target is static.
 fn eval_reflection_function_method_is_static(target: &EvalReflectionFunctionMethodTarget) -> bool {
     match target {
@@ -9735,6 +9824,28 @@ fn eval_reflection_function_method_is_deprecated(
         EvalReflectionFunctionMethodTarget::Function { is_deprecated, .. }
         | EvalReflectionFunctionMethodTarget::Method { is_deprecated, .. } => *is_deprecated,
     }
+}
+
+/// Builds `ReflectionFunction::getClosureUsedVariables()` for eval closure targets.
+fn eval_reflection_function_closure_used_variables_result(
+    target: &EvalReflectionFunctionMethodTarget,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let EvalReflectionFunctionMethodTarget::Function {
+        is_closure: true,
+        closure_captures,
+        ..
+    } = target
+    else {
+        return values.array_new(0);
+    };
+    let mut result = values.assoc_new(closure_captures.len())?;
+    for capture in closure_captures {
+        let key = values.string(capture.name())?;
+        let value = values.retain(capture.value())?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
 }
 
 /// Returns the retained return type metadata for a reflected function or method.

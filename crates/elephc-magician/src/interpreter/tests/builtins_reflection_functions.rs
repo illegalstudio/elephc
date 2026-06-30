@@ -237,6 +237,35 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionFunction recognizes eval closure literals and dispatches them.
+#[test]
+fn execute_program_reflection_function_supports_eval_closure_literals() {
+    let program = parse_fragment(
+        br#"$seed = 4;
+$fn = function($delta = 1) use ($seed) { return $seed + $delta; };
+$ref = new ReflectionFunction($fn);
+echo $ref->isClosure() ? "C" : "c"; echo ":";
+echo $ref->isAnonymous() ? "A" : "a"; echo ":";
+echo $ref->isUserDefined() ? "U" : "u"; echo ":";
+echo $ref->getNumberOfParameters(); echo ":";
+echo $ref->getNumberOfRequiredParameters(); echo ":";
+$vars = $ref->getClosureUsedVariables();
+echo count($vars); echo ":";
+echo $vars["seed"]; echo ":";
+echo $ref->invoke(3); echo ":";
+echo $ref->invokeArgs(["delta" => 5]);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "C:A:U:1:0:1:4:7:9");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionFunction reports eval source file and line metadata.
 #[test]
 fn execute_program_reflection_function_reports_source_location() {

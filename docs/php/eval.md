@@ -344,9 +344,13 @@ and method reflectors.
 `ReflectionMethod::getStaticVariables()` expose eval-declared static local
 variables, materializing initializer values before the first invocation and
 returning updated values after reflected or direct calls.
+`ReflectionFunction` over an eval closure literal reports `isClosure()` and
+`isAnonymous()` as `true`, exposes captured `use` variables through
+`getClosureUsedVariables()`, and can invoke the closure through `invoke()` or
+`invokeArgs()`.
 `ReflectionFunction::getClosureUsedVariables()` and
 `ReflectionMethod::getClosureUsedVariables()` report empty arrays for supported
-non-closure reflectors.
+non-closure function and method reflectors.
 `ReflectionClass::isFinal()`, `ReflectionClass::isAbstract()`,
 `ReflectionClass::isInterface()`, `ReflectionClass::isTrait()`, and
 `ReflectionClass::isEnum()` report eval and generated/AOT class-like metadata,
