@@ -560,6 +560,49 @@ $box->run();');
     assert_eq!(out, "C:15:integer:15|19:integer:19|13:integer:13");
 }
 
+/// Verifies eval first-class callbacks resolve special class names and preserve by-ref writeback.
+#[test]
+fn test_eval_first_class_special_class_callables_preserve_by_ref_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalFirstClassSpecialCallableBase {
+    public static function bump(int &$value, int $delta): int {
+        $value += $delta;
+        return $value;
+    }
+}
+
+class EvalFirstClassSpecialCallableChild extends EvalFirstClassSpecialCallableBase {
+    public int $base = 10;
+
+    public function add(int &$value, int $delta): int {
+        $value += $this->base + $delta;
+        return $value;
+    }
+
+    public function run() {
+        $self = self::add(...);
+        $first = "2";
+        echo $self($first, 3) . ":" . gettype($first) . ":" . $first . "|";
+
+        $static = static::add(...);
+        $second = "4";
+        echo call_user_func_array($static, [&$second, 5]) . ":" . gettype($second) . ":" . $second . "|";
+
+        $parent = parent::bump(...);
+        $third = "6";
+        echo $parent($third, 7) . ":" . gettype($third) . ":" . $third;
+    }
+}
+
+$box = new EvalFirstClassSpecialCallableChild();
+$box->run();');
+"#,
+    );
+
+    assert_eq!(out, "15:integer:15|19:integer:19|13:integer:13");
+}
+
 /// Verifies eval `is_callable()` supports syntax-only probes and callable-name writeback.
 #[test]
 fn test_eval_is_callable_supports_syntax_only_and_callable_name_writeback() {
