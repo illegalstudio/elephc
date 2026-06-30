@@ -128,6 +128,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// so a `return $obj->prop` yields the property's ref-cell pointer instead of a value copy.
     pub by_ref_return: bool,
     pub in_main: bool,
+    /// `true` when the body being lowered is a generator coroutine (contains
+    /// `yield`, or declares a `Generator` return type). `Generator::throw()`
+    /// injects exceptions via `__rt_fiber_throw` + `__rt_throw_current`, which
+    /// longjmps to the nearest `try_push_handler` site. A try/finally with no
+    /// catch would otherwise skip its finally body under that longjmp path, so
+    /// the try-lowering synthesizes a catch-all handler for generator bodies.
+    pub is_generator_body: bool,
     pub all_global_var_names: HashSet<String>,
     owner_name: String,
     closures: Vec<Function>,
@@ -190,6 +197,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return_php_type,
             by_ref_return: false,
             in_main,
+            is_generator_body: false,
             all_global_var_names,
             owner_name,
             closures: Vec::new(),
