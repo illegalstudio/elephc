@@ -9211,6 +9211,10 @@ fn eval_closure_object_method_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if method_name.eq_ignore_ascii_case("__invoke") {
+        return eval_closure_object_invoke_result(target, evaluated_args, context, values)
+            .map(Some);
+    }
     if method_name.eq_ignore_ascii_case("bindTo") {
         let bound_this = eval_closure_bind_to_args(evaluated_args, values)?;
         return eval_closure_bind_target(target, bound_this, context, values).map(Some);
@@ -9297,6 +9301,54 @@ fn eval_closure_object_method_result(
         )
         .map(Some),
     }
+}
+
+/// Invokes the callable target retained behind a PHP-visible eval `Closure` object.
+fn eval_closure_object_invoke_result(
+    target: EvalClosureObjectTarget,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callable = match target {
+        EvalClosureObjectTarget::Named(name) => EvaluatedCallable::Named {
+            display_name: name.clone(),
+            name,
+        },
+        EvalClosureObjectTarget::BoundNamed { name, bound_this } => {
+            EvaluatedCallable::BoundClosure { name, bound_this }
+        }
+        EvalClosureObjectTarget::InvokableObject { object } => {
+            EvaluatedCallable::InvokableObject { object }
+        }
+        EvalClosureObjectTarget::ObjectMethod {
+            object,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        } => EvaluatedCallable::ObjectMethod {
+            object,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        },
+        EvalClosureObjectTarget::StaticMethod {
+            class_name,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        } => EvaluatedCallable::StaticMethod {
+            class_name,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        },
+    };
+    eval_evaluated_callable_with_call_array_args(&callable, evaluated_args, context, values)
 }
 
 /// Splits `Closure::call()` arguments into the bound object and forwarded closure args.

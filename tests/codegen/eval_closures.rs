@@ -8,7 +8,7 @@
 //! - Fixtures compile PHP to native code, enter the eval bridge, and execute
 //!   closure callable paths through elephc-magician.
 
-use crate::support::compile_and_run;
+use crate::support::{compile_and_run, compile_and_run_capture};
 
 /// Verifies eval closure literals dispatch through direct calls and call_user_func_array.
 #[test]
@@ -157,4 +157,38 @@ echo is_null($static->bindTo($box)) ? "N" : "n";');
     );
 
     assert_eq!(out, "O:15:integer:15|19:integer:19|23:integer:23|N");
+}
+
+/// Verifies eval Closure `__invoke` works as an array callable and preserves by-ref args.
+#[test]
+fn test_eval_closure_invoke_array_callable_preserves_by_ref_args() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('$fn = function(int &$value, int $delta): int {
+    $value += $delta;
+    return $value;
+};
+$callback = [$fn, "__invoke"];
+echo is_callable($callback) ? "C:" : "c:";
+
+$first = "2";
+echo $callback($first, 3) . ":" . gettype($first) . ":" . $first . "|";
+
+$second = "4";
+echo call_user_func_array($callback, [&$second, 5]) . ":" . gettype($second) . ":" . $second . "|";
+
+$fromCallable = Closure::fromCallable($callback);
+$third = "6";
+echo $fromCallable($third, 7) . ":" . gettype($third) . ":" . $third . "|";
+
+$fourth = "8";
+echo $fn->__invoke($fourth, 9) . ":" . gettype($fourth) . ":" . $fourth;');
+"#,
+    );
+
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "C:5:integer:5|9:integer:9|13:integer:13|17:integer:17"
+    );
 }
