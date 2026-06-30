@@ -1670,18 +1670,12 @@ fn lower_inc_dec(
     let old = ctx.load_local(name, Some(expr.span));
     let one = lower_int_literal(ctx, 1, expr);
     let operand = coerce_to_int(ctx, old, expr);
-    let checked_op = if increment { Op::ICheckedAdd } else { Op::ICheckedSub };
-    let new = ctx.emit_value(
-        checked_op,
-        vec![operand.value, one.value],
-        None,
-        PhpType::Mixed,
-        checked_op.default_effects(),
-        Some(expr.span),
-    );
-    // For ref-bound locals, keep the slot type as the existing type (e.g. Int)
-    // and let the codegen narrow Mixed→Int. This avoids widening the slot to
-    // Mixed mid-function, which would break earlier I64 loads.
+    let iop = if increment { Op::IAdd } else { Op::ISub };
+    let new = ctx
+        .builder
+        .emit_with_effects(iop, vec![operand.value, one.value], None, IrType::I64, PhpType::Int, Ownership::for_php_type(&PhpType::Int), iop.default_effects(), Some(expr.span))
+        .expect("integer inc/dec produces a value");
+    let new = LoweredValue { value: new, ir_type: IrType::I64 };
     let existing_type = ctx.local_type(name);
     ctx.store_local(name, new, existing_type, Some(expr.span));
     if post { old } else { new }

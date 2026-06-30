@@ -63,10 +63,8 @@ impl Checker {
                     Ok(PhpType::Mixed)
                 } else if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
-                } else if is_const_int_expr(left) && is_const_int_expr(right) {
-                    Ok(PhpType::Int)
                 } else {
-                    Ok(PhpType::Mixed)
+                    Ok(PhpType::Int)
                 }
             }
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
@@ -83,10 +81,6 @@ impl Checker {
                     Ok(PhpType::Float)
                 } else if matches!(op, BinOp::Sub | BinOp::Mul)
                     && (uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt))
-                {
-                    Ok(PhpType::Mixed)
-                } else if matches!(op, BinOp::Sub | BinOp::Mul)
-                    && !(is_const_int_expr(left) && is_const_int_expr(right))
                 {
                     Ok(PhpType::Mixed)
                 } else {
@@ -1228,15 +1222,4 @@ fn uses_mixed_numeric_dispatch(ty: &PhpType) -> bool {
 /// Returns `true` if `expr` is an empty array literal (`[]`).
 fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::ArrayLiteral(elems) if elems.is_empty())
-}
-
-/// Returns `true` when `expr` is a compile-time integer constant.
-///
-/// The constant-folding pass runs before the type checker, so any expression
-/// that is still an `IntLiteral` at this point is a true compile-time
-/// constant whose arithmetic result the optimizer already checked for
-/// overflow. Non-constant integer operands produce `Mixed` results for
-/// add/sub/mul so that runtime overflow promotion to float is possible.
-fn is_const_int_expr(expr: &Expr) -> bool {
-    matches!(&expr.kind, ExprKind::IntLiteral(_))
 }

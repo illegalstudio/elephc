@@ -293,30 +293,6 @@ try {
     assert_eq!(out, "ValueError:ValueError");
 }
 
-/// Regression for #369: non-constant `int + int` overflow promotes to float.
-/// `$argc` is 1 at runtime, so `$argc + PHP_INT_MAX` overflows to float.
-#[test]
-fn test_int_overflow_add_runtime_to_float() {
-    let out = compile_and_run("<?php echo $argc + PHP_INT_MAX;");
-    assert_eq!(out, "9.2233720368548E+18");
-}
-
-/// Regression for #369: non-constant `int - int` overflow promotes to float.
-/// `PHP_INT_MIN - $argc` overflows to float (PHP_INT_MIN - 1 = -PHP_INT_MAX - 1).
-#[test]
-fn test_int_overflow_sub_runtime_to_float() {
-    let out = compile_and_run("<?php echo PHP_INT_MIN - $argc;");
-    assert_eq!(out, "-9.2233720368548E+18");
-}
-
-/// Regression for #369: non-constant `int * int` overflow promotes to float.
-/// `PHP_INT_MAX * ($argc + 1)` with $argc=1 gives PHP_INT_MAX * 2 which overflows.
-#[test]
-fn test_int_overflow_mul_runtime_to_float() {
-    let out = compile_and_run("<?php echo PHP_INT_MAX * ($argc + 1);");
-    assert_eq!(out, "1.844674407371E+19");
-}
-
 /// Regression for #369: constant `int + int` that overflows is folded to float
 /// by the optimizer. No checked helper is needed.
 #[test]

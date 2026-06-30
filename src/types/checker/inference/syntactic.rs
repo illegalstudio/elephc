@@ -222,14 +222,6 @@ fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
 }
 
 /// Returns `true` when `expr` is a compile-time integer literal.
-///
-/// After constant folding, any remaining `IntLiteral` is a true constant.
-/// Non-constant integer arithmetic produces `Mixed` so the runtime can
-/// promote to float on overflow (PHP compatibility).
-fn is_const_int_expr_syntactic(expr: &Expr) -> bool {
-    matches!(&expr.kind, ExprKind::IntLiteral(_))
-}
-
 /// Infers the `PhpType` of an expression from its syntactic form.
 ///
 /// A best-effort syntactic heuristic — not full type inference. Handles literals,
@@ -389,10 +381,8 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     ty
                 } else if lt == PhpType::Float || rt == PhpType::Float {
                     PhpType::Float
-                } else if is_const_int_expr_syntactic(left) && is_const_int_expr_syntactic(right) {
-                    PhpType::Int
                 } else {
-                    PhpType::Mixed
+                    PhpType::Int
                 }
             }
             BinOp::Sub | BinOp::Mul | BinOp::Mod => {
@@ -400,10 +390,6 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 let rt = infer_expr_type_syntactic(right);
                 if lt == PhpType::Float || rt == PhpType::Float {
                     PhpType::Float
-                } else if matches!(op, BinOp::Sub | BinOp::Mul)
-                    && !(is_const_int_expr_syntactic(left) && is_const_int_expr_syntactic(right))
-                {
-                    PhpType::Mixed
                 } else {
                     PhpType::Int
                 }

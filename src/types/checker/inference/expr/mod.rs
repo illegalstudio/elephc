@@ -77,7 +77,7 @@ impl Checker {
             | ExprKind::PreDecrement(name)
             | ExprKind::PostDecrement(name) => match env.get(name) {
                 Some(PhpType::Int) | Some(PhpType::Bool) | Some(PhpType::Void) => {
-                    Ok(PhpType::Mixed)
+                    Ok(PhpType::Int)
                 }
                 Some(other) => Err(CompileError::new(
                     expr.span,
