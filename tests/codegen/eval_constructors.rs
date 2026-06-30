@@ -8,7 +8,7 @@
 //! - Fixtures focus on constructor bridge argument binding and by-reference
 //!   writeback for non-variable eval caller targets.
 
-use crate::support::compile_and_run;
+use crate::support::{compile_and_run, compile_and_run_capture};
 
 /// Verifies AOT constructor by-reference args write back to eval lvalue targets.
 #[test]
@@ -89,6 +89,42 @@ return gettype($box->value) . ":" . $box->value;');
     assert_eq!(
         out,
         "Exception:ctor-lvalue:integer:12|Exception:ctor-lvalue:integer:16"
+    );
+}
+
+/// Verifies AOT constructor argument-prep fatals restore the eval bridge frame.
+#[test]
+fn test_eval_dynamic_new_constructor_by_ref_arg_prep_fatal_cleans_up_stack() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalCtorPrepFatalNeed {}
+class EvalCtorPrepFatalBridge {
+    public function __construct(int &$value, EvalCtorPrepFatalNeed $need) {
+        $value = $value + 1;
+    }
+}
+
+echo eval('$value = "2";
+new EvalCtorPrepFatalBridge($value, 123);
+echo "bad";');
+"#,
+    );
+
+    assert!(
+        !out.success,
+        "expected eval runtime fatal, stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "");
+    assert!(
+        out.stderr.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
+        "stderr leaked a Rust panic: {}",
+        out.stderr
     );
 }
 
