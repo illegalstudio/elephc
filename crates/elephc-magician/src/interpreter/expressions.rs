@@ -785,6 +785,9 @@ pub(in crate::interpreter) fn eval_call(
     if name == "preg_match_all" {
         return eval_builtin_preg_match_all_call(args, context, scope, values);
     }
+    if name == "is_callable" {
+        return eval_builtin_is_callable_call(args, context, scope, values);
+    }
     if matches!(name, "fsockopen" | "pfsockopen") {
         return eval_builtin_fsockopen_call(args, context, scope, values);
     }

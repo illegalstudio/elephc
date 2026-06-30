@@ -69,6 +69,7 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "getdate" | "hrtime" => optional(params, 0),
         "header" => optional(params, 1),
         "http_response_code" => optional(params, 0),
+        "is_callable" => optional_by_ref(params, 1, &["callable_name"]),
         "localtime" => optional(params, 0),
         "microtime" | "php_uname" | "readline" | "umask" | "exit" | "die" => {
             optional(params, 0)
@@ -174,6 +175,8 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("header", 2) => Int(0),
         ("hrtime", 0) => Bool(false),
         ("http_response_code", 0) => Int(0),
+        ("is_callable", 1) => Bool(false),
+        ("is_callable", 2) => Null,
         ("localtime", 0) => Null,
         ("localtime", 1) => Bool(false),
         ("microtime", 0) => Bool(false),

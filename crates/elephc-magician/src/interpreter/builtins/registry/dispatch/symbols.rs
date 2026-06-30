@@ -41,12 +41,13 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
             };
             eval_spl_object_identity_result(name, *object, values)?
         }
-        "function_exists" | "is_callable" => {
+        "function_exists" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_function_probe_result(name, *value, context, values)?
         }
+        "is_callable" => eval_is_callable_with_values(evaluated_args, context, values)?,
         "empty" => eval_empty_result(evaluated_args, values)?,
         "isset" => eval_isset_result(evaluated_args, values)?,
         "unset" => eval_unset_result(evaluated_args, values)?,
