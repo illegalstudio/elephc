@@ -647,6 +647,61 @@ return (new EvalFromCallableSpecialStringChild())->run();');
     assert_eq!(out, "15:integer:15|19:integer:19|13:integer:13");
 }
 
+/// Verifies special first-class instance closures retain `$this` after method scope exits.
+#[test]
+fn test_eval_first_class_special_instance_callables_persist_bound_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalFirstClassPersistentInstanceBase {
+    public function base(int &$value, int $delta): string {
+        $value += $delta;
+        return "B:" . get_called_class() . ":" . get_class($this) . ":" . $value;
+    }
+}
+
+class EvalFirstClassPersistentInstanceChild extends EvalFirstClassPersistentInstanceBase {
+    public int $base = 10;
+
+    public function add(int &$value, int $delta): string {
+        $value += $this->base + $delta;
+        return "C:" . get_called_class() . ":" . get_class($this) . ":" . $value;
+    }
+
+    public function make(): array {
+        return [
+            self::add(...),
+            static::add(...),
+            parent::base(...),
+        ];
+    }
+}
+
+$closures = (new EvalFirstClassPersistentInstanceChild())->make();
+$self = $closures[0];
+$static = $closures[1];
+$parent = $closures[2];
+
+$first = "2";
+$out = $self($first, 3) . ":" . gettype($first) . ":" . $first . "|";
+
+$second = "3";
+$out .= call_user_func_array($static, [&$second, 3]) . ":" . gettype($second) . ":" . $second . "|";
+
+$third = "4";
+$out .= $parent($third, 3) . ":" . gettype($third) . ":" . $third;
+
+return $out;');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "C:EvalFirstClassPersistentInstanceChild:EvalFirstClassPersistentInstanceChild:15:integer:15|\
+C:EvalFirstClassPersistentInstanceChild:EvalFirstClassPersistentInstanceChild:16:integer:16|\
+B:EvalFirstClassPersistentInstanceChild:EvalFirstClassPersistentInstanceChild:7:integer:7"
+    );
+}
+
 /// Verifies special static string closures remain callable after leaving method scope.
 #[test]
 fn test_eval_closure_from_callable_special_static_string_callables_persist_resolved_scope() {
@@ -750,6 +805,67 @@ return $out;');
         "C:EvalFromCallablePersistentSpecialArrayChild:5:integer:5|\
 C:EvalFromCallablePersistentSpecialArrayChild:9:integer:9|\
 B:EvalFromCallablePersistentSpecialArrayChild:13:integer:13"
+    );
+}
+
+/// Verifies special instance closures retain `$this` after their method scope exits.
+#[test]
+fn test_eval_closure_from_callable_special_instance_callables_persist_bound_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalFromCallablePersistentInstanceBase {
+    public function base(int &$value, int $delta): string {
+        $value += $delta;
+        return "B:" . get_called_class() . ":" . get_class($this) . ":" . $value;
+    }
+}
+
+class EvalFromCallablePersistentInstanceChild extends EvalFromCallablePersistentInstanceBase {
+    public int $base = 10;
+
+    public function add(int &$value, int $delta): string {
+        $value += $this->base + $delta;
+        return "C:" . get_called_class() . ":" . get_class($this) . ":" . $value;
+    }
+
+    public function make(): array {
+        return [
+            Closure::fromCallable("self::add"),
+            Closure::fromCallable(["static", "add"]),
+            Closure::fromCallable("parent::base"),
+            Closure::fromCallable(["parent", "base"]),
+        ];
+    }
+}
+
+$closures = (new EvalFromCallablePersistentInstanceChild())->make();
+$self = $closures[0];
+$static = $closures[1];
+$parentString = $closures[2];
+$parentArray = $closures[3];
+
+$first = "2";
+$out = $self($first, 3) . ":" . gettype($first) . ":" . $first . "|";
+
+$second = "3";
+$out .= call_user_func_array($static, [&$second, 3]) . ":" . gettype($second) . ":" . $second . "|";
+
+$third = "4";
+$out .= $parentString($third, 3) . ":" . gettype($third) . ":" . $third . "|";
+
+$fourth = "5";
+$out .= call_user_func_array($parentArray, [&$fourth, 3]) . ":" . gettype($fourth) . ":" . $fourth;
+
+return $out;');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "C:EvalFromCallablePersistentInstanceChild:EvalFromCallablePersistentInstanceChild:15:integer:15|\
+C:EvalFromCallablePersistentInstanceChild:EvalFromCallablePersistentInstanceChild:16:integer:16|\
+B:EvalFromCallablePersistentInstanceChild:EvalFromCallablePersistentInstanceChild:7:integer:7|\
+B:EvalFromCallablePersistentInstanceChild:EvalFromCallablePersistentInstanceChild:8:integer:8"
     );
 }
 
