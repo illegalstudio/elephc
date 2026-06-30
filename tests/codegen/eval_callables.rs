@@ -211,6 +211,46 @@ echo call_user_func_array($target, ["q"]);');
     assert_eq!(out, "4|target:x|2|target:q");
 }
 
+/// Verifies callable-array class receivers accept PHP's leading namespace separator.
+#[test]
+fn test_eval_callable_array_class_receivers_allow_leading_namespace_separator() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalLeadingSlashAotCallableArray {
+    public static function stat(string $value): string {
+        return "A" . $value;
+    }
+}
+
+echo eval('class EvalLeadingSlashCallableArray {
+    public static function stat($value) {
+        return "E" . $value;
+    }
+}
+
+$eval = ["\\EvalLeadingSlashCallableArray", "stat"];
+$aot = ["\\EvalLeadingSlashAotCallableArray", "stat"];
+$name = "seed";
+
+echo call_user_func($eval, "a") . "|";
+echo $eval("b") . "|";
+echo call_user_func_array($eval, ["c"]) . "|";
+echo Closure::fromCallable($eval)("d") . "|";
+echo is_callable($eval, false, $name) ? $name : "bad";
+echo "|";
+echo call_user_func($aot, "x") . "|";
+echo $aot("y") . "|";
+echo call_user_func_array($aot, ["z"]) . "|";
+echo Closure::fromCallable($aot)("q");');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "Ea|Eb|Ec|Ed|\\EvalLeadingSlashCallableArray::stat|Ax|Ay|Az|Aq"
+    );
+}
+
 /// Verifies eval first-class callables reject invalid method targets at creation time.
 #[test]
 fn test_eval_first_class_callable_validation_rejects_invalid_method_targets() {
