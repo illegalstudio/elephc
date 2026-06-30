@@ -425,7 +425,7 @@ fn eval_special_class_array_callable(
         }
     }
     Ok(Some(EvaluatedCallable::StaticMethod {
-        class_name: class_name.to_string(),
+        class_name: receiver.dispatch_class,
         method: method.to_string(),
         called_class: Some(receiver.called_class),
         native_class: None,

@@ -647,6 +647,59 @@ return (new EvalFromCallableSpecialStringChild())->run();');
     assert_eq!(out, "15:integer:15|19:integer:19|13:integer:13");
 }
 
+/// Verifies special static string closures remain callable after leaving method scope.
+#[test]
+fn test_eval_closure_from_callable_special_static_string_callables_persist_resolved_scope() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalFromCallablePersistentSpecialBase {
+    public static function bump(int &$value, int $delta): string {
+        $value += $delta;
+        return "B:" . get_called_class() . ":" . $value;
+    }
+}
+
+class EvalFromCallablePersistentSpecialChild extends EvalFromCallablePersistentSpecialBase {
+    public static function add(int &$value, int $delta): string {
+        $value += $delta;
+        return "C:" . get_called_class() . ":" . $value;
+    }
+
+    public function make(): array {
+        return [
+            Closure::fromCallable("self::add"),
+            Closure::fromCallable("static::add"),
+            Closure::fromCallable("parent::bump"),
+        ];
+    }
+}
+
+$closures = (new EvalFromCallablePersistentSpecialChild())->make();
+$self = $closures[0];
+$static = $closures[1];
+$parent = $closures[2];
+
+$first = "2";
+$out = $self($first, 3) . ":" . gettype($first) . ":" . $first . "|";
+
+$second = "4";
+$out .= call_user_func_array($static, [&$second, 5]) . ":" . gettype($second) . ":" . $second . "|";
+
+$third = "6";
+$out .= $parent($third, 7) . ":" . gettype($third) . ":" . $third;
+
+return $out;');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "C:EvalFromCallablePersistentSpecialChild:5:integer:5|\
+C:EvalFromCallablePersistentSpecialChild:9:integer:9|\
+B:EvalFromCallablePersistentSpecialChild:13:integer:13"
+    );
+}
+
 /// Verifies eval `is_callable()` supports syntax-only probes and callable-name writeback.
 #[test]
 fn test_eval_is_callable_supports_syntax_only_and_callable_name_writeback() {
