@@ -585,8 +585,12 @@ class PDOStatement implements Iterator {
 /// change top-level execution order. The prelude is static and tested, so a
 /// tokenize/parse failure is a compiler bug and panics rather than silently
 /// degrading.
-pub fn inject_if_used(program: Program) -> Program {
-    if !detect::program_uses_pdo(&program) {
+///
+/// `force` (set by `--with-pdo`) bypasses the usage scan so the PDO surface is
+/// always injected, making it available even when auto-detection would not see
+/// the usage.
+pub fn inject_if_used(program: Program, force: bool) -> Program {
+    if !force && !detect::program_uses_pdo(&program) {
         return program;
     }
     let tokens = crate::lexer::tokenize(PDO_PRELUDE_SRC).expect("PDO prelude must tokenize");
