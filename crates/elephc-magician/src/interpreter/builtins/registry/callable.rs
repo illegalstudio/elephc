@@ -1210,6 +1210,11 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
         return eval_callable_with_values(name, evaluated_args, context, values);
     }
     if let Some(result) =
+        eval_date_procedural_alias_with_evaluated_args(name, evaluated_args.clone(), context, values)?
+    {
+        return Ok(result);
+    }
+    if let Some(result) =
         eval_mutating_builtin_with_call_array_args(name, &evaluated_args, context, values)?
     {
         return Ok(result);

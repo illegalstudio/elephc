@@ -117,7 +117,7 @@ fn eval_validate_named_callable(
 ) -> Result<(), EvalStatus> {
     if context.has_closure(name)
         || context.has_function(name)
-        || eval_php_visible_builtin_exists(name)
+        || eval_function_probe_exists(context, name)
     {
         return Ok(());
     }

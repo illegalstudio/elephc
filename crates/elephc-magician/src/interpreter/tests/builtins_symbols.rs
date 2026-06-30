@@ -172,6 +172,26 @@ echo function_exists("does_not_exist_alias_xyz") ? "x" : "X";"#,
     assert_eq!(values.output, "1".repeat(59) + ":CNIX");
 }
 
+/// Verifies simple procedural date/time aliases execute directly and by callable.
+#[test]
+fn execute_program_dispatches_simple_date_procedural_aliases() {
+    let program = parse_fragment(
+        br#"echo timezone_version_get() === "" ? "v" : "V";
+echo call_user_func("timezone_version_get") === timezone_version_get() ? "C" : "c";
+echo ":";
+echo idate("Y", 0);
+echo ":";
+echo call_user_func("idate", "Y", 0);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "VC:1970:1970");
+}
+
 /// Verifies eval `interface_exists()` probes generated interface metadata by callable.
 #[test]
 fn execute_program_interface_exists_uses_runtime_probe() {

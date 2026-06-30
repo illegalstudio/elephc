@@ -10,6 +10,7 @@
 //!   local calendar conversions where PHP behavior depends on host locale/timezone.
 
 mod calendar;
+mod aliases;
 mod clock;
 mod date;
 mod mktime;
@@ -17,6 +18,7 @@ mod sleep;
 mod strtotime;
 mod system;
 
+pub(in crate::interpreter) use aliases::*;
 pub(in crate::interpreter) use calendar::*;
 pub(in crate::interpreter) use clock::*;
 pub(in crate::interpreter) use date::*;

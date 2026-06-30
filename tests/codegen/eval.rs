@@ -2735,6 +2735,26 @@ echo function_exists("does_not_exist_alias_xyz") ? "x" : "X";');
     assert_eq!(out, "1".repeat(59) + ":CNIX");
 }
 
+/// Verifies eval can execute DateTime-family procedural aliases without static DateTime references.
+#[test]
+fn test_eval_dispatches_datetime_procedural_aliases_without_static_references() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$d = date_create("2024-01-02 03:04:05");
+echo date_format($d, "Y-m-d H:i:s");
+echo ":" . call_user_func("date_format", $d, "Y");
+$fmt = date_format(...);
+echo ":" . $fmt($d, "m");
+$tz = timezone_open("UTC");
+echo ":" . timezone_name_get($tz);
+$iv = date_interval_create_from_date_string("1 day");
+echo ":" . date_interval_format($iv, "%d");
+echo ":" . (timezone_version_get() === "" ? "bad" : "version");');
+"#,
+    );
+    assert_eq!(out, "2024-01-02 03:04:05:2024:01:UTC:1:version");
+}
+
 /// Verifies eval `strtotime()` parses supported ISO date strings and rejects others.
 #[test]
 fn test_eval_dispatches_strtotime_builtin_calls() {
