@@ -37,6 +37,66 @@ fn execute_program_call_user_func_dispatches_builtin() {
 
     assert_eq!(values.get(result), FakeValue::Int(4));
 }
+/// Verifies `call_user_func` releases literal callback temporaries after dispatch.
+#[test]
+fn execute_program_call_user_func_releases_literal_callback_after_dispatch() {
+    let program = parse_fragment(br#"return call_user_func("strlen", "abcd");"#)
+        .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(4));
+    assert!(
+        values
+            .releases
+            .iter()
+            .any(|release| values.get(*release) == FakeValue::String("strlen".to_string())),
+        "literal callback string should be released after dispatch"
+    );
+}
+
+/// Verifies `call_user_func` releases literal callback temporaries after dispatch fatal.
+#[test]
+fn execute_program_call_user_func_releases_literal_callback_after_dispatch_fatal() {
+    let program =
+        parse_fragment(br#"return call_user_func("strlen");"#).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+
+    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    assert!(
+        values
+            .releases
+            .iter()
+            .any(|release| values.get(*release) == FakeValue::String("strlen".to_string())),
+        "literal callback string should be released after fatal dispatch"
+    );
+}
+
+/// Verifies `call_user_func` releases literal callback when later arg evaluation fails.
+#[test]
+fn execute_program_call_user_func_releases_literal_callback_after_arg_eval_fatal() {
+    let program = parse_fragment(br#"return call_user_func("strlen", MISSING_ARG);"#)
+        .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+
+    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    assert!(
+        values
+            .releases
+            .iter()
+            .any(|release| values.get(*release) == FakeValue::String("strlen".to_string())),
+        "literal callback string should be released when argument evaluation fails"
+    );
+}
+
 /// Verifies `call_user_func` inside eval can dispatch a registered native function.
 #[test]
 fn execute_program_call_user_func_dispatches_registered_native_function() {
