@@ -251,3 +251,40 @@ foreach ($assoc as $key => $entry) {
 
     assert_eq!(out, "S1,2,3|Tinteger:42|1:ab:a:b|Ka1b2");
 }
+
+/// Verifies additional eval ref-like builtin callables write back through Closure dispatch.
+#[test]
+fn test_eval_ref_like_builtin_closures_write_back_extended_aliases() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$push = Closure::fromCallable("array_push");
+$items = [1];
+echo $push($items, 2, 3) . ":" . implode(",", $items) . "|";
+
+$unshift = array_unshift(...);
+$front = ["b"];
+echo $unshift($front, "a") . ":" . implode(",", $front) . "|";
+
+$splice = Closure::fromCallable("array_splice");
+$letters = ["a", "b", "c", "d"];
+$removed = call_user_func_array(
+    $splice,
+    ["array" => &$letters, "offset" => 1, "length" => 2, "replacement" => ["x", "y"]]
+);
+echo implode(",", $removed) . ":" . implode(",", $letters) . "|";
+
+$walk = Closure::fromCallable("array_walk");
+$walked = [1, 2];
+$callback = function (&$value, $key) { $value = ($value * 10) + $key; };
+echo $walk($walked, $callback) ? "W:" : "w:";
+echo implode(",", $walked) . "|";
+
+$pregAll = preg_match_all(...);
+$matches = [];
+echo $pregAll("/a(.)/", "ab ac", $matches);
+echo ":" . implode(",", $matches[0]) . ":" . implode(",", $matches[1]);');
+"#,
+    );
+
+    assert_eq!(out, "3:1,2,3|2:a,b|b,c:a,x,y,d|W:10,21|2:ab,ac:b,c");
+}
