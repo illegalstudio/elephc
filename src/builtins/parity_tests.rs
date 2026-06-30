@@ -1,26 +1,32 @@
 //! Purpose:
 //! Parity gate between registry-derived builtin signatures and the legacy
-//! `builtin_call_sig()` table. For every builtin registered in the inventory
-//! that also has a legacy table entry, this file asserts that the
+//! `legacy_builtin_call_sig()` golden table. For every builtin registered in
+//! the inventory that also has a legacy table entry, this file asserts that the
 //! behavior-bearing fields of the two `FunctionSig`s agree.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness (unit test module).
 //!
 //! Key details:
-//! - Placed here (not in `tests/`) because `builtin_call_sig` is `pub(crate)`
-//!   and cannot be reached from an integration test without widening visibility.
+//! - Placed here (not in `tests/`) because `legacy_builtin_call_sig` is
+//!   `pub(crate)` and cannot be reached from an integration test without
+//!   widening visibility.
 //! - Type fields (`params[*].1`, `return_type`, `declared_return`,
 //!   `declared_params`) are intentionally excluded from comparison: the registry
 //!   derives precise types while the legacy table uses `PhpType::Mixed`
 //!   placeholders. That precision is an intended improvement and is
 //!   behavior-neutral (call-arg planning reads only param NAMES, never types).
-//! - The test loop body runs zero times until area-migration tasks (Task 8+)
-//!   register real builtins. That is correct — this file builds the harness;
-//!   it does real work once production builtins are added to the inventory.
+//! - The gate compares against `legacy_builtin_call_sig` (not `builtin_call_sig`)
+//!   so that the comparison is non-vacuous: `builtin_call_sig` checks the registry
+//!   first, so comparing registry::function_sig against builtin_call_sig would
+//!   simply compare a value against itself for migrated builtins.
+//! - Migration rule: when a builtin is moved into `src/builtins/`, its arm is
+//!   KEPT in `legacy_builtin_call_sig` as the parity golden. Remove the arm only
+//!   after the parity gate has verified the registry matches and the golden is no
+//!   longer needed.
 
 use crate::builtins::registry;
-use crate::types::{builtin_call_sig, FunctionSig};
+use crate::types::{legacy_builtin_call_sig, FunctionSig};
 
 /// Asserts that the behavior-bearing fields of `derived` and `legacy` agree.
 ///
@@ -99,21 +105,23 @@ fn assert_behavior_fields_match(name: &str, derived: &FunctionSig, legacy: &Func
 }
 
 /// Verifies that every registry-derived builtin signature agrees with the legacy
-/// `builtin_call_sig()` table on all behavior-bearing fields.
+/// `legacy_builtin_call_sig()` golden table on all behavior-bearing fields.
 ///
 /// Iterates all names registered in the inventory. For each name that also has
-/// a legacy table entry, runs `assert_behavior_fields_match`. Names with no
-/// legacy entry (not yet migrated) are skipped — the gate activates
-/// incrementally as migration tasks (Task 8+) register real builtins.
+/// a golden legacy entry, runs `assert_behavior_fields_match`. Names with no
+/// legacy entry (internal test probes, or builtins not yet assigned a golden)
+/// are skipped — the gate activates incrementally as migration tasks register
+/// real builtins and retain their legacy arms as goldens.
 ///
-/// At this point only internal test probes are registered, so the assertion
-/// body runs zero times and the test is trivially green. That is expected.
+/// The comparison uses `legacy_builtin_call_sig` (NOT `builtin_call_sig`) so that
+/// the test is non-vacuous: `builtin_call_sig` checks the registry first, so for
+/// any migrated builtin both sides would resolve to the same registry value and
+/// the assertion would always trivially pass.
 #[test]
 fn derived_signatures_match_legacy() {
     for name in registry::names() {
-        // Skip builtins not yet present in the legacy table.
-        // The parity check activates as each area is migrated (Task 8+).
-        let Some(legacy) = builtin_call_sig(name) else {
+        // Skip internal test probes and builtins not yet assigned a legacy golden.
+        let Some(legacy) = legacy_builtin_call_sig(name) else {
             continue;
         };
 

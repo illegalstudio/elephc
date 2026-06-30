@@ -87,6 +87,14 @@ impl Checker {
         // Falls through to the legacy per-area dispatch when the name is not registered.
         if let Some(def) = crate::builtins::registry::lookup(name) {
             crate::builtins::registry::check_arity(name, args.len(), span)?;
+            // Infer argument types unconditionally so that type-environment side effects
+            // (variable narrowing, undefined-variable diagnostics, etc.) fire for every
+            // registry builtin — including pure-data builtins that have no check hook.
+            // Check hooks may still inspect inferred types; they should not call
+            // infer_type again on the same args to avoid redundant inference.
+            for arg in args.iter() {
+                self.infer_type(arg, env)?;
+            }
             let ret = if let Some(check) = def.spec.check {
                 let mut cx = crate::builtins::spec::BuiltinCheckCtx {
                     checker: self,

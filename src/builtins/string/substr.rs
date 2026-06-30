@@ -6,8 +6,9 @@
 //!   backend (lower hook), all via `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` infers argument types (side-effecting for the type environment) and
-//!   returns `PhpType::Str`, mirroring the legacy arm removed from `strings::check_builtin`.
+//! - `check` returns `PhpType::Str`. Argument type inference happens in the common
+//!   registry dispatch path (`check_builtin` in `src/types/checker/builtins/mod.rs`)
+//!   before the hook fires, so the hook does not need to call `infer_type` again.
 //! - `lower` is a thin wrapper over the shared per-arch `lower_substr` emitters.
 //! - Arity is validated by the registry's `check_arity` before the check hook fires;
 //!   the inline arity check from the legacy arm is therefore not reproduced here.
@@ -30,15 +31,14 @@ builtin! {
     php_manual: "https://www.php.net/manual/en/function.substr.php",
 }
 
-/// Infers argument types and returns `PhpType::Str` for a `substr` call.
+/// Returns `PhpType::Str` for a `substr` call.
 ///
-/// Reproduces the return-type and type-inference logic from the legacy
-/// `"substr"` arm in `strings::check_builtin`. Arity is pre-validated by the
-/// registry before this hook fires, so no inline count check is needed.
+/// Argument types are inferred by the common registry dispatch path in
+/// `check_builtin` before this hook fires; the hook only needs to return
+/// the correct return type. Arity is pre-validated by the registry before
+/// the hook fires, so no inline count check is needed.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    for arg in cx.args {
-        cx.checker.infer_type(arg, cx.env)?;
-    }
+    let _ = cx; // arguments already inferred by the common registry dispatch path
     Ok(PhpType::Str)
 }
 

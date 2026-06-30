@@ -91,7 +91,13 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
 /// Returns `Some(FunctionSig)` for builtins whose signatures are hand-coded
 /// in this match table. `builtin_call_sig` delegates here when the builtin
 /// registry does not have an entry for `name`.
-fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
+///
+/// Entries for builtins that have been migrated into `src/builtins/` are kept
+/// here so that the parity gate in `src/builtins/parity_tests.rs` can compare
+/// the registry-derived signature against a stable golden. Remove an entry only
+/// after the parity gate has verified the registry matches and the golden is no
+/// longer needed.
+pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "time" | "phpversion" | "json_last_error" | "json_last_error_msg" | "pi"
         | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" | "hash_algos"
@@ -106,6 +112,8 @@ fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "gzdeflate" => Some(optional(&["data", "level"], 1, vec![int_lit(-1)])),
         "gzinflate" => Some(optional(&["data", "max_length"], 1, vec![int_lit(0)])),
         "gzuncompress" => Some(optional(&["data", "max_length"], 1, vec![int_lit(0)])),
+        // Migrated to src/builtins/string/ord.rs — kept as the parity-gate golden.
+        "ord" => Some(fixed(&["character"])),
         "chr" => Some(fixed(&["codepoint"])),
 
         "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
@@ -200,6 +208,8 @@ fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
             1,
             vec![string_lit(" \t\r\n\u{0c}\u{0b}")],
         )),
+        // Migrated to src/builtins/string/substr.rs — kept as the parity-gate golden.
+        "substr" => Some(optional(&["string", "offset", "length"], 2, vec![null_lit()])),
         "strpos" | "strrpos" => Some(optional(
             &["haystack", "needle", "offset"],
             2,

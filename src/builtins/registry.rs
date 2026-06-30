@@ -227,7 +227,8 @@ pub fn arity_bounds(name: &str) -> Option<(usize, Option<usize>)> {
 /// - `max == None` (variadic), `min > 1`: `"<name>() takes at least N arguments"` (plural)
 /// - `max == Some(M)`, `min == 0`, `M == 1`: `"<name>() takes at most 1 argument"` (singular)
 /// - `max == Some(M)`, `min == 0`, `M > 1`: `"<name>() takes at most M arguments"` (plural)
-/// - `max == Some(M)`, `min < M`: `"<name>() takes N to M arguments"`
+/// - `max == Some(M)`, `min < M`, `M == min + 1`: `"<name>() takes N or M arguments"` (e.g., `"substr() takes 2 or 3 arguments"`)
+/// - `max == Some(M)`, `min < M`, `M > min + 1`: `"<name>() takes N to M arguments"` (e.g., `"str_pad() takes 2 to 4 arguments"`)
 ///
 /// Returns `Ok(())` without error if `name` is not registered (unknown builtins are handled
 /// upstream by the catalog / type checker, which provides its own unknown-name diagnostic).
