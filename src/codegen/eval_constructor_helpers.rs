@@ -792,13 +792,14 @@ fn emit_aarch64_constructor_body(
     }
     emit_aarch64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let body_label = constructor_body_label(module, slot);
+    let prep_fail_label = format!("{}_prep_fail", body_label);
     let (arg_temp_bytes, ref_slots) =
         emit_aarch64_prepare_constructor_args(
             module,
             emitter,
             data,
             slot,
-            fail_label,
+            &prep_fail_label,
             callable_support,
         );
     let escape_label = format!("{}_escape", body_label);
@@ -831,6 +832,8 @@ fn emit_aarch64_constructor_body(
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_aarch64_constructor_exception_boundary_pop(emitter);
     emitter.instruction(&format!("b {}", fail_label));                          // return failure after preserving by-reference writes
+    emitter.label(&prep_fail_label);
+    emit_aarch64_constructor_prep_fail_cleanup(emitter, fail_label);
 }
 
 /// Emits one x86_64 constructor body or failure branch for an unsupported constructor.
@@ -854,13 +857,14 @@ fn emit_x86_64_constructor_body(
     }
     emit_x86_64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let body_label = constructor_body_label(module, slot);
+    let prep_fail_label = format!("{}_prep_fail_x", body_label);
     let (arg_temp_bytes, ref_slots) =
         emit_x86_64_prepare_constructor_args(
             module,
             emitter,
             data,
             slot,
-            fail_label,
+            &prep_fail_label,
             callable_support,
         );
     let escape_label = format!("{}_escape_x", body_label);
@@ -893,6 +897,20 @@ fn emit_x86_64_constructor_body(
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_x86_64_constructor_exception_boundary_pop(emitter);
     emitter.instruction(&format!("jmp {}", fail_label));                        // return failure after preserving by-reference writes
+    emitter.label(&prep_fail_label);
+    emit_x86_64_constructor_prep_fail_cleanup(emitter, fail_label);
+}
+
+/// Restores an ARM64 constructor-helper frame before reporting an argument-prep fatal.
+fn emit_aarch64_constructor_prep_fail_cleanup(emitter: &mut Emitter, fail_label: &str) {
+    emitter.instruction("sub sp, x29, #48");                                    // restore the helper frame base after argument staging failed
+    emitter.instruction(&format!("b {}", fail_label));                          // report the argument-prep failure through the shared fail path
+}
+
+/// Restores an x86_64 constructor-helper frame before reporting an argument-prep fatal.
+fn emit_x86_64_constructor_prep_fail_cleanup(emitter: &mut Emitter, fail_label: &str) {
+    emitter.instruction("mov rsp, rbp");                                        // restore the helper frame base after argument staging failed
+    emitter.instruction(&format!("jmp {}", fail_label));                        // report the argument-prep failure through the shared fail path
 }
 
 /// Emits ARM64 visibility checks for a protected/private constructor bridge hit.

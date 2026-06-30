@@ -145,3 +145,80 @@ try {
         "Exception:eval-instance:integer:25|Exception:eval-static:integer:9|Exception:eval-instance:integer:33|Exception:eval-static:integer:17"
     );
 }
+
+/// Verifies AOT instance method argument-prep fatals restore the eval bridge frame.
+#[test]
+fn test_eval_aot_instance_method_by_ref_arg_prep_fatal_cleans_up_stack() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotInstancePrepFatalNeed {}
+class EvalAotInstancePrepFatalBridge {
+    public function bump(int &$value, EvalAotInstancePrepFatalNeed $need): int {
+        $value = $value + 1;
+        return $value;
+    }
+}
+
+echo eval('$box = new EvalAotInstancePrepFatalBridge();
+$callback = [$box, "bump"];
+$value = "2";
+$callback($value, 123);
+echo "bad";');
+"#,
+    );
+
+    assert!(
+        !out.success,
+        "expected eval runtime fatal, stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "");
+    assert!(
+        out.stderr.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
+        "stderr leaked a Rust panic: {}",
+        out.stderr
+    );
+}
+
+/// Verifies AOT static method argument-prep fatals restore the eval bridge frame.
+#[test]
+fn test_eval_aot_static_method_by_ref_arg_prep_fatal_cleans_up_stack() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotStaticPrepFatalNeed {}
+class EvalAotStaticPrepFatalBridge {
+    public static function bump(int &$value, EvalAotStaticPrepFatalNeed $need): int {
+        $value = $value + 1;
+        return $value;
+    }
+}
+
+echo eval('$callback = "EvalAotStaticPrepFatalBridge::bump";
+$value = "2";
+$callback($value, 123);
+echo "bad";');
+"#,
+    );
+
+    assert!(
+        !out.success,
+        "expected eval runtime fatal, stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "");
+    assert!(
+        out.stderr.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
+        "stderr leaked a Rust panic: {}",
+        out.stderr
+    );
+}
