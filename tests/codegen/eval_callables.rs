@@ -251,6 +251,48 @@ echo Closure::fromCallable($aot)("q");');
     );
 }
 
+/// Verifies string callables accept PHP's leading namespace separator.
+#[test]
+fn test_eval_string_callables_allow_leading_namespace_separator() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalLeadingSlashAotStringCallable {
+    public static function stat(string $value): string {
+        return "A" . $value;
+    }
+}
+
+echo eval('class EvalLeadingSlashStringCallable {
+    public static function stat($value) {
+        return "E" . $value;
+    }
+}
+
+$builtin = "\\strlen";
+$eval = "\\EvalLeadingSlashStringCallable::stat";
+$aot = "\\EvalLeadingSlashAotStringCallable::stat";
+$name = "seed";
+
+echo $builtin("abcd") . "|";
+echo call_user_func($eval, "a") . "|";
+echo $eval("b") . "|";
+echo call_user_func_array($eval, ["c"]) . "|";
+echo Closure::fromCallable($eval)("d") . "|";
+echo is_callable($eval, false, $name) ? $name : "bad";
+echo "|";
+echo call_user_func($aot, "x") . "|";
+echo $aot("y") . "|";
+echo call_user_func_array($aot, ["z"]) . "|";
+echo Closure::fromCallable($aot)("q");');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "4|Ea|Eb|Ec|Ed|\\EvalLeadingSlashStringCallable::stat|Ax|Ay|Az|Aq"
+    );
+}
+
 /// Verifies eval first-class callables reject invalid method targets at creation time.
 #[test]
 fn test_eval_first_class_callable_validation_rejects_invalid_method_targets() {
