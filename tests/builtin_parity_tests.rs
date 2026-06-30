@@ -70,7 +70,7 @@ const EVAL_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &[
 ];
 
 /// Eval supports extra optional by-reference parameters before the static backend does.
-const EVAL_BY_REF_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["preg_match_all"];
+const EVAL_BY_REF_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["is_callable", "preg_match_all"];
 
 /// Eval supports variadic debug output before the static backend does.
 const EVAL_VARIADIC_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["var_dump"];

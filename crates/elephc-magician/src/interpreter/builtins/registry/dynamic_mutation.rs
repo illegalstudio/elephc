@@ -38,6 +38,13 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
         }
         "preg_match" => eval_dynamic_preg_match_call(evaluated_args, context, values)?,
         "preg_match_all" => eval_dynamic_preg_match_all_call(evaluated_args, context, values)?,
+        "is_callable" => {
+            Some(eval_is_callable_call_with_evaluated_args(
+                evaluated_args,
+                context,
+                values,
+            )?)
+        }
         "flock" => eval_dynamic_flock_call(evaluated_args, context, values)?,
         "fsockopen" | "pfsockopen" => {
             eval_dynamic_fsockopen_call(evaluated_args, context, values)?

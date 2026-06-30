@@ -312,6 +312,84 @@ echo EvalFirstClassStaticSyntaxThis::makeStatic();');
     );
 }
 
+/// Verifies eval `is_callable()` supports syntax-only probes and callable-name writeback.
+#[test]
+fn test_eval_is_callable_supports_syntax_only_and_callable_name_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalCallableNameBox {
+    public function method() {}
+    private function hidden() {}
+    public static function stat() {}
+    public function __invoke() {}
+}
+
+$box = new EvalCallableNameBox();
+$closure = function () {};
+
+$name = "seed";
+echo is_callable("\\strlen", false, $name) ? "F:" : "f:";
+echo $name . "|";
+
+$name = "seed";
+echo is_callable("missing_eval_callable_name", false, $name) ? "bad:" : "M:";
+echo $name . "|";
+
+$name = "seed";
+echo is_callable("missing_eval_callable_name", true, $name) ? "S:" : "s:";
+echo $name . "|";
+
+$name = "seed";
+echo is_callable([$box, "method"], false, $name) ? "O:" : "o:";
+echo $name . "|";
+
+$name = "seed";
+echo is_callable([$box, "hidden"], false, $name) ? "bad:" : "P:";
+echo $name . "|";
+
+$name = "seed";
+echo is_callable(["NoSuchEvalCallable", "missing"], true, $name) ? "A:" : "a:";
+echo $name . "|";
+
+$name = "seed";
+echo is_callable(["NoSuchEvalCallable", "missing"], false, $name) ? "bad:" : "N:";
+echo $name . "|";
+
+$name = "seed";
+echo is_callable($box, false, $name) ? "I:" : "i:";
+echo $name . "|";
+
+$name = "seed";
+echo is_callable($closure, false, $name) ? "C:" : "c:";
+echo $name . "|";
+
+$name = "seed";
+echo is_callable(value: [$box, "method"], callable_name: $name) ? "NO:" : "no:";
+echo $name . "|";
+
+$probe = "is_callable";
+$name = "seed";
+echo $probe(["NoSuchDynamicCallable", "missing"], true, $name) ? "D:" : "d:";
+echo $name;');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "F:\\strlen|\
+M:missing_eval_callable_name|\
+S:missing_eval_callable_name|\
+O:EvalCallableNameBox::method|\
+P:EvalCallableNameBox::hidden|\
+A:NoSuchEvalCallable::missing|\
+N:NoSuchEvalCallable::missing|\
+I:EvalCallableNameBox::__invoke|\
+C:Closure::__invoke|\
+NO:EvalCallableNameBox::method|\
+D:NoSuchDynamicCallable::missing"
+    );
+}
+
 /// Verifies `Closure::fromCallable()` normalizes eval string and array callables to Closure objects.
 #[test]
 fn test_eval_closure_from_callable_normalizes_string_and_array_callables() {

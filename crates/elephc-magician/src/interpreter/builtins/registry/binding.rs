@@ -158,7 +158,8 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "boolval" | "empty" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool"
         | "is_double" | "is_float" | "is_int" | "is_integer" | "is_iterable" | "is_long"
         | "is_null" | "is_numeric" | "is_object" | "is_real" | "is_resource" | "is_string"
-        | "is_scalar" | "is_callable" | "strval" => Some(&["value"]),
+        | "is_scalar" | "strval" => Some(&["value"]),
+        "is_callable" => Some(&["value", "syntax_only", "callable_name"]),
         "buffer_new" => Some(&["length"]),
         "buffer_len" | "buffer_free" => Some(&["buffer"]),
         "is_finite" | "is_infinite" | "is_nan" => Some(&["num"]),

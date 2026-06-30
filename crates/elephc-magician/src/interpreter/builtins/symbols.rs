@@ -19,11 +19,76 @@ pub(in crate::interpreter) fn eval_builtin_function_probe(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [value] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let value = eval_expr(value, context, scope, values)?;
-    eval_function_probe_result(name, value, context, values)
+    match name {
+        "function_exists" => {
+            let [value] = args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let value = eval_expr(value, context, scope, values)?;
+            eval_function_probe_result(name, value, context, values)
+        }
+        "is_callable" => eval_builtin_is_callable(args, context, scope, values),
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Evaluates `is_callable()` over full eval call metadata so `$callable_name` stays writable.
+pub(in crate::interpreter) fn eval_builtin_is_callable_call(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+    eval_is_callable_call_with_evaluated_args(&evaluated_args, context, values)
+}
+
+/// Evaluates `is_callable()` from already evaluated arguments that may retain ref targets.
+pub(in crate::interpreter) fn eval_is_callable_call_with_evaluated_args(
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["value", "syntax_only", "callable_name"],
+        evaluated_args,
+        false,
+    )?;
+    let value = required_evaluated_ref_arg(&bound, 0)?;
+    let syntax_only = optional_evaluated_ref_arg(&bound, 1)
+        .map(|arg| values.truthy(arg.value))
+        .transpose()?
+        .unwrap_or(false);
+    let callable_name_target = optional_evaluated_ref_arg(&bound, 2)
+        .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
+        .transpose()?;
+    eval_is_callable_result(
+        value.value,
+        syntax_only,
+        callable_name_target.as_ref(),
+        context,
+        values,
+    )
+}
+
+/// Evaluates by-value dynamic `is_callable()` arguments without `$callable_name` writeback.
+pub(in crate::interpreter) fn eval_is_callable_with_values(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match evaluated_args {
+        [value] => eval_is_callable_result(*value, false, None, context, values),
+        [value, syntax_only] => {
+            let syntax_only = values.truthy(*syntax_only)?;
+            eval_is_callable_result(*value, syntax_only, None, context, values)
+        }
+        [value, syntax_only, _callable_name] => {
+            let syntax_only = values.truthy(*syntax_only)?;
+            eval_is_callable_result(*value, syntax_only, None, context, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Evaluates `function_exists()` and `is_callable()` from materialized arguments.
@@ -42,6 +107,43 @@ pub(in crate::interpreter) fn eval_function_probe_result(
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
     values.bool_value(exists)
+}
+
+/// Evaluates positional `is_callable()` arguments inside an eval fragment.
+fn eval_builtin_is_callable(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [value] => {
+            let value = eval_expr(value, context, scope, values)?;
+            eval_is_callable_result(value, false, None, context, values)
+        }
+        [value, syntax_only] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let syntax_only = eval_expr(syntax_only, context, scope, values)?;
+            let syntax_only = values.truthy(syntax_only)?;
+            eval_is_callable_result(value, syntax_only, None, context, values)
+        }
+        [value, syntax_only, callable_name] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let syntax_only = eval_expr(syntax_only, context, scope, values)?;
+            let syntax_only = values.truthy(syntax_only)?;
+            let (_, callable_name_target) =
+                eval_call_arg_value(callable_name, context, scope, values)?;
+            let callable_name_target = callable_name_target.ok_or(EvalStatus::RuntimeFatal)?;
+            eval_is_callable_result(
+                value,
+                syntax_only,
+                Some(&callable_name_target),
+                context,
+                values,
+            )
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Evaluates `define(name, value)` for eval dynamic constant-name registration.
@@ -991,6 +1093,120 @@ fn eval_is_callable_value(
         return Ok(false);
     };
     eval_callable_probe_exists(&callback, context, values)
+}
+
+/// Evaluates `is_callable()` and writes PHP's display callable name when requested.
+fn eval_is_callable_result(
+    value: RuntimeCellHandle,
+    syntax_only: bool,
+    callable_name_target: Option<&EvalReferenceTarget>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callable_name = callable_name_target
+        .map(|_| eval_callable_display_name(value, context, values))
+        .transpose()?;
+    let callable = if syntax_only {
+        eval_is_callable_syntax_only(value, context, values)?
+    } else {
+        eval_is_callable_value(value, context, values)?
+    };
+    if let Some((target, name)) = callable_name_target.zip(callable_name.as_deref()) {
+        let name = values.string(name)?;
+        eval_write_direct_ref_target(
+            target,
+            name,
+            context,
+            values,
+            Some(ScopeCellOwnership::Owned),
+        )?;
+    }
+    values.bool_value(callable)
+}
+
+/// Returns PHP's syntax-only callable result without requiring the target to exist.
+fn eval_is_callable_syntax_only(
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if values.type_tag(value)? == EVAL_TAG_STRING {
+        return Ok(true);
+    }
+    if values.type_tag(value)? == EVAL_TAG_OBJECT {
+        return eval_is_callable_value(value, context, values);
+    }
+    if values.is_array_like(value)? {
+        return eval_callable_array_display_name(value, context, values).map(|name| name.is_some());
+    }
+    Ok(false)
+}
+
+/// Builds PHP's `$callable_name` output for one probed callable value.
+fn eval_callable_display_name(
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    if values.type_tag(value)? == EVAL_TAG_STRING {
+        let bytes = values.string_bytes(value)?;
+        return String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal);
+    }
+    if values.type_tag(value)? == EVAL_TAG_OBJECT {
+        let class_name = eval_callable_object_class_name(value, context, values)?;
+        return Ok(format!("{class_name}::__invoke"));
+    }
+    if values.is_array_like(value)? {
+        return Ok(eval_callable_array_display_name(value, context, values)?
+            .unwrap_or_else(|| String::from("Array")));
+    }
+    let string = values.cast_string(value)?;
+    let bytes = values.string_bytes(string);
+    values.release(string)?;
+    String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Builds PHP's `$callable_name` output for a syntactically valid callable array.
+fn eval_callable_array_display_name(
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    if values.array_len(value)? != 2 {
+        return Ok(None);
+    }
+    let zero = values.int(0)?;
+    let one = values.int(1)?;
+    let receiver = values.array_get(value, zero)?;
+    let method = values.array_get(value, one)?;
+    if values.type_tag(method)? != EVAL_TAG_STRING {
+        return Ok(None);
+    }
+    let method =
+        String::from_utf8(values.string_bytes(method)?).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let receiver_name = match values.type_tag(receiver)? {
+        EVAL_TAG_OBJECT => eval_callable_object_class_name(receiver, context, values)?,
+        EVAL_TAG_STRING => String::from_utf8(values.string_bytes(receiver)?)
+            .map_err(|_| EvalStatus::RuntimeFatal)?,
+        _ => return Ok(None),
+    };
+    Ok(Some(format!("{receiver_name}::{method}")))
+}
+
+/// Returns the PHP-visible class name used when formatting callable object probes.
+fn eval_callable_object_class_name(
+    object: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let identity = values.object_identity(object)?;
+    if context.closure_object_target(identity).is_some() {
+        return Ok(String::from("Closure"));
+    }
+    if let Some(class_name) = context.dynamic_object_class_name(identity) {
+        return Ok(class_name);
+    }
+    runtime_object_class_name(object, values)
 }
 
 /// Returns whether a normalized eval callback has an invokable target.

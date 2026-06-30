@@ -124,6 +124,9 @@ by-reference parameters.
 String-variable and expression callable calls such as `$fn(...)` and
 `$callbacks[0](...)` share the eval callable dispatcher for supported builtins,
 eval-declared functions, and registered AOT functions.
+Inside eval, `is_callable()` also supports PHP's optional `$syntax_only` probe
+and by-reference `$callable_name` output for string, array, object, and
+`Closure` callable forms.
 
 First-class callable syntax such as `strlen(...)`, `$object->method(...)`,
 `ClassName::method(...)`, and `$invokable(...)` materializes eval callback
