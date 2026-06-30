@@ -140,6 +140,11 @@ fn eval_validate_call_user_func_object_method(
     let Ok(identity) = values.object_identity(object) else {
         return Ok(());
     };
+    if context.closure_object_target(identity).is_some()
+        && method_name.eq_ignore_ascii_case("__invoke")
+    {
+        return Ok(());
+    }
     let Some(class) = context.dynamic_object_class(identity) else {
         return eval_validate_call_user_func_native_object_method(
             object,

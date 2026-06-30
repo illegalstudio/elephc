@@ -1354,6 +1354,11 @@ fn eval_object_method_callable_probe(
     let Ok(identity) = values.object_identity(object) else {
         return Ok(false);
     };
+    if context.closure_object_target(identity).is_some()
+        && method_name.eq_ignore_ascii_case("__invoke")
+    {
+        return Ok(true);
+    }
     let Some(class) = context.dynamic_object_class(identity) else {
         return eval_aot_object_method_callable_probe(object, method_name, context, values);
     };
