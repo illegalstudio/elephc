@@ -148,7 +148,7 @@ pub(crate) fn lower_binary_string_runtime(
 }
 
 /// Lowers `explode(delimiter, string)` into the shared string-array splitter helper.
-pub(super) fn lower_explode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_explode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let cleanups = plan_split_string_temp_cleanups(ctx, inst)?;
     if !cleanups.is_empty() {
         abi::emit_reserve_temporary_stack(ctx.emitter, cleanups.bytes);
@@ -189,7 +189,7 @@ pub(crate) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `implode(glue, array)` by selecting the string or integer array helper.
-pub(super) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "implode expected 2 args, got {}",
@@ -697,7 +697,7 @@ pub(crate) fn lower_str_contains(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed.
-pub(super) fn lower_string_position(
+pub(crate) fn lower_string_position(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -759,7 +759,7 @@ pub(crate) fn lower_str_repeat(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `strstr(haystack, needle)` by searching and returning the matching suffix.
-pub(super) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "strstr expected 2 args, got {}",

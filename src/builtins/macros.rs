@@ -18,8 +18,8 @@
 //! - A trailing comma after the last field is optional.
 //!
 //! Canonical field order:
-//!   name, area, params, variadic?, returns, by_ref_return?, check?, lower, summary,
-//!   examples?, php_manual?, deprecation?, internal?
+//!   name, area, params, variadic?, max_args?, returns, by_ref_return?, check?, lower,
+//!   summary, examples?, php_manual?, deprecation?, internal?
 //!
 //! Example:
 //! ```ignore
@@ -37,8 +37,11 @@
 /// Registers a PHP builtin descriptor into the `inventory`-based registry.
 ///
 /// Fields must appear in canonical order (optional fields may be omitted):
-/// `name`, `area`, `params`, `variadic`?, `returns`, `by_ref_return`?, `check`?,
-/// `lower`, `summary`, `examples`?, `php_manual`?, `deprecation`?, `internal`?
+/// `name`, `area`, `params`, `variadic`?, `max_args`?, `returns`, `by_ref_return`?,
+/// `check`?, `lower`, `summary`, `examples`?, `php_manual`?, `deprecation`?, `internal`?
+///
+/// `max_args` (optional `usize`) caps the maximum argument count enforced by the
+/// registry's `check_arity` only; it does not affect `function_sig` or the parity gate.
 ///
 /// A trailing comma after the last field is optional.
 ///
@@ -56,6 +59,7 @@ macro_rules! builtin {
         area: $area:ident,
         params: [ $($pname:ident : $pty:ident $(= $pdefault:expr)?),* $(,)? ],
         $(variadic: $variadic:expr,)?
+        $(max_args: $max_args:expr,)?
         returns: $returns:ident,
         $(by_ref_return: $by_ref_return:expr,)?
         $(check: $check:expr,)?
@@ -85,6 +89,7 @@ macro_rules! builtin {
                     PARAMS
                 },
                 variadic: builtin!(@opt_str $($variadic)?),
+                max_args: builtin!(@opt_usize $($max_args)?),
                 returns: $crate::builtins::spec::TypeSpec::$returns,
                 by_ref_return: builtin!(@opt_bool $($by_ref_return)?),
                 check: builtin!(@opt_fn $($check)?),
@@ -106,6 +111,10 @@ macro_rules! builtin {
     // Helper: optional &'static str — present yields Some, absent yields None.
     (@opt_str $val:expr) => { Some($val) };
     (@opt_str) => { None };
+
+    // Helper: optional usize (max_args override) — present yields Some, absent yields None.
+    (@opt_usize $val:expr) => { Some($val) };
+    (@opt_usize) => { None };
 
     // Helper: optional bool — present yields the value, absent yields false.
     (@opt_bool $val:expr) => { $val };

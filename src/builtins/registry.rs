@@ -232,10 +232,24 @@ pub fn arity_bounds(name: &str) -> Option<(usize, Option<usize>)> {
 ///
 /// Returns `Ok(())` without error if `name` is not registered (unknown builtins are handled
 /// upstream by the catalog / type checker, which provides its own unknown-name diagnostic).
+///
+/// When the registered spec carries a `max_args` override, that value caps the maximum
+/// accepted argument count for this check only. `function_sig`, `arity_bounds`, and the
+/// parity gate keep the full param-derived bounds, so the override never affects argument
+/// normalization or the registry/legacy signature parity comparison.
 pub fn check_arity(name: &str, arg_count: usize, span: Span) -> Result<(), CompileError> {
-    let (min, max) = match arity_bounds(name) {
+    // Param-derived bounds, identical to what the parity gate compares against.
+    // `min` is the count of required params; `param_max` is the declared maximum.
+    let (min, param_max) = match arity_bounds(name) {
         Some(bounds) => bounds,
         None => return Ok(()),
+    };
+    // Apply the `max_args` override (if any) to the maximum only. The minimum stays
+    // param-derived; the override exists to tighten the accepted maximum for builtins
+    // whose legacy CHECK arm was stricter than their declared (golden) signature.
+    let max = match lookup(name).and_then(|def| def.spec.max_args) {
+        Some(capped) => Some(capped),
+        None => param_max,
     };
 
     let in_range = match max {
@@ -304,6 +318,20 @@ mod tests {
         internal: true,
     }
 
+    // Probe whose `max_args` (2) is smaller than its declared param count (3, since
+    // `c` is optional). Used to verify the override caps `check_arity` without
+    // affecting `function_sig`'s full param count.
+    builtin! {
+        name: "__registry_probe_capped",
+        area: Internal,
+        params: [a: Int, b: Int, c: Int = DefaultSpec::Int(0)],
+        max_args: 2,
+        returns: Int,
+        lower: noop_lower,
+        summary: "registry capped-arity probe",
+        internal: true,
+    }
+
     /// Verifies the registry derives FunctionSig arity/return for a registered builtin.
     #[test]
     fn registry_derives_signature() {
@@ -367,6 +395,33 @@ mod tests {
         // probe: exactly 1 arg
         let err = check_arity("__macro_probe", 2, crate::span::Span::dummy()).unwrap_err();
         assert!(err.message.contains("__macro_probe() takes exactly 1 argument"));
+    }
+
+    /// Verifies the `max_args` override caps `check_arity` (here to 2, below the
+    /// 3-param declared signature) while `function_sig` still reports the full
+    /// param count. The override must affect only arity validation, never the
+    /// derived signature consumed by argument normalization and the parity gate.
+    #[test]
+    fn max_args_caps_check_arity_but_not_function_sig() {
+        // __registry_probe_capped: params [a, b, c=0], max_args=2.
+        // Calling with 3 args exceeds the capped max → arity error.
+        let err = check_arity("__registry_probe_capped", 3, crate::span::Span::dummy())
+            .expect_err("3 args must exceed the max_args=2 cap");
+        assert!(
+            err.message
+                .contains("__registry_probe_capped() takes exactly 2 arguments"),
+            "capped arity error mismatch: {}",
+            err.message,
+        );
+        // function_sig is unaffected by the override: it reports all 3 params.
+        let sig = function_sig("__registry_probe_capped").expect("probe registered");
+        assert_eq!(
+            sig.params.len(),
+            3,
+            "function_sig must report the full param count, ignoring max_args",
+        );
+        // A call within the cap (2 args) is accepted.
+        assert!(check_arity("__registry_probe_capped", 2, crate::span::Span::dummy()).is_ok());
     }
 
     /// Verifies arity_bounds for a fixed-arity builtin with one optional param.

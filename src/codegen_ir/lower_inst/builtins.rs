@@ -418,18 +418,12 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "number_format" => strings::lower_number_format(ctx, inst),
         "grapheme_strrev" => strings::lower_grapheme_strrev(ctx, inst),
         "substr_replace" => strings::lower_substr_replace(ctx, inst),
-        "strstr" => strings::lower_strstr(ctx, inst),
         "str_replace" => strings::lower_string_replace(ctx, inst, "str_replace", "__rt_str_replace"),
         "str_ireplace" => {
             strings::lower_string_replace(ctx, inst, "str_ireplace", "__rt_str_ireplace")
         }
-        "explode" => strings::lower_explode(ctx, inst),
-        "implode" => strings::lower_implode(ctx, inst),
         "sscanf" => strings::lower_sscanf(ctx, inst),
-        "strpos" => strings::lower_string_position(ctx, inst, "strpos", "__rt_strpos"),
-        "strrpos" => strings::lower_string_position(ctx, inst, "strrpos", "__rt_strrpos"),
         "chr" => strings::lower_chr(ctx, inst),
-        "ucwords" => strings::lower_unary_string_runtime(ctx, inst, "ucwords", "__rt_ucwords"),
         "wordwrap" => strings::lower_wordwrap(ctx, inst),
         "bin2hex" => strings::lower_unary_string_runtime(ctx, inst, "bin2hex", "__rt_bin2hex"),
         "hex2bin" => strings::lower_unary_string_runtime(ctx, inst, "hex2bin", "__rt_hex2bin"),

@@ -156,6 +156,15 @@ pub struct BuiltinSpec {
     pub params: &'static [ParamSpec],
     /// The PHP-level name of the variadic parameter, if any.
     pub variadic: Option<&'static str>,
+    /// An optional override for the maximum argument count enforced by the
+    /// registry's `check_arity`. When `Some(n)`, `check_arity` rejects calls with
+    /// more than `n` arguments even though the declared parameter list (including
+    /// optional params) would otherwise permit more. This affects ONLY
+    /// `check_arity`; it does not change `function_sig`, `arity_bounds`, or the
+    /// parity gate, which all keep the full param-derived bounds. It exists to
+    /// preserve a migrated builtin whose legacy CHECK arm enforced a tighter arity
+    /// than its declared (golden) signature allowed.
+    pub max_args: Option<usize>,
     /// The PHP-level return type.
     pub returns: TypeSpec,
     /// Whether the function returns by reference.
@@ -204,7 +213,7 @@ mod tests {
         const P: &[ParamSpec] = &[ParamSpec { name: "string", ty: TypeSpec::Str, default: None, by_ref: false }];
         const S: BuiltinSpec = BuiltinSpec {
             name: "strlen", area: Area::String, params: P, variadic: None,
-            returns: TypeSpec::Int, by_ref_return: false, check: None,
+            max_args: None, returns: TypeSpec::Int, by_ref_return: false, check: None,
             lower: noop_lower, summary: "len", examples: &[], php_manual: None,
             deprecation: None, internal: false,
         };

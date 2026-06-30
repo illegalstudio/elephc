@@ -13,6 +13,8 @@
 
 pub mod addslashes;
 pub mod chop;
+pub mod explode;
+pub mod implode;
 pub mod lcfirst;
 pub mod ltrim;
 pub mod nl2br;
@@ -26,9 +28,13 @@ pub mod str_starts_with;
 pub mod strcasecmp;
 pub mod strcmp;
 pub mod stripslashes;
+pub mod strpos;
 pub mod strrev;
+pub mod strrpos;
+pub mod strstr;
 pub mod strtolower;
 pub mod strtoupper;
 pub mod substr;
 pub mod trim;
 pub mod ucfirst;
+pub mod ucwords;

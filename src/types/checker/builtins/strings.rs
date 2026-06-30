@@ -56,27 +56,6 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Int))
         }
-        "strpos" | "strrpos" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 2 arguments", name),
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool])))
-        }
-        "strstr" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "strstr() takes exactly 2 arguments"));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Str))
-        }
         "grapheme_strrev" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
@@ -93,7 +72,7 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Union(vec![PhpType::Str, PhpType::Bool])))
         }
-        "str_replace" | "str_ireplace" | "chr" | "bin2hex" | "ucwords" => {
+        "str_replace" | "str_ireplace" | "chr" | "bin2hex" => {
             let expected = match name {
                 "str_replace" | "str_ireplace" => 3,
                 _ => 1,
@@ -179,24 +158,6 @@ pub(super) fn check_builtin(
         "wordwrap" => {
             if args.is_empty() || args.len() > 4 {
                 return Err(CompileError::new(span, "wordwrap() takes 1 to 4 arguments"));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Str))
-        }
-        "explode" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "explode() takes exactly 2 arguments"));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
-        }
-        "implode" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "implode() takes exactly 2 arguments"));
             }
             for arg in args {
                 checker.infer_type(arg, env)?;
