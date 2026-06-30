@@ -16,6 +16,7 @@ mod macros;
 pub mod spec;
 pub mod registry;
 mod convert;
+mod array;
 mod string;
 #[cfg(test)]
 mod parity_tests;

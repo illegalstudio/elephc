@@ -5896,6 +5896,12 @@ fn array_builtin_return_type(
         "in_array" => Some(PhpType::Bool),
         "array_is_list" => Some(PhpType::Bool),
         "array_key_first" | "array_key_last" => Some(PhpType::Mixed),
+        // `array_keys`/`array_slice` produce a fresh indexed array of boxed `Mixed`
+        // payloads (keys, or the sliced elements). These mirror the result type the
+        // first-class-callable fallback supplied before they were registered as
+        // builtins, so the EIR backend keeps receiving a concrete `Array` result
+        // type rather than the registry's `Mixed` return-type placeholder.
+        "array_keys" | "array_slice" => Some(PhpType::Array(Box::new(PhpType::Mixed))),
         "range" => Some(PhpType::Array(Box::new(PhpType::Int))),
         "array_values" => {
             let array = operands.first()?;

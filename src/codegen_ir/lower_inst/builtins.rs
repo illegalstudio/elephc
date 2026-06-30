@@ -22,7 +22,7 @@ use super::{expect_data, expect_operand, load_value_to_first_int_arg, predicates
 use crate::codegen_ir::{CodegenIrError, Result};
 
 pub(in crate::codegen_ir::lower_inst) mod attributes;
-mod arrays;
+pub(crate) mod arrays;
 mod buffers;
 mod class_relations;
 pub(crate) mod ctype;
@@ -105,15 +105,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "array_sum" => arrays::lower_array_sum(ctx, inst),
         "array_product" => arrays::lower_array_product(ctx, inst),
         "array_push" => arrays::lower_array_push(ctx, inst),
-        "array_chunk" => arrays::lower_array_chunk(ctx, inst),
-        "array_pad" => arrays::lower_array_pad(ctx, inst),
-        "array_combine" => arrays::lower_array_combine(ctx, inst),
-        "array_column" => arrays::lower_array_column(ctx, inst),
-        "array_flip" => arrays::lower_array_flip(ctx, inst),
         "array_fill" => arrays::lower_array_fill(ctx, inst),
         "array_fill_keys" => arrays::lower_array_fill_keys(ctx, inst),
-        "array_reverse" => arrays::lower_array_reverse(ctx, inst),
-        "array_unique" => arrays::lower_array_unique(ctx, inst),
         "array_map" => arrays::lower_array_map(ctx, inst),
         "array_filter" => arrays::lower_array_filter(ctx, inst),
         "array_reduce" => arrays::lower_array_reduce(ctx, inst),
@@ -135,10 +128,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "array_udiff" => arrays::lower_array_udiff(ctx, inst),
         "array_uintersect" => arrays::lower_array_uintersect(ctx, inst),
         "array_multisort" => arrays::lower_array_multisort(ctx, inst),
-        "array_slice" => arrays::lower_array_slice(ctx, inst),
         "array_splice" => arrays::lower_array_splice(ctx, inst),
-        "array_keys" => arrays::lower_array_keys(ctx, inst),
-        "array_values" => arrays::lower_array_values(ctx, inst),
         "array_rand" => arrays::lower_array_rand(ctx, inst),
         "array_pop" => arrays::lower_array_pop(ctx, inst),
         "array_shift" => arrays::lower_array_shift(ctx, inst),
@@ -156,7 +146,6 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "uksort" => arrays::lower_uksort(ctx, inst),
         "uasort" => arrays::lower_uasort(ctx, inst),
         "array_key_exists" => arrays::lower_array_key_exists(ctx, inst),
-        "array_is_list" => arrays::lower_array_is_list(ctx, inst),
         "array_key_first" => arrays::lower_array_key_first(ctx, inst),
         "array_key_last" => arrays::lower_array_key_last(ctx, inst),
         "array_search" => arrays::lower_array_search(ctx, inst),

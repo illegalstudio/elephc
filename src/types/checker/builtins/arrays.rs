@@ -19,12 +19,15 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 /// Type-checks array builtin functions.
 ///
 /// Dispatches on `name` to validate arity, argument types, and return type for each
-/// supported array function (count, array_pop, in_array, array_keys, array_values, sort,
+/// supported array function (count, array_pop, in_array, sort,
 /// rsort, shuffle, natsort, natcasesort, asort, arsort, ksort, krsort, isset, array_push,
-/// array_reverse, array_unique, array_flip, array_shift, array_sum, array_product, array_rand,
+/// array_shift, array_sum, array_product, array_rand,
 /// array_key_exists, array_search, array_merge, array_diff, array_intersect, array_diff_key,
-/// array_intersect_key, array_unshift, array_combine, array_fill_keys, array_pad, array_fill,
-/// array_slice, array_splice, array_chunk, array_column, range).
+/// array_intersect_key, array_unshift, array_fill_keys, array_fill,
+/// array_splice, range). Builtins migrated to the registry (e.g. array_keys,
+/// array_values, array_flip, array_reverse, array_unique, array_slice, array_pad,
+/// array_combine, array_chunk, array_column, array_is_list) are handled by their
+/// `src/builtins/array/` homes before this dispatcher runs.
 ///
 /// Returns `Ok(Some(PhpType))` with the inferred return type, `Ok(None)` for unknown
 /// builtins (deferred to caller), or `Err(CompileError)` on arity/type mismatch.
@@ -91,33 +94,6 @@ pub(super) fn check_builtin(
             // the static type drives echo/var_dump: `echo false` is "" (not "0").
             Ok(Some(PhpType::Bool))
         }
-        "array_keys" | "array_values" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 1 argument", name),
-                ));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            match (name, &ty) {
-                ("array_keys", PhpType::Array(_)) => {
-                    Ok(Some(PhpType::Array(Box::new(PhpType::Int))))
-                }
-                ("array_keys", PhpType::AssocArray { key, .. }) => {
-                    Ok(Some(PhpType::Array(key.clone())))
-                }
-                ("array_values", PhpType::Array(elem_ty)) => {
-                    Ok(Some(PhpType::Array(elem_ty.clone())))
-                }
-                ("array_values", PhpType::AssocArray { value, .. }) => {
-                    Ok(Some(PhpType::Array(value.clone())))
-                }
-                _ => Err(CompileError::new(
-                    span,
-                    &format!("{}() argument must be array", name),
-                )),
-            }
-        }
         "sort" | "rsort" | "shuffle" | "natsort" | "natcasesort" | "asort" | "arsort"
         | "ksort" | "krsort" => {
             if args.len() != 1 {
@@ -172,39 +148,6 @@ pub(super) fn check_builtin(
                 ));
             }
             Ok(Some(PhpType::Void))
-        }
-        "array_reverse" | "array_unique" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 1 argument", name),
-                ));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() argument must be array", name),
-                ));
-            }
-            Ok(Some(ty))
-        }
-        "array_flip" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "array_flip() takes exactly 1 argument"));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            match ty {
-                PhpType::Array(elem_ty) => Ok(Some(PhpType::AssocArray {
-                    key: Box::new(array_key_type_from_value_type(*elem_ty)),
-                    value: Box::new(PhpType::Int),
-                })),
-                PhpType::AssocArray { key, value } => Ok(Some(PhpType::AssocArray {
-                    key: Box::new(array_key_type_from_value_type(*value)),
-                    value: key,
-                })),
-                _ => Err(CompileError::new(span, "array_flip() argument must be array")),
-            }
         }
         "array_shift" => {
             if args.len() != 1 {
@@ -263,22 +206,6 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(
                     span,
                     "array_key_exists() second argument must be array",
-                ));
-            }
-            Ok(Some(PhpType::Bool))
-        }
-        "array_is_list" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "array_is_list() takes exactly 1 argument",
-                ));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed) {
-                return Err(CompileError::new(
-                    span,
-                    "array_is_list() argument must be array",
                 ));
             }
             Ok(Some(PhpType::Bool))
@@ -448,38 +375,6 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Int))
         }
-        "array_combine" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    "array_combine() takes exactly 2 arguments",
-                ));
-            }
-            let keys_ty = checker.infer_type(&args[0], env)?;
-            let vals_ty = checker.infer_type(&args[1], env)?;
-            let key_elem = match keys_ty {
-                PhpType::Array(elem) => *elem,
-                _ => {
-                    return Err(CompileError::new(
-                        span,
-                        "array_combine() first argument must be array",
-                    ));
-                }
-            };
-            let val_elem = match vals_ty {
-                PhpType::Array(elem) => *elem,
-                _ => {
-                    return Err(CompileError::new(
-                        span,
-                        "array_combine() second argument must be array",
-                    ));
-                }
-            };
-            Ok(Some(PhpType::AssocArray {
-                key: Box::new(array_key_type_from_value_type(key_elem)),
-                value: Box::new(val_elem),
-            }))
-        }
         "array_fill_keys" => {
             if args.len() != 2 {
                 return Err(CompileError::new(
@@ -503,21 +398,6 @@ pub(super) fn check_builtin(
                 value: Box::new(val_ty),
             }))
         }
-        "array_pad" => {
-            if args.len() != 3 {
-                return Err(CompileError::new(span, "array_pad() takes exactly 3 arguments"));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            checker.infer_type(&args[2], env)?;
-            if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-                return Err(CompileError::new(
-                    span,
-                    "array_pad() first argument must be array",
-                ));
-            }
-            Ok(Some(ty))
-        }
         "array_fill" => {
             if args.len() != 3 {
                 return Err(CompileError::new(span, "array_fill() takes exactly 3 arguments"));
@@ -538,7 +418,7 @@ pub(super) fn check_builtin(
                 Ok(Some(PhpType::Array(Box::new(val_ty))))
             }
         }
-        "array_slice" | "array_splice" => {
+        "array_splice" => {
             if args.len() < 2 || args.len() > 3 {
                 return Err(CompileError::new(
                     span,
@@ -559,52 +439,6 @@ pub(super) fn check_builtin(
                 ));
             }
             Ok(Some(ty))
-        }
-        "array_chunk" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    "array_chunk() takes exactly 2 arguments",
-                ));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            match ty {
-                PhpType::Array(elem_ty) => {
-                    Ok(Some(PhpType::Array(Box::new(PhpType::Array(elem_ty)))))
-                }
-                PhpType::AssocArray { .. } => Err(CompileError::new(
-                    span,
-                    "array_chunk() argument must be indexed array",
-                )),
-                _ => Err(CompileError::new(
-                    span,
-                    "array_chunk() first argument must be array",
-                )),
-            }
-        }
-        "array_column" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    "array_column() takes exactly 2 arguments",
-                ));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            match ty {
-                PhpType::Array(inner) => match *inner {
-                    PhpType::AssocArray { value, .. } => Ok(Some(PhpType::Array(value))),
-                    _ => Err(CompileError::new(
-                        span,
-                        "array_column() requires an array of associative arrays",
-                    )),
-                },
-                _ => Err(CompileError::new(
-                    span,
-                    "array_column() first argument must be array",
-                )),
-            }
         }
         "range" => {
             if args.len() != 2 {

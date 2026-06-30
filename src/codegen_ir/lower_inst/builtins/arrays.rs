@@ -78,7 +78,7 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays.
-pub(super) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_chunk", 2)?;
     let array = expect_operand(inst, 0)?;
     let length = expect_operand(inst, 1)?;
@@ -96,7 +96,7 @@ pub(super) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Lowers `array_pad()` by copying an indexed array and filling missing slots.
-pub(super) fn lower_array_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_pad", 3)?;
     let array = expect_operand(inst, 0)?;
     let target_size = expect_operand(inst, 1)?;
@@ -149,7 +149,7 @@ pub(super) fn lower_array_fill_keys(ctx: &mut FunctionContext<'_>, inst: &Instru
 }
 
 /// Lowers `array_combine()` through the legacy hash-building runtime helpers.
-pub(super) fn lower_array_combine(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_combine(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_combine", 2)?;
     let keys = expect_operand(inst, 0)?;
     let values = expect_operand(inst, 1)?;
@@ -163,12 +163,12 @@ pub(super) fn lower_array_combine(ctx: &mut FunctionContext<'_>, inst: &Instruct
 }
 
 /// Lowers `array_column()` through the target-aware legacy column helpers.
-pub(super) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     column::lower_array_column(ctx, inst)
 }
 
 /// Lowers `array_flip()` through the legacy hash-building runtime helpers.
-pub(super) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_flip", 1)?;
     let array = expect_operand(inst, 0)?;
     let value_elem_ty = array_flip_source_element_type(ctx.value_php_type(array)?)?;
@@ -182,7 +182,7 @@ pub(super) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
-pub(super) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_reverse", 1)?;
     let array = expect_operand(inst, 0)?;
     let elem_ty = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
@@ -195,7 +195,7 @@ pub(super) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
 }
 
 /// Lowers `array_unique()` for indexed arrays with 8-byte payload slots.
-pub(super) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_unique", 1)?;
     let array = expect_operand(inst, 0)?;
     let elem_ty = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
@@ -903,7 +903,7 @@ pub(super) fn lower_array_intersect_key(ctx: &mut FunctionContext<'_>, inst: &In
 }
 
 /// Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
-pub(super) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_slice", 2, 3)?;
     let array = expect_operand(inst, 0)?;
     if matches!(
@@ -994,12 +994,12 @@ fn lower_mixed_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `array_values()` through the dedicated values-array builtin emitter.
-pub(super) fn lower_array_values(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_values(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     values::lower_array_values(ctx, inst)
 }
 
 /// Lowers `array_keys()` through the dedicated keys-array builtin emitter.
-pub(super) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     keys::lower_array_keys(ctx, inst)
 }
 
@@ -1141,7 +1141,7 @@ pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instr
 ///
 /// The runtime helper accepts any array kind (indexed, associative hash, or boxed mixed cell) and
 /// reports `1` when the keys are the sequential integers `0..n-1` in insertion order, `0` otherwise.
-pub(super) fn lower_array_is_list(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_is_list(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_is_list", 1)?;
     let array = expect_operand(inst, 0)?;
     require_array_like_operand(ctx.value_php_type(array)?, "array_is_list")?;
