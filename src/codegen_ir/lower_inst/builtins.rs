@@ -44,9 +44,18 @@ const DEFINE_ALREADY_DEFINED_WARNING: &str =
     "Warning: define(): Constant already defined\n";
 
 /// Lowers a scalar builtin call by matching the canonical PHP function name.
+///
+/// Consults the builtin registry first using the canonical key; falls back to the
+/// legacy match table when the name is not registered. This makes the registry the
+/// authoritative dispatch path while keeping the legacy emitters as a fallback.
 pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let name = ctx.function_name_data(expect_data(inst)?)?;
     let key = php_symbol_key(name.trim_start_matches('\\'));
+    // Registry-first: if the builtin is registered, invoke its lowering hook.
+    // Falls through to the legacy match when the name is not registered.
+    if let Some(def) = crate::builtins::registry::lookup(key.as_str()) {
+        return (def.spec.lower)(ctx, inst);
+    }
     match key.as_str() {
         "abs" => math::lower_abs(ctx, inst),
         "floor" => math::lower_floor(ctx, inst),

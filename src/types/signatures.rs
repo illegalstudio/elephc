@@ -71,15 +71,27 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
 
 /// Looks up a builtin function's canonical call signature.
 ///
-/// Returns `Some(FunctionSig)` for known PHP builtins (e.g., `strlen`, `array_push`);
-/// returns `None` for untracked or user-defined functions. The returned signature
-/// reflects PHP's actual parameter ordering, defaults, variadics, and by-ref params.
+/// Consults the builtin registry first; falls back to the legacy static match
+/// table when the name is not registered. Returns `Some(FunctionSig)` for known
+/// PHP builtins (e.g., `strlen`, `array_push`) and `None` for untracked or
+/// user-defined functions. The returned signature reflects PHP's actual parameter
+/// ordering, defaults, variadics, and by-ref params.
 ///
 /// Called from:
 /// - type checker builtin validation
 /// - first-class callable builtin sig construction
 /// - optimizer effect modeling for builtins
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
+    crate::builtins::registry::function_sig(name)
+        .or_else(|| legacy_builtin_call_sig(name))
+}
+
+/// Legacy static lookup table for builtin call signatures.
+///
+/// Returns `Some(FunctionSig)` for builtins whose signatures are hand-coded
+/// in this match table. `builtin_call_sig` delegates here when the builtin
+/// registry does not have an entry for `name`.
+fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "time" | "phpversion" | "json_last_error" | "json_last_error_msg" | "pi"
         | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" | "hash_algos"
@@ -645,13 +657,25 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
 
 /// Returns the signature used when a builtin is accessed as a first-class callable.
 ///
-/// Some builtins (e.g., `strlen`, `count`, `buffer_len`) have explicit first-class
-/// signatures with precise parameter and return types. Unknown builtins fall through
-/// to `general_first_class_callable_builtin_sig`.
+/// Consults the builtin registry first (via `registry::first_class_callable_sig`);
+/// falls back to the legacy static table when the name is not registered. Some builtins
+/// (e.g., `strlen`, `count`, `buffer_len`) have explicit first-class signatures with
+/// precise parameter and return types. Unknown builtins fall through to
+/// `general_first_class_callable_builtin_sig`.
 ///
 /// Called from:
 /// - first-class callable lowering for builtin references
 pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
+    crate::builtins::registry::first_class_callable_sig(name)
+        .or_else(|| legacy_first_class_callable_builtin_sig(name))
+}
+
+/// Legacy static lookup table for first-class-callable builtin signatures.
+///
+/// Returns the precise typed `FunctionSig` used when a builtin is referenced
+/// as a first-class callable. `first_class_callable_builtin_sig` delegates
+/// here when the registry does not have an entry for `name`.
+fn legacy_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "strlen" => Some(FunctionSig {
             params: vec![("string".to_string(), PhpType::Str)],

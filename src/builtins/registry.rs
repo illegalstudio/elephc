@@ -12,10 +12,6 @@
 //! - Lookup is case-insensitive to match PHP's builtin name semantics.
 //! - Duplicate builtin names panic at registry initialization time (link-time guard).
 
-// Dead-code warnings are expected during the multi-task migration before the
-// registry is wired into active dispatch paths.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -137,7 +133,9 @@ pub fn is_supported(name: &str) -> bool {
 /// Returns an iterator over all registered canonical builtin names.
 ///
 /// Names are returned in unspecified order and with case-preserved spelling
-/// (i.e., as originally supplied to `builtin!`).
+/// (i.e., as originally supplied to `builtin!`). Used primarily from test
+/// and documentation-generation contexts.
+#[allow(dead_code)]
 pub fn names() -> impl Iterator<Item = &'static str> {
     registry().values().map(|def| def.name)
 }

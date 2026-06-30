@@ -475,16 +475,31 @@ pub(crate) fn supported_builtin_function_names() -> &'static [&'static str] {
 }
 
 /// Converts a function name to lowercase and returns it if it is a supported builtin.
-/// Returns `None` if the name is not in the catalog. Implements PHP's case-insensitive builtin lookup.
+///
+/// Returns `None` if the name is not in either the legacy catalog or the builtin
+/// registry. Implements PHP's case-insensitive builtin lookup. The registry is
+/// consulted first; the legacy static list is the fallback.
 pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     let canonical = name.to_ascii_lowercase();
-    is_supported_builtin_function_exact(&canonical).then_some(canonical)
+    if is_supported_builtin_function_exact(&canonical)
+        || crate::builtins::registry::is_supported(&canonical)
+    {
+        Some(canonical)
+    } else {
+        None
+    }
 }
 
-/// Returns true only for PHP-visible builtin functions.
+/// Returns true only for PHP-visible builtin functions (non-internal builtins).
+///
+/// Checks both the legacy static list and the builtin registry. Registry entries
+/// flagged as `internal` are excluded from the PHP-visible set.
 pub(crate) fn is_php_visible_builtin_function(name: &str) -> bool {
     let canonical = name.to_ascii_lowercase();
     SUPPORTED_BUILTIN_FUNCTIONS.contains(&canonical.as_str())
+        || crate::builtins::registry::lookup(&canonical)
+            .map(|def| !def.spec.internal)
+            .unwrap_or(false)
 }
 
 /// Returns `true` if the name is a supported builtin function (case-insensitive).

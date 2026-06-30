@@ -82,6 +82,26 @@ impl Checker {
             args
         };
 
+        // Registry-first: if the builtin is registered, use its spec to check arity
+        // and derive the return type (or call the spec's check hook for refined types).
+        // Falls through to the legacy per-area dispatch when the name is not registered.
+        if let Some(def) = crate::builtins::registry::lookup(name) {
+            crate::builtins::registry::check_arity(name, args.len(), span)?;
+            let ret = if let Some(check) = def.spec.check {
+                let mut cx = crate::builtins::spec::BuiltinCheckCtx {
+                    checker: self,
+                    name,
+                    args,
+                    span,
+                    env,
+                };
+                check(&mut cx)?
+            } else {
+                def.return_type.clone()
+            };
+            return Ok(Some(ret));
+        }
+
         if let Some(result) = strings::check_builtin(self, name, args, span, env)? {
             return Ok(Some(result));
         }
