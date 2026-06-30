@@ -7713,7 +7713,7 @@ fn eval_closure_bind_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(bound_this) = bound_this else {
-        return eval_closure_unbind_target(target, context, values);
+        return eval_closure_unbind_target(target, bound_scope, context, values);
     };
     match target {
         EvalClosureObjectTarget::Named(name) | EvalClosureObjectTarget::BoundNamed { name, .. } => {
@@ -7732,7 +7732,7 @@ fn eval_closure_bind_target(
             eval_closure_object_from_target(
                 EvalClosureObjectTarget::BoundNamed {
                     name,
-                    bound_this,
+                    bound_this: Some(bound_this),
                     bound_scope,
                 },
                 context,
@@ -7790,12 +7790,21 @@ fn eval_closure_bind_target(
 /// Creates an unbound Closure object for targets that can drop `$this`.
 fn eval_closure_unbind_target(
     target: EvalClosureObjectTarget,
+    bound_scope: Option<String>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match target {
         EvalClosureObjectTarget::Named(name) | EvalClosureObjectTarget::BoundNamed { name, .. } => {
-            eval_closure_object_from_target(EvalClosureObjectTarget::Named(name), context, values)
+            let target = match bound_scope {
+                Some(bound_scope) => EvalClosureObjectTarget::BoundNamed {
+                    name,
+                    bound_this: None,
+                    bound_scope: Some(bound_scope),
+                },
+                None => EvalClosureObjectTarget::Named(name),
+            };
+            eval_closure_object_from_target(target, context, values)
         }
         EvalClosureObjectTarget::InvokableObject { .. }
         | EvalClosureObjectTarget::ObjectMethod { .. } => {

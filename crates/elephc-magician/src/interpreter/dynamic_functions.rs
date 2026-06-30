@@ -1704,7 +1704,7 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_closure_with_optional_bound_this(closure, None, evaluated_args, context, values)
+    eval_closure_with_optional_binding(closure, None, evaluated_args, context, values)
 }
 
 /// Evaluates one runtime eval closure with `$this` bound by `Closure::call()`.
@@ -1740,30 +1740,65 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_this_sc
     }
     let called_class = eval_closure_bound_object_class_name(bound_this, context, values)?;
     let class_scope = bound_scope.unwrap_or_else(|| called_class.clone());
-    eval_closure_with_optional_bound_this(
+    eval_closure_with_optional_binding(
         closure,
-        Some((bound_this, class_scope, called_class)),
+        Some(EvalClosureBinding {
+            this_object: Some(bound_this),
+            class_scope,
+            called_class,
+        }),
         evaluated_args,
         context,
         values,
     )
 }
 
-/// Evaluates one runtime eval closure with optional `$this` binding metadata.
-fn eval_closure_with_optional_bound_this(
+/// Evaluates one runtime eval closure with a class scope but no `$this` binding.
+pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_scope(
     closure: &EvalClosure,
-    bound_this: Option<(RuntimeCellHandle, String, String)>,
+    bound_scope: Option<String>,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(class_scope) = bound_scope else {
+        return eval_closure_with_evaluated_args(closure, evaluated_args, context, values);
+    };
+    eval_closure_with_optional_binding(
+        closure,
+        Some(EvalClosureBinding {
+            this_object: None,
+            called_class: class_scope.clone(),
+            class_scope,
+        }),
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Class binding metadata for a runtime eval closure invocation.
+struct EvalClosureBinding {
+    this_object: Option<RuntimeCellHandle>,
+    class_scope: String,
+    called_class: String,
+}
+
+/// Evaluates one runtime eval closure with optional class and `$this` binding metadata.
+fn eval_closure_with_optional_binding(
+    closure: &EvalClosure,
+    binding: Option<EvalClosureBinding>,
     evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let function = closure.function();
     let static_names = static_var_names(function.body());
-    let bound_class_pushed = bound_this.is_some();
+    let bound_class_pushed = binding.is_some();
     context.push_function(function.name());
-    if let Some((_, class_scope, called_class)) = &bound_this {
-        context.push_class_scope(class_scope.to_string());
-        context.push_called_class_scope(called_class.to_string());
+    if let Some(binding) = &binding {
+        context.push_class_scope(binding.class_scope.clone());
+        context.push_called_class_scope(binding.called_class.clone());
     }
     let evaluated_args = match bind_evaluated_method_args(
         function.params(),
@@ -1787,7 +1822,7 @@ fn eval_closure_with_optional_bound_this(
     };
     let mut function_scope = ElephcEvalScope::new();
     bind_closure_captures(&mut function_scope, closure.captures());
-    if let Some((object, _, _)) = bound_this {
+    if let Some(object) = binding.and_then(|binding| binding.this_object) {
         function_scope.set("this", object, ScopeCellOwnership::Borrowed);
     }
     bind_method_scope_args(

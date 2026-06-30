@@ -535,7 +535,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                 .closure(name)
                 .cloned()
                 .ok_or(EvalStatus::UnsupportedConstruct)?;
-            eval_closure_with_evaluated_args_and_bound_this_scope(
+            eval_bound_closure_with_call_args(
                 &closure,
                 *bound_this,
                 bound_scope.clone(),
@@ -613,6 +613,34 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
     }
 }
 
+/// Invokes a bound eval closure with either `$this` or only an explicit class scope.
+fn eval_bound_closure_with_call_args(
+    closure: &EvalClosure,
+    bound_this: Option<RuntimeCellHandle>,
+    bound_scope: Option<String>,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match bound_this {
+        Some(this_object) => eval_closure_with_evaluated_args_and_bound_this_scope(
+            closure,
+            this_object,
+            bound_scope,
+            evaluated_args,
+            context,
+            values,
+        ),
+        None => eval_closure_with_evaluated_args_and_bound_scope(
+            closure,
+            bound_scope,
+            evaluated_args,
+            context,
+            values,
+        ),
+    }
+}
+
 /// Invokes a normalized callback through `call_user_func()` by-value argument semantics.
 fn eval_evaluated_callable_with_call_user_func_values(
     callback: &EvaluatedCallable,
@@ -633,7 +661,7 @@ fn eval_evaluated_callable_with_call_user_func_values(
                 .closure(name)
                 .cloned()
                 .ok_or(EvalStatus::UnsupportedConstruct)?;
-            eval_closure_with_evaluated_args_and_bound_this_scope(
+            eval_bound_closure_with_call_args(
                 &closure,
                 *bound_this,
                 bound_scope.clone(),
@@ -1117,7 +1145,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 .closure(name)
                 .cloned()
                 .ok_or(EvalStatus::UnsupportedConstruct)?;
-            eval_closure_with_evaluated_args_and_bound_this_scope(
+            eval_bound_closure_with_call_args(
                 &closure,
                 *bound_this,
                 bound_scope.clone(),
