@@ -301,6 +301,138 @@ echo "bad";');
     }
 }
 
+/// Verifies named AOT callable by-ref argument-prep fatals restore the eval bridge frame.
+#[test]
+fn test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack() {
+    let cases = [
+        (
+            "instance array callable",
+            r#"<?php
+class EvalAotNamedRefArrayFatalNeed {}
+class EvalAotNamedRefArrayFatalBridge {
+    public function bump(int &$value, EvalAotNamedRefArrayFatalNeed $need): int {
+        $value = $value + 1;
+        return $value;
+    }
+}
+
+echo eval('$box = new EvalAotNamedRefArrayFatalBridge();
+$callback = [$box, "bump"];
+$value = "2";
+$callback(value: $value, need: 123);
+echo "bad";');
+"#,
+        ),
+        (
+            "first-class instance callable",
+            r#"<?php
+class EvalAotNamedRefFirstFatalNeed {}
+class EvalAotNamedRefFirstFatalBridge {
+    public function bump(int &$value, EvalAotNamedRefFirstFatalNeed $need): int {
+        $value = $value + 1;
+        return $value;
+    }
+}
+
+echo eval('$box = new EvalAotNamedRefFirstFatalBridge();
+$callback = $box->bump(...);
+$value = "2";
+$callback(need: 123, value: $value);
+echo "bad";');
+"#,
+        ),
+        (
+            "Closure::fromCallable instance",
+            r#"<?php
+class EvalAotNamedRefClosureFatalNeed {}
+class EvalAotNamedRefClosureFatalBridge {
+    public function bump(int &$value, EvalAotNamedRefClosureFatalNeed $need): int {
+        $value = $value + 1;
+        return $value;
+    }
+}
+
+echo eval('$box = new EvalAotNamedRefClosureFatalBridge();
+$callback = Closure::fromCallable([$box, "bump"]);
+$value = "2";
+$callback(value: $value, need: 123);
+echo "bad";');
+"#,
+        ),
+        (
+            "static string callable",
+            r#"<?php
+class EvalAotNamedRefStringFatalNeed {}
+class EvalAotNamedRefStringFatalBridge {
+    public static function bump(int &$value, EvalAotNamedRefStringFatalNeed $need): int {
+        $value = $value + 1;
+        return $value;
+    }
+}
+
+echo eval('$callback = "EvalAotNamedRefStringFatalBridge::bump";
+$value = "2";
+$callback(need: 123, value: $value);
+echo "bad";');
+"#,
+        ),
+        (
+            "first-class static callable",
+            r#"<?php
+class EvalAotNamedRefStaticFatalNeed {}
+class EvalAotNamedRefStaticFatalBridge {
+    public static function bump(int &$value, EvalAotNamedRefStaticFatalNeed $need): int {
+        $value = $value + 1;
+        return $value;
+    }
+}
+
+echo eval('$callback = EvalAotNamedRefStaticFatalBridge::bump(...);
+$value = "2";
+$callback(value: $value, need: 123);
+echo "bad";');
+"#,
+        ),
+        (
+            "invokable object callable",
+            r#"<?php
+class EvalAotNamedRefInvokeFatalNeed {}
+class EvalAotNamedRefInvokeFatalBridge {
+    public function __invoke(int &$value, EvalAotNamedRefInvokeFatalNeed $need): int {
+        $value = $value + 1;
+        return $value;
+    }
+}
+
+echo eval('$callback = new EvalAotNamedRefInvokeFatalBridge();
+$value = "2";
+$callback(need: 123, value: $value);
+echo "bad";');
+"#,
+        ),
+    ];
+
+    for (label, source) in cases {
+        let out = compile_and_run_capture(source);
+        assert!(
+            !out.success,
+            "{label}: expected eval runtime fatal, stdout={:?} stderr={}",
+            out.stdout, out.stderr
+        );
+        assert_eq!(out.stdout, "", "{label}: unexpected stdout");
+        assert!(
+            out.stderr.contains("Fatal error: eval() runtime failed"),
+            "{label}: stderr did not contain eval runtime fatal diagnostic: {}",
+            out.stderr
+        );
+        assert!(
+            !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
+            "{label}: stderr leaked a Rust panic: {}",
+            out.stderr
+        );
+    }
+}
+
 /// Verifies AOT first-class method argument-prep fatals restore the eval bridge frame.
 #[test]
 fn test_eval_aot_first_class_method_by_ref_arg_prep_fatal_cleans_up_stack() {

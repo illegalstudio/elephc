@@ -114,6 +114,64 @@ return call_user_func_array($static, [&$d, 9]) . ":" . gettype($d) . ":" . $d;')
     );
 }
 
+/// Verifies eval AOT callables preserve named by-ref argument writeback.
+#[test]
+fn test_eval_aot_callable_named_ref_args_preserve_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotCallableNamedRefBox {
+    public int $base = 10;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public static function add(int &$value, int $delta): int {
+        $value = $value + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+}
+
+echo eval('$box = new EvalAotCallableNamedRefBox();
+
+$array = [$box, "bump"];
+$a = "2";
+echo $array(value: $a, delta: 3) . ":" . gettype($a) . ":" . $a . "|";
+
+$first = $box->bump(...);
+$b = "4";
+echo $first(delta: 5, value: $b) . ":" . gettype($b) . ":" . $b . "|";
+
+$closure = Closure::fromCallable([$box, "bump"]);
+$c = "6";
+echo $closure(delta: 7, value: $c) . ":" . gettype($c) . ":" . $c . "|";
+
+$string = "EvalAotCallableNamedRefBox::add";
+$d = "8";
+echo $string(delta: 9, value: $d) . ":" . gettype($d) . ":" . $d . "|";
+
+$static = EvalAotCallableNamedRefBox::add(...);
+$e = "10";
+echo $static(value: $e, delta: 11) . ":" . gettype($e) . ":" . $e . "|";
+
+$invokable = new EvalAotCallableNamedRefBox();
+$f = "12";
+return $invokable(delta: 13, value: $f) . ":" . gettype($f) . ":" . $f;');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "15:integer:15|19:integer:19|23:integer:23|17:integer:17|21:integer:21|35:integer:35"
+    );
+}
+
 /// Verifies eval-declared callable forms preserve by-ref writeback.
 #[test]
 fn test_eval_declared_callable_forms_preserve_by_ref_writeback() {
