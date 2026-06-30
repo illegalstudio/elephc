@@ -273,6 +273,10 @@ pub enum EvalReferenceTarget {
     Cell {
         cell: RuntimeCellHandle,
     },
+    InvokerSlot {
+        slot: usize,
+        source_tag: u64,
+    },
 }
 
 /// Normalized PHP array key used for eval-side reference metadata.
