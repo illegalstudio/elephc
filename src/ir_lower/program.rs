@@ -40,6 +40,13 @@ pub(crate) fn lower(
     lower_builtin_reflection_methods(&mut module, check_result, &borrowed_passthrough, &constants, &fiber_return_sigs);
     function::lower_main(program, &mut module, check_result, &borrowed_passthrough, &constants, &fiber_return_sigs);
     lower_referenced_builtin_spl_methods(&mut module, check_result, &borrowed_passthrough, &constants, &fiber_return_sigs);
+    builtin_datetime::lower_referenced_builtin_datetime_methods(
+        &mut module,
+        check_result,
+        &borrowed_passthrough,
+        &constants,
+        &fiber_return_sigs,
+    );
     include_lowered_runtime_features(&mut module);
     validate_module(&module)?;
     Ok(module)
@@ -545,7 +552,7 @@ fn lower_class_like_methods(
                     .get(name)
                     .map(|class_info| class_info.method_decls.as_slice())
                     .unwrap_or(methods.as_slice());
-                lower_methods_for_class_like(name, methods, module, check_result, constants, fiber_return_sigs);
+                lower_methods_for_class_like(name, methods, module, check_result, borrowed_passthrough, constants, fiber_return_sigs);
             }
             StmtKind::NamespaceBlock { body, .. }
             | StmtKind::Synthetic(body)

@@ -1002,7 +1002,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owning_builtin_temporary(value.value) {
             return true;
         }
+        if self.value_is_owned_temp_load(value.value) {
+            return true;
+        }
+        if self.value_is_owning_mixed_string_cast(value.value) {
+            return true;
+        }
+        if self.value_is_owning_container_read(value.value) {
+            return true;
+        }
         if self.cast_result_owns_string_storage(value.value) {
+            return true;
+        }
+        if matches!(
+            self.builder.value_defining_op(value.value),
+            Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
+        ) && matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        {
             return true;
         }
         matches!(

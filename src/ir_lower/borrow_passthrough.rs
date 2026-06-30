@@ -253,7 +253,7 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
         StmtKind::Assign { name: target, value } | StmtKind::TypedAssign { name: target, value, .. } => {
             target == name || expr_writes_local(value, name)
         }
-        StmtKind::RefAssign { target, source } => target == name || source == name,
+        StmtKind::RefAssign { target, source } => target == name || expr_writes_local(source, name),
         StmtKind::ArrayAssign { array, index, value } => {
             array == name || expr_writes_local(index, name) || expr_writes_local(value, name)
         }
