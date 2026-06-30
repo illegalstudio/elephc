@@ -2,7 +2,7 @@
 title: "tempnam()"
 description: "Lowers `tempnam(directory, prefix)` through the target-aware runtime helper."
 sidebar:
-  order: 131
+  order: 146
 ---
 
 ## tempnam()

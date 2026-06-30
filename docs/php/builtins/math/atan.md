@@ -2,7 +2,7 @@
 title: "atan()"
 description: "atan() — math builtin supported by Elephc."
 sidebar:
-  order: 221
+  order: 236
 ---
 
 ## atan()

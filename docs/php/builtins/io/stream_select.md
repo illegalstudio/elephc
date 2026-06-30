@@ -2,7 +2,7 @@
 title: "stream_select()"
 description: "Lowers `stream_select(read, write, except, seconds, microseconds?)`."
 sidebar:
-  order: 193
+  order: 208
 ---
 
 ## stream_select()

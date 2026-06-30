@@ -2,7 +2,7 @@
 title: "gzdeflate()"
 description: "Lowers `gzdeflate(data, level?)` through inline raw-DEFLATE zlib calls."
 sidebar:
-  order: 329
+  order: 344
 ---
 
 ## gzdeflate()

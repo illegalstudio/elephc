@@ -2,7 +2,7 @@
 title: "header()"
 description: "Lowers `header($line[, $replace[, $code]])` to `__rt_header`, materializing the"
 sidebar:
-  order: 260
+  order: 275
 ---
 
 ## header()

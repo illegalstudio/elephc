@@ -2,7 +2,7 @@
 title: "__elephc_phar_gzip_archive() — internals"
 description: "Compiler internals for __elephc_phar_gzip_archive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 423
+  order: 438
 ---
 
 ## `__elephc_phar_gzip_archive()` — internals

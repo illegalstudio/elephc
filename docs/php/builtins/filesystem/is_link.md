@@ -2,7 +2,7 @@
 title: "is_link()"
 description: "Lowers `is_link(path)` through the target-aware runtime lstat helper."
 sidebar:
-  order: 108
+  order: 123
 ---
 
 ## is_link()

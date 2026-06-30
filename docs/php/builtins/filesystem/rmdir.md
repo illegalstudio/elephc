@@ -2,7 +2,7 @@
 title: "rmdir()"
 description: "Lowers `rmdir(path)` through the target-aware runtime helper."
 sidebar:
-  order: 126
+  order: 141
 ---
 
 ## rmdir()

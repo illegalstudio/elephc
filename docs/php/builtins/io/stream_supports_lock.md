@@ -2,7 +2,7 @@
 title: "stream_supports_lock()"
 description: "Lowers `stream_supports_lock(stream)` as true after resource unboxing."
 sidebar:
-  order: 208
+  order: 223
 ---
 
 ## stream_supports_lock()

@@ -2,7 +2,7 @@
 title: "lstat()"
 description: "Lowers `lstat(path)` and boxes the runtime lstat array or PHP false result."
 sidebar:
-  order: 116
+  order: 131
 ---
 
 ## lstat()

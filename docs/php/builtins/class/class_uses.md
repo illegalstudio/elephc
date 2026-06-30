@@ -2,7 +2,7 @@
 title: "class_uses()"
 description: "class_uses() — class builtin supported by Elephc."
 sidebar:
-  order: 56
+  order: 71
 ---
 
 ## class_uses()

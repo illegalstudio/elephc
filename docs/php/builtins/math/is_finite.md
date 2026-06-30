@@ -2,7 +2,7 @@
 title: "is_finite()"
 description: "Lowers `is_finite()` by rejecting NaN and both infinities."
 sidebar:
-  order: 234
+  order: 249
 ---
 
 ## is_finite()

@@ -2,7 +2,7 @@
 title: "chdir()"
 description: "Lowers `chdir(path)` through the target-aware runtime helper."
 sidebar:
-  order: 82
+  order: 97
 ---
 
 ## chdir()

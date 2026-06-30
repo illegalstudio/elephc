@@ -2,7 +2,7 @@
 title: "fpassthru()"
 description: "Lowers `fpassthru(stream)` through the remaining-bytes stream runtime helper."
 sidebar:
-  order: 149
+  order: 164
 ---
 
 ## fpassthru()

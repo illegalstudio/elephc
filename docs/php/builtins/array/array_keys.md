@@ -2,7 +2,7 @@
 title: "array_keys()"
 description: "Lowers `array_keys()` for indexed arrays and associative arrays."
 sidebar:
-  order: 13
+  order: 21
 ---
 
 ## array_keys()

@@ -2,7 +2,7 @@
 title: "stream_socket_sendto()"
 description: "Lowers `stream_socket_sendto(socket, data, flags?, address?)` and boxes `int|false`."
 sidebar:
-  order: 205
+  order: 220
 ---
 
 ## stream_socket_sendto()

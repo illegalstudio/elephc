@@ -2,7 +2,7 @@
 title: "is_executable()"
 description: "Lowers `is_executable(path)` through the target-aware runtime access helper."
 sidebar:
-  order: 106
+  order: 121
 ---
 
 ## is_executable()

@@ -2,7 +2,7 @@
 title: "uasort()"
 description: "Lowers `uasort()` through the legacy user-sort helper for static comparators."
 sidebar:
-  order: 44
+  order: 59
 ---
 
 ## uasort()

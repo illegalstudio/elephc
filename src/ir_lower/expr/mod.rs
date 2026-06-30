@@ -5888,6 +5888,8 @@ fn array_builtin_return_type(
         "array_splice" | "array_filter" | "array_diff" | "array_intersect" | "array_diff_key"
         | "array_intersect_key" => array_preserve_first_builtin_return_type(ctx, operands),
         "in_array" => Some(PhpType::Bool),
+        "array_is_list" => Some(PhpType::Bool),
+        "array_key_first" | "array_key_last" => Some(PhpType::Mixed),
         "range" => Some(PhpType::Array(Box::new(PhpType::Int))),
         "array_values" => {
             let array = operands.first()?;
@@ -5911,8 +5913,52 @@ fn array_builtin_return_type(
                 other => Some(other),
             }
         }
+        "array_replace" | "array_replace_recursive" | "array_diff_assoc"
+        | "array_intersect_assoc" => two_input_hash_builtin_return_type(ctx, operands),
+        "array_merge_recursive" => array_merge_recursive_builtin_return_type(ctx, operands),
+        "array_find" => Some(PhpType::Mixed),
+        "array_any" | "array_all" => Some(PhpType::Bool),
+        "array_multisort" => Some(PhpType::Bool),
+        "array_walk_recursive" => Some(PhpType::Void),
+        "array_udiff" | "array_uintersect" => {
+            array_preserve_first_builtin_return_type(ctx, operands)
+        }
         _ => None,
     }
+}
+
+/// Returns the hash result metadata for the two-input hash builtins (`array_replace`,
+/// `array_replace_recursive`, `array_diff_assoc`, `array_intersect_assoc`).
+///
+/// Mirrors the type checker's `two_input_hash_result`: the key and value each widen to `Mixed`
+/// when the two operands disagree, so the result hash dispatches keys/values correctly at runtime.
+fn two_input_hash_builtin_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    operands: &[crate::ir::ValueId],
+) -> Option<PhpType> {
+    let first = operands.first()?;
+    let second = operands.get(1)?;
+    let t1 = ctx.builder.value_php_type(*first).codegen_repr();
+    let t2 = ctx.builder.value_php_type(*second).codegen_repr();
+    Some(PhpType::two_input_hash_result(&t1, &t2))
+}
+
+/// Returns the hash result metadata for `array_merge_recursive(a, b)`.
+///
+/// Scalar collisions combine into lists, so the value type is always `Mixed`; the key widens to
+/// `Mixed` when the two operands disagree, matching the type checker.
+fn array_merge_recursive_builtin_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    operands: &[crate::ir::ValueId],
+) -> Option<PhpType> {
+    let first = operands.first()?;
+    let second = operands.get(1)?;
+    let t1 = ctx.builder.value_php_type(*first).codegen_repr();
+    let t2 = ctx.builder.value_php_type(*second).codegen_repr();
+    Some(PhpType::AssocArray {
+        key: Box::new(PhpType::widen(t1.hash_key_type(), t2.hash_key_type())),
+        value: Box::new(PhpType::Mixed),
+    })
 }
 
 /// Returns precise return metadata for `array_fill(start, count, value)`.

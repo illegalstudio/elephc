@@ -2,7 +2,7 @@
 title: "usort()"
 description: "Lowers `usort()` for indexed integer arrays with a static user comparator."
 sidebar:
-  order: 46
+  order: 61
 ---
 
 ## usort()

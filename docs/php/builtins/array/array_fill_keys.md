@@ -2,7 +2,7 @@
 title: "array_fill_keys()"
 description: "Lowers `array_fill_keys()` through the legacy hash-building runtime helpers."
 sidebar:
-  order: 7
+  order: 10
 ---
 
 ## array_fill_keys()

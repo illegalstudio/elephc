@@ -2,7 +2,7 @@
 title: "symlink()"
 description: "Lowers `symlink(target, link)` through the target-aware libc wrapper."
 sidebar:
-  order: 129
+  order: 144
 ---
 
 ## symlink()

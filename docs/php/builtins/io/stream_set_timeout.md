@@ -2,7 +2,7 @@
 title: "stream_set_timeout()"
 description: "Lowers `stream_set_timeout(stream, seconds, microseconds?)`."
 sidebar:
-  order: 197
+  order: 212
 ---
 
 ## stream_set_timeout()

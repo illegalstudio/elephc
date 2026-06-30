@@ -2,7 +2,7 @@
 title: "fnmatch()"
 description: "Lowers `fnmatch(pattern, filename, flags?)` through the target-aware runtime helper."
 sidebar:
-  order: 101
+  order: 116
 ---
 
 ## fnmatch()

@@ -2,7 +2,7 @@
 title: "array_filter() — internals"
 description: "Compiler internals for array_filter(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 8
+  order: 11
 ---
 
 ## `array_filter()` — internals

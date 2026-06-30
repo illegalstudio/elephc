@@ -1137,6 +1137,575 @@ pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instr
     key_exists::lower_array_key_exists(ctx, inst)
 }
 
+/// Lowers `array_is_list()` to the `__rt_array_is_list` runtime predicate, returning a bool.
+///
+/// The runtime helper accepts any array kind (indexed, associative hash, or boxed mixed cell) and
+/// reports `1` when the keys are the sequential integers `0..n-1` in insertion order, `0` otherwise.
+pub(super) fn lower_array_is_list(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "array_is_list", 1)?;
+    let array = expect_operand(inst, 0)?;
+    require_array_like_operand(ctx.value_php_type(array)?, "array_is_list")?;
+    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, arg0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_is_list");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_key_first()` through the shared edge-key helper with selector `0`.
+pub(super) fn lower_array_key_first(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_array_edge_key(ctx, inst, "array_key_first", 0)
+}
+
+/// Lowers `array_key_last()` through the shared edge-key helper with selector `1`.
+pub(super) fn lower_array_key_last(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_array_edge_key(ctx, inst, "array_key_last", 1)
+}
+
+/// Loads the array operand plus a first/last selector, then calls `__rt_array_edge_key`.
+///
+/// `which` is `0` for the first key and `1` for the last. The runtime helper boxes the resulting
+/// integer or string key into a mixed cell (or a boxed null for empty/non-array inputs) via a tail
+/// call to `__rt_mixed_from_value`, leaving the boxed pointer in the integer result register.
+fn lower_array_edge_key(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    which: i64,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 1)?;
+    let array = expect_operand(inst, 0)?;
+    require_array_like_operand(ctx.value_php_type(array)?, name)?;
+    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    ctx.load_value_to_reg(array, arg0)?;
+    abi::emit_load_int_immediate(ctx.emitter, arg1, which);
+    abi::emit_call_label(ctx.emitter, "__rt_array_edge_key");
+    store_if_result(ctx, inst)
+}
+
+/// Verifies an operand is array-like: `array_is_list` / `array_key_first` / `array_key_last` accept
+/// any indexed array, associative hash, or boxed mixed value, matching their uniform runtime helpers.
+fn require_array_like_operand(ty: PhpType, name: &str) -> Result<()> {
+    match ty.codegen_repr() {
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(()),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            name, other
+        ))),
+    }
+}
+
+/// Validates a two-input hash builtin operand and reports whether it must be converted to a hash.
+///
+/// Associative arrays are used directly; scalar indexed arrays (`int`/`float`/`bool` elements) are
+/// converted to integer-keyed hashes at runtime. Any other shape is unsupported.
+fn two_hash_operand_needs_conversion(ty: PhpType, name: &str) -> Result<bool> {
+    match ty.codegen_repr() {
+        PhpType::AssocArray { .. } => Ok(false),
+        PhpType::Array(elem) if matches!(*elem, PhpType::Int | PhpType::Float | PhpType::Bool) => {
+            Ok(true)
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} hash operand PHP type {:?}",
+            name, other
+        ))),
+    }
+}
+
+/// Loads the array pointer currently in the integer result register and converts it to an owned hash.
+///
+/// `__rt_array_to_hash` reads its argument from the first argument register; on AArch64 the result
+/// register already is that register, but on x86_64 the value lives in `rax` and must move to `rdi`.
+fn emit_convert_indexed_to_hash(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // move the array pointer into the first SysV argument register
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+}
+
+/// Lowers a two-input hash builtin: materializes both operands (converting scalar indexed inputs to
+/// owned hashes), calls `runtime_label`, then releases any converted temporaries.
+///
+/// `mode` is loaded into the third argument register for `array_diff_assoc` (0) /
+/// `array_intersect_assoc` (1). The result hash pointer is left in the integer result register.
+/// Mirrors the legacy two-hash choreography but sources operands from EIR values.
+fn lower_two_hash_arg_builtin(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+    mode: Option<i64>,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 2)?;
+    let first = expect_operand(inst, 0)?;
+    let second = expect_operand(inst, 1)?;
+    let conv0 = two_hash_operand_needs_conversion(ctx.value_php_type(first)?, name)?;
+    let conv1 = two_hash_operand_needs_conversion(ctx.value_php_type(second)?, name)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+
+    // -- materialize first operand into the result register, convert if indexed, then spill --
+    ctx.load_value_to_reg(first, result_reg)?;
+    if conv0 {
+        emit_convert_indexed_to_hash(ctx);
+    }
+    abi::emit_push_reg(ctx.emitter, result_reg);
+
+    // -- materialize second operand into the result register, convert if indexed --
+    ctx.load_value_to_reg(second, result_reg)?;
+    if conv1 {
+        emit_convert_indexed_to_hash(ctx);
+    }
+
+    if !conv0 && !conv1 {
+        // -- fast path: both inputs are already hashes, no temporaries to free --
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, x0");                          // second hash pointer into the second argument register
+                abi::emit_pop_reg(ctx.emitter, "x0");
+                if let Some(m) = mode {
+                    ctx.emitter.instruction(&format!("mov x2, #{}", m));        // mode selector into the third argument register
+                }
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rsi, rax");                        // second hash pointer into the second SysV argument register
+                abi::emit_pop_reg(ctx.emitter, "rdi");
+                if let Some(m) = mode {
+                    ctx.emitter.instruction(&format!("mov edx, {}", m));        // mode selector into the third SysV argument register
+                }
+            }
+        }
+        abi::emit_call_label(ctx.emitter, runtime_label);
+        return store_if_result(ctx, inst);
+    }
+
+    // -- freeing path: at least one input was converted to a temporary hash that must be released --
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // first hash pointer kept on the stack for freeing
+            ctx.emitter.instruction("ldr x1, [sp]");                            // second hash pointer kept on the stack for freeing
+            if let Some(m) = mode {
+                ctx.emitter.instruction(&format!("mov x2, #{}", m));            // mode selector into the third argument register
+            }
+            abi::emit_call_label(ctx.emitter, runtime_label);
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // spill the result; stack holds [result, h2, h1]
+            if conv1 {
+                ctx.emitter.instruction("ldr x0, [sp, #16]");                   // reload the converted second hash temporary
+                abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            }
+            if conv0 {
+                ctx.emitter.instruction("ldr x0, [sp, #32]");                   // reload the converted first hash temporary
+                abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            }
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the result hash pointer
+            ctx.emitter.instruction("add sp, sp, #32");                         // discard the two spilled input hash pointers
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // first hash pointer kept on the stack for freeing
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                // second hash pointer kept on the stack for freeing
+            if let Some(m) = mode {
+                ctx.emitter.instruction(&format!("mov edx, {}", m));            // mode selector into the third SysV argument register
+            }
+            abi::emit_call_label(ctx.emitter, runtime_label);
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve a slot for the result
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // spill the result; stack holds [result, h2, h1]
+            if conv1 {
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");       // reload the converted second hash temporary
+                abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            }
+            if conv0 {
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");       // reload the converted first hash temporary
+                abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            }
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the result hash pointer
+            ctx.emitter.instruction("add rsp, 48");                             // discard the result slot and the two spilled inputs
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_replace()` (right-wins hash merge of two hashes).
+pub(super) fn lower_array_replace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_two_hash_arg_builtin(ctx, inst, "array_replace", "__rt_array_replace", None)
+}
+
+/// Lowers `array_replace_recursive()` (recursive right-wins hash merge).
+pub(super) fn lower_array_replace_recursive(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_two_hash_arg_builtin(
+        ctx,
+        inst,
+        "array_replace_recursive",
+        "__rt_array_replace_recursive",
+        None,
+    )
+}
+
+/// Lowers `array_diff_assoc()` via the shared associative diff/intersect helper (mode 0 = diff).
+pub(super) fn lower_array_diff_assoc(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_two_hash_arg_builtin(ctx, inst, "array_diff_assoc", "__rt_assoc_diff_intersect", Some(0))
+}
+
+/// Lowers `array_intersect_assoc()` via the shared associative diff/intersect helper (mode 1 = intersect).
+pub(super) fn lower_array_intersect_assoc(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_two_hash_arg_builtin(
+        ctx,
+        inst,
+        "array_intersect_assoc",
+        "__rt_assoc_diff_intersect",
+        Some(1),
+    )
+}
+
+/// Lowers `array_merge_recursive()` (recursive merge with scalar collisions combined into lists).
+pub(super) fn lower_array_merge_recursive(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_two_hash_arg_builtin(
+        ctx,
+        inst,
+        "array_merge_recursive",
+        "__rt_array_merge_recursive",
+        None,
+    )
+}
+
+/// Returns the scalar callback element type for an indexed-array predicate/comparator builtin.
+///
+/// The `__rt_array_find_any_all` / `__rt_array_udiff_uintersect` runtimes load each element as a
+/// single 8-byte word and pass it in an integer argument register, so only `int`/`bool` indexed
+/// arrays are supported (float elements would need the float register file).
+fn predicate_callback_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
+    match ty.codegen_repr() {
+        PhpType::Array(elem) => {
+            let elem = elem.codegen_repr();
+            if matches!(elem, PhpType::Int | PhpType::Bool) {
+                Ok(elem)
+            } else {
+                Err(CodegenIrError::unsupported(format!(
+                    "{} indexed-array element PHP type {:?}",
+                    name, elem
+                )))
+            }
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            name, other
+        ))),
+    }
+}
+
+/// Loads the `(wrapper, array, env[, mode])` argument registers and calls a single-array callback
+/// runtime helper. Shared by `array_find`/`array_any`/`array_all` (mode 0/1/2) and
+/// `array_walk_recursive` (no mode). The callback wrapper goes in arg0, the array in arg1, the
+/// environment pointer in arg2, and the optional mode selector in arg3.
+fn emit_single_array_callback_call(
+    ctx: &mut FunctionContext<'_>,
+    wrapper_label: &str,
+    array: ValueId,
+    env_bytes: usize,
+    mode: Option<i64>,
+    runtime_label: &str,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x0", wrapper_label);
+            ctx.load_value_to_reg(array, "x1")?;
+            load_static_callback_env_arg(ctx, "x2", env_bytes);
+            if let Some(m) = mode {
+                abi::emit_load_int_immediate(ctx.emitter, "x3", m);
+            }
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", wrapper_label);
+            ctx.load_value_to_reg(array, "rsi")?;
+            load_static_callback_env_arg(ctx, "rdx", env_bytes);
+            if let Some(m) = mode {
+                abi::emit_load_int_immediate(ctx.emitter, "rcx", m);
+            }
+        }
+    }
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    Ok(())
+}
+
+/// Lowers a single-array callback builtin through the EIR callback machinery, dispatching on the
+/// callback's closure/first-class-callable, runtime-string, or static form (mirrors `array_filter`).
+fn lower_single_array_callback_builtin(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+    array: ValueId,
+    callback: ValueId,
+    source_arg_ty: &PhpType,
+    visible_arg_types: Vec<PhpType>,
+    return_ty: PhpType,
+    mode: Option<i64>,
+) -> Result<()> {
+    match ctx.value_php_type(callback)?.codegen_repr() {
+        PhpType::Callable => {
+            lower_descriptor_callback_runtime(
+                ctx,
+                callback,
+                visible_arg_types,
+                return_ty,
+                |ctx, wrapper_label, env_bytes| {
+                    emit_single_array_callback_call(ctx, wrapper_label, array, env_bytes, mode, runtime_label)
+                },
+            )?;
+            store_if_result(ctx, inst)
+        }
+        PhpType::Str => {
+            lower_runtime_string_descriptor_callback(
+                ctx,
+                callback,
+                Some(source_arg_ty),
+                visible_arg_types,
+                return_ty,
+                name,
+                |ctx, wrapper_label, env_bytes| {
+                    emit_single_array_callback_call(ctx, wrapper_label, array, env_bytes, mode, runtime_label)
+                },
+            )?;
+            store_if_result(ctx, inst)
+        }
+        _ => {
+            let binding = static_sort_callback_binding(
+                ctx,
+                callback,
+                &format!("{} callback", name),
+                Some(&visible_arg_types),
+            )?;
+            let env_bytes = reserve_static_callback_env(ctx, binding.env_source)?;
+            emit_single_array_callback_call(ctx, &binding.label, array, env_bytes, mode, runtime_label)?;
+            if env_bytes != 0 {
+                abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
+            }
+            store_if_result(ctx, inst)
+        }
+    }
+}
+
+/// Lowers a predicate builtin (`array_find` mode 0 / `array_any` mode 1 / `array_all` mode 2)
+/// over an indexed scalar array, validating the element type and routing through the shared
+/// `__rt_array_find_any_all` runtime. The predicate callback always returns `bool`; the builtin's
+/// own result type (Mixed for `array_find`, bool for any/all) is taken from `inst.result_php_type`.
+fn lower_array_predicate_builtin(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    mode: i64,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 2)?;
+    let array = expect_operand(inst, 0)?;
+    let callback = expect_operand(inst, 1)?;
+    let elem_ty = predicate_callback_element_type(ctx.value_php_type(array)?, name)?;
+    let source_arg_ty = PhpType::Array(Box::new(elem_ty.clone()));
+    lower_single_array_callback_builtin(
+        ctx,
+        inst,
+        name,
+        "__rt_array_find_any_all",
+        array,
+        callback,
+        &source_arg_ty,
+        vec![elem_ty],
+        PhpType::Bool,
+        Some(mode),
+    )
+}
+
+/// Lowers `array_find()`: returns the first element satisfying the predicate, boxed as Mixed (or null).
+pub(super) fn lower_array_find(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_array_predicate_builtin(ctx, inst, "array_find", 0)
+}
+
+/// Lowers `array_any()`: returns true when some element satisfies the predicate.
+pub(super) fn lower_array_any(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_array_predicate_builtin(ctx, inst, "array_any", 1)
+}
+
+/// Lowers `array_all()`: returns true when every element satisfies the predicate.
+pub(super) fn lower_array_all(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_array_predicate_builtin(ctx, inst, "array_all", 2)
+}
+
+/// Lowers `array_walk_recursive()`: invokes the callback on each scalar leaf of a (possibly nested)
+/// array, descending into array-valued elements. Returns void; leaves are passed as 8-byte scalars.
+pub(super) fn lower_array_walk_recursive(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "array_walk_recursive", 2)?;
+    let array = expect_operand(inst, 0)?;
+    let callback = expect_operand(inst, 1)?;
+    require_array_like_operand(ctx.value_php_type(array)?, "array_walk_recursive")?;
+    let source_arg_ty = PhpType::Array(Box::new(PhpType::Int));
+    lower_single_array_callback_builtin(
+        ctx,
+        inst,
+        "array_walk_recursive",
+        "__rt_array_walk_recursive",
+        array,
+        callback,
+        &source_arg_ty,
+        vec![PhpType::Int],
+        PhpType::Void,
+        None,
+    )
+}
+
+/// Loads the `(wrapper, arr1, arr2, env, mode)` argument registers and calls the two-array
+/// comparator runtime helper `__rt_array_udiff_uintersect`. The comparator wrapper goes in arg0,
+/// the two arrays in arg1/arg2, the environment pointer in arg3, and the mode selector in arg4.
+fn emit_two_array_comparator_call(
+    ctx: &mut FunctionContext<'_>,
+    wrapper_label: &str,
+    arr1: ValueId,
+    arr2: ValueId,
+    env_bytes: usize,
+    mode: i64,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x0", wrapper_label);
+            ctx.load_value_to_reg(arr1, "x1")?;
+            ctx.load_value_to_reg(arr2, "x2")?;
+            load_static_callback_env_arg(ctx, "x3", env_bytes);
+            abi::emit_load_int_immediate(ctx.emitter, "x4", mode);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", wrapper_label);
+            ctx.load_value_to_reg(arr1, "rsi")?;
+            ctx.load_value_to_reg(arr2, "rdx")?;
+            load_static_callback_env_arg(ctx, "rcx", env_bytes);
+            abi::emit_load_int_immediate(ctx.emitter, "r8", mode);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_udiff_uintersect");
+    Ok(())
+}
+
+/// Lowers a two-array comparator builtin (`array_udiff` mode 0 / `array_uintersect` mode 1) over
+/// indexed scalar arrays, dispatching on the comparator's closure/string/static form. The result is
+/// a sequentially re-indexed array of the first array's surviving elements.
+fn lower_two_array_comparator_builtin(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    mode: i64,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 3)?;
+    let arr1 = expect_operand(inst, 0)?;
+    let arr2 = expect_operand(inst, 1)?;
+    let comparator = expect_operand(inst, 2)?;
+    let elem_ty = predicate_callback_element_type(ctx.value_php_type(arr1)?, name)?;
+    predicate_callback_element_type(ctx.value_php_type(arr2)?, name)?;
+    // The comparator returns an int (negative/zero/positive); the builtin's own array result type
+    // is taken from `inst.result_php_type` at `store_if_result`.
+    let comparator_return_ty = PhpType::Int;
+    let source_arg_ty = PhpType::Array(Box::new(elem_ty.clone()));
+    let visible_arg_types = vec![elem_ty.clone(), elem_ty];
+    match ctx.value_php_type(comparator)?.codegen_repr() {
+        PhpType::Callable => {
+            lower_descriptor_callback_runtime(
+                ctx,
+                comparator,
+                visible_arg_types,
+                comparator_return_ty,
+                |ctx, wrapper_label, env_bytes| {
+                    emit_two_array_comparator_call(ctx, wrapper_label, arr1, arr2, env_bytes, mode)
+                },
+            )?;
+            store_if_result(ctx, inst)
+        }
+        PhpType::Str => {
+            lower_runtime_string_descriptor_callback(
+                ctx,
+                comparator,
+                Some(&source_arg_ty),
+                visible_arg_types,
+                comparator_return_ty,
+                name,
+                |ctx, wrapper_label, env_bytes| {
+                    emit_two_array_comparator_call(ctx, wrapper_label, arr1, arr2, env_bytes, mode)
+                },
+            )?;
+            store_if_result(ctx, inst)
+        }
+        _ => {
+            let binding = static_sort_callback_binding(
+                ctx,
+                comparator,
+                &format!("{} comparator", name),
+                Some(&visible_arg_types),
+            )?;
+            let env_bytes = reserve_static_callback_env(ctx, binding.env_source)?;
+            emit_two_array_comparator_call(ctx, &binding.label, arr1, arr2, env_bytes, mode)?;
+            if env_bytes != 0 {
+                abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
+            }
+            store_if_result(ctx, inst)
+        }
+    }
+}
+
+/// Lowers `array_udiff()`: keeps first-array elements not equal (per comparator) to any second-array element.
+pub(super) fn lower_array_udiff(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_two_array_comparator_builtin(ctx, inst, "array_udiff", 0)
+}
+
+/// Lowers `array_uintersect()`: keeps first-array elements equal (per comparator) to some second-array element.
+pub(super) fn lower_array_uintersect(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_two_array_comparator_builtin(ctx, inst, "array_uintersect", 1)
+}
+
+/// Lowers `array_multisort()`: stable-sorts the first indexed array ascending and reorders the second
+/// in tandem, both in place. Both arguments are by-reference, so each is copy-on-write split with
+/// `ensure_unique_sort_source` and the (possibly relocated) pointer is written back to its local
+/// before the runtime mutates the storage. Returns `true`. Supports 8-byte scalar indexed arrays.
+pub(super) fn lower_array_multisort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "array_multisort", 2)?;
+    let arr1 = expect_operand(inst, 0)?;
+    let arr2 = expect_operand(inst, 1)?;
+    eight_byte_indexed_array_element_type(ctx.value_php_type(arr1)?, "array_multisort")?;
+    eight_byte_indexed_array_element_type(ctx.value_php_type(arr2)?, "array_multisort")?;
+
+    // -- copy-on-write split both by-ref arrays and publish the new pointers to their locals --
+    let slot1 = source_load_local_slot(ctx, arr1)?;
+    ensure_unique_sort_source(ctx, arr1)?;
+    if let Some(slot) = slot1 {
+        ctx.store_value_to_local(slot, arr1)?;
+    }
+    let slot2 = source_load_local_slot(ctx, arr2)?;
+    ensure_unique_sort_source(ctx, arr2)?;
+    if let Some(slot) = slot2 {
+        ctx.store_value_to_local(slot, arr2)?;
+    }
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(arr1, "x0")?;
+            ctx.load_value_to_reg(arr2, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(arr1, "rdi")?;
+            ctx.load_value_to_reg(arr2, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_multisort");
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        0x7fff_ffff_ffff_fffe,
+    );
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `array_search()` for indexed arrays with integer-like payloads.
 pub(super) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_search", 2)?;

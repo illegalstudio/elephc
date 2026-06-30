@@ -2,7 +2,7 @@
 title: "function_exists()"
 description: "Lowers `function_exists(\"name\")` for compile-time string names."
 sidebar:
-  order: 58
+  order: 73
 ---
 
 ## function_exists()

@@ -2,7 +2,7 @@
 title: "class_alias()"
 description: "Lowers the defensive `class_alias()` fallback that remains after AOT alias extraction."
 sidebar:
-  order: 49
+  order: 64
 ---
 
 ## class_alias()

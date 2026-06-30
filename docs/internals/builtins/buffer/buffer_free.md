@@ -2,7 +2,7 @@
 title: "buffer_free() — internals"
 description: "Compiler internals for buffer_free(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 47
+  order: 62
 ---
 
 ## `buffer_free()` — internals

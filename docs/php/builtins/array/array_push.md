@@ -2,7 +2,7 @@
 title: "array_push()"
 description: "Lowers `array_push()` by appending one value and publishing the mutated array."
 sidebar:
-  order: 19
+  order: 29
 ---
 
 ## array_push()

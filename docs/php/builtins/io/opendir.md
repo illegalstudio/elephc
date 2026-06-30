@@ -2,7 +2,7 @@
 title: "opendir()"
 description: "Lowers `opendir(path)` and boxes the directory stream as `resource|false`."
 sidebar:
-  order: 168
+  order: 183
 ---
 
 ## opendir()

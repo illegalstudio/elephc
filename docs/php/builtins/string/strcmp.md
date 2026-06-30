@@ -2,7 +2,7 @@
 title: "strcmp()"
 description: "Lowers a two-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 371
+  order: 386
 ---
 
 ## strcmp()

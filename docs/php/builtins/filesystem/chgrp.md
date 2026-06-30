@@ -2,7 +2,7 @@
 title: "chgrp()"
 description: "Lowers `chgrp(path, group)` for integer GIDs and string group names."
 sidebar:
-  order: 83
+  order: 98
 ---
 
 ## chgrp()

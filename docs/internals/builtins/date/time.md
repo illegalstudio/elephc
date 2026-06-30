@@ -2,7 +2,7 @@
 title: "time() — internals"
 description: "Compiler internals for time(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 80
+  order: 95
 ---
 
 ## `time()` — internals

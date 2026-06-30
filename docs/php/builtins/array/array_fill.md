@@ -2,7 +2,7 @@
 title: "array_fill()"
 description: "Lowers `array_fill()` for pointer-sized scalar and refcounted payloads."
 sidebar:
-  order: 6
+  order: 9
 ---
 
 ## array_fill()

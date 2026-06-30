@@ -2,7 +2,7 @@
 title: "stream_get_line()"
 description: "Lowers `stream_get_line(stream, length, ending?)`."
 sidebar:
-  order: 186
+  order: 201
 ---
 
 ## stream_get_line()

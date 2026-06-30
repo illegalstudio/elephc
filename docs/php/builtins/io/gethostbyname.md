@@ -2,7 +2,7 @@
 title: "gethostbyname()"
 description: "Lowers `gethostbyname(hostname)` through the shared runtime resolver."
 sidebar:
-  order: 161
+  order: 176
 ---
 
 ## gethostbyname()

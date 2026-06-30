@@ -2,7 +2,7 @@
 title: "fclose()"
 description: "Lowers `fclose(stream)` after validating and unboxing the stream handle."
 sidebar:
-  order: 137
+  order: 152
 ---
 
 ## fclose()

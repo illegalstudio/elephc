@@ -2,7 +2,7 @@
 title: "stream_get_meta_data()"
 description: "Lowers `stream_get_meta_data(stream)` through the metadata runtime helper."
 sidebar:
-  order: 187
+  order: 202
 ---
 
 ## stream_get_meta_data()

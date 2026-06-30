@@ -2,7 +2,7 @@
 title: "rsort()"
 description: "Lowers `rsort()` for indexed integer arrays by mutating the source array in place."
 sidebar:
-  order: 41
+  order: 56
 ---
 
 ## rsort()

@@ -2,7 +2,7 @@
 title: "stream_isatty()"
 description: "Lowers `stream_isatty(stream)`."
 sidebar:
-  order: 191
+  order: 206
 ---
 
 ## stream_isatty()

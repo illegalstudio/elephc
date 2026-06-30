@@ -2,7 +2,7 @@
 title: "str_starts_with()"
 description: "Lowers a two-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 369
+  order: 384
 ---
 
 ## str_starts_with()

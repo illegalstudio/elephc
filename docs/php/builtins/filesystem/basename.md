@@ -2,7 +2,7 @@
 title: "basename()"
 description: "Lowers `basename(path, suffix?)` through the target-aware runtime helper."
 sidebar:
-  order: 81
+  order: 96
 ---
 
 ## basename()

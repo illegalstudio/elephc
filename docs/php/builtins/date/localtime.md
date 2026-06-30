@@ -2,7 +2,7 @@
 title: "localtime()"
 description: "Lowers `localtime([$timestamp[, $associative]])` through the shared decomposition runtime helper."
 sidebar:
-  order: 76
+  order: 91
 ---
 
 ## localtime()

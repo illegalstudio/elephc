@@ -877,6 +877,68 @@ pub(super) fn check_builtin(
                 )),
             }
         }
+        "array_find" | "array_any" | "array_all" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 2 arguments", name),
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            let arr_ty = checker.infer_type(&args[0], env)?;
+            if !matches!(arr_ty, PhpType::Array(_)) {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() first argument must be array", name),
+                ));
+            }
+            let dummy_args = vec![dummy_arg_for_array_scalar_elem(&arr_ty, span)];
+            check_callback_builtin_call(
+                checker,
+                &args[1],
+                &dummy_args,
+                span,
+                env,
+                &format!("{}() callback", name),
+            )?;
+            // array_find returns the matching element or null (Mixed); any/all return bool.
+            if name == "array_find" {
+                Ok(Some(PhpType::Mixed))
+            } else {
+                Ok(Some(PhpType::Bool))
+            }
+        }
+        "array_udiff" | "array_uintersect" => {
+            if args.len() != 3 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 3 arguments", name),
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            let arr_ty = checker.infer_type(&args[0], env)?;
+            if !matches!(arr_ty, PhpType::Array(_)) {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() first argument must be array", name),
+                ));
+            }
+            let cmp_arg = dummy_arg_for_array_scalar_elem(&arr_ty, span);
+            let dummy_args = vec![cmp_arg.clone(), cmp_arg];
+            check_callback_builtin_call(
+                checker,
+                &args[2],
+                &dummy_args,
+                span,
+                env,
+                &format!("{}() comparator", name),
+            )?;
+            Ok(Some(arr_ty))
+        }
         "array_reduce" => {
             if args.len() != 3 {
                 return Err(CompileError::new(
@@ -902,9 +964,12 @@ pub(super) fn check_builtin(
             )?;
             Ok(Some(PhpType::Int))
         }
-        "array_walk" => {
+        "array_walk" | "array_walk_recursive" => {
             if args.len() != 2 {
-                return Err(CompileError::new(span, "array_walk() takes exactly 2 arguments"));
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 2 arguments", name),
+                ));
             }
             for arg in args {
                 checker.infer_type(arg, env)?;
@@ -917,7 +982,7 @@ pub(super) fn check_builtin(
                 &dummy_args,
                 span,
                 env,
-                "array_walk() callback",
+                &format!("{}() callback", name),
             )?;
             Ok(Some(PhpType::Void))
         }

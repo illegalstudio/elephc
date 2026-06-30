@@ -2,7 +2,7 @@
 title: "spl_autoload_register() — internals"
 description: "Compiler internals for spl_autoload_register(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 311
+  order: 326
 ---
 
 ## `spl_autoload_register()` — internals

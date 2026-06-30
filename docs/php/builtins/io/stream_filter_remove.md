@@ -2,7 +2,7 @@
 title: "stream_filter_remove()"
 description: "Lowers `stream_filter_remove(filter)` and clears both direction tables for the fd."
 sidebar:
-  order: 183
+  order: 198
 ---
 
 ## stream_filter_remove()

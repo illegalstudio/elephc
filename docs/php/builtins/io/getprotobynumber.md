@@ -2,7 +2,7 @@
 title: "getprotobynumber()"
 description: "Lowers `getprotobynumber(number)` and boxes a missing entry as PHP `false`."
 sidebar:
-  order: 164
+  order: 179
 ---
 
 ## getprotobynumber()

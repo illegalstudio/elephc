@@ -2,7 +2,7 @@
 title: "ftruncate() — internals"
 description: "Compiler internals for ftruncate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 158
+  order: 173
 ---
 
 ## `ftruncate()` — internals

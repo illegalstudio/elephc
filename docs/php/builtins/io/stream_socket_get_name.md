@@ -2,7 +2,7 @@
 title: "stream_socket_get_name()"
 description: "Lowers `stream_socket_get_name(socket, remote)` and boxes `string|false`."
 sidebar:
-  order: 202
+  order: 217
 ---
 
 ## stream_socket_get_name()

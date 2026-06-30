@@ -2,7 +2,7 @@
 title: "array_splice()"
 description: "Lowers `array_splice()` by mutating an indexed source array and returning removed elements."
 sidebar:
-  order: 26
+  order: 38
 ---
 
 ## array_splice()

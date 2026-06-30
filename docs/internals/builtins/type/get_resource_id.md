@@ -2,7 +2,7 @@
 title: "get_resource_id() — internals"
 description: "Compiler internals for get_resource_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 399
+  order: 414
 ---
 
 ## `get_resource_id()` — internals

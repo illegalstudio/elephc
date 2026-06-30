@@ -2,7 +2,7 @@
 title: "fwrite()"
 description: "Lowers `fwrite(stream, data)` and returns the number of bytes written."
 sidebar:
-  order: 159
+  order: 174
 ---
 
 ## fwrite()

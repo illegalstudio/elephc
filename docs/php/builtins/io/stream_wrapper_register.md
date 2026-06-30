@@ -2,7 +2,7 @@
 title: "stream_wrapper_register()"
 description: "Lowers `stream_wrapper_register(protocol, class, flags?)`."
 sidebar:
-  order: 209
+  order: 224
 ---
 
 ## stream_wrapper_register()

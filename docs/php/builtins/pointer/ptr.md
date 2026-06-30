@@ -2,7 +2,7 @@
 title: "ptr()"
 description: "Lowers `ptr(value)` by materializing the address of addressable local/global storage."
 sidebar:
-  order: 270
+  order: 285
 ---
 
 ## ptr()

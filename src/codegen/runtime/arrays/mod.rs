@@ -20,6 +20,7 @@ mod array_clone_shallow;
 mod array_diff;
 mod array_diff_refcounted;
 mod array_diff_key;
+mod array_edge_key;
 mod array_ensure_unique;
 mod array_fill;
 mod array_fill_assoc;
@@ -29,6 +30,7 @@ mod array_fill_refcounted;
 mod array_fill_str;
 mod array_filter;
 mod array_filter_refcounted;
+mod array_find_any_all;
 mod array_flip;
 mod array_flip_string;
 mod array_free_deep;
@@ -37,6 +39,7 @@ mod array_hash_union;
 mod array_intersect;
 mod array_intersect_refcounted;
 mod array_intersect_key;
+mod array_is_list;
 mod array_key_exists;
 mod array_map;
 mod array_map_mixed;
@@ -44,7 +47,9 @@ mod array_map_str;
 mod array_merge;
 mod array_merge_into;
 mod array_merge_into_refcounted;
+mod array_merge_recursive;
 mod array_merge_refcounted;
+mod array_multisort;
 mod array_new;
 mod array_pad;
 mod array_pad_refcounted;
@@ -61,6 +66,8 @@ mod array_rand;
 mod random_u32;
 mod random_uniform;
 mod array_reduce;
+mod array_replace;
+mod array_replace_recursive;
 mod array_reverse;
 mod array_reverse_refcounted;
 mod array_search;
@@ -70,13 +77,17 @@ mod array_slice_refcounted;
 mod array_splice;
 mod array_splice_refcounted;
 mod array_sum;
+mod array_to_hash;
 mod array_to_mixed;
+mod array_udiff_uintersect;
 mod array_union;
 mod array_unique;
 mod array_unique_refcounted;
 mod array_unshift;
 mod array_walk;
+mod array_walk_recursive;
 mod asort;
+mod assoc_diff_intersect;
 mod decref_any;
 mod decref_array;
 mod decref_hash;
@@ -166,6 +177,8 @@ pub use array_diff_refcounted::emit_array_diff_refcounted;
 /// Emit refcounted array difference helper.
 pub use array_diff_key::emit_array_diff_key;
 /// Emit array difference by key helper.
+pub use array_edge_key::emit_array_edge_key;
+/// Emit array first/last key helper (array_key_first / array_key_last).
 pub use array_ensure_unique::emit_array_ensure_unique;
 /// Emit array uniqueness enforcement helper.
 pub use array_fill::emit_array_fill;
@@ -183,6 +196,8 @@ pub use array_filter::emit_array_filter;
 /// Emit array filter helper.
 pub use array_filter_refcounted::emit_array_filter_refcounted;
 /// Emit refcounted array filter helper.
+pub use array_find_any_all::emit_array_find_any_all;
+/// Emit array find/any/all predicate helper.
 pub use array_flip::emit_array_flip;
 /// Emit array flip helper.
 pub use array_flip_string::emit_array_flip_string;
@@ -198,6 +213,8 @@ pub use array_intersect::emit_array_intersect;
 pub use array_intersect_refcounted::emit_array_intersect_refcounted;
 /// Emit array intersection by key helper.
 pub use array_intersect_key::emit_array_intersect_key;
+/// Emit array list-shape predicate helper (array_is_list).
+pub use array_is_list::emit_array_is_list;
 /// Emit array key existence check helper.
 pub use array_key_exists::emit_array_key_exists;
 /// Emit array map helper.
@@ -214,6 +231,10 @@ pub use array_merge_into_refcounted::emit_array_merge_into_refcounted;
 /// Emit refcounted merge-into helper.
 pub use array_merge_refcounted::emit_array_merge_refcounted;
 /// Emit refcounted array merge helper.
+pub use array_merge_recursive::{emit_amr_box_value, emit_array_merge_recursive};
+/// Emit recursive array merge helpers (array_merge_recursive + scalar-to-list box helper).
+pub use array_multisort::emit_array_multisort;
+/// Emit array multisort helper (tandem in-place sort of two parallel arrays).
 pub use array_new::emit_array_new;
 /// Emit new empty array helper.
 pub use array_pad::emit_array_pad;
@@ -246,6 +267,10 @@ pub use random_uniform::emit_random_uniform;
 /// Emit uniform random integer helper.
 pub use array_reduce::emit_array_reduce;
 /// Emit array reduce helper.
+pub use array_replace::emit_array_replace;
+/// Emit array replace helper (right-wins hash merge).
+pub use array_replace_recursive::emit_array_replace_recursive;
+/// Emit recursive array replace helper.
 pub use array_reverse::emit_array_reverse;
 /// Emit array reverse helper.
 pub use array_reverse_refcounted::emit_array_reverse_refcounted;
@@ -264,8 +289,12 @@ pub use array_splice_refcounted::emit_array_splice_refcounted;
 /// Emit refcounted array splice helper.
 pub use array_sum::emit_array_sum;
 /// Emit array sum helper.
+pub use array_to_hash::emit_array_to_hash;
+/// Emit indexed-array-to-hash converter helper (shared by hash-based set ops).
 pub use array_to_mixed::emit_array_to_mixed;
 /// Emit array-to-Mixed conversion helper.
+pub use array_udiff_uintersect::emit_array_udiff_uintersect;
+/// Emit array udiff/uintersect comparator helper.
 pub use array_union::emit_array_union;
 /// Emit array union helper.
 pub use array_unique::emit_array_unique;
@@ -276,8 +305,12 @@ pub use array_unshift::emit_array_unshift;
 /// Emit array unshift (prepend) helper.
 pub use array_walk::emit_array_walk;
 /// Emit array walk helper.
+pub use array_walk_recursive::emit_array_walk_recursive;
+/// Emit recursive array walk helper.
 pub use asort::emit_asort;
 /// Emit associative sort helper.
+pub use assoc_diff_intersect::emit_assoc_diff_intersect;
+/// Emit associative diff/intersect helper (array_diff_assoc / array_intersect_assoc).
 pub use decref_any::emit_decref_any;
 /// Emit generic reference decrement helper.
 pub use decref_mixed::emit_decref_mixed;

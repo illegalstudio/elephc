@@ -2,7 +2,7 @@
 title: "readline()"
 description: "Lowers `readline(prompt?)` by optionally writing a prompt and reading stdin."
 sidebar:
-  order: 291
+  order: 306
 ---
 
 ## readline()

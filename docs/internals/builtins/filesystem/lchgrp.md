@@ -2,7 +2,7 @@
 title: "lchgrp() — internals"
 description: "Compiler internals for lchgrp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 112
+  order: 127
 ---
 
 ## `lchgrp()` — internals

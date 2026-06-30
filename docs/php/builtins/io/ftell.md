@@ -2,7 +2,7 @@
 title: "ftell()"
 description: "Lowers `ftell(stream)` as `lseek(fd, 0, SEEK_CUR)`."
 sidebar:
-  order: 157
+  order: 172
 ---
 
 ## ftell()

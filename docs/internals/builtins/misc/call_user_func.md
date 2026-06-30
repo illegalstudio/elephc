@@ -2,7 +2,7 @@
 title: "call_user_func() — internals"
 description: "Compiler internals for call_user_func(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 258
+  order: 273
 ---
 
 ## `call_user_func()` — internals

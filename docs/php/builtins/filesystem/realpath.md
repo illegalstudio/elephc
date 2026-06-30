@@ -2,7 +2,7 @@
 title: "realpath()"
 description: "Lowers `realpath(path)` and boxes the owned runtime string-or-false result."
 sidebar:
-  order: 122
+  order: 137
 ---
 
 ## realpath()

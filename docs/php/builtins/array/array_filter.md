@@ -2,7 +2,7 @@
 title: "array_filter()"
 description: "Lowers `array_filter()` for static and first-class callbacks through the runtime helper."
 sidebar:
-  order: 8
+  order: 11
 ---
 
 ## array_filter()

@@ -2,7 +2,7 @@
 title: "stream_filter_remove() — internals"
 description: "Compiler internals for stream_filter_remove(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 183
+  order: 198
 ---
 
 ## `stream_filter_remove()` — internals

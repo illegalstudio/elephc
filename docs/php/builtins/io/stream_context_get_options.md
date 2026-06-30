@@ -2,7 +2,7 @@
 title: "stream_context_get_options()"
 description: "Lowers `stream_context_get_options(context)`."
 sidebar:
-  order: 176
+  order: 191
 ---
 
 ## stream_context_get_options()

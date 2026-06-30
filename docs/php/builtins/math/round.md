@@ -2,7 +2,7 @@
 title: "round()"
 description: "Lowers `round()` for concrete integer-like and floating operands."
 sidebar:
-  order: 248
+  order: 263
 ---
 
 ## round()

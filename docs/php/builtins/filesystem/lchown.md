@@ -2,7 +2,7 @@
 title: "lchown()"
 description: "Lowers `lchown(path, owner)` for integer UIDs and string user names without following symlinks."
 sidebar:
-  order: 113
+  order: 128
 ---
 
 ## lchown()

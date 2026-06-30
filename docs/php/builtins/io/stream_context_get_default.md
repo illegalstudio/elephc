@@ -2,7 +2,7 @@
 title: "stream_context_get_default()"
 description: "Lowers `stream_context_get_default(options?)`."
 sidebar:
-  order: 175
+  order: 190
 ---
 
 ## stream_context_get_default()

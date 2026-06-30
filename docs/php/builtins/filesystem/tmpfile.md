@@ -2,7 +2,7 @@
 title: "tmpfile()"
 description: "Lowers `tmpfile()` and boxes the anonymous stream descriptor or PHP false."
 sidebar:
-  order: 132
+  order: 147
 ---
 
 ## tmpfile()

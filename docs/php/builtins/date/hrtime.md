@@ -2,7 +2,7 @@
 title: "hrtime()"
 description: "Lowers `hrtime([$as_number])` through the monotonic-clock runtime helper."
 sidebar:
-  order: 75
+  order: 90
 ---
 
 ## hrtime()

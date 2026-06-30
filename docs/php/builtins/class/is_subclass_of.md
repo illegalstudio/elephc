@@ -2,7 +2,7 @@
 title: "is_subclass_of()"
 description: "is_subclass_of() — class builtin supported by Elephc."
 sidebar:
-  order: 66
+  order: 81
 ---
 
 ## is_subclass_of()

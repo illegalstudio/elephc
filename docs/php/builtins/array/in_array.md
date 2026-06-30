@@ -2,7 +2,7 @@
 title: "in_array()"
 description: "Lowers `in_array()` for indexed arrays with scalar or string payloads."
 sidebar:
-  order: 35
+  order: 50
 ---
 
 ## in_array()

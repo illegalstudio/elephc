@@ -2,7 +2,7 @@
 title: "array_intersect_key()"
 description: "Lowers `array_intersect_key()` for two associative arrays by keeping shared first-operand keys."
 sidebar:
-  order: 11
+  order: 16
 ---
 
 ## array_intersect_key()

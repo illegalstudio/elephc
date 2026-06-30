@@ -2,7 +2,7 @@
 title: "stream_bucket_append() — internals"
 description: "Compiler internals for stream_bucket_append(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 318
+  order: 333
 ---
 
 ## `stream_bucket_append()` — internals

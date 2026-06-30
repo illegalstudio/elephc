@@ -2,7 +2,7 @@
 title: "getservbyname()"
 description: "Lowers `getservbyname(service, protocol)` and boxes a missing entry as PHP `false`."
 sidebar:
-  order: 165
+  order: 180
 ---
 
 ## getservbyname()

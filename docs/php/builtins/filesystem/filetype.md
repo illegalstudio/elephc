@@ -2,7 +2,7 @@
 title: "filetype()"
 description: "Lowers `filetype(path)` and boxes the runtime string-or-false result."
 sidebar:
-  order: 100
+  order: 115
 ---
 
 ## filetype()

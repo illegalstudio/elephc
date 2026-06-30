@@ -2,7 +2,7 @@
 title: "class_implements()"
 description: "class_implements() — class builtin supported by Elephc."
 sidebar:
-  order: 54
+  order: 69
 ---
 
 ## class_implements()

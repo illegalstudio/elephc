@@ -2,7 +2,7 @@
 title: "array_slice()"
 description: "Lowers `array_slice()` for indexed arrays with pointer-sized payload slots."
 sidebar:
-  order: 25
+  order: 37
 ---
 
 ## array_slice()

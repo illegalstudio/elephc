@@ -2,7 +2,7 @@
 title: "stream_wrapper_restore()"
 description: "Lowers `stream_wrapper_restore(protocol)` as a successful no-op."
 sidebar:
-  order: 210
+  order: 225
 ---
 
 ## stream_wrapper_restore()

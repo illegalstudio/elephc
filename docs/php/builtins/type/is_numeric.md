@@ -2,7 +2,7 @@
 title: "is_numeric()"
 description: "Lowers `is_numeric()` for concrete scalar values."
 sidebar:
-  order: 407
+  order: 422
 ---
 
 ## is_numeric()

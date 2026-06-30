@@ -2,7 +2,7 @@
 title: "log()"
 description: "Lowers `log()` in one-argument and base-changing two-argument forms."
 sidebar:
-  order: 237
+  order: 252
 ---
 
 ## log()

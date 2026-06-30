@@ -2,7 +2,7 @@
 title: "fsync()"
 description: "Lowers `fsync(stream)` through the shared fd sync runtime helper."
 sidebar:
-  order: 156
+  order: 171
 ---
 
 ## fsync()

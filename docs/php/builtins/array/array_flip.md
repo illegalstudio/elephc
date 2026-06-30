@@ -2,7 +2,7 @@
 title: "array_flip()"
 description: "Lowers `array_flip()` through the legacy hash-building runtime helpers."
 sidebar:
-  order: 9
+  order: 13
 ---
 
 ## array_flip()

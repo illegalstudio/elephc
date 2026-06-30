@@ -316,6 +316,99 @@
   },
   {
     "area": "Array",
+    "canonical_name": "array_all",
+    "description": "Lowers `array_all()`: returns true when every element satisfies the predicate.",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_all",
+      "codegen_line": 1536,
+      "notes": [
+        "Lowers `array_all()`: returns true when every element satisfies the predicate."
+      ],
+      "runtime_helpers": [
+        "__rt_array_udiff_uintersect",
+        "__rt_array_walk_recursive"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_all",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "array_all",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
+    "canonical_name": "array_any",
+    "description": "Lowers `array_any()`: returns true when some element satisfies the predicate.",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_any",
+      "codegen_line": 1531,
+      "notes": [
+        "Lowers `array_any()`: returns true when some element satisfies the predicate."
+      ],
+      "runtime_helpers": [
+        "__rt_array_walk_recursive"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_any",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "array_any",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
     "canonical_name": "array_chunk",
     "description": "Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays.",
     "in_catalog": true,
@@ -502,6 +595,46 @@
       "variadic": "arrays"
     },
     "slug": "array_diff",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
+    "canonical_name": "array_diff_assoc",
+    "description": "Lowers `array_diff_assoc()` via the shared associative diff/intersect helper (mode 0 = diff).",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_diff_assoc",
+      "codegen_line": 1347,
+      "notes": [
+        "Lowers `array_diff_assoc()` via the shared associative diff/intersect helper (mode 0 = diff)."
+      ],
+      "runtime_helpers": [
+        "__rt_array_merge_recursive",
+        "__rt_assoc_diff_intersect"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_diff_assoc",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": "arrays"
+    },
+    "slug": "array_diff_assoc",
     "sub_area": "Array"
   },
   {
@@ -695,6 +828,52 @@
   },
   {
     "area": "Array",
+    "canonical_name": "array_find",
+    "description": "Lowers `array_find()`: returns the first element satisfying the predicate, boxed as Mixed (or null).",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_find",
+      "codegen_line": 1526,
+      "notes": [
+        "Lowers `array_find()`: returns the first element satisfying the predicate, boxed as Mixed (or null)."
+      ],
+      "runtime_helpers": [
+        "__rt_array_walk_recursive"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_find",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "array_find",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
     "canonical_name": "array_flip",
     "description": "Lowers `array_flip()` through the legacy hash-building runtime helpers.",
     "in_catalog": true,
@@ -774,6 +953,48 @@
   },
   {
     "area": "Array",
+    "canonical_name": "array_intersect_assoc",
+    "description": "Lowers `array_intersect_assoc()` via the shared associative diff/intersect helper (mode 1 = intersect).",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_intersect_assoc",
+      "codegen_line": 1352,
+      "notes": [
+        "Lowers `array_intersect_assoc()` via the shared associative diff/intersect helper (mode 1 = intersect)."
+      ],
+      "runtime_helpers": [
+        "__rt_array_find_any_all",
+        "__rt_array_merge_recursive",
+        "__rt_array_udiff_uintersect",
+        "__rt_assoc_diff_intersect"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_intersect_assoc",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": "arrays"
+    },
+    "slug": "array_intersect_assoc",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
     "canonical_name": "array_intersect_key",
     "description": "Lowers `array_intersect_key()` for two associative arrays by keeping shared first-operand keys.",
     "in_catalog": true,
@@ -809,6 +1030,49 @@
       "variadic": "arrays"
     },
     "slug": "array_intersect_key",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
+    "canonical_name": "array_is_list",
+    "description": "Lowers `array_is_list()` to the `__rt_array_is_list` runtime predicate, returning a bool.",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_is_list",
+      "codegen_line": 1144,
+      "notes": [
+        "Lowers `array_is_list()` to the `__rt_array_is_list` runtime predicate, returning a bool.",
+        "The runtime helper accepts any array kind (indexed, associative hash, or boxed mixed cell) and",
+        "reports `1` when the keys are the sequential integers `0..n-1` in insertion order, `0` otherwise."
+      ],
+      "runtime_helpers": [
+        "__rt_array_edge_key",
+        "__rt_array_is_list",
+        "__rt_mixed_from_value"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_is_list",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "array_is_list",
     "sub_area": "Array"
   },
   {
@@ -853,6 +1117,86 @@
       "variadic": null
     },
     "slug": "array_key_exists",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
+    "canonical_name": "array_key_first",
+    "description": "Lowers `array_key_first()` through the shared edge-key helper with selector `0`.",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_key_first",
+      "codegen_line": 1155,
+      "notes": [
+        "Lowers `array_key_first()` through the shared edge-key helper with selector `0`."
+      ],
+      "runtime_helpers": [
+        "__rt_array_edge_key",
+        "__rt_mixed_from_value"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_key_first",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "array_key_first",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
+    "canonical_name": "array_key_last",
+    "description": "Lowers `array_key_last()` through the shared edge-key helper with selector `1`.",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_key_last",
+      "codegen_line": 1160,
+      "notes": [
+        "Lowers `array_key_last()` through the shared edge-key helper with selector `1`."
+      ],
+      "runtime_helpers": [
+        "__rt_array_edge_key",
+        "__rt_mixed_from_value"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_key_last",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "array_key_last",
     "sub_area": "Array"
   },
   {
@@ -980,6 +1324,88 @@
       "variadic": "arrays"
     },
     "slug": "array_merge",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
+    "canonical_name": "array_merge_recursive",
+    "description": "Lowers `array_merge_recursive()` (recursive merge with scalar collisions combined into lists).",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_merge_recursive",
+      "codegen_line": 1366,
+      "notes": [
+        "Lowers `array_merge_recursive()` (recursive merge with scalar collisions combined into lists)."
+      ],
+      "runtime_helpers": [
+        "__rt_array_find_any_all",
+        "__rt_array_merge_recursive",
+        "__rt_array_udiff_uintersect"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_merge_recursive",
+    "sig": {
+      "params": [],
+      "return_type": "mixed",
+      "variadic": "arrays"
+    },
+    "slug": "array_merge_recursive",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
+    "canonical_name": "array_multisort",
+    "description": "Lowers `array_multisort()`: stable-sorts the first indexed array ascending and reorders the second",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_multisort",
+      "codegen_line": 1671,
+      "notes": [
+        "Lowers `array_multisort()`: stable-sorts the first indexed array ascending and reorders the second",
+        "in tandem, both in place. Both arguments are by-reference, so each is copy-on-write split with",
+        "`ensure_unique_sort_source` and the (possibly relocated) pointer is written back to its local",
+        "before the runtime mutates the storage. Returns `true`. Supports 8-byte scalar indexed arrays."
+      ],
+      "runtime_helpers": [
+        "__rt_array_multisort"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_multisort",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array1",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array2",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "array_multisort",
     "sub_area": "Array"
   },
   {
@@ -1251,6 +1677,101 @@
   },
   {
     "area": "Array",
+    "canonical_name": "array_replace",
+    "description": "Lowers `array_replace()` (right-wins hash merge of two hashes).",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_replace",
+      "codegen_line": 1328,
+      "notes": [
+        "Lowers `array_replace()` (right-wins hash merge of two hashes)."
+      ],
+      "runtime_helpers": [
+        "__rt_array_replace",
+        "__rt_array_replace_recursive",
+        "__rt_assoc_diff_intersect"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_replace",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "replacements",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "array_replace",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
+    "canonical_name": "array_replace_recursive",
+    "description": "Lowers `array_replace_recursive()` (recursive right-wins hash merge).",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_replace_recursive",
+      "codegen_line": 1333,
+      "notes": [
+        "Lowers `array_replace_recursive()` (recursive right-wins hash merge)."
+      ],
+      "runtime_helpers": [
+        "__rt_array_replace_recursive",
+        "__rt_assoc_diff_intersect"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_replace_recursive",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "replacements",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "array_replace_recursive",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
     "canonical_name": "array_reverse",
     "description": "Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.",
     "in_catalog": true,
@@ -1304,7 +1825,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_search",
-      "codegen_line": 1141,
+      "codegen_line": 1710,
       "notes": [
         "Lowers `array_search()` for indexed arrays with integer-like payloads."
       ],
@@ -1539,6 +2060,108 @@
   },
   {
     "area": "Array",
+    "canonical_name": "array_udiff",
+    "description": "Lowers `array_udiff()`: keeps first-array elements not equal (per comparator) to any second-array element.",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_udiff",
+      "codegen_line": 1658,
+      "notes": [
+        "Lowers `array_udiff()`: keeps first-array elements not equal (per comparator) to any second-array element."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_udiff",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array1",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array2",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "callable"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "array_udiff",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
+    "canonical_name": "array_uintersect",
+    "description": "Lowers `array_uintersect()`: keeps first-array elements equal (per comparator) to some second-array element.",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_uintersect",
+      "codegen_line": 1663,
+      "notes": [
+        "Lowers `array_uintersect()`: keeps first-array elements equal (per comparator) to some second-array element."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_uintersect",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array1",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array2",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "callable"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "array_uintersect",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
     "canonical_name": "array_unique",
     "description": "Lowers `array_unique()` for indexed arrays with 8-byte payload slots.",
     "in_catalog": true,
@@ -1709,6 +2332,61 @@
       "variadic": null
     },
     "slug": "array_walk",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
+    "canonical_name": "array_walk_recursive",
+    "description": "Lowers `array_walk_recursive()`: invokes the callback on each scalar leaf of a (possibly nested)",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
+      "codegen_function": "lower_array_walk_recursive",
+      "codegen_line": 1542,
+      "notes": [
+        "Lowers `array_walk_recursive()`: invokes the callback on each scalar leaf of a (possibly nested)",
+        "array, descending into array-valued elements. Returns void; leaves are passed as 8-byte scalars."
+      ],
+      "runtime_helpers": [
+        "__rt_array_udiff_uintersect",
+        "__rt_array_walk_recursive"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "array_walk_recursive",
+    "sig": {
+      "params": [
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "callable"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "slug": "array_walk_recursive",
     "sub_area": "Array"
   },
   {
@@ -2536,7 +3214,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_boolval",
-      "codegen_line": 1091,
+      "codegen_line": 1106,
       "notes": [
         "Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`."
       ],
@@ -3336,7 +4014,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_count",
-      "codegen_line": 944,
+      "codegen_line": 959,
       "notes": [
         "Lowers `count(array)` for concrete array values by reading the runtime length header."
       ],
@@ -3698,7 +4376,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_define",
-      "codegen_line": 576,
+      "codegen_line": 591,
       "notes": [
         "Lowers `define(\"NAME\", value)` with the legacy duplicate-name runtime guard."
       ],
@@ -3749,7 +4427,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_defined",
-      "codegen_line": 771,
+      "codegen_line": 786,
       "notes": [
         "Lowers `defined(\"NAME\")` for compile-time string constant names."
       ],
@@ -3905,7 +4583,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 1123,
+      "codegen_line": 1138,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -5171,7 +5849,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_floatval",
-      "codegen_line": 1061,
+      "codegen_line": 1076,
       "notes": [
         "Lowers `floatval()` for concrete scalar operands."
       ],
@@ -6251,7 +6929,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_function_exists",
-      "codegen_line": 786,
+      "codegen_line": 801,
       "notes": [
         "Lowers `function_exists(\"name\")` for compile-time string names.",
         "Recognizes user functions, externs, catalog builtins, and the date/time procedural aliases",
@@ -6777,7 +7455,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_gettype",
-      "codegen_line": 639,
+      "codegen_line": 654,
       "notes": [
         "Lowers `gettype(value)` for statically concrete PHP types."
       ],
@@ -7929,7 +8607,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_in_array",
-      "codegen_line": 1160,
+      "codegen_line": 1729,
       "notes": [
         "Lowers `in_array()` for indexed arrays with scalar or string payloads."
       ],
@@ -8024,7 +8702,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_intval",
-      "codegen_line": 1028,
+      "codegen_line": 1043,
       "notes": [
         "Lowers `intval()` for concrete scalar operands."
       ],
@@ -8238,7 +8916,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_callable",
-      "codegen_line": 829,
+      "codegen_line": 844,
       "notes": [
         "Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers."
       ],
@@ -8466,7 +9144,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_array",
-      "codegen_line": 1507,
+      "codegen_line": 1522,
       "notes": [
         "Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value",
         "whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is",
@@ -8505,7 +9183,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_object",
-      "codegen_line": 1522,
+      "codegen_line": 1537,
       "notes": [
         "Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose",
         "runtime tag is an object (6)."
@@ -8543,7 +9221,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_scalar",
-      "codegen_line": 1538,
+      "codegen_line": 1553,
       "notes": [
         "Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed",
         "Mixed/Union value whose runtime tag is int (0), string (1), float (2), or bool (3). Null,",
@@ -8775,7 +9453,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_iterable",
-      "codegen_line": 1299,
+      "codegen_line": 1314,
       "notes": [
         "Lowers `is_iterable()` for concrete values and boxed Mixed payloads."
       ],
@@ -10348,6 +11026,7 @@
         "Lowers `natcasesort()` for indexed integer arrays through the case-insensitive wrapper."
       ],
       "runtime_helpers": [
+        "__rt_array_is_list",
         "__rt_natcasesort"
       ],
       "sig_arm": null,
@@ -10698,7 +11377,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_phpversion",
-      "codegen_line": 761,
+      "codegen_line": 776,
       "notes": [
         "Lowers `phpversion()` as the compiler package version string."
       ],
@@ -10735,7 +11414,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_pi",
-      "codegen_line": 623,
+      "codegen_line": 638,
       "notes": [
         "Lowers `pi()` as the same data-section float constant used by the legacy backend."
       ],
@@ -12776,7 +13455,9 @@
       "notes": [
         "Lowers `shuffle()` for indexed arrays with 8-byte slots by mutating the source array in place."
       ],
-      "runtime_helpers": [],
+      "runtime_helpers": [
+        "__rt_array_is_list"
+      ],
       "sig_arm": null,
       "sig_file": null,
       "sig_line": null
@@ -14011,7 +14692,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_strlen",
-      "codegen_line": 998,
+      "codegen_line": 1013,
       "notes": [
         "Lowers `strlen()` by coercing string-like values and returning the byte length."
       ],
@@ -17574,7 +18255,9 @@
       "notes": [
         "Lowers `uasort()` through the legacy user-sort helper for static comparators."
       ],
-      "runtime_helpers": [],
+      "runtime_helpers": [
+        "__rt_array_is_list"
+      ],
       "sig_arm": null,
       "sig_file": null,
       "sig_line": null
@@ -17704,7 +18387,9 @@
       "notes": [
         "Lowers `uksort()` through the legacy user-sort helper for static comparators."
       ],
-      "runtime_helpers": [],
+      "runtime_helpers": [
+        "__rt_array_is_list"
+      ],
       "sig_arm": null,
       "sig_file": null,
       "sig_line": null
@@ -18035,7 +18720,9 @@
       "notes": [
         "Lowers `usort()` for indexed integer arrays with a static user comparator."
       ],
-      "runtime_helpers": [],
+      "runtime_helpers": [
+        "__rt_array_is_list"
+      ],
       "sig_arm": null,
       "sig_file": null,
       "sig_line": null

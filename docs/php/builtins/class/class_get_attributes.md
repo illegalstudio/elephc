@@ -2,7 +2,7 @@
 title: "class_get_attributes()"
 description: "Lowers `class_get_attributes(class)` into an array of `ReflectionAttribute` objects."
 sidebar:
-  order: 53
+  order: 68
 ---
 
 ## class_get_attributes()

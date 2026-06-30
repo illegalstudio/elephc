@@ -2,7 +2,7 @@
 title: "class_attribute_names()"
 description: "Lowers `class_attribute_names(class)` into an indexed string array."
 sidebar:
-  order: 51
+  order: 66
 ---
 
 ## class_attribute_names()

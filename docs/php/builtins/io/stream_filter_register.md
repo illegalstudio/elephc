@@ -2,7 +2,7 @@
 title: "stream_filter_register()"
 description: "Lowers `stream_filter_register(filter_name, class)` into the user-filter registry helper."
 sidebar:
-  order: 182
+  order: 197
 ---
 
 ## stream_filter_register()

@@ -2,7 +2,7 @@
 title: "is_infinite()"
 description: "Lowers `is_infinite()` by comparing the normalized float against +/- infinity."
 sidebar:
-  order: 235
+  order: 250
 ---
 
 ## is_infinite()

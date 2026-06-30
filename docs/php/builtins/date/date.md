@@ -2,7 +2,7 @@
 title: "date()"
 description: "Lowers `date(format, timestamp?)` through the shared formatter runtime helper."
 sidebar:
-  order: 69
+  order: 84
 ---
 
 ## date()

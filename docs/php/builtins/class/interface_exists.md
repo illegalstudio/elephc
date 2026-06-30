@@ -2,7 +2,7 @@
 title: "interface_exists()"
 description: "interface_exists() — class builtin supported by Elephc."
 sidebar:
-  order: 64
+  order: 79
 ---
 
 ## interface_exists()

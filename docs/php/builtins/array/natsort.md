@@ -2,7 +2,7 @@
 title: "natsort()"
 description: "Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper."
 sidebar:
-  order: 39
+  order: 54
 ---
 
 ## natsort()

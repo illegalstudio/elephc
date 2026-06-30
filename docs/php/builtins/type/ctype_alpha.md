@@ -2,7 +2,7 @@
 title: "ctype_alpha()"
 description: "Lowers `ctype_alpha(string)` by checking every byte against ASCII alpha ranges."
 sidebar:
-  order: 392
+  order: 407
 ---
 
 ## ctype_alpha()

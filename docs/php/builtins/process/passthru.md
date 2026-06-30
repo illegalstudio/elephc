@@ -2,7 +2,7 @@
 title: "passthru()"
 description: "Lowers `passthru(command)` through libc `system()` for direct stdout passthrough."
 sidebar:
-  order: 288
+  order: 303
 ---
 
 ## passthru()

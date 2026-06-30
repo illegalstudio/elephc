@@ -2,7 +2,7 @@
 title: "stream_context_set_option()"
 description: "Lowers `stream_context_set_option(context, options)` and the four-argument form."
 sidebar:
-  order: 179
+  order: 194
 ---
 
 ## stream_context_set_option()

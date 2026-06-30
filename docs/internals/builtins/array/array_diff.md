@@ -2,7 +2,7 @@
 title: "array_diff() — internals"
 description: "Compiler internals for array_diff(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 4
+  order: 6
 ---
 
 ## `array_diff()` — internals

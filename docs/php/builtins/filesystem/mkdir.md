@@ -2,7 +2,7 @@
 title: "mkdir()"
 description: "Lowers `mkdir(path)` through the target-aware runtime helper."
 sidebar:
-  order: 117
+  order: 132
 ---
 
 ## mkdir()

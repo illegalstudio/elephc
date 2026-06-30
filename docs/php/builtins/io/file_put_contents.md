@@ -2,7 +2,7 @@
 title: "file_put_contents()"
 description: "Lowers `file_put_contents(path, data)` through the target-aware runtime writer."
 sidebar:
-  order: 146
+  order: 161
 ---
 
 ## file_put_contents()

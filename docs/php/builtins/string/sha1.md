@@ -2,7 +2,7 @@
 title: "sha1()"
 description: "Lowers `sha1(data, binary?)` through the shared crypto-backed runtime helper."
 sidebar:
-  order: 359
+  order: 374
 ---
 
 ## sha1()

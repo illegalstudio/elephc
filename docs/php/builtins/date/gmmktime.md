@@ -2,7 +2,7 @@
 title: "gmmktime()"
 description: "Lowers `gmmktime(...)`: the UTC counterpart of `mktime()`."
 sidebar:
-  order: 74
+  order: 89
 ---
 
 ## gmmktime()

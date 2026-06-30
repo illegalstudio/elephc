@@ -2,7 +2,7 @@
 title: "array_walk()"
 description: "Lowers `array_walk()` through the callback-driven runtime helper."
 sidebar:
-  order: 31
+  order: 45
 ---
 
 ## array_walk()

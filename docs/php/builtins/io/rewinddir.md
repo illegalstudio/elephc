@@ -2,7 +2,7 @@
 title: "rewinddir()"
 description: "Lowers `rewinddir(dir_handle)` for libc, glob, and userspace-wrapper handles."
 sidebar:
-  order: 171
+  order: 186
 ---
 
 ## rewinddir()

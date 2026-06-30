@@ -2,7 +2,7 @@
 title: "range() — internals"
 description: "Compiler internals for range(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 40
+  order: 55
 ---
 
 ## `range()` — internals

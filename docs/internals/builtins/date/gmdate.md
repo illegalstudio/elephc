@@ -2,7 +2,7 @@
 title: "gmdate() — internals"
 description: "Compiler internals for gmdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 73
+  order: 88
 ---
 
 ## `gmdate()` — internals

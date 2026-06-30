@@ -2,7 +2,7 @@
 title: "fileowner()"
 description: "Lowers `fileowner(path)` and boxes the runtime integer-or-false result."
 sidebar:
-  order: 97
+  order: 112
 ---
 
 ## fileowner()

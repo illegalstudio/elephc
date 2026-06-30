@@ -2,7 +2,7 @@
 title: "filemtime()"
 description: "Lowers `filemtime(path)` through the target-aware runtime stat helper."
 sidebar:
-  order: 96
+  order: 111
 ---
 
 ## filemtime()

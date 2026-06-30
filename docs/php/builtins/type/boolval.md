@@ -2,7 +2,7 @@
 title: "boolval()"
 description: "Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`."
 sidebar:
-  order: 390
+  order: 405
 ---
 
 ## boolval()

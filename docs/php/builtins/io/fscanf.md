@@ -2,7 +2,7 @@
 title: "fscanf()"
 description: "Lowers `fscanf(stream, format)` through `__rt_fgets` and `__rt_sscanf`."
 sidebar:
-  order: 153
+  order: 168
 ---
 
 ## fscanf()

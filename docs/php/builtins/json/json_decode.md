@@ -2,7 +2,7 @@
 title: "json_decode()"
 description: "Lowers `json_decode(json, associative?, depth?, flags?)` through the shared JSON decoder runtime."
 sidebar:
-  order: 213
+  order: 228
 ---
 
 ## json_decode()

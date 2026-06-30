@@ -2,7 +2,7 @@
 title: "disk_total_space()"
 description: "Lowers `disk_total_space(path)` through the shared disk-space runtime helper."
 sidebar:
-  order: 90
+  order: 105
 ---
 
 ## disk_total_space()

@@ -2,7 +2,7 @@
 title: "array_reverse()"
 description: "Lowers `array_reverse()` for indexed arrays with 8-byte payload slots."
 sidebar:
-  order: 22
+  order: 34
 ---
 
 ## array_reverse()

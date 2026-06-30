@@ -2,7 +2,7 @@
 title: "exp()"
 description: "exp() — math builtin supported by Elephc."
 sidebar:
-  order: 228
+  order: 243
 ---
 
 ## exp()

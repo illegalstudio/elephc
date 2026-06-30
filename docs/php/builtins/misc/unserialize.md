@@ -2,7 +2,7 @@
 title: "unserialize()"
 description: "Lowers `unserialize($data, $options?)` into the shared unserialize runtime helper."
 sidebar:
-  order: 267
+  order: 282
 ---
 
 ## unserialize()

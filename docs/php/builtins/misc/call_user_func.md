@@ -2,7 +2,7 @@
 title: "call_user_func()"
 description: "call_user_func() — misc builtin supported by Elephc."
 sidebar:
-  order: 255
+  order: 270
 ---
 
 ## call_user_func()

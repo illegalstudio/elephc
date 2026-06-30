@@ -2,7 +2,7 @@
 title: "stream_get_contents()"
 description: "Lowers `stream_get_contents(stream, length?, offset?)` to `string|false`."
 sidebar:
-  order: 184
+  order: 199
 ---
 
 ## stream_get_contents()

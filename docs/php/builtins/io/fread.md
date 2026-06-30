@@ -2,7 +2,7 @@
 title: "fread()"
 description: "Lowers `fread(stream, length)` using the shared runtime file-read helper."
 sidebar:
-  order: 152
+  order: 167
 ---
 
 ## fread()

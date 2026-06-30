@@ -2,7 +2,7 @@
 title: "array_diff()"
 description: "Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots."
 sidebar:
-  order: 4
+  order: 6
 ---
 
 ## array_diff()

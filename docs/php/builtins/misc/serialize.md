@@ -2,7 +2,7 @@
 title: "serialize()"
 description: "Lowers `serialize($value)` into the shared serialize runtime helper."
 sidebar:
-  order: 266
+  order: 281
 ---
 
 ## serialize()

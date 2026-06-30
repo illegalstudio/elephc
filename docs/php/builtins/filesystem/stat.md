@@ -2,7 +2,7 @@
 title: "stat()"
 description: "Lowers `stat(path)` and boxes the runtime stat array or PHP false result."
 sidebar:
-  order: 128
+  order: 143
 ---
 
 ## stat()

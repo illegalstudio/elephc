@@ -2,7 +2,7 @@
 title: "explode()"
 description: "Lowers `explode(delimiter, string)` into the shared string-array splitter helper."
 sidebar:
-  order: 326
+  order: 341
 ---
 
 ## explode()

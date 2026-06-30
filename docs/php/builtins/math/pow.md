@@ -2,7 +2,7 @@
 title: "pow()"
 description: "Lowers `pow()` for concrete integer-like and floating operands."
 sidebar:
-  order: 244
+  order: 259
 ---
 
 ## pow()

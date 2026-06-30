@@ -2,7 +2,7 @@
 title: "array_merge()"
 description: "Lowers `array_merge()` for two compatible indexed arrays with 8-byte payload slots."
 sidebar:
-  order: 15
+  order: 23
 ---
 
 ## array_merge()

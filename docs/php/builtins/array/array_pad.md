@@ -2,7 +2,7 @@
 title: "array_pad()"
 description: "Lowers `array_pad()` by copying an indexed array and filling missing slots."
 sidebar:
-  order: 16
+  order: 26
 ---
 
 ## array_pad()

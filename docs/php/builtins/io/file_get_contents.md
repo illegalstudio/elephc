@@ -2,7 +2,7 @@
 title: "file_get_contents()"
 description: "Lowers `file_get_contents(path)` and boxes the runtime string-or-false result."
 sidebar:
-  order: 145
+  order: 160
 ---
 
 ## file_get_contents()

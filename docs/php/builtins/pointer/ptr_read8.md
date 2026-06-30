@@ -2,7 +2,7 @@
 title: "ptr_read8()"
 description: "Lowers `ptr_read8(pointer)` by reading one unsigned byte through a checked pointer."
 sidebar:
-  order: 277
+  order: 292
 ---
 
 ## ptr_read8()

@@ -2,7 +2,7 @@
 title: "array_intersect()"
 description: "Lowers `array_intersect()` for two compatible indexed arrays with pointer-sized payload slots."
 sidebar:
-  order: 10
+  order: 14
 ---
 
 ## array_intersect()

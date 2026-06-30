@@ -2,7 +2,7 @@
 title: "stream_bucket_make_writeable()"
 description: "Lowers `stream_bucket_make_writeable(brigade)` by popping the brigade head."
 sidebar:
-  order: 172
+  order: 187
 ---
 
 ## stream_bucket_make_writeable()

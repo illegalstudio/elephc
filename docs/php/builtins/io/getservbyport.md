@@ -2,7 +2,7 @@
 title: "getservbyport()"
 description: "Lowers `getservbyport(port, protocol)` and boxes a missing entry as PHP `false`."
 sidebar:
-  order: 166
+  order: 181
 ---
 
 ## getservbyport()

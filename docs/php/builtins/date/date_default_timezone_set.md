@@ -2,7 +2,7 @@
 title: "date_default_timezone_set()"
 description: "Lowers `date_default_timezone_set(timezoneId)` through the shared runtime helper."
 sidebar:
-  order: 71
+  order: 86
 ---
 
 ## date_default_timezone_set()

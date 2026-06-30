@@ -2,7 +2,7 @@
 title: "readfile()"
 description: "Lowers `readfile(path)` and boxes the runtime byte-count-or-false result."
 sidebar:
-  order: 120
+  order: 135
 ---
 
 ## readfile()

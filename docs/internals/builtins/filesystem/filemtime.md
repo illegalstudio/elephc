@@ -2,7 +2,7 @@
 title: "filemtime() — internals"
 description: "Compiler internals for filemtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 96
+  order: 111
 ---
 
 ## `filemtime()` — internals

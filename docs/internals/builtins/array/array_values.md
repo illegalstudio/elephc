@@ -2,7 +2,7 @@
 title: "array_values() — internals"
 description: "Compiler internals for array_values(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 30
+  order: 44
 ---
 
 ## `array_values()` — internals

@@ -2,7 +2,7 @@
 title: "array_column() — internals"
 description: "Compiler internals for array_column(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 2
+  order: 4
 ---
 
 ## `array_column()` — internals

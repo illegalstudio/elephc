@@ -2,7 +2,7 @@
 title: "class_alias() — internals"
 description: "Compiler internals for class_alias(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 49
+  order: 64
 ---
 
 ## `class_alias()` — internals

@@ -2,7 +2,7 @@
 title: "buffer_free()"
 description: "Lowers `buffer_free()` through the direct buffer opcode helper."
 sidebar:
-  order: 47
+  order: 62
 ---
 
 ## buffer_free()

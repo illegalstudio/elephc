@@ -2,7 +2,7 @@
 title: "rewind()"
 description: "Lowers `rewind(stream)` as `lseek(fd, 0, SEEK_SET)` and clears EOF state on success."
 sidebar:
-  order: 170
+  order: 185
 ---
 
 ## rewind()

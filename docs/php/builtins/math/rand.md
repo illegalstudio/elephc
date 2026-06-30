@@ -2,7 +2,7 @@
 title: "rand()"
 description: "rand() — math builtin supported by Elephc."
 sidebar:
-  order: 246
+  order: 261
 ---
 
 ## rand()

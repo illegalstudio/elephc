@@ -2,7 +2,7 @@
 title: "clearstatcache()"
 description: "Lowers `clearstatcache(...)` as an ordered no-op after EIR operand evaluation."
 sidebar:
-  order: 86
+  order: 101
 ---
 
 ## clearstatcache()

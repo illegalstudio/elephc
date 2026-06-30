@@ -2,7 +2,7 @@
 title: "ptr_set()"
 description: "Lowers `ptr_set(pointer, value)` by writing one machine word through a checked pointer."
 sidebar:
-  order: 279
+  order: 294
 ---
 
 ## ptr_set()

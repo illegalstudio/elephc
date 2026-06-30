@@ -2,7 +2,7 @@
 title: "time()"
 description: "Lowers `time()` through the shared wall-clock runtime helper."
 sidebar:
-  order: 80
+  order: 95
 ---
 
 ## time()

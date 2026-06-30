@@ -2,7 +2,7 @@
 title: "floor()"
 description: "Lowers `floor()` for concrete integer-like and floating operands."
 sidebar:
-  order: 230
+  order: 245
 ---
 
 ## floor()

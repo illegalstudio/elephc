@@ -2,7 +2,7 @@
 title: "disk_free_space()"
 description: "Lowers `disk_free_space(path)` through the shared disk-space runtime helper."
 sidebar:
-  order: 89
+  order: 104
 ---
 
 ## disk_free_space()

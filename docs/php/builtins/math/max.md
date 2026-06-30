@@ -2,7 +2,7 @@
 title: "max()"
 description: "Lowers numeric `min()` and `max()` over concrete integer-like or float operands."
 sidebar:
-  order: 240
+  order: 255
 ---
 
 ## max()

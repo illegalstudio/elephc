@@ -2,7 +2,7 @@
 title: "enum_exists()"
 description: "enum_exists() — class builtin supported by Elephc."
 sidebar:
-  order: 57
+  order: 72
 ---
 
 ## enum_exists()

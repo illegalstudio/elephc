@@ -2,7 +2,7 @@
 title: "array_unique()"
 description: "Lowers `array_unique()` for indexed arrays with 8-byte payload slots."
 sidebar:
-  order: 28
+  order: 42
 ---
 
 ## array_unique()

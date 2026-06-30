@@ -2,7 +2,7 @@
 title: "stream_context_create()"
 description: "Lowers `stream_context_create(options?, params?)`."
 sidebar:
-  order: 174
+  order: 189
 ---
 
 ## stream_context_create()

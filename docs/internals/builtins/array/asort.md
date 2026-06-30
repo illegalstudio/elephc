@@ -2,7 +2,7 @@
 title: "asort() — internals"
 description: "Compiler internals for asort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 33
+  order: 48
 ---
 
 ## `asort()` — internals

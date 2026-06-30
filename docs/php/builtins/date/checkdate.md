@@ -2,7 +2,7 @@
 title: "checkdate()"
 description: "Lowers `checkdate(month, day, year)` through the shared Gregorian-validation runtime helper."
 sidebar:
-  order: 68
+  order: 83
 ---
 
 ## checkdate()

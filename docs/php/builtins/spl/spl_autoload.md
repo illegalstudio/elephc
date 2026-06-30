@@ -2,7 +2,7 @@
 title: "spl_autoload()"
 description: "Lowers no-op autoload calls by preserving arg effects and returning PHP null if used."
 sidebar:
-  order: 304
+  order: 319
 ---
 
 ## spl_autoload()

@@ -2,7 +2,7 @@
 title: "trait_exists()"
 description: "trait_exists() — class builtin supported by Elephc."
 sidebar:
-  order: 67
+  order: 82
 ---
 
 ## trait_exists()

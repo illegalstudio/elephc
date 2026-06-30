@@ -2,7 +2,7 @@
 title: "json_validate()"
 description: "Lowers `json_validate(json, depth?, flags?)` into the shared validator runtime."
 sidebar:
-  order: 217
+  order: 232
 ---
 
 ## json_validate()

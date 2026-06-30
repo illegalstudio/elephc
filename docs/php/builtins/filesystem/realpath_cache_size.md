@@ -2,7 +2,7 @@
 title: "realpath_cache_size()"
 description: "Lowers `realpath_cache_size()` to zero because elephc has no realpath cache."
 sidebar:
-  order: 124
+  order: 139
 ---
 
 ## realpath_cache_size()

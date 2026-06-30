@@ -2,7 +2,7 @@
 title: "json_encode()"
 description: "Lowers `json_encode(value, flags?, depth?)` through the shared JSON encoder runtime."
 sidebar:
-  order: 214
+  order: 229
 ---
 
 ## json_encode()

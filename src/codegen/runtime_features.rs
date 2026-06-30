@@ -793,8 +793,10 @@ fn expr_is_descriptor_invoker_trigger(expr: &Expr) -> bool {
 fn function_call_needs_descriptor_invoker(name: &str, args: &[Expr]) -> bool {
     let callback = match php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "call_user_func" | "call_user_func_array" | "array_map" => args.first(),
-        "array_filter" | "array_walk" | "array_reduce" | "usort" | "uasort" | "uksort"
-        | "iterator_apply" | "preg_replace_callback" => args.get(1),
+        "array_filter" | "array_walk" | "array_walk_recursive" | "array_reduce" | "usort"
+        | "uasort" | "uksort" | "iterator_apply" | "preg_replace_callback" | "array_find"
+        | "array_any" | "array_all" => args.get(1),
+        "array_udiff" | "array_uintersect" => args.get(2),
         _ => return false,
     };
     callback.is_some_and(callback_arg_may_be_runtime_dispatch)

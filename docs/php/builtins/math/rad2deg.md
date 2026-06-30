@@ -2,7 +2,7 @@
 title: "rad2deg()"
 description: "Lowers `rad2deg()` by multiplying with `180 / PI`."
 sidebar:
-  order: 245
+  order: 260
 ---
 
 ## rad2deg()

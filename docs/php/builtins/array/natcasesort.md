@@ -2,7 +2,7 @@
 title: "natcasesort()"
 description: "Lowers `natcasesort()` for indexed integer arrays through the case-insensitive wrapper."
 sidebar:
-  order: 38
+  order: 53
 ---
 
 ## natcasesort()

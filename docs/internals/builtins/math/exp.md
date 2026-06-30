@@ -2,7 +2,7 @@
 title: "exp() — internals"
 description: "Compiler internals for exp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 228
+  order: 243
 ---
 
 ## `exp()` — internals

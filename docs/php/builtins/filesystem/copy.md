@@ -2,7 +2,7 @@
 title: "copy()"
 description: "Lowers `copy(source, dest)` through the target-aware runtime helper."
 sidebar:
-  order: 87
+  order: 102
 ---
 
 ## copy()

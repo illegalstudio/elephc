@@ -2,7 +2,7 @@
 title: "asort()"
 description: "Lowers `asort()` for indexed integer arrays through the value-sort runtime wrapper."
 sidebar:
-  order: 33
+  order: 48
 ---
 
 ## asort()

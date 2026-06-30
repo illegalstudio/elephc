@@ -2,7 +2,7 @@
 title: "ftruncate()"
 description: "Lowers `ftruncate(stream, size)` through the shared fd truncate runtime helper."
 sidebar:
-  order: 158
+  order: 173
 ---
 
 ## ftruncate()

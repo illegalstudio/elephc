@@ -2,7 +2,7 @@
 title: "fprintf()"
 description: "Lowers `fprintf(stream, format, values...)` as `sprintf()` plus stream write."
 sidebar:
-  order: 150
+  order: 165
 ---
 
 ## fprintf()

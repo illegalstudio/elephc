@@ -2,7 +2,7 @@
 title: "array_map()"
 description: "Lowers `array_map()` through the callback runtime helper matching the callback result type."
 sidebar:
-  order: 14
+  order: 22
 ---
 
 ## array_map()

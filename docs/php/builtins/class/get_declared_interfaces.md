@@ -2,7 +2,7 @@
 title: "get_declared_interfaces()"
 description: "get_declared_interfaces() — class builtin supported by Elephc."
 sidebar:
-  order: 61
+  order: 76
 ---
 
 ## get_declared_interfaces()
