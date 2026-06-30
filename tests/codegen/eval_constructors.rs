@@ -50,6 +50,48 @@ return gettype(EvalCtorRefTargetStatic::$value) . ":" . EvalCtorRefTargetStatic:
     assert_eq!(out, "integer:6|integer:7|integer:8|integer:9");
 }
 
+/// Verifies AOT constructor by-reference args write back through named and unpacked calls.
+#[test]
+fn test_eval_dynamic_new_constructor_by_ref_named_and_spread_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCtorNamedRefTargetBridge {
+    public function __construct(int &$value, int $delta = 0) {
+        $value = $value + $delta;
+    }
+}
+
+class EvalCtorNamedRefTargetBox {
+    public int $value = 4;
+}
+
+class EvalCtorNamedRefTargetStatic {
+    public static mixed $value = 8;
+}
+
+echo eval('$class = "EvalCtorNamedRefTargetBridge";
+
+$value = "2";
+new $class(value: $value, delta: 3);
+echo gettype($value) . ":" . $value . "|";
+
+$items = ["x" => "4"];
+new $class(...["value" => &$items["x"], "delta" => 5]);
+echo gettype($items["x"]) . ":" . $items["x"] . "|";
+
+$box = new EvalCtorNamedRefTargetBox();
+new $class(delta: 6, value: $box->value);
+echo gettype($box->value) . ":" . $box->value . "|";
+
+EvalCtorNamedRefTargetStatic::$value = "8";
+new $class(delta: 7, value: EvalCtorNamedRefTargetStatic::$value);
+return gettype(EvalCtorNamedRefTargetStatic::$value) . ":" . EvalCtorNamedRefTargetStatic::$value;');
+"#,
+    );
+
+    assert_eq!(out, "integer:5|integer:9|integer:10|integer:15");
+}
+
 /// Verifies AOT constructor by-reference writeback happens before a catchable throw.
 #[test]
 fn test_eval_dynamic_new_constructor_by_ref_lvalue_writeback_before_throw() {
@@ -126,6 +168,65 @@ echo "bad";');
         "stderr leaked a Rust panic: {}",
         out.stderr
     );
+}
+
+/// Verifies named and unpacked AOT constructor arg-prep fatals restore the eval bridge frame.
+#[test]
+fn test_eval_dynamic_new_constructor_by_ref_named_spread_arg_prep_fatal_cleans_up_stack() {
+    let cases = [
+        (
+            "named",
+            r#"<?php
+class EvalCtorNamedPrepFatalNeed {}
+class EvalCtorNamedPrepFatalBridge {
+    public function __construct(int &$value, EvalCtorNamedPrepFatalNeed $need) {
+        $value = $value + 1;
+    }
+}
+
+echo eval('$class = "EvalCtorNamedPrepFatalBridge";
+$value = "2";
+new $class(value: $value, need: 123);
+echo "bad";');
+"#,
+        ),
+        (
+            "spread",
+            r#"<?php
+class EvalCtorSpreadPrepFatalNeed {}
+class EvalCtorSpreadPrepFatalBridge {
+    public function __construct(int &$value, EvalCtorSpreadPrepFatalNeed $need) {
+        $value = $value + 1;
+    }
+}
+
+echo eval('$class = "EvalCtorSpreadPrepFatalBridge";
+$value = "2";
+new $class(...["value" => &$value, "need" => 123]);
+echo "bad";');
+"#,
+        ),
+    ];
+
+    for (label, source) in cases {
+        let out = compile_and_run_capture(source);
+        assert!(
+            !out.success,
+            "{label}: expected eval runtime fatal, stdout={:?} stderr={}",
+            out.stdout, out.stderr
+        );
+        assert_eq!(out.stdout, "", "{label}: unexpected stdout");
+        assert!(
+            out.stderr.contains("Fatal error: eval() runtime failed"),
+            "{label}: stderr did not contain eval runtime fatal diagnostic: {}",
+            out.stderr
+        );
+        assert!(
+            !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
+            "{label}: stderr leaked a Rust panic: {}",
+            out.stderr
+        );
+    }
 }
 
 /// Verifies eval-declared constructor by-reference args write back to lvalue targets.
