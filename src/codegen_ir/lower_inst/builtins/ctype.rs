@@ -17,22 +17,22 @@ use super::super::super::context::FunctionContext;
 use super::super::{expect_operand, store_if_result};
 
 /// Lowers `ctype_alpha(string)` by checking every byte against ASCII alpha ranges.
-pub(super) fn lower_ctype_alpha(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ctype_alpha(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_ctype(ctx, inst, CtypeKind::Alpha)
 }
 
 /// Lowers `ctype_digit(string)` by checking every byte against the ASCII digit range.
-pub(super) fn lower_ctype_digit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ctype_digit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_ctype(ctx, inst, CtypeKind::Digit)
 }
 
 /// Lowers `ctype_alnum(string)` by checking every byte against ASCII alpha or digit ranges.
-pub(super) fn lower_ctype_alnum(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ctype_alnum(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_ctype(ctx, inst, CtypeKind::Alnum)
 }
 
 /// Lowers `ctype_space(string)` by checking every byte against PHP's ASCII whitespace set.
-pub(super) fn lower_ctype_space(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ctype_space(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_ctype(ctx, inst, CtypeKind::Space)
 }
 

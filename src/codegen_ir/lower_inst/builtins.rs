@@ -25,7 +25,7 @@ pub(in crate::codegen_ir::lower_inst) mod attributes;
 mod arrays;
 mod buffers;
 mod class_relations;
-mod ctype;
+pub(crate) mod ctype;
 mod debug;
 mod io;
 mod isset;
@@ -425,23 +425,11 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "wordwrap" => strings::lower_wordwrap(ctx, inst),
         "hash_init" => strings::lower_hash_init(ctx, inst),
         "hash_file" => io::lower_hash_file(ctx, inst),
-        "gzcompress" => strings::lower_gzcompress(ctx, inst),
-        "gzdeflate" => strings::lower_gzdeflate(ctx, inst),
-        "gzinflate" => strings::lower_gzinflate(ctx, inst),
-        "gzuncompress" => strings::lower_gzuncompress(ctx, inst),
-        "long2ip" => strings::lower_long2ip(ctx, inst),
-        "ip2long" => strings::lower_ip2long(ctx, inst),
-        "inet_ntop" => strings::lower_inet(ctx, inst, "inet_ntop", "__rt_inet_ntop"),
-        "inet_pton" => strings::lower_inet(ctx, inst, "inet_pton", "__rt_inet_pton"),
         "str_pad" => strings::lower_str_pad(ctx, inst),
         "sprintf" => strings::lower_sprintf(ctx, inst),
         "printf" => strings::lower_printf(ctx, inst),
         "vsprintf" => strings::lower_vsprintf(ctx, inst),
         "vprintf" => strings::lower_vprintf(ctx, inst),
-        "ctype_alpha" => ctype::lower_ctype_alpha(ctx, inst),
-        "ctype_digit" => ctype::lower_ctype_digit(ctx, inst),
-        "ctype_alnum" => ctype::lower_ctype_alnum(ctx, inst),
-        "ctype_space" => ctype::lower_ctype_space(ctx, inst),
         "spl_autoload_register" => spl::lower_spl_autoload_bool(ctx, inst, "spl_autoload_register"),
         "spl_autoload_unregister" => spl::lower_spl_autoload_bool(ctx, inst, "spl_autoload_unregister"),
         "spl_autoload_functions" => spl::lower_spl_autoload_functions(ctx, inst),

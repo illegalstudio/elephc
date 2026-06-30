@@ -399,7 +399,7 @@ fn lower_fixed_hash(
 }
 
 /// Lowers `gzcompress(data, level?)` through inline zlib `compress2` calls.
-pub(super) fn lower_gzcompress(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_gzcompress(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "gzcompress expected 1 or 2 args, got {}",
@@ -415,7 +415,7 @@ pub(super) fn lower_gzcompress(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `gzdeflate(data, level?)` through inline raw-DEFLATE zlib calls.
-pub(super) fn lower_gzdeflate(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_gzdeflate(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "gzdeflate expected 1 or 2 args, got {}",
@@ -433,7 +433,7 @@ pub(super) fn lower_gzdeflate(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `gzinflate(data, max_length?)` and boxes zlib failures as PHP false.
-pub(super) fn lower_gzinflate(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_gzinflate(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "gzinflate expected 1 or 2 args, got {}",
@@ -454,7 +454,7 @@ pub(super) fn lower_gzinflate(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `gzuncompress(data, max_length?)` and boxes zlib failures as PHP false.
-pub(super) fn lower_gzuncompress(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_gzuncompress(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "gzuncompress expected 1 or 2 args, got {}",
@@ -473,7 +473,7 @@ pub(super) fn lower_gzuncompress(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Lowers `long2ip(value)` through the IPv4 formatting runtime helper.
-pub(super) fn lower_long2ip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_long2ip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "long2ip", 1)?;
     let value = expect_operand(inst, 0)?;
     load_as_int(ctx, value, "long2ip")?;
@@ -485,7 +485,7 @@ pub(super) fn lower_long2ip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `ip2long(string)` and boxes invalid-address results as PHP false.
-pub(super) fn lower_ip2long(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ip2long(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "ip2long")?;
     move_string_result_to_c_abi_pair(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_ip2long");
@@ -494,7 +494,7 @@ pub(super) fn lower_ip2long(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `inet_ntop()` and `inet_pton()` and boxes invalid-address results as PHP false.
-pub(super) fn lower_inet(
+pub(crate) fn lower_inet(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,

@@ -301,25 +301,25 @@ fn test_error_inet_pton_wrong_args() {
 /// Verifies the invalid-call diagnostic for error gzcompress wrong args.
 #[test]
 fn test_error_gzcompress_wrong_args() {
-    expect_error("<?php gzcompress();", "gzcompress() expects 1 or 2 arguments");
+    expect_error("<?php gzcompress();", "gzcompress() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error gzuncompress wrong args.
 #[test]
 fn test_error_gzuncompress_wrong_args() {
-    expect_error("<?php gzuncompress();", "gzuncompress() expects 1 or 2 arguments");
+    expect_error("<?php gzuncompress();", "gzuncompress() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error gzdeflate wrong args.
 #[test]
 fn test_error_gzdeflate_wrong_args() {
-    expect_error("<?php gzdeflate();", "gzdeflate() expects 1 or 2 arguments");
+    expect_error("<?php gzdeflate();", "gzdeflate() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error gzinflate wrong args.
 #[test]
 fn test_error_gzinflate_wrong_args() {
-    expect_error("<?php gzinflate();", "gzinflate() expects 1 or 2 arguments");
+    expect_error("<?php gzinflate();", "gzinflate() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error vsprintf wrong args.

@@ -74,36 +74,6 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Str))
         }
-        "long2ip" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "long2ip() takes exactly 1 argument"));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Str))
-        }
-        "ip2long" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "ip2long() takes exactly 1 argument"));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(checker.normalize_union_type(vec![
-                PhpType::Int,
-                PhpType::Bool,
-            ])))
-        }
-        "inet_ntop" | "inet_pton" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 1 argument", name),
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(checker.normalize_union_type(vec![
-                PhpType::Str,
-                PhpType::Bool,
-            ])))
-        }
         "substr_replace" => {
             if args.len() != 3 && args.len() != 4 {
                 return Err(CompileError::new(
@@ -190,35 +160,6 @@ pub(super) fn check_builtin(
                 checker.infer_type(arg, env)?;
             }
             Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
-        }
-        "gzcompress" | "gzuncompress" | "gzdeflate" | "gzinflate" => {
-            if args.is_empty() || args.len() > 2 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() expects 1 or 2 arguments", name),
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            checker.require_builtin_library("z");
-            // gzcompress/gzdeflate always produce a string; the decompressors
-            // return false on a zlib error.
-            if name == "gzcompress" || name == "gzdeflate" {
-                Ok(Some(PhpType::Str))
-            } else {
-                Ok(Some(checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool])))
-            }
-        }
-        "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 1 argument", name),
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Bool))
         }
         _ => Ok(None),
     }
