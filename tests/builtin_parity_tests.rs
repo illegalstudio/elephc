@@ -11,6 +11,47 @@
 
 use std::collections::BTreeSet;
 
+const EVAL_DIRECT_DISPATCH_SOURCES: &[&str] = &[include_str!(
+    "../crates/elephc-magician/src/interpreter/expressions.rs"
+)];
+
+const EVAL_DYNAMIC_DISPATCH_SOURCES: &[&str] = &[
+    include_str!("../crates/elephc-magician/src/interpreter/builtins/raw_memory.rs"),
+    include_str!(
+        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/arrays.rs"
+    ),
+    include_str!(
+        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/core.rs"
+    ),
+    include_str!(
+        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/filesystem.rs"
+    ),
+    include_str!(
+        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/formatting.rs"
+    ),
+    include_str!(
+        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/json.rs"
+    ),
+    include_str!(
+        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/network_env.rs"
+    ),
+    include_str!(
+        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/regex.rs"
+    ),
+    include_str!(
+        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/scalars.rs"
+    ),
+    include_str!(
+        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/strings.rs"
+    ),
+    include_str!(
+        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/symbols.rs"
+    ),
+    include_str!(
+        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/time.rs"
+    ),
+];
+
 /// Eval-only reflection probes exist because magician can inspect dynamic eval metadata before the AOT catalog exposes them.
 const EVAL_ONLY_REFLECTION_BUILTINS: &[&str] = &[
     "get_called_class",
@@ -47,6 +88,84 @@ fn static_php_visible_builtins_are_visible_to_eval() {
         missing.is_empty(),
         "static builtins missing from eval function lookup: {missing:?}"
     );
+}
+
+/// Verifies every static builtin appears in eval's direct and dynamic dispatch sources.
+#[test]
+fn static_php_visible_builtins_have_eval_dispatch_literals() {
+    let direct_dispatch_names = php_symbol_string_literals(EVAL_DIRECT_DISPATCH_SOURCES);
+    let dynamic_dispatch_names = php_symbol_string_literals(EVAL_DYNAMIC_DISPATCH_SOURCES);
+
+    let missing_direct = elephc::builtin_metadata::php_visible_builtin_names()
+        .iter()
+        .copied()
+        .filter(|name| !direct_dispatch_names.contains(*name))
+        .collect::<Vec<_>>();
+    let missing_dynamic = elephc::builtin_metadata::php_visible_builtin_names()
+        .iter()
+        .copied()
+        .filter(|name| !dynamic_dispatch_names.contains(*name))
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing_direct.is_empty(),
+        "static builtins missing from eval direct dispatcher literals: {missing_direct:?}"
+    );
+    assert!(
+        missing_dynamic.is_empty(),
+        "static builtins missing from eval dynamic dispatcher literals: {missing_dynamic:?}"
+    );
+}
+
+/// Extracts lowercase PHP-symbol string literals from Rust source snippets.
+fn php_symbol_string_literals(sources: &[&str]) -> BTreeSet<String> {
+    let mut literals = BTreeSet::new();
+    for source in sources {
+        collect_php_symbol_string_literals(source, &mut literals);
+    }
+    literals
+}
+
+/// Adds simple double-quoted PHP-symbol literals from one Rust source string.
+fn collect_php_symbol_string_literals(source: &str, literals: &mut BTreeSet<String>) {
+    let bytes = source.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'"' {
+            index += 1;
+            continue;
+        }
+
+        index += 1;
+        let mut literal = String::new();
+        let mut escaped = false;
+        while index < bytes.len() {
+            let byte = bytes[index];
+            index += 1;
+            if escaped {
+                literal.push(byte as char);
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                break;
+            } else {
+                literal.push(byte as char);
+            }
+        }
+
+        if is_php_symbol_literal(&literal) {
+            literals.insert(literal);
+        }
+    }
+}
+
+/// Returns whether a string literal can be a lowercase PHP builtin symbol.
+fn is_php_symbol_literal(literal: &str) -> bool {
+    !literal.is_empty()
+        && literal
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 /// Verifies eval has signature metadata for each shared static builtin.
