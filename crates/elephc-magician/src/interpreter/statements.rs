@@ -6244,7 +6244,7 @@ fn eval_throw_uninitialized_static_property_error<T>(
 }
 
 /// Throws PHP's class-not-found error for unresolved static member receivers.
-fn eval_throw_class_not_found_error<T>(
+pub(in crate::interpreter) fn eval_throw_class_not_found_error<T>(
     class_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -7282,6 +7282,7 @@ fn eval_static_method_call_result_resolved(
         &class_name,
         method_name,
         evaluated_args.clone(),
+        lexical_scope,
         context,
         values,
     )? {
@@ -7437,6 +7438,7 @@ fn eval_closure_static_method_result(
     class_name: &str,
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
@@ -7447,7 +7449,8 @@ fn eval_closure_static_method_result(
         return Ok(None);
     }
     if method_name.eq_ignore_ascii_case("fromCallable") {
-        return eval_closure_from_callable(evaluated_args, context, values).map(Some);
+        return eval_closure_from_callable(evaluated_args, lexical_scope, context, values)
+            .map(Some);
     }
     if method_name.eq_ignore_ascii_case("bind") {
         return eval_closure_bind_static(evaluated_args, context, values).map(Some);
@@ -7458,12 +7461,17 @@ fn eval_closure_static_method_result(
 /// Materializes `Closure::fromCallable()` from one normalized eval callback.
 fn eval_closure_from_callable(
     evaluated_args: Vec<EvaluatedCallArg>,
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut args = bind_evaluated_function_args(&[String::from("callback")], evaluated_args)?;
     let callback = args.pop().ok_or(EvalStatus::RuntimeFatal)?;
-    let callable = match eval_callable(callback, context, values) {
+    let callable = match lexical_scope {
+        Some(scope) => eval_callable_from_scope(callback, context, scope, values),
+        None => eval_callable(callback, context, values),
+    };
+    let callable = match callable {
         Ok(callable) => callable,
         Err(EvalStatus::UnsupportedConstruct) if values.type_tag(callback)? == EVAL_TAG_OBJECT => {
             return eval_closure_from_callable_type_error(

@@ -41,7 +41,19 @@ pub(in crate::interpreter) fn eval_user_sort_replacement(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_callable(callback, context, values)?;
+    eval_user_sort_replacement_from_scope(name, array, callback, None, context, values)
+}
+
+/// Builds the sorted replacement array with optional lexical scope for callback names.
+pub(in crate::interpreter) fn eval_user_sort_replacement_from_scope(
+    name: &str,
+    array: RuntimeCellHandle,
+    callback: RuntimeCellHandle,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
     let mut entries = eval_user_sort_entries(array, values)?;
     eval_user_sort_entries_in_place(name, &callback, &mut entries, context, values)?;
     if name == "usort" {

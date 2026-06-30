@@ -25,7 +25,7 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func(
     for arg in args {
         evaluated_args.push(eval_expr(arg, context, scope, values)?);
     }
-    eval_call_user_func_with_values(evaluated_args, context, values)
+    eval_call_user_func_with_values_from_scope(evaluated_args, Some(scope), context, values)
 }
 
 /// Evaluates `call_user_func_array($name, $args)` inside a runtime eval fragment.
@@ -40,7 +40,7 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func_array(
     };
     let callback = eval_expr(callback, context, scope, values)?;
     let arg_array = eval_expr(arg_array, context, scope, values)?;
-    eval_call_user_func_array_with_values(callback, arg_array, context, values)
+    eval_call_user_func_array_with_values_from_scope(callback, arg_array, Some(scope), context, values)
 }
 
 /// Dispatches `call_user_func_array` after callback and array arguments are evaluated.
@@ -50,7 +50,24 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_call_user_func_callback(callback, "call_user_func_array", context, values)?;
+    eval_call_user_func_array_with_values_from_scope(callback, arg_array, None, context, values)
+}
+
+/// Dispatches `call_user_func_array` with optional lexical scope for special class receivers.
+fn eval_call_user_func_array_with_values_from_scope(
+    callback: RuntimeCellHandle,
+    arg_array: RuntimeCellHandle,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback = eval_call_user_func_callback(
+        callback,
+        "call_user_func_array",
+        lexical_scope,
+        context,
+        values,
+    )?;
     if !values.is_array_like(arg_array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -64,10 +81,21 @@ pub(in crate::interpreter) fn eval_call_user_func_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_call_user_func_with_values_from_scope(evaluated_args, None, context, values)
+}
+
+/// Dispatches `call_user_func` with optional lexical scope for special class receivers.
+fn eval_call_user_func_with_values_from_scope(
+    evaluated_args: Vec<RuntimeCellHandle>,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some((callback, callback_args)) = evaluated_args.split_first() else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let callback = eval_call_user_func_callback(*callback, "call_user_func", context, values)?;
+    let callback =
+        eval_call_user_func_callback(*callback, "call_user_func", lexical_scope, context, values)?;
     eval_evaluated_callable_with_call_user_func_values(
         &callback,
         callback_args.to_vec(),
@@ -80,10 +108,11 @@ pub(in crate::interpreter) fn eval_call_user_func_with_values(
 fn eval_call_user_func_callback(
     callback: RuntimeCellHandle,
     function_name: &str,
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedCallable, EvalStatus> {
-    match eval_callable(callback, context, values) {
+    match eval_callable_with_optional_scope(callback, context, lexical_scope, values) {
         Ok(callback) => {
             eval_validate_call_user_func_callback(&callback, function_name, context, values)?;
             Ok(callback)
@@ -106,11 +135,31 @@ pub(in crate::interpreter) fn eval_callable(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedCallable, EvalStatus> {
+    eval_callable_with_optional_scope(callback, context, None, values)
+}
+
+/// Normalizes one PHP callback while retaining the current method scope when available.
+pub(in crate::interpreter) fn eval_callable_from_scope(
+    callback: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    scope: &ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvaluatedCallable, EvalStatus> {
+    eval_callable_with_optional_scope(callback, context, Some(scope), values)
+}
+
+/// Normalizes one PHP callback with optional scope-sensitive special class receivers.
+pub(in crate::interpreter) fn eval_callable_with_optional_scope(
+    callback: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    lexical_scope: Option<&ElephcEvalScope>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvaluatedCallable, EvalStatus> {
     if values.type_tag(callback)? == EVAL_TAG_OBJECT {
         return eval_object_callable(callback, context, values);
     }
     if values.is_array_like(callback)? {
-        return eval_array_callable(callback, context, values);
+        return eval_array_callable(callback, context, lexical_scope, values);
     }
     eval_string_callable(callback, values)
 }
@@ -205,6 +254,7 @@ fn eval_closure_object_target_callable(target: &EvalClosureObjectTarget) -> Eval
 pub(in crate::interpreter) fn eval_array_callable(
     callback: RuntimeCellHandle,
     context: &ElephcEvalContext,
+    lexical_scope: Option<&ElephcEvalScope>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedCallable, EvalStatus> {
     if values.array_len(callback)? != 2 {
@@ -243,6 +293,15 @@ pub(in crate::interpreter) fn eval_array_callable(
         EVAL_TAG_STRING => {
             let class_name = String::from_utf8(values.string_bytes(receiver)?)
                 .map_err(|_| EvalStatus::RuntimeFatal)?;
+            if let Some(callable) = eval_special_class_array_callable(
+                &class_name,
+                &method,
+                lexical_scope,
+                context,
+                values,
+            )? {
+                return Ok(callable);
+            }
             let called_class = context
                 .eval_static_callable_called_class(callback, &class_name, &method)
                 .map(str::to_string);
@@ -264,6 +323,80 @@ pub(in crate::interpreter) fn eval_array_callable(
         }
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// Resolves deprecated `self`/`static`/`parent` callable arrays inside method scope.
+fn eval_special_class_array_callable(
+    class_name: &str,
+    method: &str,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvaluatedCallable>, EvalStatus> {
+    if !eval_callable_array_receiver_is_special_class_name(class_name) {
+        return Ok(None);
+    }
+    let Some(scope) = lexical_scope else {
+        return Ok(None);
+    };
+    let receiver = resolve_eval_static_method_receiver(class_name, context)?;
+    let use_instance_receiver =
+        !eval_special_class_array_static_method_exists(&receiver.dispatch_class, method, context, values)?;
+    if use_instance_receiver {
+        if let Some(object) =
+            eval_static_syntax_instance_receiver(&receiver.dispatch_class, Some(scope), context, values)?
+        {
+            return Ok(Some(EvaluatedCallable::ObjectMethod {
+                object,
+                method: method.to_string(),
+                called_class: Some(receiver.called_class),
+                native_class: None,
+                bridge_scope: None,
+            }));
+        }
+    }
+    Ok(Some(EvaluatedCallable::StaticMethod {
+        class_name: class_name.to_string(),
+        method: method.to_string(),
+        called_class: Some(receiver.called_class),
+        native_class: None,
+        bridge_scope: None,
+    }))
+}
+
+/// Returns whether a callable-array receiver is PHP's deprecated special class string.
+fn eval_callable_array_receiver_is_special_class_name(class_name: &str) -> bool {
+    matches!(
+        class_name.trim_start_matches('\\').to_ascii_lowercase().as_str(),
+        "self" | "static" | "parent"
+    )
+}
+
+/// Returns whether a special class callable array names a real static method.
+fn eval_special_class_array_static_method_exists(
+    class_name: &str,
+    method: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if let Some((_, method)) = eval_dynamic_static_method_for_call(class_name, method, context) {
+        return Ok(method.is_static());
+    }
+    let native_class = if context.has_class(class_name) {
+        let Some(parent) = context.class_native_parent_name(class_name) else {
+            return Ok(false);
+        };
+        parent
+    } else if context.has_interface(class_name)
+        || context.has_trait(class_name)
+        || context.has_enum(class_name)
+    {
+        return Ok(false);
+    } else {
+        class_name.to_string()
+    };
+    Ok(eval_aot_method_dispatch_metadata_in_hierarchy(&native_class, method, context, values)?
+        .is_some_and(|(_, _, is_static, _)| is_static))
 }
 
 /// Normalizes one string callback name for eval dynamic callable dispatch.
@@ -378,6 +511,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                     context,
                     values,
                 ),
+                None if eval_callable_array_receiver_is_special_class_name(class_name) => {
+                    eval_throw_class_not_found_error(class_name, context, values)
+                }
                 None => eval_static_method_call_result(
                     class_name,
                     method,
@@ -727,6 +863,9 @@ fn eval_static_method_with_call_user_func_values(
             context,
             values,
         ),
+        None if eval_callable_array_receiver_is_special_class_name(class_name) => {
+            eval_throw_class_not_found_error(class_name, context, values)
+        }
         None => eval_static_method_call_result(
             class_name,
             method_name,
@@ -945,6 +1084,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                     context,
                     values,
                 ),
+                None if eval_callable_array_receiver_is_special_class_name(class_name) => {
+                    eval_throw_class_not_found_error(class_name, context, values)
+                }
                 None => eval_static_method_call_result(
                     class_name,
                     method,

@@ -39,7 +39,14 @@ pub(in crate::interpreter) fn eval_builtin_user_sort_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (array, target, callback) = eval_user_sort_direct_args(args, context, scope, values)?;
 
-    let replacement = eval_user_sort_replacement(name, array, callback, context, values)?;
+    let replacement = eval_user_sort_replacement_from_scope(
+        name,
+        array,
+        callback,
+        Some(scope),
+        context,
+        values,
+    )?;
     let result = values.bool_value(true)?;
     eval_write_direct_ref_target(&target, replacement, context, values, None)?;
     Ok(result)

@@ -21,18 +21,32 @@ pub(in crate::interpreter) fn eval_builtin_array_filter(
     match args {
         [array] => {
             let array = eval_expr(array, context, scope, values)?;
-            eval_array_filter_result(array, None, None, context, values)
+            eval_array_filter_result_from_scope(array, None, None, Some(scope), context, values)
         }
         [array, callback] => {
             let array = eval_expr(array, context, scope, values)?;
             let callback = eval_expr(callback, context, scope, values)?;
-            eval_array_filter_result(array, Some(callback), None, context, values)
+            eval_array_filter_result_from_scope(
+                array,
+                Some(callback),
+                None,
+                Some(scope),
+                context,
+                values,
+            )
         }
         [array, callback, mode] => {
             let array = eval_expr(array, context, scope, values)?;
             let callback = eval_expr(callback, context, scope, values)?;
             let mode = eval_expr(mode, context, scope, values)?;
-            eval_array_filter_result(array, Some(callback), Some(mode), context, values)
+            eval_array_filter_result_from_scope(
+                array,
+                Some(callback),
+                Some(mode),
+                Some(scope),
+                context,
+                values,
+            )
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -46,9 +60,26 @@ pub(in crate::interpreter) fn eval_array_filter_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_array_filter_result_from_scope(array, callback, mode, None, context, values)
+}
+
+/// Filters eval array entries with optional lexical scope for callback names.
+fn eval_array_filter_result_from_scope(
+    array: RuntimeCellHandle,
+    callback: Option<RuntimeCellHandle>,
+    mode: Option<RuntimeCellHandle>,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = match callback {
         Some(callback) if !values.is_null(callback)? => {
-            Some(eval_callable(callback, context, values)?)
+            Some(eval_callable_with_optional_scope(
+                callback,
+                context,
+                lexical_scope,
+                values,
+            )?)
         }
         _ => None,
     };

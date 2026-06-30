@@ -234,7 +234,7 @@ pub(in crate::interpreter) fn eval_builtin_array_map(
     for array in arrays {
         evaluated_arrays.push(eval_expr(array, context, scope, values)?);
     }
-    eval_array_map_result(callback, &evaluated_arrays, context, values)
+    eval_array_map_result_from_scope(callback, &evaluated_arrays, Some(scope), context, values)
 }
 
 /// Maps one eval array with PHP key preservation for the one-array form.
@@ -244,13 +244,35 @@ pub(in crate::interpreter) fn eval_array_map_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_array_map_result_from_scope(callback, arrays, None, context, values)
+}
+
+/// Maps one or more eval arrays with optional lexical scope for callback names.
+fn eval_array_map_result_from_scope(
+    callback: RuntimeCellHandle,
+    arrays: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let [array] = arrays else {
-        return eval_array_map_variadic_result(callback, arrays, context, values);
+        return eval_array_map_variadic_result_from_scope(
+            callback,
+            arrays,
+            lexical_scope,
+            context,
+            values,
+        );
     };
     let callback = if values.is_null(callback)? {
         None
     } else {
-        Some(eval_callable(callback, context, values)?)
+        Some(eval_callable_with_optional_scope(
+            callback,
+            context,
+            lexical_scope,
+            values,
+        )?)
     };
     let len = values.array_len(*array)?;
     let mut result = values.assoc_new(len)?;
@@ -267,10 +289,11 @@ pub(in crate::interpreter) fn eval_array_map_result(
     Ok(result)
 }
 
-/// Maps multiple eval arrays with PHP's reindexed and null-padded variadic behavior.
-pub(in crate::interpreter) fn eval_array_map_variadic_result(
+/// Maps multiple eval arrays with optional lexical scope for callback names.
+fn eval_array_map_variadic_result_from_scope(
     callback: RuntimeCellHandle,
     arrays: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -280,7 +303,12 @@ pub(in crate::interpreter) fn eval_array_map_variadic_result(
     let callback = if values.is_null(callback)? {
         None
     } else {
-        Some(eval_callable(callback, context, values)?)
+        Some(eval_callable_with_optional_scope(
+            callback,
+            context,
+            lexical_scope,
+            values,
+        )?)
     };
     let mut lengths = Vec::with_capacity(arrays.len());
     let mut max_len = 0;
@@ -347,7 +375,7 @@ pub(in crate::interpreter) fn eval_builtin_array_reduce(
         }
         _ => return Err(EvalStatus::RuntimeFatal),
     };
-    eval_array_reduce_result(array, callback, initial, context, values)
+    eval_array_reduce_result_from_scope(array, callback, initial, Some(scope), context, values)
 }
 
 /// Reduces one eval array by invoking a callable with carry and item cells.
@@ -358,7 +386,19 @@ pub(in crate::interpreter) fn eval_array_reduce_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_callable(callback, context, values)?;
+    eval_array_reduce_result_from_scope(array, callback, initial, None, context, values)
+}
+
+/// Reduces one eval array with optional lexical scope for callback names.
+fn eval_array_reduce_result_from_scope(
+    array: RuntimeCellHandle,
+    callback: RuntimeCellHandle,
+    initial: RuntimeCellHandle,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
     let len = values.array_len(array)?;
     let mut carry = initial;
     for position in 0..len {
@@ -379,7 +419,7 @@ pub(in crate::interpreter) fn eval_builtin_array_walk_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (array, array_target, callback) =
         eval_array_walk_direct_args(args, context, scope, values)?;
-    eval_array_walk_ref_result(array, array_target, callback, context, values)
+    eval_array_walk_ref_result_from_scope(array, array_target, callback, Some(scope), context, values)
 }
 
 /// Evaluates and binds direct `array_walk()` arguments in PHP source order.
@@ -444,7 +484,19 @@ pub(in crate::interpreter) fn eval_array_walk_ref_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_callable(callback, context, values)?;
+    eval_array_walk_ref_result_from_scope(array, array_target, callback, None, context, values)
+}
+
+/// Walks one writable eval array with optional lexical scope for callback names.
+fn eval_array_walk_ref_result_from_scope(
+    array: RuntimeCellHandle,
+    array_target: EvalReferenceTarget,
+    callback: RuntimeCellHandle,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
     let len = values.array_len(array)?;
     for position in 0..len {
         let current_array = eval_reference_target_value(&array_target, context, values)?;
@@ -483,7 +535,7 @@ pub(in crate::interpreter) fn eval_builtin_array_walk(
     };
     let array = eval_expr(array, context, scope, values)?;
     let callback = eval_expr(callback, context, scope, values)?;
-    eval_array_walk_result(array, callback, context, values)
+    eval_array_walk_result_from_scope(array, callback, Some(scope), context, values)
 }
 
 /// Walks one eval array by invoking a callable with value and key cells.
@@ -493,7 +545,18 @@ pub(in crate::interpreter) fn eval_array_walk_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_callable(callback, context, values)?;
+    eval_array_walk_result_from_scope(array, callback, None, context, values)
+}
+
+/// Walks one eval array with optional lexical scope for callback names.
+fn eval_array_walk_result_from_scope(
+    array: RuntimeCellHandle,
+    callback: RuntimeCellHandle,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
     let len = values.array_len(array)?;
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;

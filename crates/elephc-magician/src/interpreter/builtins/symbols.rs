@@ -40,12 +40,27 @@ pub(in crate::interpreter) fn eval_builtin_is_callable_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    eval_is_callable_call_with_evaluated_args(&evaluated_args, context, values)
+    eval_is_callable_call_with_evaluated_args_from_scope(
+        &evaluated_args,
+        Some(scope),
+        context,
+        values,
+    )
 }
 
 /// Evaluates `is_callable()` from already evaluated arguments that may retain ref targets.
 pub(in crate::interpreter) fn eval_is_callable_call_with_evaluated_args(
     evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_is_callable_call_with_evaluated_args_from_scope(evaluated_args, None, context, values)
+}
+
+/// Evaluates materialized `is_callable()` args with optional special-class callable scope.
+fn eval_is_callable_call_with_evaluated_args_from_scope(
+    evaluated_args: &[EvaluatedCallArg],
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -66,6 +81,7 @@ pub(in crate::interpreter) fn eval_is_callable_call_with_evaluated_args(
         value.value,
         syntax_only,
         callable_name_target.as_ref(),
+        lexical_scope,
         context,
         values,
     )
@@ -78,14 +94,14 @@ pub(in crate::interpreter) fn eval_is_callable_with_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [value] => eval_is_callable_result(*value, false, None, context, values),
+        [value] => eval_is_callable_result(*value, false, None, None, context, values),
         [value, syntax_only] => {
             let syntax_only = values.truthy(*syntax_only)?;
-            eval_is_callable_result(*value, syntax_only, None, context, values)
+            eval_is_callable_result(*value, syntax_only, None, None, context, values)
         }
         [value, syntax_only, _callable_name] => {
             let syntax_only = values.truthy(*syntax_only)?;
-            eval_is_callable_result(*value, syntax_only, None, context, values)
+            eval_is_callable_result(*value, syntax_only, None, None, context, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -103,7 +119,7 @@ pub(in crate::interpreter) fn eval_function_probe_result(
             let name = eval_function_probe_name(value, values)?;
             eval_function_probe_exists(context, &name)
         }
-        "is_callable" => eval_is_callable_value(value, context, values)?,
+        "is_callable" => eval_is_callable_value(value, None, context, values)?,
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
     values.bool_value(exists)
@@ -119,13 +135,13 @@ fn eval_builtin_is_callable(
     match args {
         [value] => {
             let value = eval_expr(value, context, scope, values)?;
-            eval_is_callable_result(value, false, None, context, values)
+            eval_is_callable_result(value, false, None, Some(scope), context, values)
         }
         [value, syntax_only] => {
             let value = eval_expr(value, context, scope, values)?;
             let syntax_only = eval_expr(syntax_only, context, scope, values)?;
             let syntax_only = values.truthy(syntax_only)?;
-            eval_is_callable_result(value, syntax_only, None, context, values)
+            eval_is_callable_result(value, syntax_only, None, Some(scope), context, values)
         }
         [value, syntax_only, callable_name] => {
             let value = eval_expr(value, context, scope, values)?;
@@ -138,6 +154,7 @@ fn eval_builtin_is_callable(
                 value,
                 syntax_only,
                 Some(&callable_name_target),
+                Some(scope),
                 context,
                 values,
             )
@@ -1086,10 +1103,15 @@ fn eval_function_probe_name(
 /// Returns whether one runtime value is callable from the current eval scope.
 fn eval_is_callable_value(
     value: RuntimeCellHandle,
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let Ok(callback) = eval_callable(value, context, values) else {
+    let callback = match lexical_scope {
+        Some(scope) => eval_callable_from_scope(value, context, scope, values),
+        None => eval_callable(value, context, values),
+    };
+    let Ok(callback) = callback else {
         return Ok(false);
     };
     eval_callable_probe_exists(&callback, context, values)
@@ -1100,6 +1122,7 @@ fn eval_is_callable_result(
     value: RuntimeCellHandle,
     syntax_only: bool,
     callable_name_target: Option<&EvalReferenceTarget>,
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -1109,7 +1132,7 @@ fn eval_is_callable_result(
     let callable = if syntax_only {
         eval_is_callable_syntax_only(value, context, values)?
     } else {
-        eval_is_callable_value(value, context, values)?
+        eval_is_callable_value(value, lexical_scope, context, values)?
     };
     if let Some((target, name)) = callable_name_target.zip(callable_name.as_deref()) {
         let name = values.string(name)?;
@@ -1134,7 +1157,7 @@ fn eval_is_callable_syntax_only(
         return Ok(true);
     }
     if values.type_tag(value)? == EVAL_TAG_OBJECT {
-        return eval_is_callable_value(value, context, values);
+        return eval_is_callable_value(value, None, context, values);
     }
     if values.is_array_like(value)? {
         return eval_callable_array_display_name(value, context, values).map(|name| name.is_some());

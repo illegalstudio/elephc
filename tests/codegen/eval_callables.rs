@@ -390,6 +390,136 @@ D:NoSuchDynamicCallable::missing"
     );
 }
 
+/// Verifies eval callable arrays resolve `self`, `static`, and `parent` in method scope.
+#[test]
+fn test_eval_special_class_callable_arrays_follow_method_scope() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalSpecialCallableArrayBase {
+    public static function parentStatic(): string {
+        return "P:" . get_called_class();
+    }
+
+    public function parentInstance(): string {
+        return "PI:" . get_class($this);
+    }
+}
+
+class EvalSpecialCallableArrayChild extends EvalSpecialCallableArrayBase {
+    public static function selfStatic(): string {
+        return "S:" . get_called_class();
+    }
+
+    public function selfInstance(): string {
+        return "I:" . get_class($this);
+    }
+
+    public static function mapStatic(int $value): string {
+        return "MS" . $value . ":" . get_called_class();
+    }
+
+    public function mapInstance(int $value): string {
+        return "MI" . $value . ":" . get_class($this);
+    }
+
+    public function keepValue(int $value): bool {
+        return $value > 1;
+    }
+
+    public function reduceValue(string $carry, int $value): string {
+        return $carry . $value . ":" . get_class($this) . ";";
+    }
+
+    public function walkValue(string &$value, int $key) {
+        $value = $value . $key . ":" . get_class($this);
+    }
+
+    public function compareDesc(int $left, int $right): int {
+        return $right - $left;
+    }
+
+    public function replaceMatch(array $matches): string {
+        return "R" . $matches[0] . ":" . get_class($this);
+    }
+
+    public function run(): string {
+        $out = "";
+        $name = "seed";
+        $out .= is_callable(["self", "selfStatic"], false, $name) ? "Y:" . $name . ":" : "N:";
+        $out .= call_user_func(["self", "selfStatic"]) . "|";
+
+        $name = "seed";
+        $out .= is_callable(["static", "selfStatic"], false, $name) ? "Y:" . $name . ":" : "N:";
+        $out .= call_user_func(["static", "selfStatic"]) . "|";
+
+        $name = "seed";
+        $out .= is_callable(["parent", "parentStatic"], false, $name) ? "Y:" . $name . ":" : "N:";
+        $out .= call_user_func(["parent", "parentStatic"]) . "|";
+
+        $name = "seed";
+        $out .= is_callable(["self", "selfInstance"], false, $name) ? "Y:" . $name . ":" : "N:";
+        $out .= call_user_func(["self", "selfInstance"]) . "|";
+
+        $name = "seed";
+        $out .= is_callable(["parent", "parentInstance"], false, $name) ? "Y:" . $name . ":" : "N:";
+        $out .= call_user_func(["parent", "parentInstance"]) . "|";
+
+        $fromInstance = Closure::fromCallable(["self", "selfInstance"]);
+        $out .= $fromInstance() . "|";
+
+        $fromStatic = Closure::fromCallable(["parent", "parentStatic"]);
+        $out .= $fromStatic();
+
+        $out .= "|" . implode(",", array_map(["static", "mapStatic"], [3]));
+        $out .= "|" . implode(",", array_map(["self", "mapInstance"], [4]));
+        $out .= "|" . implode(",", array_filter([1, 2], ["self", "keepValue"]));
+        $out .= "|" . array_reduce([1, 2], ["self", "reduceValue"], "");
+
+        $walk = ["x"];
+        array_walk($walk, ["self", "walkValue"]);
+        $out .= "|" . $walk[0];
+
+        $sort = [1, 3, 2];
+        usort($sort, ["self", "compareDesc"]);
+        $out .= "|" . implode(",", $sort);
+
+        $out .= "|" . preg_replace_callback("/a/", ["self", "replaceMatch"], "a");
+
+        try {
+            $direct = ["self", "selfStatic"];
+            $out .= "|" . $direct();
+        } catch (Error $e) {
+            $out .= "|" . get_class($e) . ":" . $e->getMessage();
+        }
+
+        return $out;
+    }
+}
+
+return (new EvalSpecialCallableArrayChild())->run();');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "Y:self::selfStatic:S:EvalSpecialCallableArrayChild|\
+Y:static::selfStatic:S:EvalSpecialCallableArrayChild|\
+Y:parent::parentStatic:P:EvalSpecialCallableArrayChild|\
+Y:self::selfInstance:I:EvalSpecialCallableArrayChild|\
+Y:parent::parentInstance:PI:EvalSpecialCallableArrayChild|\
+I:EvalSpecialCallableArrayChild|\
+P:EvalSpecialCallableArrayChild|\
+MS3:EvalSpecialCallableArrayChild|\
+MI4:EvalSpecialCallableArrayChild|\
+2|\
+1:EvalSpecialCallableArrayChild;2:EvalSpecialCallableArrayChild;|\
+x0:EvalSpecialCallableArrayChild|\
+3,2,1|\
+Ra:EvalSpecialCallableArrayChild|\
+Error:Class \"self\" not found"
+    );
+}
+
 /// Verifies `Closure::fromCallable()` normalizes eval string and array callables to Closure objects.
 #[test]
 fn test_eval_closure_from_callable_normalizes_string_and_array_callables() {

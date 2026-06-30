@@ -65,7 +65,7 @@ pub(in crate::interpreter) fn eval_builtin_preg_replace_callback(
     let pattern = eval_expr(pattern, context, scope, values)?;
     let callback = eval_expr(callback, context, scope, values)?;
     let subject = eval_expr(subject, context, scope, values)?;
-    eval_preg_replace_callback_result(pattern, callback, subject, context, values)
+    eval_preg_replace_callback_result_from_scope(pattern, callback, subject, Some(scope), context, values)
 }
 
 /// Replaces every regex match by invoking an eval-supported callback with `$matches`.
@@ -76,8 +76,20 @@ pub(in crate::interpreter) fn eval_preg_replace_callback_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_preg_replace_callback_result_from_scope(pattern, callback, subject, None, context, values)
+}
+
+/// Replaces regex matches with optional lexical scope for callback names.
+fn eval_preg_replace_callback_result_from_scope(
+    pattern: RuntimeCellHandle,
+    callback: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let regex = eval_preg_regex(pattern, values)?;
-    let callback = eval_callable(callback, context, values)?;
+    let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
     let subject = values.string_bytes(subject)?;
     let mut result = Vec::with_capacity(subject.len());
     let mut cursor = 0;
