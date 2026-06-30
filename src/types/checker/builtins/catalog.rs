@@ -468,17 +468,37 @@ fn is_supported_builtin_function_exact(name: &str) -> bool {
     SUPPORTED_BUILTIN_FUNCTIONS.contains(&name) || INTERNAL_BUILTIN_FUNCTIONS.contains(&name)
 }
 
-/// Returns the static slice of PHP-visible supported builtin function names.
-/// Used by callers that must enumerate only the public builtin surface.
-pub(crate) fn supported_builtin_function_names() -> &'static [&'static str] {
-    SUPPORTED_BUILTIN_FUNCTIONS
+/// Returns the union of PHP-visible supported builtin function names from the
+/// legacy static list and the builtin registry.
+///
+/// Registry entries flagged as `internal` are excluded, mirroring the semantics
+/// of `is_php_visible_builtin_function`. Names present in both sources appear
+/// exactly once. With an empty registry this returns the legacy list unchanged,
+/// so behavior is preserved while the registry is empty.
+pub(crate) fn supported_builtin_function_names() -> Vec<&'static str> {
+    let mut result: Vec<&'static str> = SUPPORTED_BUILTIN_FUNCTIONS.to_vec();
+    for name in crate::builtins::registry::names() {
+        let def = match crate::builtins::registry::lookup(name) {
+            Some(d) => d,
+            None => continue,
+        };
+        if def.spec.internal {
+            continue;
+        }
+        // De-duplicate: skip names already present in the legacy list.
+        let lower = name.to_ascii_lowercase();
+        if !SUPPORTED_BUILTIN_FUNCTIONS.contains(&lower.as_str()) {
+            result.push(def.name);
+        }
+    }
+    result
 }
 
 /// Converts a function name to lowercase and returns it if it is a supported builtin.
 ///
 /// Returns `None` if the name is not in either the legacy catalog or the builtin
-/// registry. Implements PHP's case-insensitive builtin lookup. The registry is
-/// consulted first; the legacy static list is the fallback.
+/// registry. Implements PHP's case-insensitive builtin lookup. The legacy static
+/// list is consulted first; the registry is the fallback.
 pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     let canonical = name.to_ascii_lowercase();
     if is_supported_builtin_function_exact(&canonical)
@@ -506,4 +526,58 @@ pub(crate) fn is_php_visible_builtin_function(name: &str) -> bool {
 /// Delegates to `canonical_builtin_function_name` and checks for `Some`.
 pub(crate) fn is_supported_builtin_function(name: &str) -> bool {
     canonical_builtin_function_name(name).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builtin;
+
+    /// No-op lowering hook for test probe; does nothing and succeeds.
+    fn noop_lower(
+        _c: &mut crate::codegen_ir::context::FunctionContext,
+        _i: &crate::ir::Instruction,
+    ) -> Result<(), crate::codegen_ir::CodegenIrError> {
+        Ok(())
+    }
+
+    // Register a PHP-visible (non-internal) probe to exercise the catalog API.
+    // This verifies that `supported_builtin_function_names` and the catalog
+    // lookup functions include registry entries with `internal: false`.
+    builtin! {
+        name: "__catalog_probe_visible",
+        area: Internal,
+        params: [x: Int],
+        returns: Bool,
+        lower: noop_lower,
+        summary: "catalog probe for PHP-visibility test",
+        internal: false,
+    }
+
+    /// Verifies that a `builtin!`-registered probe with `internal: false` is reported
+    /// as supported by the catalog's `is_supported_builtin_function` and
+    /// `canonical_builtin_function_name` surfaces.
+    #[test]
+    fn catalog_reports_registered_visible_probe_as_supported() {
+        assert!(
+            is_supported_builtin_function("__catalog_probe_visible"),
+            "catalog must report a non-internal registered builtin as supported"
+        );
+        let canonical = canonical_builtin_function_name("__catalog_probe_visible");
+        assert_eq!(
+            canonical,
+            Some("__catalog_probe_visible".to_string()),
+            "catalog must canonicalize a non-internal registered builtin"
+        );
+    }
+
+    /// Verifies that a non-internal registered probe appears in `supported_builtin_function_names`.
+    #[test]
+    fn supported_builtin_function_names_includes_registered_visible_probe() {
+        let names = supported_builtin_function_names();
+        assert!(
+            names.contains(&"__catalog_probe_visible"),
+            "supported_builtin_function_names must include non-internal registry entries"
+        );
+    }
 }

@@ -120,13 +120,13 @@ pub(crate) fn runtime_callable_cases(
                 &case_sig,
                 &[],
                 &[],
-                CallableDescriptorInvocation::named(CallableDescriptorShape::Builtin, *name),
+                CallableDescriptorInvocation::named(CallableDescriptorShape::Builtin, name),
                 invoker_label.as_deref(),
             );
             cases.push(RuntimeCallableCase {
                 label,
                 descriptor_label,
-                php_name: Some((*name).to_string()),
+                php_name: Some(name.to_string()),
                 sig: case_sig,
                 captures: Vec::new(),
                 has_invoker: invoker_label.is_some(),
