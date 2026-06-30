@@ -91,7 +91,7 @@ pub(super) enum EvaluatedCallable {
     },
     BoundClosure {
         name: String,
-        bound_this: RuntimeCellHandle,
+        bound_this: Option<RuntimeCellHandle>,
         bound_scope: Option<String>,
     },
     InvokableObject {

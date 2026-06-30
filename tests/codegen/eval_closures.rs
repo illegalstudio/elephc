@@ -198,6 +198,33 @@ echo call_user_func_array($staticBound, [&$second, 2]) . ":" . gettype($second) 
     );
 }
 
+/// Verifies eval Closure binding to `null` preserves explicit class scope and by-ref args.
+#[test]
+fn test_eval_closure_bind_null_receiver_preserves_explicit_scope_and_by_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalClosureNullScopeBox {
+    private static int $secret = 40;
+}
+
+$fn = function(int &$value, int $delta): int {
+    $value += self::$secret + $delta;
+    return $value;
+};
+
+$bound = Closure::bind($fn, null, "EvalClosureNullScopeBox");
+$first = "1";
+echo $bound($first, 2) . ":" . gettype($first) . ":" . $first . "|";
+
+$boundTo = $fn->bindTo(null, "EvalClosureNullScopeBox");
+$second = "3";
+echo call_user_func_array($boundTo, [&$second, 4]) . ":" . gettype($second) . ":" . $second;');
+"#,
+    );
+
+    assert_eq!(out, "43:integer:43|47:integer:47");
+}
+
 /// Verifies eval Closure `__invoke` works as an array callable and preserves by-ref args.
 #[test]
 fn test_eval_closure_invoke_array_callable_preserves_by_ref_args() {
