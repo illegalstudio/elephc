@@ -37,16 +37,16 @@ echo exif_tagname(0x010F), "|", exif_tagname(0x0112), "|", exif_tagname(0x8825),
     assert_eq!(out, "Make|Orientation|GPS_IFD_Pointer|ExposureTime");
 }
 
-/// An unknown tag yields "" (the documented `string|false` collapse), not false.
+/// An unknown tag yields `false` (PHP's `string|false` return semantics), not "".
 #[test]
-fn test_exif_tagname_unknown_is_empty() {
+fn test_exif_tagname_unknown_is_false() {
     let out = compile_and_run(
         r#"<?php
 $n = exif_tagname(0x9999);
-echo ($n === "" ? "EMPTY" : "VALUE:" . $n);
+var_dump($n === false);
 "#,
     );
-    assert_eq!(out, "EMPTY");
+    assert_eq!(out, "bool(true)\n");
 }
 
 /// `exif_imagetype` returns the IMAGETYPE_* code for a real image and false for a
@@ -170,10 +170,10 @@ echo "|", $w, "x", $h, "|", $ty, "|", ($out === $thumb ? "MATCH" : "DIFF");
     assert_eq!(out, "Y|6x9|2|MATCH");
 }
 
-/// `exif_thumbnail` yields "" (the `string|false` collapse) when the EXIF data has
-/// no thumbnail, leaving the by-ref out-params untouched.
+/// `exif_thumbnail` yields `false` (PHP's `string|false` return semantics) when the EXIF
+/// data has no thumbnail, leaving the by-ref out-params untouched.
 #[test]
-fn test_exif_thumbnail_none_is_empty() {
+fn test_exif_thumbnail_none_is_false() {
     let src = format!(
         r#"<?php
 {HELPERS}
@@ -186,11 +186,11 @@ $p = (string) tempnam(sys_get_temp_dir(), "elephc_img_p6nt_");
 file_put_contents($p, $jpeg);
 $w = -1;
 $out = exif_thumbnail($p, $w);
-echo ($out === "" ? "EMPTY" : "STR:" . strlen($out)), "|", $w;
+echo ($out === false ? "FALSE" : "STR:" . strlen($out)), "|", $w;
 "#
     );
     let out = compile_and_run(&src);
-    assert_eq!(out, "EMPTY|-1");
+    assert_eq!(out, "FALSE|-1");
 }
 
 /// `iptcparse` decodes an IIM block into `record#dataset` keys, grouping repeated
@@ -237,7 +237,7 @@ $iptc = chr(0x1C).chr(2).chr(5).be16(9)."headline!";
 $embedded = iptcembed($iptc, $p);
 $hasPs = strpos($embedded, "Photoshop 3.0") !== false ? "Y" : "N";
 $hasData = strpos($embedded, "headline!") !== false ? "Y" : "N";
-$re = imagecreatefromstring($embedded);
+$re = imagecreatefromstring((string) $embedded);
 echo $hasPs, "|", $hasData, "|", imagesx($re), "x", imagesy($re);
 "#
     );

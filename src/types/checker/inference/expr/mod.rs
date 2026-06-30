@@ -178,6 +178,11 @@ impl Checker {
                         Ok(PhpType::Str)
                     }
                     PhpType::Array(elem_ty) => {
+                        // Array(Mixed) may have been promoted to a hash at runtime
+                        // (e.g. foreach-rebuilt arrays). Allow any PHP array key.
+                        if **elem_ty == PhpType::Mixed {
+                            return Ok(PhpType::Mixed);
+                        }
                         if normalized_idx_ty != PhpType::Int {
                             return Err(CompileError::new(
                                 expr.span,
@@ -215,12 +220,17 @@ impl Checker {
                                 }
                                 PhpType::Array(elem_ty) => {
                                     saw_indexable_member = true;
-                                    if normalized_idx_ty != PhpType::Int {
+                                    // Array(Mixed) may have been promoted to a hash
+                                    // at runtime; allow any PHP array key.
+                                    if **elem_ty == PhpType::Mixed {
+                                        result_members.push(PhpType::Mixed);
+                                    } else if normalized_idx_ty != PhpType::Int {
                                         first_index_error =
                                             first_index_error.or(Some("Array index must be integer"));
                                         continue;
+                                    } else {
+                                        result_members.push(*elem_ty.clone());
                                     }
-                                    result_members.push(*elem_ty.clone());
                                 }
                                 PhpType::AssocArray { value, .. } => {
                                     saw_indexable_member = true;

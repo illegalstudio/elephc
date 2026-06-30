@@ -58,22 +58,19 @@ echo image_type_to_mime_type(IMAGETYPE_WEBP) . "\n";
 }
 
 /// `image_type_to_extension` returns the extension with the leading dot by
-/// default and without it when `$include_dot` is false.
-///
-/// Known limitation: PHP returns `false` for an unknown type, but elephc
-/// currently collapses a `string|false` function return to `string`, so an
-/// unknown type yields "" here (asserted as the empty third line). This is
-/// tracked with the scalar-union value-runtime work; revisit when fixed.
+/// default and without it when `$include_dot` is false. Unknown types return
+/// `false` (not `""`), matching PHP's `string|false` return semantics.
 #[test]
 fn test_image_type_to_extension() {
     let out = compile_and_run(
         r#"<?php
 echo image_type_to_extension(IMAGETYPE_PNG) . "\n";
 echo image_type_to_extension(IMAGETYPE_JPEG, false) . "\n";
-echo image_type_to_extension(IMAGETYPE_UNKNOWN) . "\n";
+$r = image_type_to_extension(IMAGETYPE_UNKNOWN);
+var_dump($r === false);
 "#,
     );
-    assert_eq!(out, ".png\njpeg\n\n");
+    assert_eq!(out, ".png\njpeg\nbool(true)\n");
 }
 
 /// `imagesx`/`imagesy` report the dimensions of a freshly created image without

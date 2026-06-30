@@ -420,15 +420,22 @@ impl Checker {
 
     /// Computes the wider of two PHP types for return-type merging:
     /// - If equal, returns a clone.
-    /// - Str + anything → Str; Float + anything → Float.
+    /// - Str/Float absorb compatible numeric scalars (Int/Float/numeric-string) but
+    ///   do NOT absorb Bool, so `string|false` and `float|false` widen to Mixed
+    ///   (boxed tagged cell) instead of collapsing `false` to `""`/`0.0`.
     /// - Void or Never resolves to the other type; otherwise → Mixed.
     pub(crate) fn wider_type(a: &PhpType, b: &PhpType) -> PhpType {
         match (a, b) {
             _ if a == b => a.clone(),
-            (PhpType::Str, _) | (_, PhpType::Str) => PhpType::Str,
-            (PhpType::Float, _) | (_, PhpType::Float) => PhpType::Float,
             (PhpType::Void, other) | (other, PhpType::Void) => other.clone(),
             (PhpType::Never, other) | (other, PhpType::Never) => other.clone(),
+            // Once we reach Mixed (e.g. Bool + scalar), stay Mixed: don't let
+            // Str/Float absorb it back, which would re-collapse `false`.
+            (PhpType::Mixed, _) | (_, PhpType::Mixed) => PhpType::Mixed,
+            // Bool + scalar must not be absorbed: `false` would lose its tag.
+            (PhpType::Bool, _) | (_, PhpType::Bool) => PhpType::Mixed,
+            (PhpType::Str, _) | (_, PhpType::Str) => PhpType::Str,
+            (PhpType::Float, _) | (_, PhpType::Float) => PhpType::Float,
             _ => PhpType::Mixed,
         }
     }

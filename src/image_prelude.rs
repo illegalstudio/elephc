@@ -1064,12 +1064,9 @@ function image_type_to_mime_type(int $image_type): string {
     }
 }
 
-// Known limitation: PHP returns `string|false`, returning `false` for an unknown
-// type. elephc currently collapses a string|false function return to `string`
-// (coercing the `false` to ""), and an explicit union return type hits an
-// unsupported EIR path for the dead-code copy of this function. So an unknown
-// type yields "" here rather than `false`. Revisit when scalar-union values are
-// representable end-to-end (the union-value-runtime work).
+// PHP returns `string|false` for `image_type_to_extension`: `false` for an
+// unknown type. The inferred return type widens to Mixed so `false` preserves
+// its bool tag through the boxed Mixed cell at runtime.
 function image_type_to_extension(int $image_type, bool $include_dot = true) {
     $ext = "";
     switch ($image_type) {
@@ -1176,10 +1173,8 @@ function exif_imagetype(string $filename) {
     return elephc_img_probe_type();
 }
 
-// PHP returns string|false (false for an unknown tag). elephc collapses a
-// string|false return to string, so an unknown tag yields "" here rather than
-// false — the same limitation documented on image_type_to_extension. Test with
-// `=== ""` instead of `=== false`.
+// PHP returns string|false (false for an unknown tag). The inferred return
+// type widens to Mixed so `false` preserves its bool tag.
 function exif_tagname(int $index) {
     $_len = elephc_exif_tagname($index);
     if ($_len < 0) {

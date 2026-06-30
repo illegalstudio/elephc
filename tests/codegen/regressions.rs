@@ -33,3 +33,7 @@ mod mixed_method_dispatch;
 mod switch_and_float_params;
 #[path = "regressions/return_this_ownership.rs"]
 mod return_this_ownership;
+#[path = "regressions/scalar_union_returns.rs"]
+mod scalar_union_returns;
+#[path = "regressions/mixed_array_read.rs"]
+mod mixed_array_read;
