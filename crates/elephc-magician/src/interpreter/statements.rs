@@ -7463,8 +7463,18 @@ fn eval_closure_from_callable(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut args = bind_evaluated_function_args(&[String::from("callback")], evaluated_args)?;
     let callback = args.pop().ok_or(EvalStatus::RuntimeFatal)?;
-    let callable = eval_callable(callback, context, values)?;
-    eval_validate_call_user_func_callback(&callable, "Closure::fromCallable", context, values)?;
+    let callable = match eval_callable(callback, context, values) {
+        Ok(callable) => callable,
+        Err(EvalStatus::UnsupportedConstruct) if values.type_tag(callback)? == EVAL_TAG_OBJECT => {
+            return eval_closure_from_callable_type_error(
+                "no array or string given",
+                context,
+                values,
+            );
+        }
+        Err(status) => return Err(status),
+    };
+    eval_validate_closure_from_callable_callback(&callable, context, values)?;
     let target = eval_closure_object_target_from_callable(callable);
     eval_closure_object_from_target(target, context, values)
 }
@@ -7474,7 +7484,7 @@ fn eval_closure_object_target_from_callable(
     callable: EvaluatedCallable,
 ) -> EvalClosureObjectTarget {
     match callable {
-        EvaluatedCallable::Named(name) => EvalClosureObjectTarget::Named(name),
+        EvaluatedCallable::Named { name, .. } => EvalClosureObjectTarget::Named(name),
         EvaluatedCallable::BoundClosure { name, bound_this } => {
             EvalClosureObjectTarget::BoundNamed { name, bound_this }
         }

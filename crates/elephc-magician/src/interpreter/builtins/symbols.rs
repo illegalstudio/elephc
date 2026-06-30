@@ -1000,7 +1000,7 @@ fn eval_callable_probe_exists(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     match callback {
-        EvaluatedCallable::Named(name) => {
+        EvaluatedCallable::Named { name, .. } => {
             Ok(context.has_closure(name) || eval_function_probe_exists(context, name))
         }
         EvaluatedCallable::BoundClosure { name, .. } => Ok(context.has_closure(name)),

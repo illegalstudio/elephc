@@ -11,6 +11,12 @@
 
 use super::super::super::*;
 
+#[derive(Clone, Copy)]
+enum EvalCallableValidationError<'a> {
+    CallUserFunc(&'a str),
+    ClosureFromCallable,
+}
+
 /// Validates callback targets whose PHP errors depend on method metadata.
 pub(in crate::interpreter) fn eval_validate_call_user_func_callback(
     callback: &EvaluatedCallable,
@@ -18,7 +24,53 @@ pub(in crate::interpreter) fn eval_validate_call_user_func_callback(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    eval_validate_callback(
+        callback,
+        EvalCallableValidationError::CallUserFunc(function_name),
+        context,
+        values,
+    )
+}
+
+/// Validates `Closure::fromCallable()` callback targets before materializing a closure.
+pub(in crate::interpreter) fn eval_validate_closure_from_callable_callback(
+    callback: &EvaluatedCallable,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    eval_validate_callback(
+        callback,
+        EvalCallableValidationError::ClosureFromCallable,
+        context,
+        values,
+    )
+}
+
+/// Throws the PHP TypeError used when `Closure::fromCallable()` cannot normalize a value.
+pub(in crate::interpreter) fn eval_closure_from_callable_type_error<T>(
+    reason: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_invalid_callback_type_error(
+        EvalCallableValidationError::ClosureFromCallable,
+        reason,
+        context,
+        values,
+    )
+}
+
+/// Validates one normalized callback for a PHP API with invalid-callback TypeErrors.
+fn eval_validate_callback(
+    callback: &EvaluatedCallable,
+    error: EvalCallableValidationError<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     match callback {
+        EvaluatedCallable::Named { name, display_name } => {
+            eval_validate_named_callable(name, display_name, error, context, values)
+        }
         EvaluatedCallable::ObjectMethod {
             object,
             method,
@@ -29,7 +81,7 @@ pub(in crate::interpreter) fn eval_validate_call_user_func_callback(
             None => eval_validate_call_user_func_object_method(
                 *object,
                 method,
-                function_name,
+                error,
                 context,
                 values,
             ),
@@ -44,22 +96,44 @@ pub(in crate::interpreter) fn eval_validate_call_user_func_callback(
             None => eval_validate_call_user_func_static_method(
                 class_name,
                 method,
-                function_name,
+                error,
                 context,
                 values,
             ),
         },
-        EvaluatedCallable::Named(_)
-        | EvaluatedCallable::BoundClosure { .. }
-        | EvaluatedCallable::InvokableObject { .. } => Ok(()),
+        EvaluatedCallable::BoundClosure { .. } | EvaluatedCallable::InvokableObject { .. } => {
+            Ok(())
+        }
     }
+}
+
+/// Validates string function callables before APIs materialize or dispatch them.
+fn eval_validate_named_callable(
+    name: &str,
+    display_name: &str,
+    error: EvalCallableValidationError<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if context.has_closure(name)
+        || context.has_function(name)
+        || eval_php_visible_builtin_exists(name)
+    {
+        return Ok(());
+    }
+    eval_invalid_callback_type_error(
+        error,
+        &format!("function \"{display_name}\" not found or invalid function name"),
+        context,
+        values,
+    )
 }
 
 /// Validates `[$object, "method"]` callbacks before call_user_func dispatch.
 fn eval_validate_call_user_func_object_method(
     object: RuntimeCellHandle,
     method_name: &str,
-    function_name: &str,
+    error: EvalCallableValidationError<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -70,7 +144,7 @@ fn eval_validate_call_user_func_object_method(
         return eval_validate_call_user_func_native_object_method(
             object,
             method_name,
-            function_name,
+            error,
             context,
             values,
         );
@@ -102,7 +176,7 @@ fn eval_validate_call_user_func_object_method(
                     &parent,
                     &called_class_name,
                     method_name,
-                    function_name,
+                    error,
                     context,
                     values,
                 );
@@ -112,7 +186,7 @@ fn eval_validate_call_user_func_object_method(
             return Ok(());
         }
         return eval_call_user_func_missing_method_type_error(
-            function_name,
+            error,
             &called_class_name,
             method_name,
             context,
@@ -128,7 +202,7 @@ fn eval_validate_call_user_func_object_method(
         return Ok(());
     }
     eval_call_user_func_method_access_type_error(
-        function_name,
+        error,
         &declaring_class,
         method.name(),
         method.visibility(),
@@ -141,7 +215,7 @@ fn eval_validate_call_user_func_object_method(
 fn eval_validate_call_user_func_native_object_method(
     object: RuntimeCellHandle,
     method_name: &str,
-    function_name: &str,
+    error: EvalCallableValidationError<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -150,7 +224,7 @@ fn eval_validate_call_user_func_native_object_method(
         &class_name,
         &class_name,
         method_name,
-        function_name,
+        error,
         context,
         values,
     )
@@ -161,7 +235,7 @@ fn eval_validate_call_user_func_native_object_method_for_class(
     class_name: &str,
     error_class_name: &str,
     method_name: &str,
-    function_name: &str,
+    error: EvalCallableValidationError<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -177,7 +251,7 @@ fn eval_validate_call_user_func_native_object_method_for_class(
             return Ok(());
         }
         return eval_call_user_func_missing_method_type_error(
-            function_name,
+            error,
             error_class_name,
             method_name,
             context,
@@ -193,7 +267,7 @@ fn eval_validate_call_user_func_native_object_method_for_class(
         return Ok(());
     }
     eval_call_user_func_method_access_type_error(
-        function_name,
+        error,
         &declaring_class,
         method_name,
         visibility,
@@ -206,7 +280,7 @@ fn eval_validate_call_user_func_native_object_method_for_class(
 fn eval_validate_call_user_func_static_method(
     class_name: &str,
     method_name: &str,
-    function_name: &str,
+    error: EvalCallableValidationError<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -217,7 +291,7 @@ fn eval_validate_call_user_func_static_method(
     if let Some((declaring_class, method)) = context.class_method(&class_name, method_name) {
         if !method.is_static() {
             return eval_call_user_func_non_static_method_type_error(
-                function_name,
+                error,
                 &declaring_class,
                 method.name(),
                 context,
@@ -233,7 +307,7 @@ fn eval_validate_call_user_func_static_method(
             return Ok(());
         }
         return eval_call_user_func_method_access_type_error(
-            function_name,
+            error,
             &declaring_class,
             method.name(),
             method.visibility(),
@@ -254,13 +328,13 @@ fn eval_validate_call_user_func_static_method(
                 &parent,
                 &class_name,
                 method_name,
-                function_name,
+                error,
                 context,
                 values,
             );
         }
         return eval_call_user_func_missing_method_type_error(
-            function_name,
+            error,
             &class_name,
             method_name,
             context,
@@ -270,7 +344,7 @@ fn eval_validate_call_user_func_static_method(
     eval_validate_call_user_func_native_static_method(
         &class_name,
         method_name,
-        function_name,
+        error,
         context,
         values,
     )
@@ -280,7 +354,7 @@ fn eval_validate_call_user_func_static_method(
 fn eval_validate_call_user_func_native_static_method(
     class_name: &str,
     method_name: &str,
-    function_name: &str,
+    error: EvalCallableValidationError<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -296,7 +370,7 @@ fn eval_validate_call_user_func_native_static_method(
             return Ok(());
         }
         return eval_call_user_func_missing_method_type_error(
-            function_name,
+            error,
             class_name,
             method_name,
             context,
@@ -305,7 +379,7 @@ fn eval_validate_call_user_func_native_static_method(
     };
     if !is_static {
         return eval_call_user_func_non_static_method_type_error(
-            function_name,
+            error,
             &declaring_class,
             method_name,
             context,
@@ -321,7 +395,7 @@ fn eval_validate_call_user_func_native_static_method(
         return Ok(());
     }
     eval_call_user_func_method_access_type_error(
-        function_name,
+        error,
         &declaring_class,
         method_name,
         visibility,
@@ -335,7 +409,7 @@ fn eval_validate_call_user_func_native_static_method_for_class(
     class_name: &str,
     error_class_name: &str,
     method_name: &str,
-    function_name: &str,
+    error: EvalCallableValidationError<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -351,7 +425,7 @@ fn eval_validate_call_user_func_native_static_method_for_class(
             return Ok(());
         }
         return eval_call_user_func_missing_method_type_error(
-            function_name,
+            error,
             error_class_name,
             method_name,
             context,
@@ -360,7 +434,7 @@ fn eval_validate_call_user_func_native_static_method_for_class(
     };
     if !is_static {
         return eval_call_user_func_non_static_method_type_error(
-            function_name,
+            error,
             &declaring_class,
             method_name,
             context,
@@ -376,7 +450,7 @@ fn eval_validate_call_user_func_native_static_method_for_class(
         return Ok(());
     }
     eval_call_user_func_method_access_type_error(
-        function_name,
+        error,
         &declaring_class,
         method_name,
         visibility,
@@ -432,16 +506,16 @@ fn eval_call_user_func_native_static_magic_callable(
     )
 }
 
-/// Throws call_user_func's TypeError for a missing object or static method callback.
+/// Throws the API-specific TypeError for a missing object or static method callback.
 fn eval_call_user_func_missing_method_type_error<T>(
-    function_name: &str,
+    error: EvalCallableValidationError<'_>,
     class_name: &str,
     method_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    eval_call_user_func_type_error(
-        function_name,
+    eval_invalid_callback_type_error(
+        error,
         &format!(
             "class {} does not have a method \"{}\"",
             class_name.trim_start_matches('\\'),
@@ -452,17 +526,17 @@ fn eval_call_user_func_missing_method_type_error<T>(
     )
 }
 
-/// Throws call_user_func's TypeError for an inaccessible method callback.
+/// Throws the API-specific TypeError for an inaccessible method callback.
 fn eval_call_user_func_method_access_type_error<T>(
-    function_name: &str,
+    error: EvalCallableValidationError<'_>,
     class_name: &str,
     method_name: &str,
     visibility: EvalVisibility,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    eval_call_user_func_type_error(
-        function_name,
+    eval_invalid_callback_type_error(
+        error,
         &format!(
             "cannot access {} method {}::{}()",
             eval_call_user_func_visibility_label(visibility),
@@ -474,16 +548,16 @@ fn eval_call_user_func_method_access_type_error<T>(
     )
 }
 
-/// Throws call_user_func's TypeError for non-static static-method callbacks.
+/// Throws the API-specific TypeError for non-static static-method callbacks.
 fn eval_call_user_func_non_static_method_type_error<T>(
-    function_name: &str,
+    error: EvalCallableValidationError<'_>,
     class_name: &str,
     method_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    eval_call_user_func_type_error(
-        function_name,
+    eval_invalid_callback_type_error(
+        error,
         &format!(
             "non-static method {}::{}() cannot be called statically",
             class_name.trim_start_matches('\\'),
@@ -501,14 +575,33 @@ pub(in crate::interpreter) fn eval_call_user_func_type_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    eval_throw_type_error(
-        &format!(
-            "{}(): Argument #1 ($callback) must be a valid callback, {}",
-            function_name, reason
-        ),
+    eval_invalid_callback_type_error(
+        EvalCallableValidationError::CallUserFunc(function_name),
+        reason,
         context,
         values,
     )
+}
+
+/// Throws the invalid-callback TypeError for the PHP API currently validating a callback.
+fn eval_invalid_callback_type_error<T>(
+    error: EvalCallableValidationError<'_>,
+    reason: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let message = match error {
+        EvalCallableValidationError::CallUserFunc(function_name) => {
+            format!(
+                "{}(): Argument #1 ($callback) must be a valid callback, {}",
+                function_name, reason
+            )
+        }
+        EvalCallableValidationError::ClosureFromCallable => {
+            format!("Failed to create closure from callable: {reason}")
+        }
+    };
+    eval_throw_type_error(&message, context, values)
 }
 
 /// Returns PHP's lowercase visibility label used in callback TypeError messages.
