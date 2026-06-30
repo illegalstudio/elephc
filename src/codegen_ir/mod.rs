@@ -13,7 +13,7 @@
 //! - The legacy `src/codegen/` AST backend remains available through `--ast-backend`.
 
 mod block_emit;
-mod context;
+pub(crate) mod context;
 mod fibers;
 mod frame;
 mod function_variants;
