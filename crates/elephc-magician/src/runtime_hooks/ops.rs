@@ -15,7 +15,7 @@ use super::ElephcRuntimeOps;
 use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
 use crate::interpreter::RuntimeValueOps;
-use crate::value::RuntimeCellHandle;
+use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 #[cfg(not(test))]
 impl RuntimeValueOps for ElephcRuntimeOps {
@@ -274,7 +274,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let arg_array = Self::arg_array(args)?;
-        let result = Self::handle(unsafe {
+        let result = unsafe {
             __elephc_eval_value_method_call(
                 object.as_ptr(),
                 method.as_ptr(),
@@ -283,11 +283,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
                 scope_ptr,
                 scope_len,
             )
-        });
+        };
         unsafe {
             __elephc_eval_value_release(arg_array.as_ptr());
         }
-        result
+        self.handle_native_call_result(result)
     }
 
     /// Calls an AOT static method through the generated user helper.
@@ -299,7 +299,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let arg_array = Self::arg_array(args)?;
-        let result = Self::handle(unsafe {
+        let result = unsafe {
             __elephc_eval_value_static_method_call(
                 class_name.as_ptr(),
                 class_name.len() as u64,
@@ -309,11 +309,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
                 scope_ptr,
                 scope_len,
             )
-        });
+        };
         unsafe {
             __elephc_eval_value_release(arg_array.as_ptr());
         }
-        result
+        self.handle_native_call_result(result)
     }
 
     /// Materializes a populated synthetic `ReflectionAttribute` object for eval metadata.
@@ -1113,6 +1113,21 @@ impl RuntimeValueOps for ElephcRuntimeOps {
 
 #[cfg(not(test))]
 impl ElephcRuntimeOps {
+    /// Converts a generated native method-call result into an eval result status.
+    fn handle_native_call_result(
+        &self,
+        result: *mut RuntimeCell,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        if !result.is_null() {
+            return Ok(RuntimeCellHandle::from_raw(result));
+        }
+        self.take_pending_native_throwable()
+            .map_or(Err(EvalStatus::RuntimeFatal), |thrown| {
+                self.schedule_pending_throw(thrown)?;
+                Err(EvalStatus::UncaughtThrowable)
+            })
+    }
+
     /// Takes a native Throwable that escaped through the generated constructor bridge.
     fn take_pending_native_throwable(&self) -> Option<RuntimeCellHandle> {
         let thrown = unsafe { __elephc_eval_value_take_pending_throwable() };

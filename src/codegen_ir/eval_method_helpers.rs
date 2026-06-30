@@ -14,6 +14,9 @@
 use std::collections::BTreeMap;
 
 use crate::codegen::abi;
+use crate::codegen::context::{
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::emit_box_current_value_as_mixed;
@@ -85,6 +88,13 @@ const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
 ];
 const BUILTIN_THROWABLE_GET_MESSAGE_LABEL: &str = "__elephc_eval_builtin_throwable_getmessage";
 const BUILTIN_THROWABLE_GET_CODE_LABEL: &str = "__elephc_eval_builtin_throwable_getcode";
+const METHOD_HELPER_BASE_FRAME_SIZE: usize = 64;
+const METHOD_HELPER_HANDLER_OFFSET: usize = METHOD_HELPER_BASE_FRAME_SIZE;
+const METHOD_HELPER_FRAME_SIZE: usize = METHOD_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
+const STATIC_METHOD_HELPER_BASE_FRAME_SIZE: usize = 80;
+const STATIC_METHOD_HELPER_HANDLER_OFFSET: usize = STATIC_METHOD_HELPER_BASE_FRAME_SIZE;
+const STATIC_METHOD_HELPER_FRAME_SIZE: usize =
+    STATIC_METHOD_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
 
 /// Emits eval method-call helpers when any lowered function owns an eval context.
 pub(super) fn emit_eval_method_helpers(
@@ -484,7 +494,7 @@ fn emit_static_method_call_aarch64(
 ) {
     let fail_label = "__elephc_eval_value_static_method_call_fail";
     let done_label = "__elephc_eval_value_static_method_call_done";
-    emitter.instruction("sub sp, sp, #80");                                     // reserve helper frame for class, method, args, scope, and fp/lr
+    emitter.instruction(&format!("sub sp, sp, #{}", STATIC_METHOD_HELPER_FRAME_SIZE)); // reserve helper frame plus a boundary exception handler
     emitter.instruction("stp x29, x30, [sp, #64]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #64");                                    // establish a stable helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
@@ -509,7 +519,7 @@ fn emit_static_method_call_aarch64(
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the Rust caller frame
-    emitter.instruction("add sp, sp, #80");                                     // release the helper frame
+    emitter.instruction(&format!("add sp, sp, #{}", STATIC_METHOD_HELPER_FRAME_SIZE)); // release the helper frame and boundary handler
     emitter.instruction("ret");                                                 // return the boxed static method result to Rust
 }
 
@@ -525,7 +535,7 @@ fn emit_static_method_call_x86_64(
     let done_label = "__elephc_eval_value_static_method_call_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 80");                                         // reserve aligned slots for class, method, args, scope, and one argument
+    emitter.instruction(&format!("sub rsp, {}", STATIC_METHOD_HELPER_FRAME_SIZE)); // reserve aligned slots plus a boundary exception handler
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested method-name pointer
@@ -564,7 +574,7 @@ fn emit_method_call_aarch64(
 ) {
     let fail_label = "__elephc_eval_value_method_call_fail";
     let done_label = "__elephc_eval_value_method_call_done";
-    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for inputs, object, scope, and fp/lr
+    emitter.instruction(&format!("sub sp, sp, #{}", METHOD_HELPER_FRAME_SIZE)); // reserve helper frame plus a boundary exception handler
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
     emitter.instruction("str x1, [sp, #0]");                                    // save the requested method-name pointer
@@ -599,7 +609,7 @@ fn emit_method_call_aarch64(
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
-    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
+    emitter.instruction(&format!("add sp, sp, #{}", METHOD_HELPER_FRAME_SIZE)); // release the helper frame and boundary handler
     emitter.instruction("ret");                                                 // return the boxed method result to Rust
 }
 
@@ -616,7 +626,7 @@ fn emit_method_call_x86_64(
     let done_label = "__elephc_eval_value_method_call_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 64");                                         // reserve aligned slots for name, length, object, args, scope, and first argument
+    emitter.instruction(&format!("sub rsp, {}", METHOD_HELPER_FRAME_SIZE));     // reserve aligned slots plus a boundary exception handler
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the requested method-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the requested method-name length
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed eval argument array
@@ -653,6 +663,83 @@ fn emit_method_call_x86_64(
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed method result to Rust
+}
+
+/// Emits an ARM64 boundary handler so native method throws return to magician.
+fn emit_aarch64_method_exception_boundary_push(
+    emitter: &mut Emitter,
+    handler_offset: usize,
+    escape_label: &str,
+) {
+    emitter.comment("push eval method exception boundary");
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset));       // save the previous native exception-handler head
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + 8));   // preserve the caller activation frame across method unwinding
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!(
+        "str x10, [x29, #{}]",
+        handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
+    ));                                                                          // save diagnostic suppression depth for restoration
+    emitter.instruction(&format!("add x10, x29, #{}", handler_offset));         // compute the boundary handler record address
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!(
+        "add x0, x29, #{}",
+        handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
+    ));                                                                          // pass the boundary jmp_buf to setjmp
+    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native methods
+    emitter.instruction(&format!("cbnz x0, {}", escape_label));                 // non-zero setjmp result means a method Throwable escaped
+}
+
+/// Emits an ARM64 boundary pop after a native method call returns to magician.
+fn emit_aarch64_method_exception_boundary_pop(emitter: &mut Emitter, handler_offset: usize) {
+    emitter.comment("pop eval method exception boundary");
+    emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset));       // reload the previous native exception-handler head
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!(
+        "ldr x10, [x29, #{}]",
+        handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
+    ));                                                                          // reload the saved diagnostic suppression depth
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+}
+
+/// Emits an x86_64 boundary handler so native method throws return to magician.
+fn emit_x86_64_method_exception_boundary_push(
+    emitter: &mut Emitter,
+    handler_base: usize,
+    escape_label: &str,
+) {
+    emitter.comment("push eval method exception boundary");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base)); // save the previous native exception-handler head
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)); // preserve the caller activation frame across method unwinding
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!(
+        "mov QWORD PTR [rbp - {}], r10",
+        handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
+    ));                                                                          // save diagnostic suppression depth for restoration
+    emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));         // compute the boundary handler record address
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!(
+        "lea rdi, [rbp - {}]",
+        handler_base - TRY_HANDLER_JMP_BUF_OFFSET
+    ));                                                                          // pass the boundary jmp_buf to setjmp
+    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native methods
+    emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
+    emitter.instruction(&format!("jne {}", escape_label));                      // non-zero setjmp result means a method Throwable escaped
+}
+
+/// Emits an x86_64 boundary pop after a native method call returns to magician.
+fn emit_x86_64_method_exception_boundary_pop(emitter: &mut Emitter, handler_base: usize) {
+    emitter.comment("pop eval method exception boundary");
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", handler_base)); // reload the previous native exception-handler head
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!(
+        "mov r10, QWORD PTR [rbp - {}]",
+        handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
+    ));                                                                          // reload the saved diagnostic suppression depth
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
 }
 
 /// Emits ARM64 class-id and method-name dispatch for helper method bodies.
@@ -1160,7 +1247,7 @@ fn emit_aarch64_method_bodies(
     for slot in slots {
         emitter.label(&method_body_label(module, slot));
         emit_aarch64_validate_method_arg_count(module, emitter, slot, fail_label);
-        let (overflow_bytes, ref_slots) =
+        let (arg_temp_bytes, ref_slots) =
             emit_aarch64_prepare_method_args(
                 module,
                 emitter,
@@ -1169,6 +1256,15 @@ fn emit_aarch64_method_bodies(
                 fail_label,
                 callable_support,
             );
+        let escape_label = format!("{}_escape", method_body_label(module, slot));
+        emit_aarch64_method_exception_boundary_push(
+            emitter,
+            METHOD_HELPER_HANDLER_OFFSET - 48,
+            &escape_label,
+        );
+        let receiver_ty = PhpType::Object(slot.class_name.clone());
+        let overflow_bytes =
+            materialize_method_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
@@ -1185,7 +1281,15 @@ fn emit_aarch64_method_bodies(
             &ref_slots,
             &method_body_label(module, slot),
         );
+        emit_aarch64_method_exception_boundary_pop(emitter, METHOD_HELPER_HANDLER_OFFSET - 48);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the native method result
+        emitter.label(&escape_label);
+        abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
+        let escape_writeback_label = format!("{}_throw", method_body_label(module, slot));
+        emit_aarch64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
+        abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
+        emit_aarch64_method_exception_boundary_pop(emitter, METHOD_HELPER_HANDLER_OFFSET - 48);
+        emitter.instruction(&format!("b {}", fail_label));                      // return failure after preserving by-reference writes
     }
 }
 
@@ -1202,7 +1306,7 @@ fn emit_x86_64_method_bodies(
     for slot in slots {
         emitter.label(&method_body_label(module, slot));
         emit_x86_64_validate_method_arg_count(module, emitter, slot, fail_label);
-        let (overflow_bytes, ref_slots) =
+        let (arg_temp_bytes, ref_slots) =
             emit_x86_64_prepare_method_args(
                 module,
                 emitter,
@@ -1211,6 +1315,11 @@ fn emit_x86_64_method_bodies(
                 fail_label,
                 callable_support,
             );
+        let escape_label = format!("{}_escape_x", method_body_label(module, slot));
+        emit_x86_64_method_exception_boundary_push(emitter, METHOD_HELPER_FRAME_SIZE, &escape_label);
+        let receiver_ty = PhpType::Object(slot.class_name.clone());
+        let overflow_bytes =
+            materialize_method_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
@@ -1227,7 +1336,15 @@ fn emit_x86_64_method_bodies(
             &ref_slots,
             &method_body_label(module, slot),
         );
+        emit_x86_64_method_exception_boundary_pop(emitter, METHOD_HELPER_FRAME_SIZE);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native method result
+        emitter.label(&escape_label);
+        abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
+        let escape_writeback_label = format!("{}_throw", method_body_label(module, slot));
+        emit_x86_64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
+        abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
+        emit_x86_64_method_exception_boundary_pop(emitter, METHOD_HELPER_FRAME_SIZE);
+        emitter.instruction(&format!("jmp {}", fail_label));                    // return failure after preserving by-reference writes
     }
 }
 
@@ -1244,7 +1361,7 @@ fn emit_aarch64_static_method_bodies(
     for slot in slots {
         emitter.label(&static_method_body_label(module, slot));
         emit_aarch64_validate_static_method_arg_count(module, emitter, slot, fail_label);
-        let (overflow_bytes, ref_slots) =
+        let (arg_temp_bytes, ref_slots) =
             emit_aarch64_prepare_static_method_args(
                 module,
                 emitter,
@@ -1253,6 +1370,13 @@ fn emit_aarch64_static_method_bodies(
                 fail_label,
                 callable_support,
             );
+        let escape_label = format!("{}_escape", static_method_body_label(module, slot));
+        emit_aarch64_method_exception_boundary_push(
+            emitter,
+            STATIC_METHOD_HELPER_HANDLER_OFFSET - 64,
+            &escape_label,
+        );
+        let overflow_bytes = materialize_static_method_args(module, emitter, slot);
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
@@ -1268,7 +1392,21 @@ fn emit_aarch64_static_method_bodies(
             &ref_slots,
             &static_method_body_label(module, slot),
         );
+        emit_aarch64_method_exception_boundary_pop(
+            emitter,
+            STATIC_METHOD_HELPER_HANDLER_OFFSET - 64,
+        );
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the native static method result
+        emitter.label(&escape_label);
+        abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
+        let escape_writeback_label = format!("{}_throw", static_method_body_label(module, slot));
+        emit_aarch64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
+        abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
+        emit_aarch64_method_exception_boundary_pop(
+            emitter,
+            STATIC_METHOD_HELPER_HANDLER_OFFSET - 64,
+        );
+        emitter.instruction(&format!("b {}", fail_label));                      // return failure after preserving by-reference writes
     }
 }
 
@@ -1285,7 +1423,7 @@ fn emit_x86_64_static_method_bodies(
     for slot in slots {
         emitter.label(&static_method_body_label(module, slot));
         emit_x86_64_validate_static_method_arg_count(module, emitter, slot, fail_label);
-        let (overflow_bytes, ref_slots) =
+        let (arg_temp_bytes, ref_slots) =
             emit_x86_64_prepare_static_method_args(
                 module,
                 emitter,
@@ -1294,6 +1432,13 @@ fn emit_x86_64_static_method_bodies(
                 fail_label,
                 callable_support,
             );
+        let escape_label = format!("{}_escape_x", static_method_body_label(module, slot));
+        emit_x86_64_method_exception_boundary_push(
+            emitter,
+            STATIC_METHOD_HELPER_FRAME_SIZE,
+            &escape_label,
+        );
+        let overflow_bytes = materialize_static_method_args(module, emitter, slot);
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
@@ -1309,7 +1454,15 @@ fn emit_x86_64_static_method_bodies(
             &ref_slots,
             &static_method_body_label(module, slot),
         );
+        emit_x86_64_method_exception_boundary_pop(emitter, STATIC_METHOD_HELPER_FRAME_SIZE);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native static method result
+        emitter.label(&escape_label);
+        abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
+        let escape_writeback_label = format!("{}_throw", static_method_body_label(module, slot));
+        emit_x86_64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
+        abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
+        emit_x86_64_method_exception_boundary_pop(emitter, STATIC_METHOD_HELPER_FRAME_SIZE);
+        emitter.instruction(&format!("jmp {}", fail_label));                    // return failure after preserving by-reference writes
     }
 }
 
@@ -1423,16 +1576,7 @@ fn emit_aarch64_prepare_method_args(
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
     }
-    (
-        materialize_method_args(
-            module,
-            emitter,
-            &receiver_ty,
-            &slot.params,
-            &slot.ref_params,
-        ),
-        ref_slots,
-    )
+    (arg_temp_bytes, ref_slots)
 }
 
 /// Prepares ARM64 static method ABI registers for the supported argument shapes.
@@ -1484,7 +1628,7 @@ fn emit_aarch64_prepare_static_method_args(
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
     }
-    (materialize_static_method_args(module, emitter, slot), ref_slots)
+    (arg_temp_bytes, ref_slots)
 }
 
 /// Prepares x86_64 method ABI registers for the supported argument shapes.
@@ -1536,16 +1680,7 @@ fn emit_x86_64_prepare_method_args(
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
     }
-    (
-        materialize_method_args(
-            module,
-            emitter,
-            &receiver_ty,
-            &slot.params,
-            &slot.ref_params,
-        ),
-        ref_slots,
-    )
+    (arg_temp_bytes, ref_slots)
 }
 
 /// Prepares x86_64 static method ABI registers for the supported argument shapes.
@@ -1596,7 +1731,7 @@ fn emit_x86_64_prepare_static_method_args(
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
     }
-    (materialize_static_method_args(module, emitter, slot), ref_slots)
+    (arg_temp_bytes, ref_slots)
 }
 
 /// Materializes the pushed receiver and eval arguments into the target method ABI.
