@@ -38,9 +38,20 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func_array(
     let [callback, arg_array] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    let release_arg_array = matches!(arg_array, EvalExpr::Array(_));
     let callback = eval_expr(callback, context, scope, values)?;
     let arg_array = eval_expr(arg_array, context, scope, values)?;
-    eval_call_user_func_array_with_values_from_scope(callback, arg_array, Some(scope), context, values)
+    let result = eval_call_user_func_array_with_values_from_scope(
+        callback,
+        arg_array,
+        Some(scope),
+        context,
+        values,
+    );
+    if release_arg_array {
+        values.release(arg_array)?;
+    }
+    result
 }
 
 /// Dispatches `call_user_func_array` after callback and array arguments are evaluated.

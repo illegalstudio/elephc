@@ -288,32 +288,57 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
     let len = values.array_len(array)?;
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
         let ref_target = eval_array_reference_key(key, values)?
             .and_then(|key| context.array_element_alias(array, &key).cloned());
-        match values.type_tag(key)? {
+        let arg = match values.type_tag(key)? {
             EVAL_TAG_INT => {
                 if *saw_named {
+                    values.release(key)?;
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                evaluated_args.push(EvaluatedCallArg {
+                let value = match values.array_get(array, key) {
+                    Ok(value) => value,
+                    Err(status) => {
+                        values.release(key)?;
+                        return Err(status);
+                    }
+                };
+                EvaluatedCallArg {
                     name: None,
                     value,
                     ref_target,
-                });
+                }
             }
             EVAL_TAG_STRING => {
                 *saw_named = true;
                 let name = values.string_bytes(key)?;
-                let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
-                evaluated_args.push(EvaluatedCallArg {
+                let name = match String::from_utf8(name) {
+                    Ok(name) => name,
+                    Err(_) => {
+                        values.release(key)?;
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
+                };
+                let value = match values.array_get(array, key) {
+                    Ok(value) => value,
+                    Err(status) => {
+                        values.release(key)?;
+                        return Err(status);
+                    }
+                };
+                EvaluatedCallArg {
                     name: Some(name),
                     value,
                     ref_target,
-                });
+                }
             }
-            _ => return Err(EvalStatus::RuntimeFatal),
-        }
+            _ => {
+                values.release(key)?;
+                return Err(EvalStatus::RuntimeFatal);
+            }
+        };
+        values.release(key)?;
+        evaluated_args.push(arg);
     }
     Ok(())
 }
