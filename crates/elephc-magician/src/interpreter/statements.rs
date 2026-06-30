@@ -7278,6 +7278,15 @@ fn eval_static_method_call_result_resolved(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(result) = eval_closure_static_method_result(
+        &class_name,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
     if let Some(result) = eval_builtin_property_hook_type_static_method_result(
         &class_name,
         method_name,
@@ -7421,6 +7430,90 @@ fn eval_static_method_call_result_resolved(
         context,
         values,
     )
+}
+
+/// Dispatches static methods for eval's builtin `Closure` class slice.
+fn eval_closure_static_method_result(
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("Closure")
+    {
+        return Ok(None);
+    }
+    if !method_name.eq_ignore_ascii_case("fromCallable") {
+        return Ok(None);
+    }
+    eval_closure_from_callable(evaluated_args, context, values).map(Some)
+}
+
+/// Materializes `Closure::fromCallable()` from one normalized eval callback.
+fn eval_closure_from_callable(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut args = bind_evaluated_function_args(&[String::from("callback")], evaluated_args)?;
+    let callback = args.pop().ok_or(EvalStatus::RuntimeFatal)?;
+    let callable = eval_callable(callback, context, values)?;
+    eval_validate_call_user_func_callback(&callable, "Closure::fromCallable", context, values)?;
+    let target = eval_closure_object_target_from_callable(callable);
+    eval_closure_object_from_target(target, context, values)
+}
+
+/// Converts a normalized callable target into the storage used by eval Closure objects.
+fn eval_closure_object_target_from_callable(
+    callable: EvaluatedCallable,
+) -> EvalClosureObjectTarget {
+    match callable {
+        EvaluatedCallable::Named(name) => EvalClosureObjectTarget::Named(name),
+        EvaluatedCallable::InvokableObject { object } => {
+            EvalClosureObjectTarget::InvokableObject { object }
+        }
+        EvaluatedCallable::ObjectMethod {
+            object,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        } => EvalClosureObjectTarget::ObjectMethod {
+            object,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        },
+        EvaluatedCallable::StaticMethod {
+            class_name,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        } => EvalClosureObjectTarget::StaticMethod {
+            class_name,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        },
+    }
+}
+
+/// Allocates a PHP-visible eval Closure object for one retained callable target.
+fn eval_closure_object_from_target(
+    target: EvalClosureObjectTarget,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let object = values.new_object("stdClass")?;
+    let identity = values.object_identity(object)?;
+    context.register_closure_object_target(identity, target);
+    Ok(object)
 }
 
 /// Dispatches one generated/AOT method reached through PHP static-call syntax.

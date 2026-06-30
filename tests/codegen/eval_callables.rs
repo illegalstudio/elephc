@@ -160,3 +160,92 @@ return $f("1") . ":" . $m("2") . ":" . $s("3") . ":" . $ds("4") . ":" . $i("5");
         "OClosureIC|OClosureIC|OClosureIC|OClosureIC|OClosureIC|F1:M2:S3:S4:I5"
     );
 }
+
+/// Verifies `Closure::fromCallable()` normalizes eval string and array callables to Closure objects.
+#[test]
+fn test_eval_closure_from_callable_normalizes_string_and_array_callables() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_from_callable_fn(int $value): string {
+    return "F" . $value;
+}
+
+class EvalFromCallableBox {
+    public function m(int $value): string {
+        return "M" . $value;
+    }
+
+    public static function s(int $value): string {
+        return "S" . $value;
+    }
+}
+
+echo eval('$box = new EvalFromCallableBox();
+$callbacks = [
+    Closure::fromCallable("eval_from_callable_fn"),
+    Closure::fromCallable([$box, "m"]),
+    Closure::fromCallable(["EvalFromCallableBox", "s"]),
+    Closure::fromCallable("EvalFromCallableBox::s"),
+];
+foreach ($callbacks as $index => $cb) {
+    echo is_object($cb) ? "O" : "o";
+    echo get_class($cb);
+    echo $cb instanceof Closure ? "I" : "i";
+    echo is_callable($cb) ? "C" : "c";
+    echo $cb($index + 1);
+    echo "|";
+}');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "OClosureICF1|OClosureICM2|OClosureICS3|OClosureICS4|"
+    );
+}
+
+/// Verifies `Closure::fromCallable()` preserves by-ref writeback for AOT call targets.
+#[test]
+fn test_eval_closure_from_callable_preserves_aot_by_ref_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_from_callable_ref_add(int &$value, int $delta): int {
+    $value = $value + $delta;
+    return $value;
+}
+
+class EvalFromCallableRefBox {
+    public int $base = 10;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public static function add(int &$value, int $delta): int {
+        $value = $value + $delta;
+        return $value;
+    }
+}
+
+echo eval('$box = new EvalFromCallableRefBox();
+$function = Closure::fromCallable("eval_from_callable_ref_add");
+$a = "2";
+echo $function($a, 3) . ":" . gettype($a) . ":" . $a . "|";
+$instance = Closure::fromCallable([$box, "bump"]);
+$b = "4";
+echo $instance($b, 5) . ":" . gettype($b) . ":" . $b . "|";
+$static = Closure::fromCallable(["EvalFromCallableRefBox", "add"]);
+$c = "7";
+echo $static($c, 6) . ":" . gettype($c) . ":" . $c . "|";
+$named = Closure::fromCallable("EvalFromCallableRefBox::add");
+$d = "8";
+return call_user_func_array($named, [&$d, 9]) . ":" . gettype($d) . ":" . $d;');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "5:integer:5|19:integer:19|13:integer:13|17:integer:17"
+    );
+}

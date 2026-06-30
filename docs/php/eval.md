@@ -131,6 +131,9 @@ values as PHP-visible `Closure` objects that can be invoked through
 `$callback(...)`, `call_user_func()`, and `call_user_func_array()`.
 Namespaced function callables follow PHP's global fallback rule when the
 namespaced function is not visible.
+`Closure::fromCallable()` accepts the same supported string, callable-array,
+object, and existing `Closure` callback values and materializes a PHP-visible
+`Closure` object backed by the normalized eval callable target.
 
 Closure literals created inside eval are PHP-visible `Closure` objects: they
 report true for `is_object()`, `get_class($fn)` returns `Closure`,
