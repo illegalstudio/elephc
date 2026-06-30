@@ -86,6 +86,82 @@ fn execute_program_cleans_native_raw_ref_slots_when_arg_array_build_fails() {
     assert!(values.releases.iter().any(|release| *release == value));
 }
 
+/// Verifies raw native by-reference staging is released after a successful invoker call.
+#[test]
+fn execute_program_cleans_native_raw_ref_slots_after_normal_return() {
+    let program = parse_fragment(br#"$value = "keep"; return native_string_ref($value);"#)
+        .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let expected = values.int(42).expect("allocate fake result");
+    let mut native =
+        NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 1);
+    assert!(native.set_param_name(0, "value"));
+    assert!(native.set_param_type(
+        0,
+        EvalParameterType::new(vec![EvalParameterTypeVariant::String], false)
+    ));
+    assert!(native.set_param_by_ref(0, true));
+    assert!(context
+        .define_native_function("native_string_ref", native)
+        .is_ok());
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("native dispatch should return normally");
+    let value = scope
+        .entry("value")
+        .expect("scope should retain the original string")
+        .cell();
+
+    assert_eq!(result, expected);
+    assert_eq!(values.get(value), FakeValue::String("keep".to_string()));
+    assert!(values.releases.iter().any(|release| *release == value));
+}
+
+/// Verifies raw native by-reference staging is released when the invoker signals fatal.
+#[test]
+fn execute_program_cleans_native_raw_ref_slots_after_null_invoker_return() {
+    let program = parse_fragment(br#"$value = "keep"; native_string_ref($value);"#)
+        .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let mut native = NativeFunction::new(
+        std::ptr::null_mut(),
+        fake_native_null_descriptor,
+        1,
+    );
+    assert!(native.set_param_name(0, "value"));
+    assert!(native.set_param_type(
+        0,
+        EvalParameterType::new(vec![EvalParameterTypeVariant::String], false)
+    ));
+    assert!(native.set_param_by_ref(0, true));
+    assert!(context
+        .define_native_function("native_string_ref", native)
+        .is_ok());
+
+    let err = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect_err("null invoker result should become a runtime fatal");
+    let value = scope
+        .entry("value")
+        .expect("scope should retain the original string")
+        .cell();
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(values.get(value), FakeValue::String("keep".to_string()));
+    assert!(values.releases.iter().any(|release| *release == value));
+}
+
+/// Test native invoker that returns NULL to model a bridge-level fatal result.
+unsafe extern "C" fn fake_native_null_descriptor(
+    _descriptor: *mut std::ffi::c_void,
+    _args: *mut crate::value::RuntimeCell,
+) -> *mut crate::value::RuntimeCell {
+    std::ptr::null_mut()
+}
+
 /// Verifies direct eval calls can bind registered native parameters by name.
 #[test]
 fn execute_program_calls_registered_native_function_with_named_args() {
