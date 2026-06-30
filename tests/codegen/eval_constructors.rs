@@ -91,3 +91,92 @@ return gettype($box->value) . ":" . $box->value;');
         "Exception:ctor-lvalue:integer:12|Exception:ctor-lvalue:integer:16"
     );
 }
+
+/// Verifies eval-declared constructor by-reference args write back to lvalue targets.
+#[test]
+fn test_eval_declared_constructor_by_ref_writes_back_to_lvalue_targets() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalDeclaredCtorRefTargetBridge {
+    public function __construct(int &$value) {
+        $value = $value + 5;
+    }
+}
+
+class EvalDeclaredCtorRefTargetBox {
+    public int $value = 3;
+}
+
+class EvalDeclaredCtorRefTargetStatic {
+    public static mixed $value = 4;
+}
+
+$value = "1";
+new EvalDeclaredCtorRefTargetBridge($value);
+echo gettype($value) . ":" . $value . "|";
+
+$items = ["x" => "2"];
+new EvalDeclaredCtorRefTargetBridge($items["x"]);
+echo gettype($items["x"]) . ":" . $items["x"] . "|";
+
+$nested = ["outer" => ["inner" => "3"]];
+new EvalDeclaredCtorRefTargetBridge($nested["outer"]["inner"]);
+echo gettype($nested["outer"]["inner"]) . ":" . $nested["outer"]["inner"] . "|";
+
+$box = new EvalDeclaredCtorRefTargetBox();
+new EvalDeclaredCtorRefTargetBridge($box->value);
+echo gettype($box->value) . ":" . $box->value . "|";
+
+EvalDeclaredCtorRefTargetStatic::$value = "5";
+new EvalDeclaredCtorRefTargetBridge(EvalDeclaredCtorRefTargetStatic::$value);
+return gettype(EvalDeclaredCtorRefTargetStatic::$value) . ":" . EvalDeclaredCtorRefTargetStatic::$value;');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "integer:6|integer:7|integer:8|integer:8|integer:10"
+    );
+}
+
+/// Verifies eval-declared constructor by-reference writeback happens before catchable throw.
+#[test]
+fn test_eval_declared_constructor_by_ref_lvalue_writeback_before_throw() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalDeclaredCtorThrowRefTargetBridge {
+    public function __construct(int &$value) {
+        $value = $value + 11;
+        throw new Exception("eval-ctor-lvalue");
+    }
+}
+
+class EvalDeclaredCtorThrowRefTargetBox {
+    public int $value = 5;
+}
+
+$items = ["x" => "1"];
+try {
+    new EvalDeclaredCtorThrowRefTargetBridge($items["x"]);
+    echo "bad";
+} catch (Throwable $e) {
+    echo get_class($e) . ":" . $e->getMessage() . ":";
+}
+echo gettype($items["x"]) . ":" . $items["x"] . "|";
+
+$box = new EvalDeclaredCtorThrowRefTargetBox();
+try {
+    new EvalDeclaredCtorThrowRefTargetBridge($box->value);
+    echo "bad";
+} catch (Throwable $e) {
+    echo get_class($e) . ":" . $e->getMessage() . ":";
+}
+return gettype($box->value) . ":" . $box->value;');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "Exception:eval-ctor-lvalue:integer:12|Exception:eval-ctor-lvalue:integer:16"
+    );
+}
