@@ -1715,14 +1715,34 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_this(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_closure_with_evaluated_args_and_bound_this_scope(
+        closure,
+        bound_this,
+        None,
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Evaluates one runtime eval closure with `$this` and an optional binding scope.
+pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_this_scope(
+    closure: &EvalClosure,
+    bound_this: RuntimeCellHandle,
+    bound_scope: Option<String>,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if closure.is_static() {
         values.warning("Cannot bind an instance to a static closure")?;
         return values.null();
     }
-    let class_name = eval_closure_bound_object_class_name(bound_this, context, values)?;
+    let called_class = eval_closure_bound_object_class_name(bound_this, context, values)?;
+    let class_scope = bound_scope.unwrap_or_else(|| called_class.clone());
     eval_closure_with_optional_bound_this(
         closure,
-        Some((bound_this, class_name)),
+        Some((bound_this, class_scope, called_class)),
         evaluated_args,
         context,
         values,
@@ -1732,7 +1752,7 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_this(
 /// Evaluates one runtime eval closure with optional `$this` binding metadata.
 fn eval_closure_with_optional_bound_this(
     closure: &EvalClosure,
-    bound_this: Option<(RuntimeCellHandle, String)>,
+    bound_this: Option<(RuntimeCellHandle, String, String)>,
     evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -1741,9 +1761,9 @@ fn eval_closure_with_optional_bound_this(
     let static_names = static_var_names(function.body());
     let bound_class_pushed = bound_this.is_some();
     context.push_function(function.name());
-    if let Some((_, class_name)) = &bound_this {
-        context.push_class_scope(class_name.to_string());
-        context.push_called_class_scope(class_name.to_string());
+    if let Some((_, class_scope, called_class)) = &bound_this {
+        context.push_class_scope(class_scope.to_string());
+        context.push_called_class_scope(called_class.to_string());
     }
     let evaluated_args = match bind_evaluated_method_args(
         function.params(),
@@ -1767,7 +1787,7 @@ fn eval_closure_with_optional_bound_this(
     };
     let mut function_scope = ElephcEvalScope::new();
     bind_closure_captures(&mut function_scope, closure.captures());
-    if let Some((object, _)) = bound_this {
+    if let Some((object, _, _)) = bound_this {
         function_scope.set("this", object, ScopeCellOwnership::Borrowed);
     }
     bind_method_scope_args(

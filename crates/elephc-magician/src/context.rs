@@ -313,6 +313,7 @@ pub enum EvalClosureObjectTarget {
     BoundNamed {
         name: String,
         bound_this: RuntimeCellHandle,
+        bound_scope: Option<String>,
     },
     InvokableObject {
         object: RuntimeCellHandle,
