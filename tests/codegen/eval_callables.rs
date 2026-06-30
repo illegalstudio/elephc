@@ -603,6 +603,50 @@ $box->run();');
     assert_eq!(out, "15:integer:15|19:integer:19|13:integer:13");
 }
 
+/// Verifies `Closure::fromCallable()` resolves special string callables through method scope.
+#[test]
+fn test_eval_closure_from_callable_special_string_callables_preserve_by_ref_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalFromCallableSpecialStringBase {
+    public static function bump(int &$value, int $delta): int {
+        $value += $delta;
+        return $value;
+    }
+}
+
+class EvalFromCallableSpecialStringChild extends EvalFromCallableSpecialStringBase {
+    public int $base = 10;
+
+    public function add(int &$value, int $delta): int {
+        $value += $this->base + $delta;
+        return $value;
+    }
+
+    public function run(): string {
+        $self = Closure::fromCallable("self::add");
+        $first = "2";
+        $out = $self($first, 3) . ":" . gettype($first) . ":" . $first . "|";
+
+        $static = Closure::fromCallable("static::add");
+        $second = "4";
+        $out .= call_user_func_array($static, [&$second, 5]) . ":" . gettype($second) . ":" . $second . "|";
+
+        $parent = Closure::fromCallable("parent::bump");
+        $third = "6";
+        $out .= $parent($third, 7) . ":" . gettype($third) . ":" . $third;
+
+        return $out;
+    }
+}
+
+return (new EvalFromCallableSpecialStringChild())->run();');
+"#,
+    );
+
+    assert_eq!(out, "15:integer:15|19:integer:19|13:integer:13");
+}
+
 /// Verifies eval `is_callable()` supports syntax-only probes and callable-name writeback.
 #[test]
 fn test_eval_is_callable_supports_syntax_only_and_callable_name_writeback() {
