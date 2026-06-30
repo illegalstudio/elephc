@@ -23,14 +23,14 @@ use crate::lexer::TokenKind;
 
 /// Parsed method parameters plus constructor-promotion side products.
 pub(super) struct ParsedMethodParams {
-    params: Vec<String>,
-    parameter_attributes: Vec<Vec<EvalAttribute>>,
-    parameter_types: Vec<Option<EvalParameterType>>,
-    parameter_defaults: Vec<Option<EvalExpr>>,
-    parameter_is_by_ref: Vec<bool>,
-    parameter_is_variadic: Vec<bool>,
-    promoted_properties: Vec<EvalClassProperty>,
-    promoted_assignments: Vec<EvalStmt>,
+    pub(super) params: Vec<String>,
+    pub(super) parameter_attributes: Vec<Vec<EvalAttribute>>,
+    pub(super) parameter_types: Vec<Option<EvalParameterType>>,
+    pub(super) parameter_defaults: Vec<Option<EvalExpr>>,
+    pub(super) parameter_is_by_ref: Vec<bool>,
+    pub(super) parameter_is_variadic: Vec<bool>,
+    pub(super) promoted_properties: Vec<EvalClassProperty>,
+    pub(super) promoted_assignments: Vec<EvalStmt>,
 }
 
 /// Class-body members collected while parsing a named or anonymous eval class.
@@ -45,7 +45,7 @@ struct ParsedClassBody {
 
 /// Type-declaration position controls PHP-only atoms such as `void`, `static`, and `callable`.
 #[derive(Clone, Copy)]
-enum EvalTypePosition {
+pub(super) enum EvalTypePosition {
     FunctionParameter,
     MethodParameter,
     Property,
@@ -2524,7 +2524,7 @@ impl Parser {
     }
 
     /// Consumes a supported function or method return type after `:`.
-    fn parse_optional_return_type(
+    pub(super) fn parse_optional_return_type(
         &mut self,
         position: EvalTypePosition,
     ) -> Result<Option<EvalParameterType>, EvalParseError> {
@@ -4220,6 +4220,7 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
         }
         EvalExpr::Const(_)
         | EvalExpr::ConstFetch(_)
+        | EvalExpr::Closure { .. }
         | EvalExpr::FunctionCallable { .. }
         | EvalExpr::ClassConstantFetch { .. }
         | EvalExpr::ClassNameFetch { .. }

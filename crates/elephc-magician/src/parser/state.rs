@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static ANONYMOUS_CLASS_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static CLOSURE_FUNCTION_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Parses tokenized eval fragments into EvalIR.
 pub(super) struct Parser {
@@ -57,6 +58,12 @@ pub(super) enum UseImportKind {
 pub(super) fn next_anonymous_class_name() -> String {
     let id = ANONYMOUS_CLASS_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("class@anonymous#eval{id}")
+}
+
+/// Returns a parser-global synthetic function name for one eval closure expression.
+pub(super) fn next_closure_function_name() -> String {
+    let id = CLOSURE_FUNCTION_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{{closure:eval:function:{id}}}")
 }
 
 impl NamespaceImports {
