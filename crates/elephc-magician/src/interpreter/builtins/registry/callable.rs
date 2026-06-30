@@ -587,13 +587,27 @@ fn eval_native_object_method_call_user_func_result_for_class(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let Some((declaring_class, _, is_static, is_abstract)) =
+    let Some((declaring_class, visibility, is_static, is_abstract)) =
         eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?
     else {
         return Ok(None);
     };
     if is_static || is_abstract {
         return Ok(None);
+    }
+    if validate_eval_member_access(&declaring_class, visibility, context).is_err()
+        && eval_aot_method_dispatch_metadata_in_hierarchy(class_name, "__call", context, values)?
+            .is_some_and(|(_, _, is_static, is_abstract)| !is_static && !is_abstract)
+    {
+        return eval_native_magic_instance_method_call(
+            object,
+            class_name,
+            method_name,
+            evaluated_args,
+            context,
+            values,
+        )
+        .map(Some);
     }
     eval_native_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
         object,
@@ -696,7 +710,7 @@ fn eval_static_method_call_user_func_result(
     } else {
         dispatch_class.clone()
     };
-    let Some((declaring_class, _, is_static, is_abstract)) =
+    let Some((declaring_class, visibility, is_static, is_abstract)) =
         eval_aot_method_dispatch_metadata_in_hierarchy(
             &native_class,
             method_name,
@@ -708,6 +722,24 @@ fn eval_static_method_call_user_func_result(
     };
     if !is_static || is_abstract {
         return Ok(None);
+    }
+    if validate_eval_member_access(&declaring_class, visibility, context).is_err()
+        && eval_aot_method_dispatch_metadata_in_hierarchy(
+            &native_class,
+            "__callStatic",
+            context,
+            values,
+        )?
+        .is_some_and(|(_, _, is_static, is_abstract)| is_static && !is_abstract)
+    {
+        return eval_native_magic_static_method_call(
+            &native_class,
+            method_name,
+            evaluated_args,
+            context,
+            values,
+        )
+        .map(Some);
     }
     eval_native_static_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
         &native_class,
