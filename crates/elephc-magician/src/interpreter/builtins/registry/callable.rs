@@ -256,12 +256,15 @@ fn eval_closure_object_target_callable(target: &EvalClosureObjectTarget) -> Eval
             name: name.clone(),
             display_name: name.clone(),
         },
-        EvalClosureObjectTarget::BoundNamed { name, bound_this } => {
-            EvaluatedCallable::BoundClosure {
-                name: name.clone(),
-                bound_this: *bound_this,
-            }
-        }
+        EvalClosureObjectTarget::BoundNamed {
+            name,
+            bound_this,
+            bound_scope,
+        } => EvaluatedCallable::BoundClosure {
+            name: name.clone(),
+            bound_this: *bound_this,
+            bound_scope: bound_scope.clone(),
+        },
         EvalClosureObjectTarget::InvokableObject { object } => EvaluatedCallable::InvokableObject {
             object: *object,
         },
@@ -523,14 +526,19 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
             }
             eval_callable_with_values(name, evaluated_args, context, values)
         }
-        EvaluatedCallable::BoundClosure { name, bound_this } => {
+        EvaluatedCallable::BoundClosure {
+            name,
+            bound_this,
+            bound_scope,
+        } => {
             let closure = context
                 .closure(name)
                 .cloned()
                 .ok_or(EvalStatus::UnsupportedConstruct)?;
-            eval_closure_with_evaluated_args_and_bound_this(
+            eval_closure_with_evaluated_args_and_bound_this_scope(
                 &closure,
                 *bound_this,
+                bound_scope.clone(),
                 positional_args(evaluated_args),
                 context,
                 values,
@@ -616,14 +624,19 @@ fn eval_evaluated_callable_with_call_user_func_values(
         EvaluatedCallable::Named { name, .. } => {
             eval_named_callable_with_call_user_func_values(name, evaluated_args, context, values)
         }
-        EvaluatedCallable::BoundClosure { name, bound_this } => {
+        EvaluatedCallable::BoundClosure {
+            name,
+            bound_this,
+            bound_scope,
+        } => {
             let closure = context
                 .closure(name)
                 .cloned()
                 .ok_or(EvalStatus::UnsupportedConstruct)?;
-            eval_closure_with_evaluated_args_and_bound_this(
+            eval_closure_with_evaluated_args_and_bound_this_scope(
                 &closure,
                 *bound_this,
+                bound_scope.clone(),
                 positional_args(evaluated_args),
                 context,
                 values,
@@ -1095,14 +1108,19 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
         EvaluatedCallable::Named { name, .. } => {
             eval_callable_with_call_array_args(name, evaluated_args, context, values)
         }
-        EvaluatedCallable::BoundClosure { name, bound_this } => {
+        EvaluatedCallable::BoundClosure {
+            name,
+            bound_this,
+            bound_scope,
+        } => {
             let closure = context
                 .closure(name)
                 .cloned()
                 .ok_or(EvalStatus::UnsupportedConstruct)?;
-            eval_closure_with_evaluated_args_and_bound_this(
+            eval_closure_with_evaluated_args_and_bound_this_scope(
                 &closure,
                 *bound_this,
+                bound_scope.clone(),
                 evaluated_args,
                 context,
                 values,

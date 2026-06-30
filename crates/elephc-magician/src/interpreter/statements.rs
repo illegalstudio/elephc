@@ -7496,9 +7496,15 @@ fn eval_closure_object_target_from_callable(
 ) -> EvalClosureObjectTarget {
     match callable {
         EvaluatedCallable::Named { name, .. } => EvalClosureObjectTarget::Named(name),
-        EvaluatedCallable::BoundClosure { name, bound_this } => {
-            EvalClosureObjectTarget::BoundNamed { name, bound_this }
-        }
+        EvaluatedCallable::BoundClosure {
+            name,
+            bound_this,
+            bound_scope,
+        } => EvalClosureObjectTarget::BoundNamed {
+            name,
+            bound_this,
+            bound_scope,
+        },
         EvaluatedCallable::InvokableObject { object } => {
             EvalClosureObjectTarget::InvokableObject { object }
         }
@@ -7549,8 +7555,9 @@ fn eval_closure_bind_static(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (target, bound_this) = eval_closure_bind_static_args(evaluated_args, context, values)?;
-    eval_closure_bind_target(target, bound_this, context, values)
+    let (target, bound_this, bound_scope) =
+        eval_closure_bind_static_args(evaluated_args, context, values)?;
+    eval_closure_bind_target(target, bound_this, bound_scope, context, values)
 }
 
 /// Binds static `Closure::bind()` arguments to their PHP parameter slots.
@@ -7558,7 +7565,7 @@ fn eval_closure_bind_static_args(
     evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<(EvalClosureObjectTarget, Option<RuntimeCellHandle>), EvalStatus> {
+) -> Result<(EvalClosureObjectTarget, Option<RuntimeCellHandle>, Option<String>), EvalStatus> {
     let bound = eval_closure_bind_args(
         &["closure", "newThis", "newScope"],
         2,
@@ -7568,17 +7575,21 @@ fn eval_closure_bind_static_args(
     let new_this = required_closure_bind_arg(&bound, 1)?;
     let target = eval_closure_target_arg(closure.value, context, values)?;
     let bound_this = eval_closure_bind_receiver_arg(new_this.value, values)?;
-    Ok((target, bound_this))
+    let bound_scope = eval_closure_bind_scope_arg(bound.get(2), bound_this, context, values)?;
+    Ok((target, bound_this, bound_scope))
 }
 
 /// Binds `Closure::bindTo()` arguments to their PHP parameter slots.
 fn eval_closure_bind_to_args(
     evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+) -> Result<(Option<RuntimeCellHandle>, Option<String>), EvalStatus> {
     let bound = eval_closure_bind_args(&["newThis", "newScope"], 1, evaluated_args)?;
     let new_this = required_closure_bind_arg(&bound, 0)?;
-    eval_closure_bind_receiver_arg(new_this.value, values)
+    let bound_this = eval_closure_bind_receiver_arg(new_this.value, values)?;
+    let bound_scope = eval_closure_bind_scope_arg(bound.get(1), bound_this, context, values)?;
+    Ok((bound_this, bound_scope))
 }
 
 /// Binds positional and named Closure binding arguments while accepting optional scope.
@@ -7662,10 +7673,42 @@ fn eval_closure_bind_receiver_arg(
     Ok(Some(new_this))
 }
 
+/// Converts the optional `newScope` binding argument into a PHP class scope name.
+fn eval_closure_bind_scope_arg(
+    new_scope: Option<&Option<EvaluatedCallArg>>,
+    bound_this: Option<RuntimeCellHandle>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let Some(new_scope) = new_scope.and_then(Option::as_ref) else {
+        return Ok(None);
+    };
+    if values.is_null(new_scope.value)? {
+        return Ok(None);
+    }
+    if values.type_tag(new_scope.value)? == EVAL_TAG_OBJECT {
+        return eval_closure_bound_object_class_name(new_scope.value, context, values).map(Some);
+    }
+    let bytes = values.string_bytes(new_scope.value)?;
+    let scope = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+    if scope.eq_ignore_ascii_case("static") {
+        let Some(bound_this) = bound_this else {
+            return Ok(None);
+        };
+        return eval_closure_bound_object_class_name(bound_this, context, values).map(Some);
+    }
+    Ok(Some(
+        context
+            .resolve_class_name(&scope)
+            .unwrap_or_else(|| scope.trim_start_matches('\\').to_string()),
+    ))
+}
+
 /// Creates a new Closure object with persistent binding metadata when supported.
 fn eval_closure_bind_target(
     target: EvalClosureObjectTarget,
     bound_this: Option<RuntimeCellHandle>,
+    bound_scope: Option<String>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -7687,7 +7730,11 @@ fn eval_closure_bind_target(
                 );
             }
             eval_closure_object_from_target(
-                EvalClosureObjectTarget::BoundNamed { name, bound_this },
+                EvalClosureObjectTarget::BoundNamed {
+                    name,
+                    bound_this,
+                    bound_scope,
+                },
                 context,
                 values,
             )
@@ -9216,8 +9263,10 @@ fn eval_closure_object_method_result(
             .map(Some);
     }
     if method_name.eq_ignore_ascii_case("bindTo") {
-        let bound_this = eval_closure_bind_to_args(evaluated_args, values)?;
-        return eval_closure_bind_target(target, bound_this, context, values).map(Some);
+        let (bound_this, bound_scope) =
+            eval_closure_bind_to_args(evaluated_args, context, values)?;
+        return eval_closure_bind_target(target, bound_this, bound_scope, context, values)
+            .map(Some);
     }
     if !method_name.eq_ignore_ascii_case("call") {
         return Ok(None);
@@ -9241,11 +9290,14 @@ fn eval_closure_object_method_result(
             )
             .map(Some)
         }
-        EvalClosureObjectTarget::BoundNamed { name, .. } => {
+        EvalClosureObjectTarget::BoundNamed {
+            name, bound_scope, ..
+        } => {
             if let Some(closure) = context.closure(&name).cloned() {
-                return eval_closure_with_evaluated_args_and_bound_this(
+                return eval_closure_with_evaluated_args_and_bound_this_scope(
                     &closure,
                     bound_this,
+                    bound_scope,
                     call_args,
                     context,
                     values,
@@ -9315,9 +9367,15 @@ fn eval_closure_object_invoke_result(
             display_name: name.clone(),
             name,
         },
-        EvalClosureObjectTarget::BoundNamed { name, bound_this } => {
-            EvaluatedCallable::BoundClosure { name, bound_this }
-        }
+        EvalClosureObjectTarget::BoundNamed {
+            name,
+            bound_this,
+            bound_scope,
+        } => EvaluatedCallable::BoundClosure {
+            name,
+            bound_this,
+            bound_scope,
+        },
         EvalClosureObjectTarget::InvokableObject { object } => {
             EvaluatedCallable::InvokableObject { object }
         }

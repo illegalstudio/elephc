@@ -159,6 +159,45 @@ echo is_null($static->bindTo($box)) ? "N" : "n";');
     assert_eq!(out, "O:15:integer:15|19:integer:19|23:integer:23|N");
 }
 
+/// Verifies eval `Closure::bind()` and `bindTo()` honor explicit private-access scope.
+#[test]
+fn test_eval_closure_bind_honors_explicit_scope_and_by_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalClosureScopeBase {
+    private int $secret = 40;
+}
+
+class EvalClosureScopeChild extends EvalClosureScopeBase {}
+
+class EvalClosureScopeFactory {
+    public function make() {
+        return function(int &$value, int $delta): string {
+            $value += $this->secret + $delta;
+            return $value . ":" . get_called_class();
+        };
+    }
+}
+
+$fn = (new EvalClosureScopeFactory())->make();
+$child = new EvalClosureScopeChild();
+
+$bound = $fn->bindTo($child, "EvalClosureScopeBase");
+$first = "1";
+echo $bound($first, 1) . ":" . gettype($first) . ":" . $first . "|";
+
+$staticBound = Closure::bind($fn, $child, "EvalClosureScopeBase");
+$second = "2";
+echo call_user_func_array($staticBound, [&$second, 2]) . ":" . gettype($second) . ":" . $second;');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "42:EvalClosureScopeChild:integer:42|44:EvalClosureScopeChild:integer:44"
+    );
+}
+
 /// Verifies eval Closure `__invoke` works as an array callable and preserves by-ref args.
 #[test]
 fn test_eval_closure_invoke_array_callable_preserves_by_ref_args() {
