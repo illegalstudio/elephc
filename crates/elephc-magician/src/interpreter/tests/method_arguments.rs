@@ -709,6 +709,69 @@ return $value;"#,
     assert_eq!(values.get(result), FakeValue::Int(3));
 }
 
+/// Verifies AOT instance method by-reference writeback still runs when the method fatals.
+#[test]
+fn execute_program_writes_back_runtime_method_by_ref_before_fatal() {
+    let program = parse_fragment(
+        br#"$box = new KnownClass(10);
+$value = "3";
+$box->add2_x($value);"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut signature = NativeCallableSignature::new(1);
+    assert!(signature.set_param_name(0, "left"));
+    assert!(signature.set_param_type(
+        0,
+        EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false)
+    ));
+    assert!(signature.set_param_by_ref(0, true));
+    assert!(context.define_native_method_signature("KnownClass", "add2_x", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect_err("runtime method should fail after argument binding");
+    let value = scope
+        .entry("value")
+        .expect("caller variable should remain visible")
+        .cell();
+
+    assert_eq!(err, EvalStatus::UnsupportedConstruct);
+    assert_eq!(values.get(value), FakeValue::Int(3));
+}
+
+/// Verifies AOT static method by-reference writeback still runs when the method fatals.
+#[test]
+fn execute_program_writes_back_runtime_static_method_by_ref_before_fatal() {
+    let program = parse_fragment(
+        br#"$value = "3";
+KnownClass::sum($value);"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut signature = NativeCallableSignature::new(1);
+    assert!(signature.set_param_name(0, "left"));
+    assert!(signature.set_param_type(
+        0,
+        EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false)
+    ));
+    assert!(signature.set_param_by_ref(0, true));
+    assert!(context.define_native_static_method_signature("KnownClass", "sum", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect_err("runtime static method should fail after argument binding");
+    let value = scope
+        .entry("value")
+        .expect("caller variable should remain visible")
+        .cell();
+
+    assert_eq!(err, EvalStatus::UnsupportedConstruct);
+    assert_eq!(values.get(value), FakeValue::Int(3));
+}
+
 /// Verifies runtime/AOT method fallback rejects named arguments without metadata.
 #[test]
 fn execute_program_rejects_unregistered_named_args_for_runtime_method_fallback() {

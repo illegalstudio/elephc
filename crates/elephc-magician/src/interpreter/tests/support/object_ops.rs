@@ -1163,6 +1163,12 @@ impl FakeOps {
             }
             return Ok(());
         }
+        if class_name
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case("KnownFailingConstructor"))
+        {
+            return Err(EvalStatus::RuntimeFatal);
+        }
         if let Some(first) = args.first().copied() {
             if let Some((_, value)) = properties.iter_mut().find(|(name, _)| name == "x") {
                 *value = first;
@@ -1174,7 +1180,8 @@ impl FakeOps {
     }
     /// Reports one fake AOT class for eval `class_exists` unit tests.
     pub(super) fn runtime_class_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        Ok(name.eq_ignore_ascii_case("KnownClass"))
+        Ok(name.eq_ignore_ascii_case("KnownClass")
+            || name.eq_ignore_ascii_case("KnownFailingConstructor"))
     }
     /// Reports fake generated AOT ReflectionClass flags for eval metadata unit tests.
     pub(super) fn runtime_reflection_class_flags(
