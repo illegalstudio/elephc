@@ -21,11 +21,27 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func(
     if args.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let release_callback = eval_call_user_func_callback_expr_is_temporary(&args[0]);
     let mut evaluated_args = Vec::with_capacity(args.len());
-    for arg in args {
-        evaluated_args.push(eval_expr(arg, context, scope, values)?);
+    for (index, arg) in args.iter().enumerate() {
+        let value = match eval_expr(arg, context, scope, values) {
+            Ok(value) => value,
+            Err(status) => {
+                if index > 0 && release_callback {
+                    values.release(evaluated_args[0])?;
+                }
+                return Err(status);
+            }
+        };
+        evaluated_args.push(value);
     }
-    eval_call_user_func_with_values_from_scope(evaluated_args, Some(scope), context, values)
+    let callback = evaluated_args[0];
+    let result =
+        eval_call_user_func_with_values_from_scope(evaluated_args, Some(scope), context, values);
+    if release_callback {
+        values.release(callback)?;
+    }
+    result
 }
 
 /// Evaluates `call_user_func_array($name, $args)` inside a runtime eval fragment.
@@ -38,7 +54,7 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func_array(
     let [callback, arg_array] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let release_callback = eval_call_user_func_array_callback_is_temporary(callback);
+    let release_callback = eval_call_user_func_callback_expr_is_temporary(callback);
     let release_arg_array = matches!(arg_array, EvalExpr::Array(_));
     let callback = eval_expr(callback, context, scope, values)?;
     let arg_array = match eval_expr(arg_array, context, scope, values) {
@@ -66,8 +82,8 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func_array(
     result
 }
 
-/// Returns whether a `call_user_func_array` callback expression allocates a temporary cell.
-fn eval_call_user_func_array_callback_is_temporary(callback: &EvalExpr) -> bool {
+/// Returns whether a `call_user_func*` callback expression allocates a temporary cell.
+fn eval_call_user_func_callback_expr_is_temporary(callback: &EvalExpr) -> bool {
     matches!(callback, EvalExpr::Const(_))
 }
 
