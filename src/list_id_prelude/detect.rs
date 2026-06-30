@@ -36,6 +36,16 @@ fn name_is_listid_fn(name: &Name) -> bool {
         .is_some_and(|segment| segment.eq_ignore_ascii_case("timezone_identifiers_list"))
 }
 
+/// Returns whether a function name is PHP's `eval` construct.
+///
+/// Runtime eval can call `timezone_identifiers_list()` from a string that this
+/// prelude detector cannot inspect statically, so an `eval(...)` call is treated
+/// as a potential identifier-listing use.
+fn name_is_eval_fn(name: &Name) -> bool {
+    name.last_segment()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("eval"))
+}
+
 /// Returns whether a method name is `listIdentifiers`, compared case-insensitively
 /// as PHP method names are.
 fn method_is_listid(method: &str) -> bool {
@@ -128,7 +138,7 @@ fn expr_refs_listid(expr: &Expr) -> bool {
         | ExprKind::MagicConstant(_) => false,
 
         ExprKind::FunctionCall { name, args } => {
-            name_is_listid_fn(name) || args.iter().any(expr_refs_listid)
+            name_is_eval_fn(name) || name_is_listid_fn(name) || args.iter().any(expr_refs_listid)
         }
         ExprKind::MethodCall {
             object,
@@ -463,6 +473,15 @@ mod tests {
     fn detects_case_insensitive() {
         assert!(program_uses_list_identifiers(&parse(
             r#"<?php $z = TIMEZONE_IDENTIFIERS_LIST();"#
+        )));
+    }
+
+    /// A runtime `eval(...)` call is detected because the eval fragment can call
+    /// `timezone_identifiers_list()` dynamically.
+    #[test]
+    fn detects_eval_call() {
+        assert!(program_uses_list_identifiers(&parse(
+            r#"<?php eval('$z = timezone_identifiers_list(DateTimeZone::EUROPE);');"#
         )));
     }
 

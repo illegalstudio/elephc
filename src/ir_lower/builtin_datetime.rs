@@ -177,7 +177,14 @@ fn eval_date_alias_builtin_datetime_methods(module: &Module) -> Vec<(String, Str
     for method_name in ["createFromDateString", "format"] {
         methods.push(("DateInterval".to_string(), php_method_key(method_name)));
     }
-    for method_name in ["getName", "getOffset", "listIdentifiers"] {
+    for method_name in [
+        "getName",
+        "getOffset",
+        "listIdentifiers",
+        "getLocation",
+        "getTransitions",
+        "listAbbreviations",
+    ] {
         methods.push(("DateTimeZone".to_string(), php_method_key(method_name)));
     }
     methods

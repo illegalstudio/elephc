@@ -39,6 +39,16 @@ fn name_is_tz_fn(name: &Name) -> bool {
     })
 }
 
+/// Returns whether a function name is PHP's `eval` construct.
+///
+/// Runtime eval can call the introspection aliases from a string that this
+/// prelude detector cannot inspect statically, so an `eval(...)` call is treated
+/// as a potential introspection use.
+fn name_is_eval_fn(name: &Name) -> bool {
+    name.last_segment()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("eval"))
+}
+
 /// Returns whether a method name is one of the three introspection methods,
 /// compared case-insensitively as PHP method names are.
 fn method_is_tz(method: &str) -> bool {
@@ -131,7 +141,7 @@ fn expr_refs_tz(expr: &Expr) -> bool {
         | ExprKind::MagicConstant(_) => false,
 
         ExprKind::FunctionCall { name, args } => {
-            name_is_tz_fn(name) || args.iter().any(expr_refs_tz)
+            name_is_eval_fn(name) || name_is_tz_fn(name) || args.iter().any(expr_refs_tz)
         }
         ExprKind::MethodCall {
             object,
@@ -458,6 +468,15 @@ mod tests {
     fn detects_case_insensitive() {
         assert!(program_uses_tz_introspection(&parse(
             r#"<?php $l = TIMEZONE_LOCATION_GET($tz);"#
+        )));
+    }
+
+    /// A runtime `eval(...)` call is detected because the eval fragment can call
+    /// the introspection aliases dynamically.
+    #[test]
+    fn detects_eval_call() {
+        assert!(program_uses_tz_introspection(&parse(
+            r#"<?php eval('$l = timezone_location_get(new DateTimeZone("UTC"));');"#
         )));
     }
 

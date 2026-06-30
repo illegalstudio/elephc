@@ -181,7 +181,10 @@ echo call_user_func("timezone_version_get") === timezone_version_get() ? "C" : "
 echo ":";
 echo idate("Y", 0);
 echo ":";
-echo call_user_func("idate", "Y", 0);"#,
+echo call_user_func("idate", "Y", 0);
+echo ":";
+$ids = timezone_identifiers_list(512);
+echo count($ids) . ":" . $ids[0];"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
@@ -189,7 +192,7 @@ echo call_user_func("idate", "Y", 0);"#,
 
     let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "VC:1970:1970");
+    assert_eq!(values.output, "VC:1970:1970:38:Pacific/Apia");
 }
 
 /// Verifies eval `interface_exists()` probes generated interface metadata by callable.

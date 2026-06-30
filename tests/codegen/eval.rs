@@ -2755,6 +2755,28 @@ echo ":" . (timezone_version_get() === "" ? "bad" : "version");');
     assert_eq!(out, "2024-01-02 03:04:05:2024:01:UTC:1:version");
 }
 
+/// Verifies eval can execute timezone-introspection aliases without static DateTimeZone references.
+#[test]
+fn test_eval_dispatches_timezone_introspection_aliases_without_static_references() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$paris = timezone_open("Europe/Paris");
+$loc = timezone_location_get($paris);
+echo $loc["country_code"] . ":" . $loc["latitude"] . ":" . $loc["longitude"];
+$transitions = timezone_transitions_get($paris, mktime(0,0,0,1,1,2020), mktime(0,0,0,6,1,2021));
+echo ":" . count($transitions) . ":" . $transitions[0]["abbr"] . ":" . $transitions[3]["abbr"];
+$abbr = timezone_abbreviations_list();
+echo ":" . count($abbr) . ":" . $abbr["acdt"][0]["timezone_id"];
+$ids = timezone_identifiers_list(DateTimeZone::PACIFIC);
+echo ":" . count($ids) . ":" . $ids[0];');
+"#,
+    );
+    assert_eq!(
+        out,
+        "FR:48.86666:2.33333:4:CET:CEST:144:Australia/Adelaide:38:Pacific/Apia"
+    );
+}
+
 /// Verifies eval `strtotime()` parses supported ISO date strings and rejects others.
 #[test]
 fn test_eval_dispatches_strtotime_builtin_calls() {

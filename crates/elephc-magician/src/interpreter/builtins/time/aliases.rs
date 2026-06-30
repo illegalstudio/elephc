@@ -13,8 +13,18 @@
 use super::super::super::*;
 use super::*;
 
+#[path = "../../../../../../src/list_id_prelude/table.rs"]
+mod timezone_identifier_table;
+
 const EVAL_TZ_VERSION: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../elephc-tz/data/version.data"));
+const EVAL_DATETIMEZONE_ALL: i64 = 2047;
+const EVAL_DATETIMEZONE_PER_COUNTRY: i64 = 4096;
+const EVAL_DATETIMEZONE_PER_COUNTRY_ERROR: &str = concat!(
+    "DateTimeZone::listIdentifiers(): Argument #2 ($countryCode) must be a two-letter ",
+    "ISO 3166-1 compatible country code when argument #1 ($timezoneGroup) is ",
+    "DateTimeZone::PER_COUNTRY",
+);
 
 /// Attempts to execute one direct procedural date/time alias call.
 pub(in crate::interpreter) fn eval_date_procedural_alias_call(
@@ -154,9 +164,7 @@ fn eval_date_alias_result(
         "strftime" => eval_strftime_alias(false, args, context, values),
         "gmstrftime" => eval_strftime_alias(true, args, context, values),
         "timezone_open" => eval_new_datetime_alias("DateTimeZone", args, context, values),
-        "timezone_identifiers_list" => {
-            eval_static_alias("DateTimeZone", "listIdentifiers", args, context, values)
-        }
+        "timezone_identifiers_list" => eval_timezone_identifiers_alias(args, context, values),
         "timezone_location_get" => eval_method_alias(args, 0, "getLocation", &[], context, values),
         "timezone_transitions_get" => {
             eval_method_alias_tail(args, 0, "getTransitions", context, values)
@@ -265,6 +273,104 @@ fn eval_static_alias(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_static_method_call_result(class_name, method_name, positional_args(args), context, values)
+}
+
+/// Calls the injected list-identifiers prelude function, falling back to the
+/// synthetic method if the native prelude function is unavailable.
+fn eval_timezone_identifiers_alias(
+    args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(function) = context.native_function("__elephc_list_identifiers") {
+        let bound_args =
+            bind_evaluated_native_function_args(&function, positional_args(args), context, values)?;
+        return eval_native_function_with_values(function, bound_args, context, values);
+    }
+    eval_timezone_identifiers_filtered_alias(args, context, values)
+}
+
+/// Implements `timezone_identifiers_list()` filtering for eval-only programs.
+fn eval_timezone_identifiers_filtered_alias(
+    args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if args.len() > 2 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let group = eval_timezone_identifier_group(args.first().copied(), values)?;
+    let country = eval_timezone_identifier_country(args.get(1).copied(), values)?;
+    if group & EVAL_DATETIMEZONE_PER_COUNTRY != 0 && country.is_empty() {
+        return eval_timezone_identifiers_country_error(context, values);
+    }
+    let rows = eval_timezone_identifier_rows(group, &country);
+    let mut result = values.array_new(rows.len())?;
+    for (index, name) in rows.into_iter().enumerate() {
+        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        let value = values.string(name)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
+/// Returns the requested DateTimeZone group mask, defaulting to `DateTimeZone::ALL`.
+fn eval_timezone_identifier_group(
+    value: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    value
+        .map(|value| eval_int_value(value, values))
+        .unwrap_or(Ok(EVAL_DATETIMEZONE_ALL))
+}
+
+/// Returns the requested PER_COUNTRY country code, defaulting to the empty marker.
+fn eval_timezone_identifier_country(
+    value: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let Some(value) = value else {
+        return Ok(String::new());
+    };
+    String::from_utf8(values.string_bytes(value)?).map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Returns the identifiers matching one DateTimeZone group/country selector.
+fn eval_timezone_identifier_rows(group: i64, country: &str) -> Vec<&'static str> {
+    timezone_identifier_table::TIMEZONE_GROUPS_TABLE
+        .split(';')
+        .filter_map(|row| eval_timezone_identifier_row(row, group, country))
+        .collect()
+}
+
+/// Returns one table row's identifier when it matches the selector.
+fn eval_timezone_identifier_row(
+    row: &'static str,
+    group: i64,
+    country: &str,
+) -> Option<&'static str> {
+    let mut fields = row.split(',');
+    let name = fields.next()?;
+    let mask = fields.next()?.parse::<i64>().ok()?;
+    let row_country = fields.next()?;
+    if group & EVAL_DATETIMEZONE_PER_COUNTRY != 0 {
+        (row_country == country).then_some(name)
+    } else {
+        (mask & group != 0).then_some(name)
+    }
+}
+
+/// Throws PHP's `ValueError` for PER_COUNTRY calls without a country code.
+fn eval_timezone_identifiers_country_error<T>(
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let exception = values.new_object("ValueError")?;
+    let message = values.string(EVAL_DATETIMEZONE_PER_COUNTRY_ERROR)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
 }
 
 /// Calls one object-method alias with selected argument indices.
