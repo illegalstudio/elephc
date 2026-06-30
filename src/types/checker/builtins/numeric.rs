@@ -32,7 +32,7 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 ///   `pi`, `round`, `pow`, `intdiv`, `fmod`, `fdiv`, `log`
 /// - Random: `rand`, `mt_rand`, `random_int`
 /// - Cast/retype: `floatval`, `settype`, `gettype`
-/// - Array/string helpers: `min`, `max`, `number_format`
+/// - Array/string helpers: `min`, `max`
 /// - Control: `exit`, `die`, `empty`
 /// - Unset: `unset`
 /// - Buffers: `buffer_len`, `buffer_free`
