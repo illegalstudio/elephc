@@ -161,6 +161,30 @@ return $f("1") . ":" . $m("2") . ":" . $s("3") . ":" . $ds("4") . ":" . $i("5");
     );
 }
 
+/// Verifies namespaced eval first-class function callables use PHP builtin fallback rules.
+#[test]
+fn test_eval_first_class_function_callables_follow_namespace_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+namespace EvalFirstClassFallback;
+
+eval('namespace EvalFirstClassFallback;
+function strrev($value) {
+    return "local:" . $value;
+}
+
+$builtin = strlen(...);
+$local = strrev(...);
+echo $builtin("abcd") . "|";
+echo $local("ab") . "|";
+echo call_user_func($builtin, "xyz") . "|";
+echo call_user_func_array($local, ["cd"]);');
+"#,
+    );
+
+    assert_eq!(out, "4|local:ab|3|local:cd");
+}
+
 /// Verifies eval first-class callables reject invalid method targets at creation time.
 #[test]
 fn test_eval_first_class_callable_validation_rejects_invalid_method_targets() {
