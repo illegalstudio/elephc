@@ -5,8 +5,8 @@
 //! - `crate::interpreter::builtins::regex` re-exports.
 //!
 //! Key details:
-//! - Callback replacement evaluates through the persistent eval context and casts
-//!   callback results with runtime string coercion.
+//! - Callback replacement evaluates general eval callables and casts callback
+//!   results with runtime string coercion.
 
 use super::super::super::*;
 use super::super::*;
@@ -77,7 +77,7 @@ pub(in crate::interpreter) fn eval_preg_replace_callback_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let regex = eval_preg_regex(pattern, values)?;
-    let callback = eval_callable_name(callback, values)?;
+    let callback = eval_callable(callback, context, values)?;
     let subject = values.string_bytes(subject)?;
     let mut result = Vec::with_capacity(subject.len());
     let mut cursor = 0;
@@ -87,7 +87,8 @@ pub(in crate::interpreter) fn eval_preg_replace_callback_result(
         };
         result.extend_from_slice(&subject[cursor..matched.start()]);
         let matches = eval_preg_capture_array(&subject, Some(&captures), false, false, values)?;
-        let callback_result = eval_callable_with_values(&callback, vec![matches], context, values)?;
+        let callback_result =
+            eval_evaluated_callable_with_values(&callback, vec![matches], context, values)?;
         let callback_result = values.cast_string(callback_result)?;
         let callback_bytes = values.string_bytes(callback_result)?;
         result.extend_from_slice(&callback_bytes);

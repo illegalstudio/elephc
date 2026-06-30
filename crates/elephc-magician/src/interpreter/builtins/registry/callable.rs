@@ -242,20 +242,6 @@ pub(in crate::interpreter) fn eval_string_callable(
     ))
 }
 
-/// Normalizes one string function callback name for builtin callback positions.
-pub(in crate::interpreter) fn eval_callable_name(
-    callback: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<String, EvalStatus> {
-    let callback = values.string_bytes(callback)?;
-    let callback = String::from_utf8(callback).map_err(|_| EvalStatus::RuntimeFatal)?;
-    let callback = callback.trim_start_matches('\\').to_ascii_lowercase();
-    if callback.contains("::") {
-        return Err(EvalStatus::UnsupportedConstruct);
-    }
-    Ok(callback)
-}
-
 /// Invokes an already normalized callback with source-order positional values.
 pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
     callback: &EvaluatedCallable,
