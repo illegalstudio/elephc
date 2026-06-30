@@ -21,6 +21,7 @@ use std::sync::OnceLock;
 
 use crate::builtins::convert::{default_spec_to_expr, type_spec_to_php};
 use crate::builtins::spec::BuiltinSpec;
+use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
@@ -205,6 +206,56 @@ pub fn arity_bounds(name: &str) -> Option<(usize, Option<usize>)> {
     Some((min, max))
 }
 
+/// Validates the argument count for a named builtin and returns a standard arity error on mismatch.
+///
+/// Uses `arity_bounds(name)` to determine the expected arity and compares it against
+/// `arg_count`. Returns `Ok(())` when the count is in range. Returns a `CompileError`
+/// with `span` and a message matching the dominant legacy `"<name>() takes …"` phrasing:
+///
+/// - `min == max == 0`: `"<name>() takes no arguments"`
+/// - `min == max == 1`: `"<name>() takes exactly 1 argument"` (singular)
+/// - `min == max > 1`: `"<name>() takes exactly N arguments"` (plural)
+/// - `max == None` (variadic), `min == 1`: `"<name>() takes at least 1 argument"` (singular)
+/// - `max == None` (variadic), `min > 1`: `"<name>() takes at least N arguments"` (plural)
+/// - `max == Some(M)`, `min == 0`, `M == 1`: `"<name>() takes at most 1 argument"` (singular)
+/// - `max == Some(M)`, `min == 0`, `M > 1`: `"<name>() takes at most M arguments"` (plural)
+/// - `max == Some(M)`, `min < M`: `"<name>() takes N to M arguments"`
+///
+/// Returns `Ok(())` without error if `name` is not registered (unknown builtins are handled
+/// upstream by the catalog / type checker, which provides its own unknown-name diagnostic).
+pub fn check_arity(name: &str, arg_count: usize, span: Span) -> Result<(), CompileError> {
+    let (min, max) = match arity_bounds(name) {
+        Some(bounds) => bounds,
+        None => return Ok(()),
+    };
+
+    let in_range = match max {
+        None => arg_count >= min,
+        Some(m) => arg_count >= min && arg_count <= m,
+    };
+
+    if in_range {
+        return Ok(());
+    }
+
+    let msg = match (min, max) {
+        (0, Some(0)) => format!("{}() takes no arguments", name),
+        (n, Some(m)) if n == m && n == 1 => {
+            format!("{}() takes exactly 1 argument", name)
+        }
+        (n, Some(m)) if n == m => {
+            format!("{}() takes exactly {} arguments", name, n)
+        }
+        (n, None) if n == 1 => format!("{}() takes at least 1 argument", name),
+        (n, None) => format!("{}() takes at least {} arguments", name, n),
+        (0, Some(1)) => format!("{}() takes at most 1 argument", name),
+        (0, Some(m)) => format!("{}() takes at most {} arguments", name, m),
+        (n, Some(m)) => format!("{}() takes {} to {} arguments", name, n, m),
+    };
+
+    Err(CompileError::new(span, &msg))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,6 +335,14 @@ mod tests {
             all.contains(&"__macro_probe"),
             "names() must yield all registered builtins"
         );
+    }
+
+    /// Verifies the derived arity error mirrors the legacy "<name>() takes …" messages.
+    #[test]
+    fn arity_messages_match_legacy() {
+        // probe: exactly 1 arg
+        let err = check_arity("__macro_probe", 2, crate::span::Span::dummy()).unwrap_err();
+        assert!(err.message.contains("__macro_probe() takes exactly 1 argument"));
     }
 
     /// Verifies arity_bounds for a fixed-arity builtin with one optional param.
