@@ -114,6 +114,78 @@ return call_user_func_array($static, [&$d, 9]) . ":" . gettype($d) . ":" . $d;')
     );
 }
 
+/// Verifies eval-declared callable forms preserve by-ref writeback.
+#[test]
+fn test_eval_declared_callable_forms_preserve_by_ref_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('function eval_declared_ref_add(int &$value, int $delta): int {
+    $value = $value + $delta;
+    return $value;
+}
+
+class EvalDeclaredRefCallableBox {
+    public int $base = 10;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public static function add(int &$value, int $delta): int {
+        $value = $value + $delta;
+        return $value;
+    }
+}
+
+$string = "eval_declared_ref_add";
+$a = "2";
+echo $string($a, 3) . ":" . gettype($a) . ":" . $a . "|";
+
+$first = eval_declared_ref_add(...);
+$b = "4";
+echo $first($b, 5) . ":" . gettype($b) . ":" . $b . "|";
+$c = "6";
+echo call_user_func_array($first, [&$c, 7]) . ":" . gettype($c) . ":" . $c . "|";
+
+$box = new EvalDeclaredRefCallableBox();
+$instance = [$box, "bump"];
+$d = "8";
+echo $instance($d, 4) . ":" . gettype($d) . ":" . $d . "|";
+$e = "1";
+echo call_user_func_array($instance, [&$e, 5]) . ":" . gettype($e) . ":" . $e . "|";
+
+$static = ["EvalDeclaredRefCallableBox", "add"];
+$f = "7";
+echo $static($f, 6) . ":" . gettype($f) . ":" . $f . "|";
+
+$closureFunction = Closure::fromCallable("eval_declared_ref_add");
+$g = "3";
+echo $closureFunction($g, 4) . ":" . gettype($g) . ":" . $g . "|";
+
+$closureInstance = Closure::fromCallable([$box, "bump"]);
+$h = "2";
+echo $closureInstance($h, 6) . ":" . gettype($h) . ":" . $h . "|";
+
+$closureStatic = Closure::fromCallable(["EvalDeclaredRefCallableBox", "add"]);
+$i = "5";
+echo $closureStatic($i, 8) . ":" . gettype($i) . ":" . $i . "|";
+
+$closureNamedStatic = Closure::fromCallable("EvalDeclaredRefCallableBox::add");
+$j = "6";
+return call_user_func_array($closureNamedStatic, [&$j, 9]) . ":" . gettype($j) . ":" . $j;');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        concat!(
+            "5:integer:5|9:integer:9|13:integer:13|22:integer:22|16:integer:16|",
+            "13:integer:13|7:integer:7|18:integer:18|13:integer:13|15:integer:15"
+        )
+    );
+}
+
 /// Verifies eval first-class callables are PHP-visible `Closure` objects and remain invokable.
 #[test]
 fn test_eval_first_class_callables_are_php_closure_objects() {
