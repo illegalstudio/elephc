@@ -310,6 +310,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_is_empty(emitter);
     arrays::emit_mixed_numeric_binops(emitter);
     arrays::emit_mixed_strict_eq(emitter);
+    arrays::emit_array_strict_eq(emitter);
+    arrays::emit_hash_strict_eq(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_write_stdout(emitter);
     arrays::emit_object_free_deep(emitter);
@@ -463,6 +465,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_var_dump_emit_bool_line(emitter);
     io::emit_var_dump_emit_float_line(emitter);
     io::emit_var_dump_emit_null_line(emitter);
+    io::emit_var_dump_spaces(emitter);
+    io::emit_var_dump_value(emitter);
+    io::emit_var_dump_indexed(emitter);
     io::emit_print_r_spaces(emitter);
     io::emit_print_r_open(emitter);
     io::emit_print_r_close(emitter);

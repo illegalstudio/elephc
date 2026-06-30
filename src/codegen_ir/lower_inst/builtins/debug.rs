@@ -366,7 +366,17 @@ fn emit_var_dump_null(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits `var_dump` output for an array/hash payload in the integer result register.
+/// Homogeneous typed arrays use a per-type fast-path walker; `Array(Mixed)`,
+/// `AssocArray`, and heterogeneous containers route through the recursive
+/// `__rt_var_dump_value` renderer so nested arrays print fully.
 fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()> {
+    // Recursive containers (Mixed elements, hashes, unions) go through the
+    // single-value renderer, which emits the `array(N) {\n ... }\n` body itself.
+    if var_dump_uses_recursive_renderer(ty) {
+        emit_var_dump_recursive_array(ctx, ty)?;
+        return Ok(());
+    }
+
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     emit_write_literal(ctx, b"array(");
@@ -394,12 +404,55 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
     Ok(())
 }
 
-/// Returns the runtime var_dump walker for an array/hash element layout.
-///
-/// Homogeneous indexed arrays use a per-element-type walker; `Array(Mixed)` uses the
-/// boxed-cell walker; associative arrays (hashes) use `__rt_var_dump_hash`, which iterates
-/// entries and formats string/integer keys plus scalar values (nested containers fall back
-/// to `NULL`, matching the indexed Mixed walker).
+/// Routes a heterogeneous container through the recursive `__rt_var_dump_value`
+/// renderer with tag and indent 0, so nested arrays/hashes print fully. The
+/// renderer emits the `array(N) {\n ... }\n` body itself.
+fn emit_var_dump_recursive_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()> {
+    let tag = var_dump_recursive_tag(ty);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // container pointer → value low argument
+            ctx.emitter.instruction(&format!("mov x0, #{}", tag));              // runtime tag for the value renderer
+            ctx.emitter.instruction("mov x2, #0");                              // high word unused for containers
+            ctx.emitter.instruction("mov x3, #0");                              // top-level indent = 0
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rax");                            // container pointer → value low argument
+            ctx.emitter.instruction(&format!("mov edi, {}", tag));              // runtime tag for the value renderer
+            ctx.emitter.instruction("mov edx, 0");                              // high word unused for containers
+            ctx.emitter.instruction("mov ecx, 0");                              // top-level indent = 0
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_var_dump_value");
+    Ok(())
+}
+
+/// Returns the runtime tag to feed `__rt_var_dump_value` for a recursive container type.
+fn var_dump_recursive_tag(ty: &PhpType) -> u64 {
+    match ty {
+        PhpType::AssocArray { .. } => 5,
+        PhpType::Array(_) => 4,
+        _ => 7,
+    }
+}
+
+/// Returns true when the container type must route through the recursive
+/// `__rt_var_dump_value` renderer (because it may hold nested arrays/hashes
+/// that the flat per-type walkers cannot format).
+fn var_dump_uses_recursive_renderer(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::AssocArray { .. } => true,
+        PhpType::Array(elem_ty) => matches!(
+            elem_ty.as_ref(),
+            PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Union(_)
+        ),
+        _ => false,
+    }
+}
+
+/// Returns the runtime var_dump walker for a homogeneous typed array.
+/// `Array(Mixed)` and `AssocArray` are handled by the recursive renderer
+/// (`emit_var_dump_recursive_array`) instead, so they return `None` here.
 fn var_dump_array_walker(ty: &PhpType) -> Option<&'static str> {
     match ty {
         PhpType::Array(elem_ty) => match elem_ty.as_ref() {
@@ -407,10 +460,8 @@ fn var_dump_array_walker(ty: &PhpType) -> Option<&'static str> {
             PhpType::Str => Some("__rt_var_dump_array_str"),
             PhpType::Bool => Some("__rt_var_dump_array_bool"),
             PhpType::Float => Some("__rt_var_dump_array_float"),
-            PhpType::Mixed => Some("__rt_var_dump_array_mixed"),
             _ => None,
         },
-        PhpType::AssocArray { .. } => Some("__rt_var_dump_hash"),
         _ => None,
     }
 }

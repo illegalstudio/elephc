@@ -1689,7 +1689,7 @@ echo "]";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("mixed_assoc_array_slots", source),
-        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n}\n[hello|]"
+        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n[hello|]"
     );
 }
 

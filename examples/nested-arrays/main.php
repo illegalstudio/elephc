@@ -22,3 +22,7 @@ $matrix[] = [10, 11, 12];
 echo "\nAfter adding a row:\n";
 echo "Rows: " . count($matrix) . "\n";
 echo "New row: " . $matrix[3][0] . " " . $matrix[3][1] . " " . $matrix[3][2] . "\n";
+
+// var_dump recurses into nested arrays, matching PHP's layout
+echo "\nvar_dump of the matrix:\n";
+var_dump($matrix);

@@ -62,6 +62,7 @@ mod array_set_mixed;
 mod array_set_mixed_key;
 mod array_set_refcounted;
 mod array_set_str;
+mod array_strict_eq;
 mod array_rand;
 mod random_u32;
 mod random_uniform;
@@ -114,6 +115,7 @@ mod hash_insert_owned;
 mod hash_iter;
 mod hash_new;
 mod hash_set;
+mod hash_strict_eq;
 mod hash_to_mixed;
 mod hash_union;
 mod hash_unset;
@@ -259,6 +261,8 @@ pub use array_set_refcounted::emit_array_set_refcounted;
 /// Emit refcounted indexed-array set helper.
 pub use array_set_str::emit_array_set_str;
 /// Emit string indexed-array set helper.
+pub use array_strict_eq::emit_array_strict_eq;
+/// Emit indexed-array strict-equality comparison helper.
 pub use array_rand::emit_array_rand;
 /// Emit random array element helper.
 pub use random_u32::emit_random_u32;
@@ -355,6 +359,8 @@ pub use hash_new::emit_hash_new;
 /// Emit new hash helper.
 pub use hash_set::emit_hash_set;
 /// Emit hash set helper.
+pub use hash_strict_eq::emit_hash_strict_eq;
+/// Emit hash strict-equality comparison helper.
 pub use hash_to_mixed::emit_hash_to_mixed;
 /// Emit hash-to-Mixed conversion helper.
 pub use hash_union::emit_hash_union;
