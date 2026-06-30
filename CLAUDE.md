@@ -160,6 +160,37 @@ new PHP-visible behavior must be driven by EIR lowering and `src/codegen_ir/`.
 | `src/errors/` | `report()` | Error formatting with line:col |
 | `src/span.rs` | `Span` | Source position (line, col) attached to all AST nodes |
 
+### Bridge crates and `--with-<crate>` flags
+
+Optional, heavyweight functionality that is naturally expressed with Rust
+libraries lives in a workspace crate under `crates/elephc-<name>/`, compiled as a
+`staticlib` and linked into the user program on demand. Every such bridge is
+described by one entry in the `BRIDGES` table in `src/linker.rs`; `link()` and the
+discovery/auto-build helpers are fully table-driven, so adding a bridge is a
+single table entry rather than new linker logic.
+
+A bridge is linked when its `lib_name` appears in `extra_link_libs`. That set is
+populated automatically by feature detection: the type checker records a needed
+library via `require_builtin_library(...)` (e.g. hash builtins → `elephc_crypto`)
+or through an injected `extern "elephc_<name>" { ... }` prelude block (e.g. the
+PDO/tz/image preludes), so programs that do not use a feature never link its
+bridge.
+
+`--with-<crate>` force-enables a bridge regardless of detection. It force-links
+the staticlib (whole-archived so it is not dead-stripped) and, for crates whose
+PHP surface comes from a prelude (`pdo`, `tz`, `image`), force-injects that
+prelude so the API is declared even when usage was not detected. The flag name is
+the bridge's `flag_name` (`crate_name` minus the `elephc-` prefix): `--with-pdo`,
+`--with-tls`, `--with-crypto`, `--with-phar`, `--with-tz`, `--with-image`.
+`--with-web` is an alias for `--web` (the full server mode, which owns the program
+entry point). An unknown `--with-<name>` is a hard CLI error listing the valid
+crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
+(`src/pipeline.rs`: force-link + prelude forcing) → linker
+(`src/linker.rs`: `forced_whole_archive`).
+
+The full recipe for adding a new crate-backed feature and its `--with-<crate>`
+flag lives in `CONTRIBUTING.md` ("Adding functionality via a Rust crate").
+
 ### Codegen layout
 
 - `src/ir_lower/` is the active high-level lowering layer. Add PHP-visible semantics there, not in legacy direct AST emitters.

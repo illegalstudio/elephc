@@ -186,6 +186,9 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
+# Force-enable a bridge crate (pdo, tls, crypto, phar, tz, image) regardless of auto-detection
+elephc app.php --with-pdo --with-crypto
+
 # Explicit target selection
 # Supported targets today: macos-aarch64, linux-aarch64, linux-x86_64
 elephc --target linux-aarch64 hello.php

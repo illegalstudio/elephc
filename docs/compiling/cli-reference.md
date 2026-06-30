@@ -94,6 +94,7 @@ spellings.
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
+| `--with-CRATE` | `pdo`, `tls`, `crypto`, `phar`, `tz`, `image`, `web` | — | Force-enable a bridge crate regardless of feature auto-detection (repeatable). Force-links the staticlib (whole-archived, so it is not dead-stripped) and, for crates with a PHP-surface prelude (`pdo`, `tz`, `image`), force-injects that prelude so the API is available. `--with-web` is an alias for `--web`. An unknown crate name is an error. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 
