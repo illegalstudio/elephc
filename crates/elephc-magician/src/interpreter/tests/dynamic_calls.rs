@@ -817,6 +817,78 @@ fn execute_program_call_user_func_array_dispatches_builtin() {
 
     assert_eq!(values.get(result), FakeValue::Int(4));
 }
+/// Verifies `call_user_func_array` releases literal callback and argument-array temporaries.
+#[test]
+fn execute_program_call_user_func_array_releases_literal_callback_and_arg_array() {
+    let program = parse_fragment(br#"return call_user_func_array("strlen", ["abcd"]);"#)
+        .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(4));
+    assert!(
+        values
+            .releases
+            .iter()
+            .any(|release| values.get(*release) == FakeValue::String("strlen".to_string())),
+        "literal callback string should be released after dispatch"
+    );
+    assert!(
+        values
+            .releases
+            .iter()
+            .any(|release| matches!(values.get(*release), FakeValue::Array(_))),
+        "literal call argument array should be released after dispatch"
+    );
+}
+/// Verifies `call_user_func_array` releases literal temporaries after a fatal dispatch.
+#[test]
+fn execute_program_call_user_func_array_releases_literal_temporaries_after_fatal() {
+    let program =
+        parse_fragment(br#"return call_user_func_array("strlen", ["unknown" => "abcd"]);"#)
+            .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+
+    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    assert!(
+        values
+            .releases
+            .iter()
+            .any(|release| values.get(*release) == FakeValue::String("strlen".to_string())),
+        "literal callback string should be released after fatal dispatch"
+    );
+    assert!(
+        values
+            .releases
+            .iter()
+            .any(|release| matches!(values.get(*release), FakeValue::Assoc(_))),
+        "literal call argument hash should be released after fatal dispatch"
+    );
+}
+/// Verifies `call_user_func_array` releases literal callback when arg-array evaluation fails.
+#[test]
+fn execute_program_call_user_func_array_releases_literal_callback_after_arg_array_eval_fatal() {
+    let program = parse_fragment(br#"return call_user_func_array("strlen", MISSING_ARG_ARRAY);"#)
+        .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+
+    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    assert!(
+        values
+            .releases
+            .iter()
+            .any(|release| values.get(*release) == FakeValue::String("strlen".to_string())),
+        "literal callback string should be released when argument-array evaluation fails"
+    );
+}
 /// Verifies `call_user_func_array` inside eval can dispatch a registered native function.
 #[test]
 fn execute_program_call_user_func_array_dispatches_registered_native_function() {
