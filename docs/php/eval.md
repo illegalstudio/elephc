@@ -345,7 +345,8 @@ and method reflectors.
 variables, materializing initializer values before the first invocation and
 returning updated values after reflected or direct calls.
 `ReflectionFunction` over an eval closure literal reports `isClosure()` and
-`isAnonymous()` as `true`, exposes captured `use` variables through
+`isAnonymous()` as `true`, reports `isStatic()` from the literal's
+`static function` marker, exposes captured `use` variables through
 `getClosureUsedVariables()`, and can invoke the closure through `invoke()` or
 `invokeArgs()`.
 `ReflectionFunction::getClosureUsedVariables()` and

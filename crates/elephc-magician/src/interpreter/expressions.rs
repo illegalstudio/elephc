@@ -44,9 +44,11 @@ pub(in crate::interpreter) fn eval_expr(
         EvalExpr::Cast { target, expr } => eval_cast_expr(target, expr, context, scope, values),
         EvalExpr::Const(value) => eval_const(value, values),
         EvalExpr::ConstFetch(name) => eval_const_fetch(name, context, values),
-        EvalExpr::Closure { function, captures } => {
-            eval_closure_expr(function, captures, context, scope, values)
-        }
+        EvalExpr::Closure {
+            function,
+            captures,
+            is_static,
+        } => eval_closure_expr(function, captures, *is_static, context, scope, values),
         EvalExpr::FunctionCallable {
             name,
             fallback_name,
@@ -659,6 +661,7 @@ fn eval_instanceof_object_result(
 fn eval_closure_expr(
     function: &EvalFunction,
     captures: &[crate::eval_ir::EvalClosureCapture],
+    is_static: bool,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
@@ -667,7 +670,7 @@ fn eval_closure_expr(
     for capture in captures {
         bindings.push(eval_closure_capture(capture, context, scope, values)?);
     }
-    let closure = EvalClosure::new(function.clone(), bindings);
+    let closure = EvalClosure::new(function.clone(), bindings, is_static);
     let name = context.define_closure(closure);
     values.string(&name)
 }

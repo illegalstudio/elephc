@@ -64,8 +64,13 @@ fn test_eval_closure_reflection_function_metadata_and_invoke() {
 eval('$seed = 4;
 $fn = function($delta = 1) use ($seed) { return $seed + $delta; };
 $ref = new ReflectionFunction($fn);
+$staticFn = static function() {};
+$staticRef = new ReflectionFunction($staticFn);
 echo $ref->isClosure() ? "C" : "c"; echo ":";
 echo $ref->isAnonymous() ? "A" : "a"; echo ":";
+echo $ref->isStatic() ? "S" : "s"; echo ":";
+echo $staticRef->isClosure() ? "C" : "c"; echo ":";
+echo $staticRef->isStatic() ? "S" : "s"; echo ":";
 $vars = $ref->getClosureUsedVariables();
 echo count($vars); echo ":";
 echo $vars["seed"]; echo ":";
@@ -74,5 +79,5 @@ echo $ref->invokeArgs(["delta" => 5]);');
 "#,
     );
 
-    assert_eq!(out, "C:A:1:4:7:9");
+    assert_eq!(out, "C:A:s:C:S:1:4:7:9");
 }

@@ -345,12 +345,21 @@ impl EvalClosureCaptureBinding {
 pub struct EvalClosure {
     function: EvalFunction,
     captures: Vec<EvalClosureCaptureBinding>,
+    is_static: bool,
 }
 
 impl EvalClosure {
     /// Creates one closure instance from its function body and captured values.
-    pub fn new(function: EvalFunction, captures: Vec<EvalClosureCaptureBinding>) -> Self {
-        Self { function, captures }
+    pub fn new(
+        function: EvalFunction,
+        captures: Vec<EvalClosureCaptureBinding>,
+        is_static: bool,
+    ) -> Self {
+        Self {
+            function,
+            captures,
+            is_static,
+        }
     }
 
     /// Returns the executable eval function payload for this closure.
@@ -361,6 +370,11 @@ impl EvalClosure {
     /// Returns the captured runtime values attached to this closure instance.
     pub fn captures(&self) -> &[EvalClosureCaptureBinding] {
         &self.captures
+    }
+
+    /// Returns whether this closure was declared with PHP's `static function` form.
+    pub const fn is_static(&self) -> bool {
+        self.is_static
     }
 }
 

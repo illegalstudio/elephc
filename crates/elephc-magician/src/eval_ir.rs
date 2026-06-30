@@ -2550,6 +2550,7 @@ pub enum EvalExpr {
     Closure {
         function: EvalFunction,
         captures: Vec<EvalClosureCapture>,
+        is_static: bool,
     },
     FunctionCallable {
         name: String,

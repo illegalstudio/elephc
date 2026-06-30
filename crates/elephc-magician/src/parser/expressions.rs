@@ -1330,7 +1330,11 @@ impl Parser {
             .with_parameter_by_ref_flags(parameter_is_by_ref)
             .with_parameter_variadic_flags(parameter_is_variadic)
             .with_return_type(return_type);
-        Ok(EvalExpr::Closure { function, captures })
+        Ok(EvalExpr::Closure {
+            function,
+            captures,
+            is_static,
+        })
     }
 
     /// Parses an optional closure `use (...)` capture list.

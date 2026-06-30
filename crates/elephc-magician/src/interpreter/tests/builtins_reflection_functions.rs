@@ -244,9 +244,14 @@ fn execute_program_reflection_function_supports_eval_closure_literals() {
         br#"$seed = 4;
 $fn = function($delta = 1) use ($seed) { return $seed + $delta; };
 $ref = new ReflectionFunction($fn);
+$staticFn = static function() {};
+$staticRef = new ReflectionFunction($staticFn);
 echo $ref->isClosure() ? "C" : "c"; echo ":";
 echo $ref->isAnonymous() ? "A" : "a"; echo ":";
 echo $ref->isUserDefined() ? "U" : "u"; echo ":";
+echo $ref->isStatic() ? "S" : "s"; echo ":";
+echo $staticRef->isClosure() ? "C" : "c"; echo ":";
+echo $staticRef->isStatic() ? "S" : "s"; echo ":";
 echo $ref->getNumberOfParameters(); echo ":";
 echo $ref->getNumberOfRequiredParameters(); echo ":";
 $vars = $ref->getClosureUsedVariables();
@@ -262,7 +267,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "C:A:U:1:0:1:4:7:9");
+    assert_eq!(values.output, "C:A:U:s:C:S:1:0:1:4:7:9");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

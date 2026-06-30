@@ -9408,7 +9408,7 @@ fn eval_reflection_function_method_target(
                 parameters,
                 source_location,
                 is_variadic,
-                is_static: false,
+                is_static: closure.is_static(),
                 is_closure: true,
                 is_deprecated,
                 return_type_metadata,
