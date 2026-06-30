@@ -4059,12 +4059,12 @@ fn emit_phar_get_string_bridge(
             ctx.emitter.instruction(&format!("jz {}", empty));                  // fall back to an empty string
             ctx.emitter.instruction("mov rdi, rax");                            // str_persist source pointer = bridge buffer
             abi::emit_load_symbol_to_reg(ctx.emitter, "rdx", "_phar_list_len", 0); // str_persist length = bridge out-length
-            ctx.emitter.instruction(&format!("jmp {}", persist));              // persist the returned bytes
+            ctx.emitter.instruction(&format!("jmp {}", persist));               // persist the returned bytes
             ctx.emitter.label(&empty);
             ctx.emitter.instruction("mov rdi, 0");                              // empty source pointer (length 0 is not dereferenced)
             ctx.emitter.instruction("mov rdx, 0");                              // empty string length
             ctx.emitter.label(&persist);
-            ctx.emitter.instruction("call __rt_str_persist");                  // copy into an owned heap string -> rax=ptr, rdx=len
+            ctx.emitter.instruction("call __rt_str_persist");                   // copy into an owned heap string -> rax=ptr, rdx=len
         }
     }
     store_if_result(ctx, inst)
@@ -4241,11 +4241,11 @@ fn emit_phar_path_int_to_bool_bridge(
             abi::emit_pop_reg(ctx.emitter, "x2");
             abi::emit_symbol_address(ctx.emitter, "x9", slot);
             ctx.emitter.instruction("ldr x9, [x9]");                            // load the optional bridge pointer
-            ctx.emitter.instruction(&format!("cbz x9, {}", fail));             // missing bridge makes the op fail
+            ctx.emitter.instruction(&format!("cbz x9, {}", fail));              // missing bridge makes the op fail
             ctx.emitter.instruction("blr x9");                                  // invoke the bridge
             ctx.emitter.instruction("cmp x0, #0");                              // test the bridge success flag
-            ctx.emitter.instruction("cset x0, ne");                            // normalize to PHP bool
-            ctx.emitter.instruction(&format!("b {}", done));                   // skip the failure result
+            ctx.emitter.instruction("cset x0, ne");                             // normalize to PHP bool
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the failure result
             ctx.emitter.label(&fail);
             ctx.emitter.instruction("mov x0, #0");                              // report false when the bridge is unavailable
             ctx.emitter.label(&done);
@@ -4259,14 +4259,14 @@ fn emit_phar_path_int_to_bool_bridge(
             abi::emit_pop_reg(ctx.emitter, "rdx");
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", slot, 0);
             ctx.emitter.instruction("test r10, r10");                           // test whether the bridge was published
-            ctx.emitter.instruction(&format!("jz {}", fail));                  // missing bridge makes the op fail
-            ctx.emitter.instruction("call r10");                               // invoke the bridge
-            ctx.emitter.instruction("test rax, rax");                          // test the bridge success flag
-            ctx.emitter.instruction("setne al");                               // normalize to PHP bool
-            ctx.emitter.instruction("movzx eax, al");                          // widen the normalized bool
-            ctx.emitter.instruction(&format!("jmp {}", done));                 // skip the failure result
+            ctx.emitter.instruction(&format!("jz {}", fail));                   // missing bridge makes the op fail
+            ctx.emitter.instruction("call r10");                                // invoke the bridge
+            ctx.emitter.instruction("test rax, rax");                           // test the bridge success flag
+            ctx.emitter.instruction("setne al");                                // normalize to PHP bool
+            ctx.emitter.instruction("movzx eax, al");                           // widen the normalized bool
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the failure result
             ctx.emitter.label(&fail);
-            ctx.emitter.instruction("xor eax, eax");                           // report false when the bridge is unavailable
+            ctx.emitter.instruction("xor eax, eax");                            // report false when the bridge is unavailable
             ctx.emitter.label(&done);
         }
     }

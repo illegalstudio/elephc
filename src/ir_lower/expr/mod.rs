@@ -3501,6 +3501,12 @@ pub(crate) fn lower_bound_closure_for_assignment(
     Some(closure_value)
 }
 
+/// Resolves the statically-known class name of an object expression used as the
+/// receiver of an instance first-class callable (`$obj->m(...)`).
+///
+/// Returns the normalized class name for `$var` (from `local_types`), `$this`
+/// (the current class), and `new` expressions; `None` when the receiver class
+/// cannot be determined statically.
 fn instance_callable_object_class(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
