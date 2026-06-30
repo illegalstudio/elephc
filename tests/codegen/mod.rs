@@ -21,6 +21,7 @@ mod eval;
 mod eval_builtin_parity;
 mod eval_callables;
 mod eval_closures;
+mod eval_constructors;
 mod operators;
 mod control_flow;
 mod scalar_strings;
