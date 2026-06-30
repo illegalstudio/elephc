@@ -1638,9 +1638,47 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_closure_with_optional_bound_this(closure, None, evaluated_args, context, values)
+}
+
+/// Evaluates one runtime eval closure with `$this` bound by `Closure::call()`.
+pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_this(
+    closure: &EvalClosure,
+    bound_this: RuntimeCellHandle,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if closure.is_static() {
+        values.warning("Cannot bind an instance to a static closure")?;
+        return values.null();
+    }
+    let class_name = eval_closure_bound_object_class_name(bound_this, context, values)?;
+    eval_closure_with_optional_bound_this(
+        closure,
+        Some((bound_this, class_name)),
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Evaluates one runtime eval closure with optional `$this` binding metadata.
+fn eval_closure_with_optional_bound_this(
+    closure: &EvalClosure,
+    bound_this: Option<(RuntimeCellHandle, String)>,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let function = closure.function();
     let static_names = static_var_names(function.body());
+    let bound_class_pushed = bound_this.is_some();
     context.push_function(function.name());
+    if let Some((_, class_name)) = &bound_this {
+        context.push_class_scope(class_name.to_string());
+        context.push_called_class_scope(class_name.to_string());
+    }
     let evaluated_args = match bind_evaluated_method_args(
         function.params(),
         function.parameter_types(),
@@ -1653,12 +1691,19 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args(
     ) {
         Ok(args) => args,
         Err(status) => {
+            if bound_class_pushed {
+                context.pop_called_class_scope();
+                context.pop_class_scope();
+            }
             context.pop_function();
             return Err(status);
         }
     };
     let mut function_scope = ElephcEvalScope::new();
     bind_closure_captures(&mut function_scope, closure.captures());
+    if let Some((object, _)) = bound_this {
+        function_scope.set("this", object, ScopeCellOwnership::Borrowed);
+    }
     bind_method_scope_args(
         &mut function_scope,
         function.params(),
@@ -1701,8 +1746,29 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args(
             values,
         ),
     };
+    if bound_class_pushed {
+        context.pop_called_class_scope();
+        context.pop_class_scope();
+    }
     context.pop_function();
     return_result
+}
+
+/// Returns the PHP class name used as the bound scope for `Closure::call()`.
+pub(in crate::interpreter) fn eval_closure_bound_object_class_name(
+    object: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    if values.type_tag(object)? != EVAL_TAG_OBJECT {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if let Ok(identity) = values.object_identity(object) {
+        if let Some(class) = context.dynamic_object_class(identity) {
+            return Ok(class.name().to_string());
+        }
+    }
+    runtime_object_class_name(object, values)
 }
 
 /// Seeds one closure activation scope with values captured when the closure was created.

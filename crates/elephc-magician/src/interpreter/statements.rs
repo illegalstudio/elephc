@@ -8427,6 +8427,13 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         let evaluated_args = positional_evaluated_arg_values(evaluated_args)?;
         return values.method_call(object, method_name, evaluated_args);
     };
+    if let Some(target) = context.closure_object_target(identity).cloned() {
+        if let Some(result) =
+            eval_closure_object_method_result(target, method_name, evaluated_args.clone(), context, values)?
+        {
+            return Ok(result);
+        }
+    }
     if let Some(attribute_metadata) = context.eval_reflection_attribute(identity).cloned() {
         if method_name.eq_ignore_ascii_case("newInstance") {
             if !evaluated_args.is_empty() {
@@ -8949,6 +8956,134 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         );
     }
     eval_throw_undefined_method_call_error(&called_class_name, method_name, context, values)
+}
+
+/// Dispatches PHP-visible methods on eval-backed `Closure` objects.
+fn eval_closure_object_method_result(
+    target: EvalClosureObjectTarget,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("call") {
+        return Ok(None);
+    }
+    let (bound_this, call_args) = eval_closure_call_split_args(evaluated_args)?;
+    match target {
+        EvalClosureObjectTarget::Named(name) => {
+            if let Some(closure) = context.closure(&name).cloned() {
+                return eval_closure_with_evaluated_args_and_bound_this(
+                    &closure,
+                    bound_this,
+                    call_args,
+                    context,
+                    values,
+                )
+                .map(Some);
+            }
+            eval_closure_call_warning_null(
+                "Cannot rebind scope of closure created from function",
+                values,
+            )
+            .map(Some)
+        }
+        EvalClosureObjectTarget::InvokableObject { object } => {
+            if !eval_closure_call_bound_class_matches(object, bound_this, context, values)? {
+                return eval_closure_call_warning_null(
+                    "Cannot rebind scope of closure created from method",
+                    values,
+                )
+                .map(Some);
+            }
+            eval_invokable_object_call_result(bound_this, call_args, context, values).map(Some)
+        }
+        EvalClosureObjectTarget::ObjectMethod {
+            object,
+            method,
+            called_class: _,
+            native_class,
+            bridge_scope,
+        } => {
+            if !eval_closure_call_bound_class_matches(object, bound_this, context, values)? {
+                return eval_closure_call_warning_null(
+                    "Cannot rebind scope of closure created from method",
+                    values,
+                )
+                .map(Some);
+            }
+            let called_class = Some(eval_closure_bound_object_class_name(
+                bound_this, context, values,
+            )?);
+            let callable = EvaluatedCallable::ObjectMethod {
+                object: bound_this,
+                method,
+                called_class,
+                native_class,
+                bridge_scope,
+            };
+            eval_evaluated_callable_with_call_array_args(&callable, call_args, context, values)
+                .map(Some)
+        }
+        EvalClosureObjectTarget::StaticMethod { .. } => eval_closure_call_warning_null(
+            "Cannot bind an instance to a static closure",
+            values,
+        )
+        .map(Some),
+    }
+}
+
+/// Splits `Closure::call()` arguments into the bound object and forwarded closure args.
+fn eval_closure_call_split_args(
+    evaluated_args: Vec<EvaluatedCallArg>,
+) -> Result<(RuntimeCellHandle, Vec<EvaluatedCallArg>), EvalStatus> {
+    let mut bound_this = None;
+    let mut consumed_positional_receiver = false;
+    let mut call_args = Vec::with_capacity(evaluated_args.len().saturating_sub(1));
+
+    for arg in evaluated_args {
+        if arg
+            .name
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case("newThis"))
+        {
+            if bound_this.replace(arg.value).is_some() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            continue;
+        }
+        if arg.name.is_none() && !consumed_positional_receiver && bound_this.is_none() {
+            consumed_positional_receiver = true;
+            bound_this = Some(arg.value);
+            continue;
+        }
+        call_args.push(arg);
+    }
+
+    bound_this
+        .map(|receiver| (receiver, call_args))
+        .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Returns whether `Closure::call()` may bind a method closure to the new object.
+fn eval_closure_call_bound_class_matches(
+    original_object: RuntimeCellHandle,
+    bound_this: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let original_class = eval_closure_bound_object_class_name(original_object, context, values)?;
+    let bound_class = eval_closure_bound_object_class_name(bound_this, context, values)?;
+    Ok(original_class.eq_ignore_ascii_case(&bound_class))
+}
+
+/// Emits PHP's `Closure::call()` warning and returns `null`.
+fn eval_closure_call_warning_null(
+    message: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    values.warning(message)?;
+    values.null()
 }
 
 /// Dispatches an invokable object through `__invoke()` without enforcing hook visibility.

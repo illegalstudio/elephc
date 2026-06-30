@@ -133,12 +133,17 @@ Namespaced function callables follow PHP's global fallback rule when the
 namespaced function is not visible.
 `Closure::fromCallable()` accepts the same supported string, callable-array,
 object, and existing `Closure` callback values and materializes a PHP-visible
-`Closure` object backed by the normalized eval callable target.
+`Closure` object backed by the normalized eval callable target. `Closure::call()`
+on those closure objects supports same-class method and invokable-object
+rebinding and reports PHP-compatible warning/null results for function and
+static-method callables.
 
 Closure literals created inside eval are PHP-visible `Closure` objects: they
 report true for `is_object()`, `get_class($fn)` returns `Closure`,
 `$fn instanceof Closure` works, and they remain callable through direct calls,
-`call_user_func()`, `call_user_func_array()`, and `ReflectionFunction`.
+`call_user_func()`, `call_user_func_array()`, `Closure::call()` for binding
+`$this` to an object when invoking the eval-created closure, and
+`ReflectionFunction`.
 
 Inside eval fragments, two-element object-method callable arrays such as
 `[$this, "method"]` can be invoked through `$cb(...)`, `call_user_func($cb,

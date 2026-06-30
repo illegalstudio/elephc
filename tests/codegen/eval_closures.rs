@@ -99,3 +99,28 @@ echo $ref->invokeArgs(["delta" => 5]);');
 
     assert_eq!(out, "C:A:s:C:S:1:4:7:9");
 }
+
+/// Verifies eval `Closure::call()` binds `$this` and preserves by-ref argument writeback.
+#[test]
+fn test_eval_closure_call_binds_this_and_writes_back_by_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalClosureCallBox {
+    public int $base = 10;
+}
+$box = new EvalClosureCallBox();
+$fn = function(int &$value, int $delta): int {
+    $value = $value + $this->base + $delta;
+    return $value;
+};
+$seed = "2";
+echo $fn->call($box, $seed, 3);
+echo ":";
+echo gettype($seed);
+echo ":";
+echo $seed;');
+"#,
+    );
+
+    assert_eq!(out, "15:integer:15");
+}

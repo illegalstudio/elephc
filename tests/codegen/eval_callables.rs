@@ -249,3 +249,54 @@ return call_user_func_array($named, [&$d, 9]) . ":" . gettype($d) . ":" . $d;');
         "5:integer:5|19:integer:19|13:integer:13|17:integer:17"
     );
 }
+
+/// Verifies `Closure::call()` rebinds `fromCallable()` method closures to a same-class receiver.
+#[test]
+fn test_eval_closure_from_callable_call_rebinds_same_class_method_and_invokable_targets() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_from_callable_call_fn(): string {
+    return "bad";
+}
+
+class EvalFromCallableCallBox {
+    public int $base = 0;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public static function add(int $value): int {
+        return $value + 1;
+    }
+}
+
+echo eval('$original = new EvalFromCallableCallBox();
+$original->base = 10;
+$bound = new EvalFromCallableCallBox();
+$bound->base = 20;
+
+$method = Closure::fromCallable([$original, "bump"]);
+$a = "2";
+echo $method->call($bound, $a, 3) . ":" . gettype($a) . ":" . $a . "|";
+
+$invoke = Closure::fromCallable($original);
+$b = "4";
+echo $invoke->call($bound, $b, 5) . ":" . gettype($b) . ":" . $b . "|";
+
+$function = Closure::fromCallable("eval_from_callable_call_fn");
+echo is_null($function->call($bound)) ? "F" : "f"; echo "|";
+
+$static = Closure::fromCallable(["EvalFromCallableCallBox", "add"]);
+echo is_null($static->call($bound, 1)) ? "S" : "s";');
+"#,
+    );
+
+    assert_eq!(out, "25:integer:25|29:integer:29|F|S");
+}
