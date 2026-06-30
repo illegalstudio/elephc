@@ -116,6 +116,11 @@ impl FakeOps {
         index: RuntimeCellHandle,
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let call_index = self.array_set_calls;
+        self.array_set_calls += 1;
+        if self.fail_array_set_call == Some(call_index) {
+            return Err(EvalStatus::UnsupportedConstruct);
+        }
         let key = self.key(index)?;
         let id = array.as_ptr() as usize;
         let Some(slot) = self.values.get_mut(&id) else {
