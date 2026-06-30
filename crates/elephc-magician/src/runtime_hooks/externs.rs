@@ -238,6 +238,7 @@ unsafe extern "C" {
         scope_ptr: *const u8,
         scope_len: u64,
     ) -> u64;
+    pub(super) fn __elephc_eval_value_take_pending_throwable() -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_class_exists(name_ptr: *const u8, name_len: u64) -> u64;
     pub(super) fn __elephc_eval_interface_exists(name_ptr: *const u8, name_len: u64) -> u64;
     pub(super) fn __elephc_eval_value_is_a(

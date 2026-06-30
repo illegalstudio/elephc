@@ -667,7 +667,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
             __elephc_eval_value_release(arg_array.as_ptr());
         }
         if ok == 0 {
-            Err(EvalStatus::RuntimeFatal)
+            self.take_pending_native_throwable()
+                .map_or(Err(EvalStatus::RuntimeFatal), |thrown| {
+                    self.schedule_pending_throw(thrown)?;
+                    Err(EvalStatus::UncaughtThrowable)
+                })
         } else {
             Ok(())
         }
@@ -1104,5 +1108,29 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Converts one boxed Mixed cell to PHP truthiness through the generated runtime wrapper.
     fn truthy(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         Ok(unsafe { __elephc_eval_value_truthy(value.as_ptr()) != 0 })
+    }
+}
+
+#[cfg(not(test))]
+impl ElephcRuntimeOps {
+    /// Takes a native Throwable that escaped through the generated constructor bridge.
+    fn take_pending_native_throwable(&self) -> Option<RuntimeCellHandle> {
+        let thrown = unsafe { __elephc_eval_value_take_pending_throwable() };
+        if thrown.is_null() {
+            None
+        } else {
+            Self::object_from_raw(thrown).ok()
+        }
+    }
+
+    /// Schedules a native Throwable so eval's ordinary catch machinery can handle it.
+    fn schedule_pending_throw(&self, thrown: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        let Some(context) =
+            (unsafe { (self.context as *mut crate::abi::ElephcEvalContext).as_mut() })
+        else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        context.set_pending_throw(thrown);
+        Ok(())
     }
 }

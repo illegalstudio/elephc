@@ -22904,6 +22904,31 @@ return $value;');
     assert_eq!(out, "51");
 }
 
+/// Verifies eval writes AOT constructor by-reference args back before a thrown fatal path.
+#[test]
+fn test_eval_dynamic_new_writes_back_constructor_by_ref_before_throw() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewThrowingRefCtor {
+    public function __construct(int &$value) {
+        $value = $value + 13;
+        throw new Exception("ctor-fail");
+    }
+}
+
+echo eval('$value = 7;
+try {
+    new EvalDynamicNewThrowingRefCtor($value);
+    echo "bad";
+} catch (Throwable $e) {
+    echo get_class($e) . ":" . $e->getMessage() . ":";
+}
+return gettype($value) . ":" . $value;');
+"#,
+    );
+    assert_eq!(out, "Exception:ctor-fail:integer:20");
+}
+
 /// Verifies eval writes nullable scalar by-reference AOT constructor results back to eval variables.
 #[test]
 fn test_eval_dynamic_new_runs_constructor_with_nullable_scalar_by_ref_args() {

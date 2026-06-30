@@ -17,6 +17,9 @@
 use std::collections::BTreeMap;
 
 use crate::codegen::abi;
+use crate::codegen::context::{
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -55,6 +58,10 @@ const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "JsonException",
     "FiberError",
 ];
+const CONSTRUCTOR_HELPER_BASE_FRAME_SIZE: usize = 64;
+const CONSTRUCTOR_HELPER_HANDLER_OFFSET: usize = CONSTRUCTOR_HELPER_BASE_FRAME_SIZE;
+const CONSTRUCTOR_HELPER_FRAME_SIZE: usize =
+    CONSTRUCTOR_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
 
 /// Constructor metadata needed by the eval constructor bridge.
 #[derive(Clone)]
@@ -305,6 +312,7 @@ fn emit_constructor_helper(
             )
         }
     }
+    emit_take_pending_throwable_helper(module, emitter);
 }
 
 /// Emits the ARM64 constructor helper body.
@@ -319,7 +327,7 @@ fn emit_constructor_aarch64(
     let success_label = "__elephc_eval_value_construct_success";
     let fail_label = "__elephc_eval_value_construct_fail";
     let done_label = "__elephc_eval_value_construct_done";
-    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for scope, args, object, and fp/lr
+    emitter.instruction(&format!("sub sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)); //reserve helper frame plus a boundary exception handler
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
     emitter.instruction("str x2, [sp, #0]");                                    // save the active eval class-scope pointer
@@ -356,7 +364,7 @@ fn emit_constructor_aarch64(
     emitter.instruction("mov x0, #1");                                          // report successful construction or no-op
     emitter.label(done_label);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
-    emitter.instruction("add sp, sp, #64");                                     // release the constructor helper frame
+    emitter.instruction(&format!("add sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)); //release the constructor helper frame and boundary handler
     emitter.instruction("ret");                                                 // return the constructor status flag to Rust
 }
 
@@ -374,7 +382,7 @@ fn emit_constructor_x86_64(
     let done_label = "__elephc_eval_value_construct_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 64");                                         // reserve aligned slots for object, args, scope, and temp values
+    emitter.instruction(&format!("sub rsp, {}", CONSTRUCTOR_HELPER_FRAME_SIZE)); //reserve aligned slots plus a boundary exception handler
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the active eval class-scope pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the active eval class-scope length
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the boxed eval argument array
@@ -413,6 +421,98 @@ fn emit_constructor_x86_64(
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the constructor status flag to Rust
+}
+
+/// Emits an ARM64 boundary handler so native constructor throws return to magician.
+fn emit_aarch64_constructor_exception_boundary_push(emitter: &mut Emitter, escape_label: &str) {
+    let handler_offset = CONSTRUCTOR_HELPER_HANDLER_OFFSET - 48;
+    emitter.comment("push eval constructor exception boundary");
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset));        // save the previous native exception-handler head
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + 8));    // preserve the caller activation frame across constructor unwinding
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!(
+        "str x10, [x29, #{}]",
+        handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
+    ));                                                                          // save diagnostic suppression depth for restoration
+    emitter.instruction(&format!("add x10, x29, #{}", handler_offset));          // compute the boundary handler record address
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!(
+        "add x0, x29, #{}",
+        handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
+    ));                                                                          // pass the boundary jmp_buf to setjmp
+    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native constructors
+    emitter.instruction(&format!("cbnz x0, {}", escape_label));                  // non-zero setjmp result means a constructor Throwable escaped
+}
+
+/// Emits an ARM64 boundary pop that preserves the constructor status in x0.
+fn emit_aarch64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
+    let handler_offset = CONSTRUCTOR_HELPER_HANDLER_OFFSET - 48;
+    emitter.comment("pop eval constructor exception boundary");
+    emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset));        // reload the previous native exception-handler head
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!(
+        "ldr x10, [x29, #{}]",
+        handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
+    ));                                                                          // reload the saved diagnostic suppression depth
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+}
+
+/// Emits an x86_64 boundary handler so native constructor throws return to magician.
+fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape_label: &str) {
+    let handler_base = CONSTRUCTOR_HELPER_FRAME_SIZE;
+    emitter.comment("push eval constructor exception boundary");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base)); //save the previous native exception-handler head
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)); //preserve the caller activation frame across constructor unwinding
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!(
+        "mov QWORD PTR [rbp - {}], r10",
+        handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
+    ));                                                                          // save diagnostic suppression depth for restoration
+    emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));          // compute the boundary handler record address
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!(
+        "lea rdi, [rbp - {}]",
+        handler_base - TRY_HANDLER_JMP_BUF_OFFSET
+    ));                                                                          // pass the boundary jmp_buf to setjmp
+    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native constructors
+    emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
+    emitter.instruction(&format!("jne {}", escape_label));                      // non-zero setjmp result means a constructor Throwable escaped
+}
+
+/// Emits an x86_64 boundary pop that preserves the constructor status in rax.
+fn emit_x86_64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
+    let handler_base = CONSTRUCTOR_HELPER_FRAME_SIZE;
+    emitter.comment("pop eval constructor exception boundary");
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", handler_base)); //reload the previous native exception-handler head
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!(
+        "mov r10, QWORD PTR [rbp - {}]",
+        handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
+    ));                                                                          // reload the saved diagnostic suppression depth
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+}
+
+/// Emits a C helper that transfers `_exc_value` ownership to magician.
+fn emit_take_pending_throwable_helper(module: &Module, emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- eval bridge: take pending throwable ---");
+    label_c_global(module, emitter, "__elephc_eval_value_take_pending_throwable");
+    match module.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
+            abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+            emitter.instruction("ret");                                         // return the pending Throwable pointer to magician
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0);
+            abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+            emitter.instruction("ret");                                         // return the pending Throwable pointer to magician
+        }
+    }
 }
 
 /// Emits ARM64 dispatch for compact builtin Throwable constructors.
@@ -691,7 +791,8 @@ fn emit_aarch64_constructor_body(
         emitter.label(&scope_ok_label);
     }
     emit_aarch64_validate_constructor_arg_count(module, emitter, slot, fail_label);
-    let (overflow_bytes, ref_slots) =
+    let body_label = constructor_body_label(module, slot);
+    let (arg_temp_bytes, ref_slots) =
         emit_aarch64_prepare_constructor_args(
             module,
             emitter,
@@ -700,6 +801,11 @@ fn emit_aarch64_constructor_body(
             fail_label,
             callable_support,
         );
+    let escape_label = format!("{}_escape", body_label);
+    emit_aarch64_constructor_exception_boundary_push(emitter, &escape_label);
+    let receiver_ty = PhpType::Object(slot.class_name.clone());
+    let overflow_bytes =
+        materialize_constructor_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);
     let caller_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
     abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
     let callee = slot
@@ -713,10 +819,18 @@ fn emit_aarch64_constructor_body(
         emitter,
         &ref_slots,
         0,
-        &constructor_body_label(module, slot),
+        &body_label,
     );
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
+    emit_aarch64_constructor_exception_boundary_pop(emitter);
     emitter.instruction(&format!("b {}", success_label));                       // constructor returned normally
+    emitter.label(&escape_label);
+    abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
+    let escape_writeback_label = format!("{}_throw", body_label);
+    emit_aarch64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
+    abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
+    emit_aarch64_constructor_exception_boundary_pop(emitter);
+    emitter.instruction(&format!("b {}", fail_label));                          // return failure after preserving by-reference writes
 }
 
 /// Emits one x86_64 constructor body or failure branch for an unsupported constructor.
@@ -739,7 +853,8 @@ fn emit_x86_64_constructor_body(
         emitter.label(&scope_ok_label);
     }
     emit_x86_64_validate_constructor_arg_count(module, emitter, slot, fail_label);
-    let (overflow_bytes, ref_slots) =
+    let body_label = constructor_body_label(module, slot);
+    let (arg_temp_bytes, ref_slots) =
         emit_x86_64_prepare_constructor_args(
             module,
             emitter,
@@ -748,6 +863,11 @@ fn emit_x86_64_constructor_body(
             fail_label,
             callable_support,
         );
+    let escape_label = format!("{}_escape_x", body_label);
+    emit_x86_64_constructor_exception_boundary_push(emitter, &escape_label);
+    let receiver_ty = PhpType::Object(slot.class_name.clone());
+    let overflow_bytes =
+        materialize_constructor_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);
     let caller_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
     abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
     let callee = slot
@@ -761,10 +881,18 @@ fn emit_x86_64_constructor_body(
         emitter,
         &ref_slots,
         0,
-        &constructor_body_label(module, slot),
+        &body_label,
     );
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
+    emit_x86_64_constructor_exception_boundary_pop(emitter);
     emitter.instruction(&format!("jmp {}", success_label));                     // constructor returned normally
+    emitter.label(&escape_label);
+    abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
+    let escape_writeback_label = format!("{}_throw", body_label);
+    emit_x86_64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
+    abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
+    emit_x86_64_constructor_exception_boundary_pop(emitter);
+    emitter.instruction(&format!("jmp {}", fail_label));                        // return failure after preserving by-reference writes
 }
 
 /// Emits ARM64 visibility checks for a protected/private constructor bridge hit.
@@ -865,7 +993,7 @@ fn emit_x86_64_validate_constructor_arg_count(
     }
 }
 
-/// Prepares ARM64 constructor ABI registers for the supported argument shapes.
+/// Prepares ARM64 constructor argument temporaries for the supported argument shapes.
 fn emit_aarch64_prepare_constructor_args(
     module: &Module,
     emitter: &mut Emitter,
@@ -936,19 +1064,10 @@ fn emit_aarch64_prepare_constructor_args(
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
     }
-    (
-        materialize_constructor_args(
-            module,
-            emitter,
-            &receiver_ty,
-            &slot.params,
-            &slot.ref_params,
-        ),
-        ref_slots,
-    )
+    (arg_temp_bytes, ref_slots)
 }
 
-/// Prepares x86_64 constructor ABI registers for the supported argument shapes.
+/// Prepares x86_64 constructor argument temporaries for the supported argument shapes.
 fn emit_x86_64_prepare_constructor_args(
     module: &Module,
     emitter: &mut Emitter,
@@ -1020,16 +1139,7 @@ fn emit_x86_64_prepare_constructor_args(
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
     }
-    (
-        materialize_constructor_args(
-            module,
-            emitter,
-            &receiver_ty,
-            &slot.params,
-            &slot.ref_params,
-        ),
-        ref_slots,
-    )
+    (arg_temp_bytes, ref_slots)
 }
 
 /// Materializes the pushed receiver and eval arguments into the target method ABI.
