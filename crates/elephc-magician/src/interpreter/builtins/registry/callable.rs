@@ -305,9 +305,31 @@ pub(in crate::interpreter) fn eval_array_callable(
         return Err(EvalStatus::RuntimeFatal);
     }
     let zero = values.int(0)?;
-    let one = values.int(1)?;
-    let receiver = values.array_get(callback, zero)?;
-    let method = values.array_get(callback, one)?;
+    let one = match values.int(1) {
+        Ok(one) => one,
+        Err(status) => {
+            values.release(zero)?;
+            return Err(status);
+        }
+    };
+    let receiver = match values.array_get(callback, zero) {
+        Ok(receiver) => receiver,
+        Err(status) => {
+            values.release(zero)?;
+            values.release(one)?;
+            return Err(status);
+        }
+    };
+    let method = match values.array_get(callback, one) {
+        Ok(method) => method,
+        Err(status) => {
+            values.release(zero)?;
+            values.release(one)?;
+            return Err(status);
+        }
+    };
+    values.release(zero)?;
+    values.release(one)?;
     let method =
         String::from_utf8(values.string_bytes(method)?).map_err(|_| EvalStatus::RuntimeFatal)?;
     match values.type_tag(receiver)? {

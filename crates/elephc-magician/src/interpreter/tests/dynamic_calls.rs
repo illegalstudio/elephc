@@ -202,6 +202,7 @@ return $cb(1);"#,
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
     assert_eq!(values.get(result), FakeValue::Int(42));
+    assert_released_array_callable_index_temps(&values);
 }
 /// Verifies `call_user_func` dispatches callable arrays with object receivers.
 #[test]
@@ -218,6 +219,30 @@ return call_user_func($cb);"#,
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
     assert_eq!(values.get(result), FakeValue::Int(42));
+    assert_released_array_callable_index_temps(&values);
+}
+
+/// Verifies callable-array index temporaries are released when validation rejects the callback.
+#[test]
+fn execute_program_call_user_func_releases_array_callable_index_temps_after_validation_fatal() {
+    let program = parse_fragment(
+        br#"class EvalMissingArrayCallableMethod {}
+$missing = new EvalMissingArrayCallableMethod();
+try {
+    call_user_func([$missing, "MiSsInG"]);
+    return false;
+} catch (TypeError $e) {
+    return true;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_released_array_callable_index_temps(&values);
 }
 /// Verifies `call_user_func_array` dispatches callable arrays with positional args.
 #[test]
@@ -259,6 +284,24 @@ return $named(right: "H", left: "G");"#,
 
     assert_eq!(values.output, "AB:CD:EF:");
     assert_eq!(values.get(result), FakeValue::String("GH".to_string()));
+}
+
+/// Verifies fake runtime releases include both temporary callable-array index cells.
+fn assert_released_array_callable_index_temps(values: &FakeOps) {
+    assert!(
+        values
+            .releases
+            .iter()
+            .any(|release| values.get(*release) == FakeValue::Int(0)),
+        "array callable index 0 temporary should be released"
+    );
+    assert!(
+        values
+            .releases
+            .iter()
+            .any(|release| values.get(*release) == FakeValue::Int(1)),
+        "array callable index 1 temporary should be released"
+    );
 }
 
 /// Verifies first-class callable syntax dispatches through eval's callback paths.
