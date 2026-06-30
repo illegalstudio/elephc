@@ -205,7 +205,7 @@ pub(in crate::interpreter) fn eval_callable_with_optional_scope(
     if values.is_array_like(callback)? {
         return eval_array_callable(callback, context, lexical_scope, values);
     }
-    eval_string_callable(callback, values)
+    eval_string_callable(callback, context, lexical_scope, values)
 }
 
 /// Normalizes one invokable eval object for dynamic callable dispatch.
@@ -466,8 +466,12 @@ fn eval_special_class_array_static_method_exists(
 }
 
 /// Normalizes one string callback name for eval dynamic callable dispatch.
+/// Uses method lexical scope only for PHP APIs that resolve deprecated `self::`,
+/// `static::`, and `parent::` string callbacks through the current method.
 pub(in crate::interpreter) fn eval_string_callable(
     callback: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    lexical_scope: Option<&ElephcEvalScope>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedCallable, EvalStatus> {
     let callback = values.string_bytes(callback)?;
@@ -475,6 +479,15 @@ pub(in crate::interpreter) fn eval_string_callable(
     if let Some((class_name, method)) = callback.split_once("::") {
         if class_name.is_empty() || method.is_empty() {
             return Err(EvalStatus::RuntimeFatal);
+        }
+        if let Some(callable) = eval_special_class_array_callable(
+            class_name,
+            method,
+            lexical_scope,
+            context,
+            values,
+        )? {
+            return Ok(callable);
         }
         return Ok(EvaluatedCallable::StaticMethod {
             class_name: class_name.trim_start_matches('\\').to_string(),
