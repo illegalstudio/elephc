@@ -177,6 +177,35 @@ return function_exists("preg_match") && function_exists("preg_match_all") && fun
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies `preg_replace_callback()` accepts the same callable forms as other callback builtins.
+#[test]
+fn execute_program_preg_replace_callback_accepts_general_callables() {
+    let program = parse_fragment(
+        br#"class EvalPregCallbackBox {
+    public $prefix = "";
+    public function __construct($prefix) { $this->prefix = $prefix; }
+    public function wrap($matches) { return $this->prefix . $matches[0]; }
+    public static function wrapStatic($matches) { return "S" . $matches[0]; }
+}
+$box = new EvalPregCallbackBox("O");
+echo preg_replace_callback("/[A-Z]/", [$box, "wrap"], "AB") . ":";
+echo preg_replace_callback("/[0-9]/", "EvalPregCallbackBox::wrapStatic", "12") . ":";
+echo preg_replace_callback("/[C]/", ["EvalPregCallbackBox", "wrapStatic"], "CC") . ":";
+$first = $box->wrap(...);
+echo preg_replace_callback("/[a-z]/", $first, "xy") . ":";
+$static = EvalPregCallbackBox::wrapStatic(...);
+return preg_replace_callback("/[m]/", $static, "mm");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "OAOB:S1S2:SCSC:OxOy:");
+    assert_eq!(values.get(result), FakeValue::String("SmSm".to_string()));
+}
+
 /// Verifies dynamic preg callables write by-reference `$matches` targets.
 #[test]
 fn execute_program_dispatches_dynamic_preg_match_ref_targets() {

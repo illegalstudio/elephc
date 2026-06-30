@@ -3047,6 +3047,30 @@ echo function_exists("preg_match") && function_exists("preg_match_all") && funct
     );
 }
 
+/// Verifies eval `preg_replace_callback()` accepts general callable forms.
+#[test]
+fn test_eval_preg_replace_callback_accepts_general_callables() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalPregCallbackBox {
+    public $prefix = "";
+    public function __construct($prefix) { $this->prefix = $prefix; }
+    public function wrap($matches) { return $this->prefix . $matches[0]; }
+    public static function wrapStatic($matches) { return "S" . $matches[0]; }
+}
+$box = new EvalPregCallbackBox("O");
+echo preg_replace_callback("/[A-Z]/", [$box, "wrap"], "AB") . ":";
+echo preg_replace_callback("/[0-9]/", "EvalPregCallbackBox::wrapStatic", "12") . ":";
+echo preg_replace_callback("/[C]/", ["EvalPregCallbackBox", "wrapStatic"], "CC") . ":";
+$first = $box->wrap(...);
+echo preg_replace_callback("/[a-z]/", $first, "xy") . ":";
+$static = EvalPregCallbackBox::wrapStatic(...);
+return preg_replace_callback("/[m]/", $static, "mm");');
+"#,
+    );
+    assert_eq!(out, "OAOB:S1S2:SCSC:OxOy:SmSm");
+}
+
 /// Verifies dynamic eval preg callables write by-reference `$matches` arrays.
 #[test]
 fn test_eval_dynamic_preg_callables_write_matches_by_ref() {
