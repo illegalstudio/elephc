@@ -37,7 +37,7 @@ mod regex;
 mod serialize;
 mod spl;
 mod system;
-mod strings;
+pub(crate) mod strings;
 mod types;
 
 const DEFINE_ALREADY_DEFINED_WARNING: &str =
@@ -431,7 +431,6 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "strrev" => strings::lower_unary_string_runtime(ctx, inst, "strrev", "__rt_strrev"),
         "grapheme_strrev" => strings::lower_grapheme_strrev(ctx, inst),
         "str_repeat" => strings::lower_str_repeat(ctx, inst),
-        "substr" => strings::lower_substr(ctx, inst),
         "substr_replace" => strings::lower_substr_replace(ctx, inst),
         "strstr" => strings::lower_strstr(ctx, inst),
         "str_replace" => strings::lower_string_replace(ctx, inst, "str_replace", "__rt_str_replace"),
@@ -469,7 +468,6 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
             "str_ends_with",
             "__rt_str_ends_with",
         ),
-        "ord" => strings::lower_ord(ctx, inst),
         "chr" => strings::lower_chr(ctx, inst),
         "addslashes" => strings::lower_unary_string_runtime(
             ctx,

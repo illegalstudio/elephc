@@ -18,7 +18,7 @@ mod fibers;
 mod frame;
 mod function_variants;
 mod literal_defaults;
-mod lower_inst;
+pub(crate) mod lower_inst;
 mod lower_term;
 pub mod value_placement;
 mod web;

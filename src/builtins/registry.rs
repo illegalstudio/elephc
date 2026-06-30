@@ -183,10 +183,17 @@ pub fn function_sig(name: &str) -> Option<FunctionSig> {
 /// This reuses the same upgrade logic applied by the legacy `callable_wrapper_sig`
 /// helper in `src/types/signatures.rs` rather than reinventing it.
 ///
+/// Sets `declared_return: true` on the resulting signature, mirroring the
+/// `typed_first_class_builtin_sig` convention used by the legacy table. First-class
+/// callable sigs have a known, declared return type (they are typed wrappers, not
+/// type-erased callables), so `declared_return` must be `true`.
+///
 /// Returns `None` if the builtin is not registered.
 pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
     let sig = function_sig(name)?;
-    Some(callable_wrapper_sig(&sig))
+    let mut fcc_sig = callable_wrapper_sig(&sig);
+    fcc_sig.declared_return = true;
+    Some(fcc_sig)
 }
 
 /// Returns the minimum and maximum arity for the named builtin.
@@ -251,6 +258,9 @@ pub fn check_arity(name: &str, arg_count: usize, span: Span) -> Result<(), Compi
         (n, None) => format!("{}() takes at least {} arguments", name, n),
         (0, Some(1)) => format!("{}() takes at most 1 argument", name),
         (0, Some(m)) => format!("{}() takes at most {} arguments", name, m),
+        // Consecutive two-value range: use "N or M" to match PHP's natural phrasing
+        // (e.g. "substr() takes 2 or 3 arguments", "substr_replace() takes 3 or 4 arguments").
+        (n, Some(m)) if m == n + 1 => format!("{}() takes {} or {} arguments", name, n, m),
         (n, Some(m)) => format!("{}() takes {} to {} arguments", name, n, m),
     };
 

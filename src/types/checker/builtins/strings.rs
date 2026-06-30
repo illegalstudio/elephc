@@ -56,15 +56,6 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Int))
         }
-        "substr" => {
-            if args.len() < 2 || args.len() > 3 {
-                return Err(CompileError::new(span, "substr() takes 2 or 3 arguments"));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Str))
-        }
         "strpos" | "strrpos" => {
             if args.len() != 2 {
                 return Err(CompileError::new(
@@ -212,13 +203,6 @@ pub(super) fn check_builtin(
                 checker.infer_type(arg, env)?;
             }
             Ok(Some(PhpType::Str))
-        }
-        "ord" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "ord() takes exactly 1 argument"));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Int))
         }
         "strcmp" | "strcasecmp" => {
             if args.len() != 2 {

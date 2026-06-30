@@ -710,7 +710,7 @@ pub(super) fn lower_string_position(
 }
 
 /// Lowers `substr(string, offset, length?)` with target-local pointer arithmetic.
-pub(super) fn lower_substr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_substr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() < 2 || inst.operands.len() > 3 {
         return Err(CodegenIrError::invalid_module(format!(
             "substr expected 2 or 3 args, got {}",
@@ -831,7 +831,7 @@ pub(super) fn lower_str_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `ord()` by returning the first byte of a string or zero for empty input.
-pub(super) fn lower_ord(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ord(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "ord")?;
     let empty_label = ctx.next_label("ord_empty");
     let done_label = ctx.next_label("ord_done");

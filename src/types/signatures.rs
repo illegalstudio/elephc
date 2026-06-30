@@ -106,7 +106,6 @@ fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "gzdeflate" => Some(optional(&["data", "level"], 1, vec![int_lit(-1)])),
         "gzinflate" => Some(optional(&["data", "max_length"], 1, vec![int_lit(0)])),
         "gzuncompress" => Some(optional(&["data", "max_length"], 1, vec![int_lit(0)])),
-        "ord" => Some(fixed(&["character"])),
         "chr" => Some(fixed(&["codepoint"])),
 
         "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
@@ -201,7 +200,6 @@ fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
             1,
             vec![string_lit(" \t\r\n\u{0c}\u{0b}")],
         )),
-        "substr" => Some(optional(&["string", "offset", "length"], 2, vec![null_lit()])),
         "strpos" | "strrpos" => Some(optional(
             &["haystack", "needle", "offset"],
             2,
@@ -740,7 +738,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             PhpType::Bool,
         )),
         "pi" => Some(typed_first_class_builtin_sig(name, &[], PhpType::Float)),
-        "intval" | "ord" => Some(typed_first_class_builtin_sig(
+        "intval" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Str],
             PhpType::Int,
@@ -780,7 +778,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         | "addslashes" | "stripslashes" | "nl2br" | "bin2hex" | "hex2bin"
         | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode"
         | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
-        | "base64_decode" | "trim" | "ltrim" | "rtrim" | "chop" | "ucwords" | "substr"
+        | "base64_decode" | "trim" | "ltrim" | "rtrim" | "chop" | "ucwords"
         | "str_repeat" | "strstr" | "str_replace" | "str_ireplace" | "explode"
         | "implode" | "substr_replace" | "str_pad" | "str_split" | "wordwrap"
         | "sprintf" | "hash" | "hash_hmac" | "md5" | "sha1" | "crc32" | "number_format" | "chr" => {
