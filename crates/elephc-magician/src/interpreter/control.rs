@@ -86,6 +86,10 @@ pub(super) enum EvalByRefBindingMode<'a> {
 /// One already evaluated PHP callback supported by the eval dispatcher.
 pub(super) enum EvaluatedCallable {
     Named(String),
+    BoundClosure {
+        name: String,
+        bound_this: RuntimeCellHandle,
+    },
     InvokableObject {
         object: RuntimeCellHandle,
     },

@@ -124,3 +124,37 @@ echo $seed;');
 
     assert_eq!(out, "15:integer:15");
 }
+
+/// Verifies eval `Closure::bind()` and `bindTo()` persist `$this` across later calls.
+#[test]
+fn test_eval_closure_bind_persists_this_and_by_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalClosureBindBox {
+    public int $base = 10;
+}
+$box = new EvalClosureBindBox();
+$fn = function(int &$value, int $delta): int {
+    $value = $value + $this->base + $delta;
+    return $value;
+};
+
+$bound = $fn->bindTo($box);
+$seed = "2";
+echo is_object($bound) ? "O:" : "o:";
+echo $bound($seed, 3) . ":" . gettype($seed) . ":" . $seed . "|";
+
+$other = "4";
+echo call_user_func_array($bound, [&$other, 5]) . ":" . gettype($other) . ":" . $other . "|";
+
+$staticBound = Closure::bind($fn, $box);
+$third = "6";
+echo $staticBound($third, 7) . ":" . gettype($third) . ":" . $third . "|";
+
+$static = static function() { return "bad"; };
+echo is_null($static->bindTo($box)) ? "N" : "n";');
+"#,
+    );
+
+    assert_eq!(out, "O:15:integer:15|19:integer:19|23:integer:23|N");
+}

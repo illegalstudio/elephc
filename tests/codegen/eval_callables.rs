@@ -300,3 +300,49 @@ echo is_null($static->call($bound, 1)) ? "S" : "s";');
 
     assert_eq!(out, "25:integer:25|29:integer:29|F|S");
 }
+
+/// Verifies `Closure::bindTo()` persists rebinding for method and invokable callable targets.
+#[test]
+fn test_eval_closure_bind_from_callable_persists_method_and_invokable_targets() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalFromCallableBindBox {
+    public int $base = 0;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public static function add(int $value): int {
+        return $value + 1;
+    }
+}
+
+echo eval('$original = new EvalFromCallableBindBox();
+$original->base = 10;
+$bound = new EvalFromCallableBindBox();
+$bound->base = 20;
+
+$rawMethod = Closure::fromCallable([$original, "bump"]);
+$method = $rawMethod->bindTo($bound);
+$a = "2";
+echo $method($a, 3) . ":" . gettype($a) . ":" . $a . "|";
+
+$rawInvoke = Closure::fromCallable($original);
+$invoke = $rawInvoke->bindTo($bound);
+$b = "4";
+echo call_user_func_array($invoke, [&$b, 5]) . ":" . gettype($b) . ":" . $b . "|";
+
+$static = Closure::fromCallable(["EvalFromCallableBindBox", "add"]);
+echo is_null($static->bindTo($bound)) ? "S" : "s";');
+"#,
+    );
+
+    assert_eq!(out, "25:integer:25|29:integer:29|S");
+}

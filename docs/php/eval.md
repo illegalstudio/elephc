@@ -136,13 +136,18 @@ object, and existing `Closure` callback values and materializes a PHP-visible
 `Closure` object backed by the normalized eval callable target. `Closure::call()`
 on those closure objects supports same-class method and invokable-object
 rebinding and reports PHP-compatible warning/null results for function and
-static-method callables.
+static-method callables. `Closure::bind()` and `Closure::bindTo()` persistently
+bind eval closure literals plus same-class method and invokable-object closure
+targets to a new receiver. The optional scope argument is accepted, but eval's
+current binding model derives method scope from the bound receiver rather than
+exposing the full PHP scope-mutation surface.
 
 Closure literals created inside eval are PHP-visible `Closure` objects: they
 report true for `is_object()`, `get_class($fn)` returns `Closure`,
 `$fn instanceof Closure` works, and they remain callable through direct calls,
-`call_user_func()`, `call_user_func_array()`, `Closure::call()` for binding
-`$this` to an object when invoking the eval-created closure, and
+`call_user_func()`, `call_user_func_array()`, `Closure::call()` for transiently
+binding `$this` to an object when invoking the eval-created closure,
+`Closure::bind()` / `Closure::bindTo()` for persistent receiver binding, and
 `ReflectionFunction`.
 
 Inside eval fragments, two-element object-method callable arrays such as
@@ -895,7 +900,7 @@ fail at runtime with an eval fatal diagnostic.
 
 The fragment subset is broad but not the full elephc language surface. In
 particular, advanced native callable descriptors and full PHP `Closure` APIs
-such as binding/scope mutation and reflection over every first-class callable
+such as arbitrary scope mutation and reflection over every first-class callable
 shape are still outside eval fragments. Runtime/AOT free-function,
 object-method, static-method, and
 constructor fallback from eval

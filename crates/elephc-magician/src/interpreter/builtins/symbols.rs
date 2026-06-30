@@ -1003,6 +1003,7 @@ fn eval_callable_probe_exists(
         EvaluatedCallable::Named(name) => {
             Ok(context.has_closure(name) || eval_function_probe_exists(context, name))
         }
+        EvaluatedCallable::BoundClosure { name, .. } => Ok(context.has_closure(name)),
         EvaluatedCallable::InvokableObject { object } => {
             eval_object_method_callable_probe(*object, "__invoke", context, values)
         }

@@ -306,6 +306,10 @@ struct EvalObjectCallableMetadata {
 #[derive(Clone)]
 pub enum EvalClosureObjectTarget {
     Named(String),
+    BoundNamed {
+        name: String,
+        bound_this: RuntimeCellHandle,
+    },
     InvokableObject {
         object: RuntimeCellHandle,
     },
@@ -2840,7 +2844,8 @@ impl ElephcEvalContext {
         self.closure_objects
             .get(&identity)
             .and_then(|target| match target {
-                EvalClosureObjectTarget::Named(name) => Some(name.as_str()),
+                EvalClosureObjectTarget::Named(name)
+                | EvalClosureObjectTarget::BoundNamed { name, .. } => Some(name.as_str()),
                 _ => None,
             })
     }

@@ -49,7 +49,9 @@ pub(in crate::interpreter) fn eval_validate_call_user_func_callback(
                 values,
             ),
         },
-        EvaluatedCallable::Named(_) | EvaluatedCallable::InvokableObject { .. } => Ok(()),
+        EvaluatedCallable::Named(_)
+        | EvaluatedCallable::BoundClosure { .. }
+        | EvaluatedCallable::InvokableObject { .. } => Ok(()),
     }
 }
 
