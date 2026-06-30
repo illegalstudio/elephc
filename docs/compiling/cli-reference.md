@@ -82,7 +82,7 @@ spellings.
 | `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Register allocator: linear-scan, or stack-only fallback. |
 | `--null-repr=sentinel\|tagged` | `sentinel`, `tagged` | `tagged` | `ELEPHC_NULL_REPR` | Representation for null-capable scalar slots. |
 | `--ir-backend` | — | on | — | Force the EIR backend (already the default). |
-| `--ast-backend` | — | off | — | **Deprecated.** Legacy direct AST backend; removal planned for v0.26.0. |
+| `--ast-backend` | — | off | — | **Deprecated.** Legacy direct AST backend; removal planned for a future release. |
 
 `--ir-backend` and `--ast-backend` cannot be combined. See
 [Optimization and codegen controls](optimization.md).

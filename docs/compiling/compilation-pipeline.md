@@ -25,6 +25,8 @@ PHP source
   -> tz-prelude         inject the timezone-introspection prelude when used
   -> list-id-prelude    inject the DateTimeZone identifier-list prelude when used
   -> var-export-prelude inject the var_export prelude when used
+  -> image-prelude      inject the image (GD/Exif/Imagick) prelude when used
+  -> web-prelude        inject the web runtime prelude with --web
   -> name-resolve       apply namespace/use rules, canonicalize names
   -> autoload-run       run autoload insertion
   -> opt-fold           AST constant folding
@@ -56,8 +58,9 @@ PHP source
   passed with [`--define`](linking-and-conditional-compilation.md#conditional-compilation).
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
   resolved, declarations are discovered, demand-loaded PHP preludes for PDO,
-  timezone introspection, `DateTimeZone::listIdentifiers()`, and `var_export()`
-  are injected only when referenced, and namespace/`use` rules rewrite
+  timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
+  and image processing are injected only when referenced, the web runtime
+  prelude is injected with `--web`, and namespace/`use` rules rewrite
   references to fully-qualified names. Autoloading is wired in around these
   steps.
 - **typecheck** — the [Type Checker](../internals/the-type-checker.md) infers and
