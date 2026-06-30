@@ -3,7 +3,7 @@
 All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
-## [Unreleased]
+## [0.26.0]
 - Runtime dead stripping: compiled executables now link only the runtime helpers the program actually reaches and drop the rest, shrinking binaries without changing behavior. Works on every supported target — Linux via per-symbol sections and `--gc-sections`, macOS via `.subsections_via_symbols` atoms and `-dead_strip`. Shared libraries (`--emit cdylib`) keep the full runtime.
 - Closures can be rebound to a new receiver: `Closure::bind()`, `bindTo()`, and `Closure::call()` are supported, and a top-level closure that captures `$this` now binds it correctly instead of losing the receiver. A by-reference `Closure::bind` stored in a variable and called later is tracked as a static callable, so the call carries the bound cell directly rather than going through the generic descriptor invoker.
 - New magic methods `__callStatic`, `__isset`, and `__unset`: a static call to an undeclared method dispatches to `__callStatic`, `isset()`/`empty()` on an undeclared property route through `__isset` (and only read `__get` when `__isset` is truthy, so an unset virtual property is empty without ever being read), and `unset($obj->prop)` on a virtual property calls `__unset`.
@@ -427,7 +427,7 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.25.2...HEAD
+[0.26.0]: https://github.com/illegalstudio/elephc/compare/v0.25.2...v0.26.0
 [0.25.2]: https://github.com/illegalstudio/elephc/compare/v0.25.1...v0.25.2
 [0.25.1]: https://github.com/illegalstudio/elephc/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/illegalstudio/elephc/compare/v0.24.3...v0.25.0
