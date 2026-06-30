@@ -181,3 +181,32 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
     // hash_hmac() is likewise NOT listed: an unknown algorithm or a non-crypto
     // checksum throws a catchable \ValueError, so it must stay side-effecting.
 }
+
+/// Returns `true` if the named PHP builtin is side-effect-free but may throw.
+///
+/// Such builtins must not be dropped by DCE when called as a bare statement,
+/// because the throw is observable. They are otherwise safe to fold and reorder
+/// relative to other side-effecting statements.
+///
+/// # Arguments
+/// * `name` - Lowercase ASCII builtin function name (callers normalize first).
+///
+/// # Returns
+/// `true` if the builtin is pure but may throw; `false` otherwise.
+pub(super) fn is_pure_but_may_throw_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "min"
+            | "max"
+            | "str_repeat"
+            | "str_pad"
+            | "explode"
+            | "str_split"
+            | "wordwrap"
+            | "hash"
+            | "array_combine"
+            | "array_chunk"
+            | "array_fill"
+            | "range"
+    )
+}

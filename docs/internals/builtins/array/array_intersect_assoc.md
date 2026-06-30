@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1352](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1352) (`lower_array_intersect_assoc`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1528](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1528) (`lower_array_intersect_assoc`)
 - **Function symbol**: `lower_array_intersect_assoc()`
 
 
