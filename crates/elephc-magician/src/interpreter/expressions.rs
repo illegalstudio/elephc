@@ -914,63 +914,153 @@ fn eval_method_callable_expr(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let object = eval_expr(object, context, scope, values)?;
     let method = eval_dynamic_member_name(method, context, scope, values)?;
-    let (native_class, bridge_scope, called_class) = if let Some((
-        native_class,
-        bridge_scope,
-        called_class,
-    )) =
-        eval_method_callable_native_dispatch(object, &method, context, values)?
-    {
-        (Some(native_class), Some(bridge_scope), Some(called_class))
-    } else {
-        (None, None, None)
-    };
-    eval_closure_object_expr(
-        EvalClosureObjectTarget::ObjectMethod {
-            object,
-            method,
-            called_class,
-            native_class,
-            bridge_scope,
-        },
-        context,
-        values,
-    )
+    let target = eval_method_callable_target(object, method, context, values)?;
+    eval_closure_object_expr(target, context, values)
 }
 
-/// Finds inherited AOT method dispatch metadata captured by an object method callable.
-fn eval_method_callable_native_dispatch(
+/// Validates and builds the retained target for an object method first-class callable.
+fn eval_method_callable_target(
     object: RuntimeCellHandle,
-    method_name: &str,
-    context: &ElephcEvalContext,
+    method_name: String,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<(String, String, String)>, EvalStatus> {
+) -> Result<EvalClosureObjectTarget, EvalStatus> {
     let Ok(identity) = values.object_identity(object) else {
-        return Ok(None);
+        return Ok(EvalClosureObjectTarget::ObjectMethod {
+            object,
+            method: method_name,
+            called_class: None,
+            native_class: None,
+            bridge_scope: None,
+        });
     };
     let Some(class) = context.dynamic_object_class(identity) else {
-        return Ok(None);
+        let class_name = runtime_object_class_name(object, values)?;
+        return eval_native_object_method_callable_target(
+            object,
+            &class_name,
+            &class_name,
+            method_name,
+            context,
+            values,
+        );
     };
-    let called_class_name = class.name();
-    if eval_dynamic_method_for_call(called_class_name, method_name, context).is_some() {
-        return Ok(None);
+    let called_class_name = class.name().to_string();
+    if let Some((declaring_class, method)) =
+        eval_dynamic_method_for_call(&called_class_name, &method_name, context)
+    {
+        if method.is_abstract() {
+            return eval_first_class_abstract_method_error(
+                &declaring_class,
+                method.name(),
+                context,
+                values,
+            );
+        }
+        if validate_eval_member_access(&declaring_class, method.visibility(), context).is_err()
+            && !eval_instance_magic_callable_for_class(&called_class_name, context)
+        {
+            return eval_first_class_method_access_error(
+                &declaring_class,
+                method.name(),
+                method.visibility(),
+                context,
+                values,
+            );
+        }
+        return Ok(EvalClosureObjectTarget::ObjectMethod {
+            object,
+            method: method_name,
+            called_class: Some(called_class_name),
+            native_class: None,
+            bridge_scope: None,
+        });
     }
-    let Some(parent) = context.class_native_parent_name(called_class_name) else {
-        return Ok(None);
-    };
-    let Some((declaring_class, visibility, is_static, is_abstract)) =
-        eval_aot_method_dispatch_metadata_in_hierarchy(&parent, method_name, context, values)?
+    if let Some(parent) = context.class_native_parent_name(&called_class_name) {
+        return eval_native_object_method_callable_target(
+            object,
+            &parent,
+            &called_class_name,
+            method_name,
+            context,
+            values,
+        );
+    }
+    if eval_instance_magic_callable_for_class(&called_class_name, context) {
+        return Ok(EvalClosureObjectTarget::ObjectMethod {
+            object,
+            method: method_name,
+            called_class: Some(called_class_name),
+            native_class: None,
+            bridge_scope: None,
+        });
+    }
+    eval_first_class_undefined_method_error(&called_class_name, &method_name, context, values)
+}
+
+/// Validates generated/AOT object-method first-class callable metadata.
+fn eval_native_object_method_callable_target(
+    object: RuntimeCellHandle,
+    native_class: &str,
+    called_class_name: &str,
+    method_name: String,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalClosureObjectTarget, EvalStatus> {
+    let Some((declaring_class, visibility, _, is_abstract)) =
+        eval_aot_method_dispatch_metadata_in_hierarchy(native_class, &method_name, context, values)?
     else {
-        return Ok(None);
+        if eval_native_instance_magic_callable_for_class(native_class, context, values)?
+            || !values.class_exists(native_class)?
+        {
+            return Ok(EvalClosureObjectTarget::ObjectMethod {
+                object,
+                method: method_name,
+                called_class: Some(called_class_name.to_string()),
+                native_class: None,
+                bridge_scope: None,
+            });
+        }
+        return eval_first_class_undefined_method_error(
+            called_class_name,
+            &method_name,
+            context,
+            values,
+        );
     };
-    if is_static || is_abstract {
-        return Ok(None);
+    if is_abstract {
+        return eval_first_class_abstract_method_error(
+            &declaring_class,
+            &method_name,
+            context,
+            values,
+        );
     }
-    // First-class callables may outlive this scope, so capture only after access is valid now.
     if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
-        return Ok(None);
+        if eval_native_instance_magic_callable_for_class(native_class, context, values)? {
+            return Ok(EvalClosureObjectTarget::ObjectMethod {
+                object,
+                method: method_name,
+                called_class: Some(called_class_name.to_string()),
+                native_class: None,
+                bridge_scope: None,
+            });
+        }
+        return eval_first_class_method_access_error(
+            &declaring_class,
+            &method_name,
+            visibility,
+            context,
+            values,
+        );
     }
-    Ok(Some((parent, declaring_class, called_class_name.to_string())))
+    Ok(EvalClosureObjectTarget::ObjectMethod {
+        object,
+        method: method_name,
+        called_class: Some(called_class_name.to_string()),
+        native_class: Some(native_class.to_string()),
+        bridge_scope: Some(declaring_class),
+    })
 }
 
 /// Materializes a first-class static method callable while retaining late-static metadata.
@@ -983,20 +1073,15 @@ fn eval_static_method_callable_expr(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let receiver = resolve_eval_static_method_receiver(class_name, context)?;
     let method = eval_dynamic_member_name(method, context, scope, values)?;
-    let native_dispatch = eval_static_method_callable_native_dispatch(
-        &receiver.dispatch_class,
-        &method,
-        context,
-        values,
-    )?;
-    eval_static_method_closure_object(
+    let target = eval_static_method_callable_target(
         receiver.dispatch_class,
         method,
         Some(receiver.called_class),
-        native_dispatch,
+        Some(scope),
         context,
         values,
-    )
+    )?;
+    eval_closure_object_expr(target, context, values)
 }
 
 /// Materializes a runtime-class static first-class callable as a PHP `Closure` object.
@@ -1011,88 +1096,367 @@ fn eval_dynamic_static_method_callable_expr(
     let class_name = eval_dynamic_class_name(class_name, context, values)?;
     let receiver = resolve_eval_static_method_receiver(&class_name, context)?;
     let method = eval_dynamic_member_name(method, context, scope, values)?;
-    let native_dispatch = eval_static_method_callable_native_dispatch(
-        &receiver.dispatch_class,
-        &method,
-        context,
-        values,
-    )?;
-    eval_static_method_closure_object(
+    let target = eval_static_method_callable_target(
         receiver.dispatch_class,
         method,
         Some(receiver.called_class),
-        native_dispatch,
+        Some(scope),
         context,
         values,
-    )
+    )?;
+    eval_closure_object_expr(target, context, values)
 }
 
-/// Materializes a static-method callable target as a PHP-visible `Closure` object.
-fn eval_static_method_closure_object(
-    class_name: String,
-    method: String,
+/// Validates and builds the retained target for a static-method first-class callable.
+fn eval_static_method_callable_target(
+    dispatch_class: String,
+    method_name: String,
     called_class: Option<String>,
-    native_dispatch: Option<(String, String)>,
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (native_class, bridge_scope) = native_dispatch
-        .map(|(native_class, bridge_scope)| (Some(native_class), Some(bridge_scope)))
-        .unwrap_or((None, None));
-    eval_closure_object_expr(
-        EvalClosureObjectTarget::StaticMethod {
-            class_name,
-            method,
+) -> Result<EvalClosureObjectTarget, EvalStatus> {
+    if let Some((declaring_class, method)) =
+        eval_dynamic_static_method_for_call(&dispatch_class, &method_name, context)
+    {
+        if method.is_abstract() {
+            return eval_first_class_abstract_method_error(
+                &declaring_class,
+                method.name(),
+                context,
+                values,
+            );
+        }
+        if validate_eval_member_access(&declaring_class, method.visibility(), context).is_err()
+            && !eval_static_magic_callable_for_class(&dispatch_class, context)
+        {
+            return eval_first_class_method_access_error(
+                &declaring_class,
+                method.name(),
+                method.visibility(),
+                context,
+                values,
+            );
+        }
+        if !method.is_static() {
+            if let Some(object) = eval_static_syntax_instance_receiver(
+                &dispatch_class,
+                lexical_scope,
+                context,
+                values,
+            )? {
+                return Ok(EvalClosureObjectTarget::ObjectMethod {
+                    object,
+                    method: method_name,
+                    called_class,
+                    native_class: None,
+                    bridge_scope: None,
+                });
+            }
+            return eval_first_class_non_static_method_error(
+                &declaring_class,
+                method.name(),
+                context,
+                values,
+            );
+        }
+        return Ok(EvalClosureObjectTarget::StaticMethod {
+            class_name: dispatch_class,
+            method: method_name,
             called_class,
-            native_class,
-            bridge_scope,
-        },
+            native_class: None,
+            bridge_scope: None,
+        });
+    }
+    if context.has_class(&dispatch_class) {
+        if let Some(parent) = context.class_native_parent_name(&dispatch_class) {
+            return eval_native_static_method_callable_target(
+                dispatch_class,
+                parent,
+                method_name,
+                called_class,
+                lexical_scope,
+                context,
+                values,
+            );
+        }
+        if eval_static_magic_callable_for_class(&dispatch_class, context) {
+            return Ok(EvalClosureObjectTarget::StaticMethod {
+                class_name: dispatch_class,
+                method: method_name,
+                called_class,
+                native_class: None,
+                bridge_scope: None,
+            });
+        }
+        return eval_first_class_undefined_method_error(
+            &dispatch_class,
+            &method_name,
+            context,
+            values,
+        );
+    }
+    if context.has_interface(&dispatch_class)
+        || context.has_trait(&dispatch_class)
+        || context.has_enum(&dispatch_class)
+    {
+        if eval_static_magic_callable_for_class(&dispatch_class, context) {
+            return Ok(EvalClosureObjectTarget::StaticMethod {
+                class_name: dispatch_class,
+                method: method_name,
+                called_class,
+                native_class: None,
+                bridge_scope: None,
+            });
+        }
+        return eval_first_class_undefined_method_error(
+            &dispatch_class,
+            &method_name,
+            context,
+            values,
+        );
+    }
+    eval_native_static_method_callable_target(
+        dispatch_class.clone(),
+        dispatch_class,
+        method_name,
+        called_class,
+        lexical_scope,
         context,
         values,
     )
 }
 
-/// Finds inherited or direct AOT static dispatch metadata captured by a static callable.
-fn eval_static_method_callable_native_dispatch(
-    dispatch_class: &str,
-    method_name: &str,
-    context: &ElephcEvalContext,
+/// Validates generated/AOT static-method first-class callable metadata.
+fn eval_native_static_method_callable_target(
+    dispatch_class: String,
+    native_class: String,
+    method_name: String,
+    called_class: Option<String>,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<(String, String)>, EvalStatus> {
-    if context.class_method(dispatch_class, method_name).is_some() {
-        return Ok(None);
-    }
-    let native_class = if context.has_class(dispatch_class) {
-        let Some(parent) = context.class_native_parent_name(dispatch_class) else {
-            return Ok(None);
-        };
-        parent
-    } else if context.has_interface(dispatch_class)
-        || context.has_trait(dispatch_class)
-        || context.has_enum(dispatch_class)
-    {
-        return Ok(None);
-    } else {
-        dispatch_class.trim_start_matches('\\').to_string()
-    };
+) -> Result<EvalClosureObjectTarget, EvalStatus> {
     let Some((declaring_class, visibility, is_static, is_abstract)) =
         eval_aot_method_dispatch_metadata_in_hierarchy(
             &native_class,
-            method_name,
+            &method_name,
             context,
             values,
         )?
     else {
-        return Ok(None);
+        if eval_native_static_magic_callable_for_class(&native_class, context, values)?
+            || !values.class_exists(&native_class)?
+        {
+            return Ok(EvalClosureObjectTarget::StaticMethod {
+                class_name: dispatch_class,
+                method: method_name,
+                called_class,
+                native_class: None,
+                bridge_scope: None,
+            });
+        }
+        return eval_first_class_undefined_method_error(
+            &dispatch_class,
+            &method_name,
+            context,
+            values,
+        );
     };
-    if !is_static || is_abstract {
-        return Ok(None);
+    if is_abstract {
+        return eval_first_class_abstract_method_error(
+            &declaring_class,
+            &method_name,
+            context,
+            values,
+        );
     }
-    // First-class callables may outlive this scope, so capture only after access is valid now.
     if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
-        return Ok(None);
+        if eval_native_static_magic_callable_for_class(&native_class, context, values)? {
+            return Ok(EvalClosureObjectTarget::StaticMethod {
+                class_name: dispatch_class,
+                method: method_name,
+                called_class,
+                native_class: None,
+                bridge_scope: None,
+            });
+        }
+        return eval_first_class_method_access_error(
+            &declaring_class,
+            &method_name,
+            visibility,
+            context,
+            values,
+        );
     }
-    Ok(Some((native_class, declaring_class)))
+    if !is_static {
+        if let Some(object) = eval_static_syntax_instance_receiver(
+            &dispatch_class,
+            lexical_scope,
+            context,
+            values,
+        )? {
+            return Ok(EvalClosureObjectTarget::ObjectMethod {
+                object,
+                method: method_name,
+                called_class,
+                native_class: Some(native_class),
+                bridge_scope: Some(declaring_class),
+            });
+        }
+        return eval_first_class_non_static_method_error(
+            &declaring_class,
+            &method_name,
+            context,
+            values,
+        );
+    }
+    Ok(EvalClosureObjectTarget::StaticMethod {
+        class_name: dispatch_class,
+        method: method_name,
+        called_class,
+        native_class: Some(native_class),
+        bridge_scope: Some(declaring_class),
+    })
+}
+
+/// Returns whether an eval class has an instance magic-call fallback for a callable.
+fn eval_instance_magic_callable_for_class(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    context
+        .class_method(class_name, "__call")
+        .is_some_and(|(_, method)| !method.is_static() && !method.is_abstract())
+}
+
+/// Returns whether an eval class has a static magic-call fallback for a callable.
+fn eval_static_magic_callable_for_class(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    context
+        .class_method(class_name, "__callStatic")
+        .is_some_and(|(_, method)| method.is_static() && !method.is_abstract())
+}
+
+/// Returns whether an AOT class has an instance magic-call fallback for a callable.
+fn eval_native_instance_magic_callable_for_class(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(eval_aot_method_dispatch_metadata_in_hierarchy(class_name, "__call", context, values)?
+        .is_some_and(|(_, _, is_static, is_abstract)| !is_static && !is_abstract))
+}
+
+/// Returns whether an AOT class has a static magic-call fallback for a callable.
+fn eval_native_static_magic_callable_for_class(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(
+        eval_aot_method_dispatch_metadata_in_hierarchy(
+            class_name,
+            "__callStatic",
+            context,
+            values,
+        )?
+        .is_some_and(|(_, _, is_static, is_abstract)| is_static && !is_abstract),
+    )
+}
+
+/// Throws PHP's first-class callable error for an inaccessible method.
+fn eval_first_class_method_access_error<T>(
+    declaring_class: &str,
+    method_name: &str,
+    visibility: EvalVisibility,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Call to {} method {}::{}() from {}",
+            eval_callable_visibility_label(visibility),
+            declaring_class.trim_start_matches('\\'),
+            method_name,
+            eval_callable_scope_label(context)
+        ),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's first-class callable error for an instance method used statically.
+fn eval_first_class_non_static_method_error<T>(
+    declaring_class: &str,
+    method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Non-static method {}::{}() cannot be called statically",
+            declaring_class.trim_start_matches('\\'),
+            method_name
+        ),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's first-class callable error for an abstract method target.
+fn eval_first_class_abstract_method_error<T>(
+    declaring_class: &str,
+    method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Cannot call abstract method {}::{}()",
+            declaring_class.trim_start_matches('\\'),
+            method_name
+        ),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's first-class callable error for a missing method target.
+fn eval_first_class_undefined_method_error<T>(
+    class_name: &str,
+    method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Call to undefined method {}::{}()",
+            class_name.trim_start_matches('\\'),
+            method_name
+        ),
+        context,
+        values,
+    )
+}
+
+/// Returns the current PHP scope label used in callable access errors.
+fn eval_callable_scope_label(context: &ElephcEvalContext) -> String {
+    context.current_class_scope().map_or_else(
+        || String::from("global scope"),
+        |class_name| format!("scope {}", class_name.trim_start_matches('\\')),
+    )
+}
+
+/// Returns PHP's lowercase visibility label for callable access errors.
+fn eval_callable_visibility_label(visibility: EvalVisibility) -> &'static str {
+    match visibility {
+        EvalVisibility::Public => "public",
+        EvalVisibility::Protected => "protected",
+        EvalVisibility::Private => "private",
+    }
 }
 
 /// Evaluates a variable or expression callable and dispatches it with source-order arguments.

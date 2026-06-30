@@ -128,7 +128,10 @@ eval-declared functions, and registered AOT functions.
 First-class callable syntax such as `strlen(...)`, `$object->method(...)`,
 `ClassName::method(...)`, and `$invokable(...)` materializes eval callback
 values as PHP-visible `Closure` objects that can be invoked through
-`$callback(...)`, `call_user_func()`, and `call_user_func_array()`.
+`$callback(...)`, `call_user_func()`, and `call_user_func_array()`. Method
+targets are validated when the first-class callable is created, including
+missing, inaccessible, non-static static-syntax, and magic-call fallback cases;
+static-syntax instance methods capture `$this` when PHP permits that form.
 Namespaced function callables follow PHP's global fallback rule when the
 namespaced function is not visible.
 `Closure::fromCallable()` accepts the same supported string, callable-array,

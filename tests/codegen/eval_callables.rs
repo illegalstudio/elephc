@@ -161,6 +161,157 @@ return $f("1") . ":" . $m("2") . ":" . $s("3") . ":" . $ds("4") . ":" . $i("5");
     );
 }
 
+/// Verifies eval first-class callables reject invalid method targets at creation time.
+#[test]
+fn test_eval_first_class_callable_validation_rejects_invalid_method_targets() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalFirstClassInvalidTargets {
+    private function hidden() {
+        return "bad";
+    }
+
+    public function inst() {
+        return "bad";
+    }
+
+    private static function secret() {
+        return "bad";
+    }
+
+    public static function ok() {
+        return "OK";
+    }
+}
+
+$box = new EvalFirstClassInvalidTargets();
+try {
+    $box->missing(...);
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    $box->hidden(...);
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    EvalFirstClassInvalidTargets::missing(...);
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    EvalFirstClassInvalidTargets::inst(...);
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    EvalFirstClassInvalidTargets::secret(...);
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+$ok = EvalFirstClassInvalidTargets::ok(...);
+echo $ok();');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "Error:Call to undefined method EvalFirstClassInvalidTargets::missing()|\
+Error:Call to private method EvalFirstClassInvalidTargets::hidden() from global scope|\
+Error:Call to undefined method EvalFirstClassInvalidTargets::missing()|\
+Error:Non-static method EvalFirstClassInvalidTargets::inst() cannot be called statically|\
+Error:Call to private method EvalFirstClassInvalidTargets::secret() from global scope|OK"
+    );
+}
+
+/// Verifies eval first-class callables preserve PHP magic-method fallback.
+#[test]
+fn test_eval_first_class_callable_validation_preserves_magic_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalFirstClassMagicTargets {
+    private function hidden() {
+        return "bad";
+    }
+
+    private static function secret() {
+        return "bad";
+    }
+
+    public function __call($name, $args) {
+        return "I:" . $name . ":" . $args[0];
+    }
+
+    public static function __callStatic($name, $args) {
+        return "S:" . $name . ":" . $args[0];
+    }
+}
+
+$box = new EvalFirstClassMagicTargets();
+$hidden = $box->hidden(...);
+echo $hidden("a") . "|";
+$missing = $box->missing(...);
+echo $missing("b") . "|";
+$secret = EvalFirstClassMagicTargets::secret(...);
+echo $secret("c") . "|";
+$staticMissing = EvalFirstClassMagicTargets::missingStatic(...);
+echo $staticMissing("d");');
+"#,
+    );
+
+    assert_eq!(out, "I:hidden:a|I:missing:b|S:secret:c|S:missingStatic:d");
+}
+
+/// Verifies `self::method(...)` inside an instance eval method captures `$this`.
+#[test]
+fn test_eval_first_class_callable_validation_static_syntax_instance_method_captures_this() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalFirstClassStaticSyntaxThis {
+    public int $base = 7;
+
+    public function make() {
+        $fn = self::add(...);
+        return $fn(5);
+    }
+
+    public function add($value) {
+        return $this->base + $value;
+    }
+
+    public static function makeStatic() {
+        try {
+            self::add(...);
+            return "bad";
+        } catch (Error $e) {
+            return get_class($e) . ":" . $e->getMessage();
+        }
+    }
+}
+
+$box = new EvalFirstClassStaticSyntaxThis();
+echo $box->make() . "|";
+echo EvalFirstClassStaticSyntaxThis::makeStatic();');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "12|Error:Non-static method EvalFirstClassStaticSyntaxThis::add() cannot be called statically"
+    );
+}
+
 /// Verifies `Closure::fromCallable()` normalizes eval string and array callables to Closure objects.
 #[test]
 fn test_eval_closure_from_callable_normalizes_string_and_array_callables() {

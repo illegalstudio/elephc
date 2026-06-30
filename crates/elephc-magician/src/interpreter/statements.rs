@@ -7838,7 +7838,7 @@ fn eval_native_static_syntax_method_result(
 }
 
 /// Returns `$this` when PHP permits static-call syntax to target an instance method.
-fn eval_static_syntax_instance_receiver(
+pub(in crate::interpreter) fn eval_static_syntax_instance_receiver(
     class_name: &str,
     lexical_scope: Option<&ElephcEvalScope>,
     context: &ElephcEvalContext,
