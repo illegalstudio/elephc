@@ -38,9 +38,18 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func_array(
     let [callback, arg_array] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    let release_callback = eval_call_user_func_array_callback_is_temporary(callback);
     let release_arg_array = matches!(arg_array, EvalExpr::Array(_));
     let callback = eval_expr(callback, context, scope, values)?;
-    let arg_array = eval_expr(arg_array, context, scope, values)?;
+    let arg_array = match eval_expr(arg_array, context, scope, values) {
+        Ok(arg_array) => arg_array,
+        Err(status) => {
+            if release_callback {
+                values.release(callback)?;
+            }
+            return Err(status);
+        }
+    };
     let result = eval_call_user_func_array_with_values_from_scope(
         callback,
         arg_array,
@@ -51,7 +60,15 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func_array(
     if release_arg_array {
         values.release(arg_array)?;
     }
+    if release_callback {
+        values.release(callback)?;
+    }
     result
+}
+
+/// Returns whether a `call_user_func_array` callback expression allocates a temporary cell.
+fn eval_call_user_func_array_callback_is_temporary(callback: &EvalExpr) -> bool {
+    matches!(callback, EvalExpr::Const(_))
 }
 
 /// Dispatches `call_user_func_array` after callback and array arguments are evaluated.
