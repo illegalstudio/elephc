@@ -166,3 +166,56 @@ echo max(value: 3, values: 8);');
 
     assert_eq!(out, "1,2,3:8");
 }
+
+/// Verifies eval `call_user_func_array()` preserves positional ref-like builtin targets.
+#[test]
+fn test_eval_call_user_func_array_ref_like_builtins_write_back_positional_aliases() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalBuiltinRefBridgeBox {
+    public array $items = [3, 1, 2];
+    public static mixed $typed = "123";
+}
+
+eval('$items = [3, 1, 2];
+echo call_user_func_array("sort", [&$items]) ? "S" : "s";
+echo implode(",", $items) . "|";
+
+$value = "42";
+echo call_user_func_array("settype", [&$value, "integer"]) ? "T" : "t";
+echo gettype($value) . ":" . $value . "|";
+
+$box = new EvalBuiltinRefBridgeBox();
+echo call_user_func_array("array_pop", [&$box->items]) . ":";
+echo implode(",", $box->items) . "|";
+
+echo call_user_func_array("settype", [&EvalBuiltinRefBridgeBox::$typed, "integer"]) ? "P" : "p";
+echo gettype(EvalBuiltinRefBridgeBox::$typed) . ":" . EvalBuiltinRefBridgeBox::$typed;');
+"#,
+    );
+
+    assert_eq!(out, "S1,2,3|Tinteger:42|2:3,1|Pinteger:123");
+}
+
+/// Verifies eval `call_user_func_array()` preserves named ref-like builtin targets.
+#[test]
+fn test_eval_call_user_func_array_ref_like_builtins_write_back_named_aliases() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$matches = [];
+echo call_user_func_array(
+    "preg_match",
+    ["pattern" => "/(a)(b)/", "subject" => "ab", "matches" => &$matches]
+);
+echo ":" . $matches[0] . ":" . $matches[1] . ":" . $matches[2] . "|";
+
+$items = ["b" => 2, "a" => 1];
+echo call_user_func_array("ksort", ["array" => &$items]) ? "K" : "k";
+foreach ($items as $key => $value) {
+    echo $key . $value;
+}');
+"#,
+    );
+
+    assert_eq!(out, "1:ab:a:b|Ka1b2");
+}
