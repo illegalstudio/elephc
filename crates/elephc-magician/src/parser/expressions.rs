@@ -484,6 +484,7 @@ impl Parser {
         loop {
             if matches!(self.current(), TokenKind::LParen) {
                 if self.consume_first_class_callable_marker() {
+                    expr = Self::invokable_callable_expr(expr);
                     continue;
                 }
                 let args = self.parse_call_args()?;
@@ -948,7 +949,7 @@ impl Parser {
                 self.advance();
                 if matches!(self.current(), TokenKind::LParen) {
                     if self.consume_first_class_callable_marker() {
-                        return Ok(Self::callable_array_expr(
+                        return Ok(Self::dynamic_static_method_callable_expr(
                             class_name,
                             EvalExpr::LoadVar(member),
                         ));
@@ -986,7 +987,7 @@ impl Parser {
                 let method = method.clone();
                 self.advance();
                 if self.consume_first_class_callable_marker() {
-                    return Ok(Self::callable_array_expr(
+                    return Ok(Self::dynamic_static_method_callable_expr(
                         class_name,
                         EvalExpr::Const(EvalConst::String(method)),
                     ));
@@ -1004,7 +1005,7 @@ impl Parser {
                 self.expect(TokenKind::RBrace)?;
                 if matches!(self.current(), TokenKind::LParen) {
                     if self.consume_first_class_callable_marker() {
-                        return Ok(Self::callable_array_expr(class_name, member));
+                        return Ok(Self::dynamic_static_method_callable_expr(class_name, member));
                     }
                     let args = self.parse_call_args()?;
                     return Ok(EvalExpr::DynamicStaticMethodCall {
@@ -1290,12 +1291,19 @@ impl Parser {
         }
     }
 
-    /// Builds a plain PHP callable-array value for dynamic static callable forms.
-    fn callable_array_expr(receiver: EvalExpr, method: EvalExpr) -> EvalExpr {
-        EvalExpr::Array(vec![
-            EvalArrayElement::Value(receiver),
-            EvalArrayElement::Value(method),
-        ])
+    /// Builds the EvalIR node used for invokable-object first-class callables.
+    fn invokable_callable_expr(object: EvalExpr) -> EvalExpr {
+        EvalExpr::InvokableCallable {
+            object: Box::new(object),
+        }
+    }
+
+    /// Builds the EvalIR node used for runtime-class static first-class callables.
+    fn dynamic_static_method_callable_expr(class_name: EvalExpr, method: EvalExpr) -> EvalExpr {
+        EvalExpr::DynamicStaticMethodCallable {
+            class_name: Box::new(class_name),
+            method: Box::new(method),
+        }
     }
 
     /// Parses an anonymous function expression into a runtime eval closure payload.

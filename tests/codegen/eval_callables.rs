@@ -113,3 +113,50 @@ return call_user_func_array($static, [&$d, 9]) . ":" . gettype($d) . ":" . $d;')
         "25:integer:25|9:integer:9|13:integer:13|17:integer:17"
     );
 }
+
+/// Verifies eval first-class callables are PHP-visible `Closure` objects and remain invokable.
+#[test]
+fn test_eval_first_class_callables_are_php_closure_objects() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_aot_first_class_object_func(string $value): string {
+    return "F" . $value;
+}
+
+class EvalAotFirstClassObjectBox {
+    public function m(string $value): string {
+        return "M" . $value;
+    }
+
+    public static function s(string $value): string {
+        return "S" . $value;
+    }
+
+    public function __invoke(string $value): string {
+        return "I" . $value;
+    }
+}
+
+echo eval('$box = new EvalAotFirstClassObjectBox();
+$f = eval_aot_first_class_object_func(...);
+$m = $box->m(...);
+$s = EvalAotFirstClassObjectBox::s(...);
+$class = "EvalAotFirstClassObjectBox";
+$ds = $class::s(...);
+$i = $box(...);
+foreach ([$f, $m, $s, $ds, $i] as $cb) {
+    echo is_object($cb) ? "O" : "o";
+    echo get_class($cb);
+    echo $cb instanceof Closure ? "I" : "i";
+    echo is_callable($cb) ? "C" : "c";
+    echo "|";
+}
+return $f("1") . ":" . $m("2") . ":" . $s("3") . ":" . $ds("4") . ":" . $i("5");');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "OClosureIC|OClosureIC|OClosureIC|OClosureIC|OClosureIC|F1:M2:S3:S4:I5"
+    );
+}

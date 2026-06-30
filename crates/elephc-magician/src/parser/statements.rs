@@ -4235,6 +4235,13 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
         EvalExpr::StaticMethodCallable { method, .. } => {
             eval_expr_uses_this_property(method, property_name)
         }
+        EvalExpr::InvokableCallable { object } => {
+            eval_expr_uses_this_property(object, property_name)
+        }
+        EvalExpr::DynamicStaticMethodCallable { class_name, method } => {
+            eval_expr_uses_this_property(class_name, property_name)
+                || eval_expr_uses_this_property(method, property_name)
+        }
         EvalExpr::Include { path, .. }
         | EvalExpr::Cast { expr: path, .. }
         | EvalExpr::Clone(path)

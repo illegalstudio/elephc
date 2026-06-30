@@ -302,6 +302,29 @@ struct EvalObjectCallableMetadata {
     bridge_scope: String,
 }
 
+/// Callable target represented by a PHP-visible eval `Closure` object.
+#[derive(Clone)]
+pub enum EvalClosureObjectTarget {
+    Named(String),
+    InvokableObject {
+        object: RuntimeCellHandle,
+    },
+    ObjectMethod {
+        object: RuntimeCellHandle,
+        method: String,
+        called_class: Option<String>,
+        native_class: Option<String>,
+        bridge_scope: Option<String>,
+    },
+    StaticMethod {
+        class_name: String,
+        method: String,
+        called_class: Option<String>,
+        native_class: Option<String>,
+        bridge_scope: Option<String>,
+    },
+}
+
 /// Runtime value captured by an eval closure literal.
 #[derive(Clone)]
 pub struct EvalClosureCaptureBinding {
@@ -844,7 +867,7 @@ pub struct ElephcEvalContext {
     constants: HashMap<String, RuntimeCellHandle>,
     functions: HashMap<String, EvalFunction>,
     closures: HashMap<String, EvalClosure>,
-    closure_objects: HashMap<u64, String>,
+    closure_objects: HashMap<u64, EvalClosureObjectTarget>,
     next_closure_id: usize,
     native_functions: HashMap<String, NativeFunction>,
     native_methods: HashMap<(String, String), NativeCallableSignature>,
@@ -2792,13 +2815,34 @@ impl ElephcEvalContext {
 
     /// Associates a PHP `Closure` object identity with an eval closure callable name.
     pub fn register_closure_object(&mut self, identity: u64, closure_name: &str) {
-        self.closure_objects
-            .insert(identity, closure_name.to_string());
+        self.register_closure_object_target(
+            identity,
+            EvalClosureObjectTarget::Named(closure_name.to_string()),
+        );
     }
 
-    /// Returns the eval closure callable name bound to a PHP `Closure` object.
+    /// Associates a PHP `Closure` object identity with any eval callable target.
+    pub fn register_closure_object_target(
+        &mut self,
+        identity: u64,
+        target: EvalClosureObjectTarget,
+    ) {
+        self.closure_objects.insert(identity, target);
+    }
+
+    /// Returns the callable target bound to a PHP `Closure` object.
+    pub fn closure_object_target(&self, identity: u64) -> Option<&EvalClosureObjectTarget> {
+        self.closure_objects.get(&identity)
+    }
+
+    /// Returns the eval closure callable name bound to a literal PHP `Closure` object.
     pub fn closure_object_name(&self, identity: u64) -> Option<&str> {
-        self.closure_objects.get(&identity).map(String::as_str)
+        self.closure_objects
+            .get(&identity)
+            .and_then(|target| match target {
+                EvalClosureObjectTarget::Named(name) => Some(name.as_str()),
+                _ => None,
+            })
     }
 
     /// Defines a generated native function callback, failing if the name already exists.

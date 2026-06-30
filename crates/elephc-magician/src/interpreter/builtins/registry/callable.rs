@@ -122,8 +122,8 @@ pub(in crate::interpreter) fn eval_object_callable(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedCallable, EvalStatus> {
     let identity = values.object_identity(callback)?;
-    if let Some(name) = context.closure_object_name(identity) {
-        return Ok(EvaluatedCallable::Named(name.to_string()));
+    if let Some(target) = context.closure_object_target(identity) {
+        return Ok(eval_closure_object_target_callable(target));
     }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = runtime_object_class_name(callback, values)?;
@@ -154,6 +154,42 @@ pub(in crate::interpreter) fn eval_object_callable(
         return Err(EvalStatus::UnsupportedConstruct);
     }
     Ok(EvaluatedCallable::InvokableObject { object: callback })
+}
+
+/// Converts a PHP-visible eval `Closure` object target into the shared callback enum.
+fn eval_closure_object_target_callable(target: &EvalClosureObjectTarget) -> EvaluatedCallable {
+    match target {
+        EvalClosureObjectTarget::Named(name) => EvaluatedCallable::Named(name.clone()),
+        EvalClosureObjectTarget::InvokableObject { object } => EvaluatedCallable::InvokableObject {
+            object: *object,
+        },
+        EvalClosureObjectTarget::ObjectMethod {
+            object,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        } => EvaluatedCallable::ObjectMethod {
+            object: *object,
+            method: method.clone(),
+            called_class: called_class.clone(),
+            native_class: native_class.clone(),
+            bridge_scope: bridge_scope.clone(),
+        },
+        EvalClosureObjectTarget::StaticMethod {
+            class_name,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        } => EvaluatedCallable::StaticMethod {
+            class_name: class_name.clone(),
+            method: method.clone(),
+            called_class: called_class.clone(),
+            native_class: native_class.clone(),
+            bridge_scope: bridge_scope.clone(),
+        },
+    }
 }
 
 /// Normalizes one two-element object-method or static-method callable array.

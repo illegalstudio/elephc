@@ -127,11 +127,10 @@ eval-declared functions, and registered AOT functions.
 
 First-class callable syntax such as `strlen(...)`, `$object->method(...)`,
 `ClassName::method(...)`, and `$invokable(...)` materializes eval callback
-values that can be invoked through `$callback(...)`, `call_user_func()`, and
-`call_user_func_array()`.
+values as PHP-visible `Closure` objects that can be invoked through
+`$callback(...)`, `call_user_func()`, and `call_user_func_array()`.
 Namespaced function callables follow PHP's global fallback rule when the
-namespaced function is not visible. First-class callable descriptors remain eval
-callback values rather than full PHP `Closure` objects.
+namespaced function is not visible.
 
 Closure literals created inside eval are PHP-visible `Closure` objects: they
 report true for `is_object()`, `get_class($fn)` returns `Closure`,
@@ -887,9 +886,10 @@ Unsupported constructs and missing class names during eval object construction
 fail at runtime with an eval fatal diagnostic.
 
 The fragment subset is broad but not the full elephc language surface. In
-particular, advanced native callable descriptors and full PHP `Closure` object
-semantics for first-class callable callback values are still outside eval
-fragments. Runtime/AOT free-function, object-method, static-method, and
+particular, advanced native callable descriptors and full PHP `Closure` APIs
+such as binding/scope mutation and reflection over every first-class callable
+shape are still outside eval fragments. Runtime/AOT free-function,
+object-method, static-method, and
 constructor fallback from eval
 can bind registered names, defaults, and positional variadic tails; method,
 static-method, and constructor fallback can also bind by-reference lvalue

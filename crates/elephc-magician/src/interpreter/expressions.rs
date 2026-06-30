@@ -53,11 +53,17 @@ pub(in crate::interpreter) fn eval_expr(
             name,
             fallback_name,
         } => eval_function_callable_expr(name, fallback_name.as_deref(), context, values),
+        EvalExpr::InvokableCallable { object } => {
+            eval_invokable_callable_expr(object, context, scope, values)
+        }
         EvalExpr::MethodCallable { object, method } => {
             eval_method_callable_expr(object, method, context, scope, values)
         }
         EvalExpr::StaticMethodCallable { class_name, method } => {
             eval_static_method_callable_expr(class_name, method, context, scope, values)
+        }
+        EvalExpr::DynamicStaticMethodCallable { class_name, method } => {
+            eval_dynamic_static_method_callable_expr(class_name, method, context, scope, values)
         }
         EvalExpr::DynamicCall { callee, args } => {
             eval_dynamic_call(callee, args, context, scope, values)
@@ -672,9 +678,18 @@ fn eval_closure_expr(
     }
     let closure = EvalClosure::new(function.clone(), bindings, is_static);
     let name = context.define_closure(closure);
+    eval_closure_object_expr(EvalClosureObjectTarget::Named(name), context, values)
+}
+
+/// Materializes one PHP-visible `Closure` object for an eval callable target.
+fn eval_closure_object_expr(
+    target: EvalClosureObjectTarget,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let object = values.new_object("stdClass")?;
     let identity = values.object_identity(object)?;
-    context.register_closure_object(identity, &name);
+    context.register_closure_object_target(identity, target);
     Ok(object)
 }
 
@@ -849,15 +864,41 @@ fn eval_function_callable_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if eval_function_probe_exists(context, name) {
-        return values.string(name);
+        return eval_closure_object_expr(
+            EvalClosureObjectTarget::Named(name.trim_start_matches('\\').to_ascii_lowercase()),
+            context,
+            values,
+        );
     }
     if let Some(fallback_name) = fallback_name {
         if eval_function_probe_exists(context, fallback_name) {
-            return values.string(fallback_name);
+            return eval_closure_object_expr(
+                EvalClosureObjectTarget::Named(
+                    fallback_name.trim_start_matches('\\').to_ascii_lowercase(),
+                ),
+                context,
+                values,
+            );
         }
     }
     eval_throw_error(
         &format!("Call to undefined function {}()", name.trim_start_matches('\\')),
+        context,
+        values,
+    )
+}
+
+/// Materializes an invokable-object first-class callable as a PHP `Closure` object.
+fn eval_invokable_callable_expr(
+    object: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let object = eval_expr(object, context, scope, values)?;
+    eval_invokable_object_precheck(object, context, values)?;
+    eval_closure_object_expr(
+        EvalClosureObjectTarget::InvokableObject { object },
         context,
         values,
     )
@@ -873,25 +914,28 @@ fn eval_method_callable_expr(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let object = eval_expr(object, context, scope, values)?;
     let method = eval_dynamic_member_name(method, context, scope, values)?;
-    let mut array = values.array_new(2)?;
-    let zero = values.int(0)?;
-    let one = values.int(1)?;
-    let method_value = values.string(&method)?;
-    array = values.array_set(array, zero, object)?;
-    array = values.array_set(array, one, method_value)?;
-    if let Some((native_class, bridge_scope, called_class)) =
+    let (native_class, bridge_scope, called_class) = if let Some((
+        native_class,
+        bridge_scope,
+        called_class,
+    )) =
         eval_method_callable_native_dispatch(object, &method, context, values)?
     {
-        context.register_eval_object_callable(
-            array,
+        (Some(native_class), Some(bridge_scope), Some(called_class))
+    } else {
+        (None, None, None)
+    };
+    eval_closure_object_expr(
+        EvalClosureObjectTarget::ObjectMethod {
             object,
-            &method,
-            &called_class,
-            &native_class,
-            &bridge_scope,
-        );
-    }
-    Ok(array)
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        },
+        context,
+        values,
+    )
 }
 
 /// Finds inherited AOT method dispatch metadata captured by an object method callable.
@@ -939,29 +983,73 @@ fn eval_static_method_callable_expr(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let receiver = resolve_eval_static_method_receiver(class_name, context)?;
     let method = eval_dynamic_member_name(method, context, scope, values)?;
-    let mut array = values.array_new(2)?;
-    let zero = values.int(0)?;
-    let one = values.int(1)?;
-    let class_value = values.string(&receiver.dispatch_class)?;
-    let method_value = values.string(&method)?;
-    array = values.array_set(array, zero, class_value)?;
-    array = values.array_set(array, one, method_value)?;
     let native_dispatch = eval_static_method_callable_native_dispatch(
         &receiver.dispatch_class,
         &method,
         context,
         values,
     )?;
-    context.register_eval_static_callable(
-        array,
+    eval_static_method_closure_object(
+        receiver.dispatch_class,
+        method,
+        Some(receiver.called_class),
+        native_dispatch,
+        context,
+        values,
+    )
+}
+
+/// Materializes a runtime-class static first-class callable as a PHP `Closure` object.
+fn eval_dynamic_static_method_callable_expr(
+    class_name: &EvalExpr,
+    method: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let class_name = eval_expr(class_name, context, scope, values)?;
+    let class_name = eval_dynamic_class_name(class_name, context, values)?;
+    let receiver = resolve_eval_static_method_receiver(&class_name, context)?;
+    let method = eval_dynamic_member_name(method, context, scope, values)?;
+    let native_dispatch = eval_static_method_callable_native_dispatch(
         &receiver.dispatch_class,
         &method,
-        &receiver.called_class,
-        native_dispatch
-            .as_ref()
-            .map(|(native_class, bridge_scope)| (native_class.as_str(), bridge_scope.as_str())),
-    );
-    Ok(array)
+        context,
+        values,
+    )?;
+    eval_static_method_closure_object(
+        receiver.dispatch_class,
+        method,
+        Some(receiver.called_class),
+        native_dispatch,
+        context,
+        values,
+    )
+}
+
+/// Materializes a static-method callable target as a PHP-visible `Closure` object.
+fn eval_static_method_closure_object(
+    class_name: String,
+    method: String,
+    called_class: Option<String>,
+    native_dispatch: Option<(String, String)>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (native_class, bridge_scope) = native_dispatch
+        .map(|(native_class, bridge_scope)| (Some(native_class), Some(bridge_scope)))
+        .unwrap_or((None, None));
+    eval_closure_object_expr(
+        EvalClosureObjectTarget::StaticMethod {
+            class_name,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        },
+        context,
+        values,
+    )
 }
 
 /// Finds inherited or direct AOT static dispatch metadata captured by a static callable.
@@ -1020,7 +1108,7 @@ pub(in crate::interpreter) fn eval_dynamic_call(
         let is_closure_object = values
             .object_identity(callback)
             .ok()
-            .and_then(|identity| context.closure_object_name(identity))
+            .and_then(|identity| context.closure_object_target(identity))
             .is_some();
         if !is_closure_object {
             eval_invokable_object_precheck(callback, context, values)?;
