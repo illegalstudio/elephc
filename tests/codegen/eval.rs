@@ -2697,6 +2697,44 @@ echo ":"; echo function_exists("date"); echo function_exists("mktime");');
     );
 }
 
+/// Verifies eval function probes recognize the DateTime/calendar aliases that static elephc
+/// desugars before codegen.
+#[test]
+fn test_eval_function_probes_date_procedural_aliases() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$aliases = [
+    "idate", "mktime", "gmmktime", "date_create", "date_create_immutable",
+    "date_create_from_format", "date_create_immutable_from_format",
+    "date_parse_from_format", "date_parse", "date_sun_info", "date_sunrise",
+    "date_sunset", "strptime", "timezone_name_from_abbr", "cal_to_jd",
+    "cal_from_jd", "cal_days_in_month", "cal_info", "gregoriantojd",
+    "jdtogregorian", "juliantojd", "jdtojulian", "frenchtojd",
+    "jdtofrench", "jewishtojd", "jdtojewish", "jddayofweek", "jdmonthname",
+    "jdtounix", "unixtojd", "easter_days", "easter_date", "gettimeofday",
+    "date_get_last_errors", "strftime", "gmstrftime", "timezone_open",
+    "timezone_identifiers_list", "timezone_location_get",
+    "timezone_transitions_get", "timezone_abbreviations_list",
+    "timezone_version_get", "date_interval_create_from_date_string",
+    "date_diff", "date_format", "date_add", "date_sub", "date_modify",
+    "date_timestamp_get", "date_timestamp_set", "date_timezone_get",
+    "date_timezone_set", "date_offset_get", "date_date_set",
+    "date_isodate_set", "date_time_set", "date_interval_format",
+    "timezone_name_get", "timezone_offset_get"
+];
+foreach ($aliases as $alias) {
+    echo function_exists($alias) ? "1" : "0";
+}
+echo ":";
+echo function_exists("Date_Create") ? "C" : "c";
+echo function_exists("EvalAlias\\idate") ? "N" : "n";
+echo is_callable("timezone_version_get") ? "I" : "i";
+echo function_exists("does_not_exist_alias_xyz") ? "x" : "X";');
+"#,
+    );
+    assert_eq!(out, "1".repeat(59) + ":CNIX");
+}
+
 /// Verifies eval `strtotime()` parses supported ISO date strings and rejects others.
 #[test]
 fn test_eval_dispatches_strtotime_builtin_calls() {
