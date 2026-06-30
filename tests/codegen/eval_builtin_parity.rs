@@ -219,3 +219,35 @@ foreach ($items as $key => $value) {
 
     assert_eq!(out, "1:ab:a:b|Ka1b2");
 }
+
+/// Verifies eval first-class and Closure builtin callables preserve ref-like parameters.
+#[test]
+fn test_eval_ref_like_builtin_closures_write_back_aliases() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$sort = sort(...);
+$items = [3, 1, 2];
+echo $sort($items) ? "S" : "s";
+echo implode(",", $items) . "|";
+
+$settype = Closure::fromCallable("settype");
+$value = "42";
+echo $settype($value, "integer") ? "T" : "t";
+echo gettype($value) . ":" . $value . "|";
+
+$preg = preg_match(...);
+$matches = [];
+echo $preg("/(a)(b)/", "ab", $matches);
+echo ":" . $matches[0] . ":" . $matches[1] . ":" . $matches[2] . "|";
+
+$ksort = Closure::fromCallable("ksort");
+$assoc = ["b" => 2, "a" => 1];
+echo call_user_func_array($ksort, ["array" => &$assoc]) ? "K" : "k";
+foreach ($assoc as $key => $entry) {
+    echo $key . $entry;
+}');
+"#,
+    );
+
+    assert_eq!(out, "S1,2,3|Tinteger:42|1:ab:a:b|Ka1b2");
+}
