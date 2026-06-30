@@ -10839,7 +10839,7 @@ fn eval_native_static_magic_method_available(
 }
 
 /// Dispatches a missing or inaccessible generated/AOT instance method through `__call()`.
-fn eval_native_magic_instance_method_call(
+pub(in crate::interpreter) fn eval_native_magic_instance_method_call(
     object: RuntimeCellHandle,
     class_name: &str,
     method_name: &str,
@@ -10859,7 +10859,7 @@ fn eval_native_magic_instance_method_call(
 }
 
 /// Dispatches a missing or inaccessible generated/AOT static method through `__callStatic()`.
-fn eval_native_magic_static_method_call(
+pub(in crate::interpreter) fn eval_native_magic_static_method_call(
     class_name: &str,
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
