@@ -425,27 +425,9 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
         "explode" => strings::lower_explode(ctx, inst),
         "implode" => strings::lower_implode(ctx, inst),
-        "str_split" => strings::lower_str_split(ctx, inst),
         "sscanf" => strings::lower_sscanf(ctx, inst),
-        "strcmp" => strings::lower_binary_string_runtime(ctx, inst, "strcmp", "__rt_strcmp"),
-        "strcasecmp" => {
-            strings::lower_binary_string_runtime(ctx, inst, "strcasecmp", "__rt_strcasecmp")
-        }
-        "str_contains" => strings::lower_str_contains(ctx, inst),
         "strpos" => strings::lower_string_position(ctx, inst, "strpos", "__rt_strpos"),
         "strrpos" => strings::lower_string_position(ctx, inst, "strrpos", "__rt_strrpos"),
-        "str_starts_with" => strings::lower_binary_string_runtime(
-            ctx,
-            inst,
-            "str_starts_with",
-            "__rt_str_starts_with",
-        ),
-        "str_ends_with" => strings::lower_binary_string_runtime(
-            ctx,
-            inst,
-            "str_ends_with",
-            "__rt_str_ends_with",
-        ),
         "chr" => strings::lower_chr(ctx, inst),
         "ucwords" => strings::lower_unary_string_runtime(ctx, inst, "ucwords", "__rt_ucwords"),
         "wordwrap" => strings::lower_wordwrap(ctx, inst),

@@ -136,7 +136,7 @@ pub(crate) fn lower_trim_like(
 }
 
 /// Lowers a two-argument string builtin that directly delegates to a runtime helper.
-pub(super) fn lower_binary_string_runtime(
+pub(crate) fn lower_binary_string_runtime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -173,7 +173,7 @@ pub(super) fn lower_sscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `str_split(string, length?)` into the fixed-width string-array splitter.
-pub(super) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "str_split expected 1 or 2 args, got {}",
@@ -679,7 +679,7 @@ fn emit_vsprintf_runtime_call(
 }
 
 /// Lowers `str_contains()` through `strpos()` and converts found positions to bool.
-pub(super) fn lower_str_contains(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_str_contains(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_binary_string_args(ctx, inst, "str_contains")?;
     abi::emit_call_label(ctx.emitter, "__rt_strpos");
     match ctx.emitter.target.arch {

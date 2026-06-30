@@ -176,15 +176,6 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Str))
         }
-        "str_split" => {
-            if args.is_empty() || args.len() > 2 {
-                return Err(CompileError::new(span, "str_split() takes 1 or 2 arguments"));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
-        }
         "wordwrap" => {
             if args.is_empty() || args.len() > 4 {
                 return Err(CompileError::new(span, "wordwrap() takes 1 to 4 arguments"));
@@ -193,30 +184,6 @@ pub(super) fn check_builtin(
                 checker.infer_type(arg, env)?;
             }
             Ok(Some(PhpType::Str))
-        }
-        "strcmp" | "strcasecmp" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 2 arguments", name),
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Int))
-        }
-        "str_contains" | "str_starts_with" | "str_ends_with" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 2 arguments", name),
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Bool))
         }
         "explode" => {
             if args.len() != 2 {
