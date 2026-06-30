@@ -52,6 +52,40 @@ fn execute_program_checks_registered_native_function_return_type() {
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies raw native by-reference staging is released when invoker argument setup fails.
+#[test]
+fn execute_program_cleans_native_raw_ref_slots_when_arg_array_build_fails() {
+    let program = parse_fragment(br#"$value = "keep"; native_string_ref($value);"#)
+        .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let expected = values.int(42).expect("allocate fake result");
+    let mut native =
+        NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 1);
+    assert!(native.set_param_name(0, "value"));
+    assert!(native.set_param_type(
+        0,
+        EvalParameterType::new(vec![EvalParameterTypeVariant::String], false)
+    ));
+    assert!(native.set_param_by_ref(0, true));
+    assert!(context
+        .define_native_function("native_string_ref", native)
+        .is_ok());
+    values.fail_array_set_call(0);
+
+    let err = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect_err("argument-array build failure should abort native dispatch");
+    let value = scope
+        .entry("value")
+        .expect("scope should retain the original string")
+        .cell();
+
+    assert_eq!(err, EvalStatus::UnsupportedConstruct);
+    assert_eq!(values.get(value), FakeValue::String("keep".to_string()));
+    assert!(values.releases.iter().any(|release| *release == value));
+}
+
 /// Verifies direct eval calls can bind registered native parameters by name.
 #[test]
 fn execute_program_calls_registered_native_function_with_named_args() {

@@ -58,6 +58,8 @@ pub(super) struct FakeOps {
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
     pub(super) warnings: Vec<String>,
+    pub(super) fail_array_set_call: Option<usize>,
+    pub(super) array_set_calls: usize,
 }
 
 impl FakeOps {
@@ -114,6 +116,12 @@ impl FakeOps {
         properties
             .iter()
             .find_map(|(property, value)| (property == name).then_some(*value))
+    }
+
+    /// Configures one fake array-set call to fail for cleanup-path tests.
+    pub(super) fn fail_array_set_call(&mut self, call_index: usize) {
+        self.fail_array_set_call = Some(call_index);
+        self.array_set_calls = 0;
     }
 }
 

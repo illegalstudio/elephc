@@ -1810,18 +1810,73 @@ pub(super) fn eval_native_function_with_values(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
-    let arg_array = values.array_new(bound_args.values.len())?;
-    for (index, value) in bound_args.values.iter().copied().enumerate() {
-        let index = values.int(index as i64)?;
-        let _ = values.array_set(arg_array, index, value)?;
-    }
+    let arg_array = match build_native_function_arg_array(&bound_args, values) {
+        Ok(arg_array) => arg_array,
+        Err(status) => {
+            cleanup_native_function_ref_args(&bound_args, values)?;
+            return Err(status);
+        }
+    };
     let result = unsafe { function.call(arg_array) };
-    values.release(arg_array)?;
+    if let Err(status) = values.release(arg_array) {
+        cleanup_native_function_ref_args(&bound_args, values)?;
+        return Err(status);
+    }
     write_back_native_function_ref_args(&bound_args, context, values)?;
     if result.is_null() {
         return Err(EvalStatus::RuntimeFatal);
     }
     eval_declared_native_return_value(function.return_type(), None, None, result, context, values)
+}
+
+/// Builds the positional runtime array passed to descriptor-compatible native invokers.
+fn build_native_function_arg_array(
+    bound_args: &BoundNativeFunctionArgs,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let arg_array = values.array_new(bound_args.values.len())?;
+    for (index, value) in bound_args.values.iter().copied().enumerate() {
+        let index = match values.int(index as i64) {
+            Ok(index) => index,
+            Err(status) => {
+                values.release(arg_array)?;
+                return Err(status);
+            }
+        };
+        if let Err(status) = values.array_set(arg_array, index, value) {
+            values.release(arg_array)?;
+            return Err(status);
+        }
+    }
+    Ok(arg_array)
+}
+
+/// Releases retained raw native-function by-reference staging slots without writeback.
+fn cleanup_native_function_ref_args(
+    bound_args: &BoundNativeFunctionArgs,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for ref_slot in &bound_args.ref_slots {
+        match ref_slot {
+            BoundNativeFunctionRefSlot::RawString { original, slot, .. } => {
+                let words = **slot;
+                values.release_raw_string_words(words[0], words[1])?;
+                if words[0] != original[0] {
+                    values.release_raw_string_words(original[0], original[1])?;
+                }
+            }
+            BoundNativeFunctionRefSlot::OwnedRawWord { original, slot, .. } => {
+                let word = **slot;
+                values.release_raw_heap_word(word)?;
+                if word != *original {
+                    values.release_raw_heap_word(*original)?;
+                }
+            }
+            BoundNativeFunctionRefSlot::Mixed { .. }
+            | BoundNativeFunctionRefSlot::RawWord { .. } => {}
+        }
+    }
+    Ok(())
 }
 
 /// Writes changed staged native-function by-reference slots back to eval caller targets.
