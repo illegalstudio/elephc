@@ -160,7 +160,7 @@ pub(crate) fn lower_explode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `sscanf(string, format)` into the shared scanner helper.
-pub(super) fn lower_sscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_sscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() < 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "sscanf expected at least 2 args, got {}",
@@ -508,26 +508,26 @@ pub(crate) fn lower_inet(
 }
 
 /// Lowers `sprintf(format, values...)` by packing variadic records for `__rt_sprintf`.
-pub(super) fn lower_sprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_sprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     emit_sprintf_runtime_call(ctx, inst, "sprintf")?;
     store_if_result(ctx, inst)
 }
 
 /// Lowers `printf(format, values...)` as `sprintf()` followed by stdout emission.
-pub(super) fn lower_printf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_printf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     emit_sprintf_runtime_call(ctx, inst, "printf")?;
     emit_printf_write_result(ctx);
     store_if_result(ctx, inst)
 }
 
 /// Lowers `vsprintf(format, values)` through the array-to-sprintf runtime bridge.
-pub(super) fn lower_vsprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_vsprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     emit_vsprintf_runtime_call(ctx, inst, "vsprintf")?;
     store_if_result(ctx, inst)
 }
 
 /// Lowers `vprintf(format, values)` as `vsprintf()` followed by stdout emission.
-pub(super) fn lower_vprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_vprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     emit_vsprintf_runtime_call(ctx, inst, "vprintf")?;
     emit_printf_write_result(ctx);
     store_if_result(ctx, inst)
@@ -727,7 +727,7 @@ pub(crate) fn lower_substr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `substr_replace(string, replacement, start, length?)`.
-pub(super) fn lower_substr_replace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_substr_replace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() < 3 || inst.operands.len() > 4 {
         return Err(CodegenIrError::invalid_module(format!(
             "substr_replace expected 3 or 4 args, got {}",
@@ -777,7 +777,7 @@ pub(crate) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `str_replace()`/`str_ireplace()` with three string operands.
-pub(super) fn lower_string_replace(
+pub(crate) fn lower_string_replace(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -799,7 +799,7 @@ pub(super) fn lower_string_replace(
 }
 
 /// Lowers `wordwrap(string, width?, break?, cut?)` through the shared runtime helper.
-pub(super) fn lower_wordwrap(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_wordwrap(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 4 {
         return Err(CodegenIrError::invalid_module(format!(
             "wordwrap expected 1 to 4 args, got {}",
@@ -815,7 +815,7 @@ pub(super) fn lower_wordwrap(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 }
 
 /// Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper.
-pub(super) fn lower_str_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_str_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() < 2 || inst.operands.len() > 4 {
         return Err(CodegenIrError::invalid_module(format!(
             "str_pad expected 2 to 4 args, got {}",
@@ -872,7 +872,7 @@ pub(crate) fn lower_chr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
 }
 
 /// Lowers `number_format()` by arranging its runtime helper arguments.
-pub(super) fn lower_number_format(
+pub(crate) fn lower_number_format(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

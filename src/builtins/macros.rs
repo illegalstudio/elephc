@@ -57,7 +57,7 @@ macro_rules! builtin {
     (
         name: $name:expr,
         area: $area:ident,
-        params: [ $($pname:ident : $pty:ident $(= $pdefault:expr)?),* $(,)? ],
+        params: [ $($pname:tt : $pty:ident $(= $pdefault:expr)?),* $(,)? ],
         $(variadic: $variadic:expr,)?
         $(max_args: $max_args:expr,)?
         returns: $returns:ident,
@@ -79,7 +79,7 @@ macro_rules! builtin {
                     const PARAMS: &[$crate::builtins::spec::ParamSpec] = &[
                         $(
                             $crate::builtins::spec::ParamSpec {
-                                name: stringify!($pname),
+                                name: builtin!(@name_str $pname),
                                 ty: $crate::builtins::spec::TypeSpec::$pty,
                                 default: builtin!(@default $($pdefault)?),
                                 by_ref: false,
@@ -102,6 +102,34 @@ macro_rules! builtin {
             }
         }
     };
+
+    // Helper: convert a param-name token to a &'static str.
+    // Handles raw identifiers (e.g. r#break → "break") and explicit string literals.
+    // Raw identifiers that are Rust keywords must be listed explicitly because
+    // `stringify!(r#keyword)` preserves the `r#` prefix on some Rust toolchains.
+    (@name_str r#break) => { "break" };
+    (@name_str r#continue) => { "continue" };
+    (@name_str r#type) => { "type" };
+    (@name_str r#match) => { "match" };
+    (@name_str r#return) => { "return" };
+    (@name_str r#use) => { "use" };
+    (@name_str r#mod) => { "mod" };
+    (@name_str r#fn) => { "fn" };
+    (@name_str r#let) => { "let" };
+    (@name_str r#move) => { "move" };
+    (@name_str r#ref) => { "ref" };
+    (@name_str r#static) => { "static" };
+    (@name_str r#const) => { "const" };
+    (@name_str r#trait) => { "trait" };
+    (@name_str r#impl) => { "impl" };
+    (@name_str r#where) => { "where" };
+    (@name_str r#as) => { "as" };
+    (@name_str r#in) => { "in" };
+    (@name_str r#loop) => { "loop" };
+    // Fallback: a normal identifier, stringified as-is.
+    (@name_str $name:ident) => { stringify!($name) };
+    // Explicit string literal (for future use if needed).
+    (@name_str $name:literal) => { $name };
 
     // Helper: optional DefaultSpec — present wraps in Some, absent yields None.
     // Users write the full DefaultSpec path: `DefaultSpec::Null`, `DefaultSpec::Int(5)`, etc.

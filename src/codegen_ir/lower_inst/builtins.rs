@@ -415,21 +415,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "is_nan" => math::lower_is_nan(ctx, inst),
         "is_infinite" => math::lower_is_infinite(ctx, inst),
         "is_finite" => math::lower_is_finite(ctx, inst),
-        "number_format" => strings::lower_number_format(ctx, inst),
-        "substr_replace" => strings::lower_substr_replace(ctx, inst),
-        "str_replace" => strings::lower_string_replace(ctx, inst, "str_replace", "__rt_str_replace"),
-        "str_ireplace" => {
-            strings::lower_string_replace(ctx, inst, "str_ireplace", "__rt_str_ireplace")
-        }
-        "sscanf" => strings::lower_sscanf(ctx, inst),
-        "wordwrap" => strings::lower_wordwrap(ctx, inst),
         "hash_init" => strings::lower_hash_init(ctx, inst),
         "hash_file" => io::lower_hash_file(ctx, inst),
-        "str_pad" => strings::lower_str_pad(ctx, inst),
-        "sprintf" => strings::lower_sprintf(ctx, inst),
-        "printf" => strings::lower_printf(ctx, inst),
-        "vsprintf" => strings::lower_vsprintf(ctx, inst),
-        "vprintf" => strings::lower_vprintf(ctx, inst),
         "spl_autoload_register" => spl::lower_spl_autoload_bool(ctx, inst, "spl_autoload_register"),
         "spl_autoload_unregister" => spl::lower_spl_autoload_bool(ctx, inst, "spl_autoload_unregister"),
         "spl_autoload_functions" => spl::lower_spl_autoload_functions(ctx, inst),

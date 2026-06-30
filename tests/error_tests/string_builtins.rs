@@ -117,13 +117,13 @@ fn test_error_str_replace_wrong_args() {
 /// Verifies that `sprintf()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_sprintf_no_args() {
-    expect_error("<?php sprintf();", "sprintf() requires at least 1 argument");
+    expect_error("<?php sprintf();", "sprintf() takes at least 1 argument");
 }
 
 /// Verifies that `printf()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_printf_no_args() {
-    expect_error("<?php printf();", "printf() requires at least 1 argument");
+    expect_error("<?php printf();", "printf() takes at least 1 argument");
 }
 
 /// Verifies that `ord()` with no arguments produces the correct arity error.

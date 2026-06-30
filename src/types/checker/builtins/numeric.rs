@@ -249,18 +249,6 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[1], env)?;
             Ok(Some(PhpType::Int))
         }
-        "number_format" => {
-            if args.is_empty() || args.len() > 4 {
-                return Err(CompileError::new(
-                    span,
-                    "number_format() takes 1 to 4 arguments",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Str))
-        }
         "gettype" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "gettype() takes exactly 1 argument"));
