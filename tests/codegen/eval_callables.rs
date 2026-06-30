@@ -811,6 +811,57 @@ Error:Class \"self\" not found"
     );
 }
 
+/// Verifies eval special-class callable arrays preserve by-reference writeback.
+#[test]
+fn test_eval_special_class_callable_arrays_preserve_by_ref_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalSpecialArrayRefBase {
+    public static function bump(int &$value, int $delta): int {
+        $value += $delta;
+        return $value;
+    }
+}
+
+class EvalSpecialArrayRefChild extends EvalSpecialArrayRefBase {
+    public int $base = 10;
+
+    public function add(int &$value, int $delta): int {
+        $value += $this->base + $delta;
+        return $value;
+    }
+
+    public function run(): string {
+        $out = "";
+
+        $first = "2";
+        $out .= call_user_func_array(["self", "add"], [&$first, 3]) . ":" . gettype($first) . ":" . $first . "|";
+
+        $second = "4";
+        $static = Closure::fromCallable(["static", "add"]);
+        $out .= $static($second, 5) . ":" . gettype($second) . ":" . $second . "|";
+
+        $third = "6";
+        $out .= call_user_func_array(["parent", "bump"], [&$third, 7]) . ":" . gettype($third) . ":" . $third . "|";
+
+        $fourth = "8";
+        $parent = Closure::fromCallable(["parent", "bump"]);
+        $out .= $parent($fourth, 9) . ":" . gettype($fourth) . ":" . $fourth;
+
+        return $out;
+    }
+}
+
+return (new EvalSpecialArrayRefChild())->run();');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "15:integer:15|19:integer:19|13:integer:13|17:integer:17"
+    );
+}
+
 /// Verifies `Closure::fromCallable()` normalizes eval string and array callables to Closure objects.
 #[test]
 fn test_eval_closure_from_callable_normalizes_string_and_array_callables() {

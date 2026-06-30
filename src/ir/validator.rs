@@ -881,42 +881,125 @@ fn definition_dominates_use(
 /// resolve to `{self}` (no reachable predecessor), so genuine uses inside dead
 /// code remain flagged until they are neutralized.
 fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
-    let all_blocks: HashSet<BlockId> = function.blocks.iter().map(|block| block.id).collect();
     let predecessors = compute_predecessors(function);
     let reachable = reachable_from_entry(function, &predecessors);
-    let mut dominators = HashMap::new();
-    for block in &function.blocks {
-        if block.id == function.entry {
-            dominators.insert(block.id, HashSet::from([block.id]));
-        } else {
-            dominators.insert(block.id, all_blocks.clone());
-        }
-    }
+    let block_count = function.blocks.len();
+    let all_blocks = full_block_bitset(block_count);
+    let mut dominators = vec![all_blocks.clone(); block_count];
+    let entry_index = function.entry.as_raw() as usize;
+    dominators[entry_index] = empty_block_bitset(block_count);
+    set_block_bit(&mut dominators[entry_index], entry_index);
+    let predecessor_indices = reachable_predecessor_indices(function, &predecessors, &reachable);
 
     let mut changed = true;
     while changed {
         changed = false;
-        for block in &function.blocks {
+        for (block_index, block) in function.blocks.iter().enumerate() {
             if block.id == function.entry {
                 continue;
             }
-            let preds: Vec<BlockId> = predecessors
-                .get(&block.id)
-                .map(|preds| preds.iter().copied().filter(|p| reachable.contains(p)).collect())
-                .unwrap_or_default();
-            let mut next = if preds.is_empty() {
-                HashSet::new()
+            let mut next = if predecessor_indices[block_index].is_empty() {
+                empty_block_bitset(block_count)
             } else {
-                intersection_of_predecessors(&preds, &dominators, &all_blocks)
+                all_blocks.clone()
             };
-            next.insert(block.id);
-            if dominators.get(&block.id) != Some(&next) {
-                dominators.insert(block.id, next);
+            for pred_index in &predecessor_indices[block_index] {
+                bitset_and_assign(&mut next, &dominators[*pred_index]);
+            }
+            set_block_bit(&mut next, block_index);
+            if dominators[block_index] != next {
+                dominators[block_index] = next;
                 changed = true;
             }
         }
     }
-    dominators
+    dominator_bitsets_to_map(function, &dominators)
+}
+
+/// Converts reachable predecessor block ids into dense block indices for bitset dominator scans.
+fn reachable_predecessor_indices(
+    function: &Function,
+    predecessors: &HashMap<BlockId, Vec<BlockId>>,
+    reachable: &HashSet<BlockId>,
+) -> Vec<Vec<usize>> {
+    function
+        .blocks
+        .iter()
+        .map(|block| {
+            predecessors
+                .get(&block.id)
+                .map(|preds| {
+                    preds
+                        .iter()
+                        .filter(|pred| reachable.contains(pred))
+                        .map(|pred| pred.as_raw() as usize)
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Builds a bitset with every block bit set, masking unused bits in the last word.
+fn full_block_bitset(block_count: usize) -> Vec<u64> {
+    let mut bits = vec![u64::MAX; block_bitset_word_count(block_count)];
+    let trailing_bits = block_count % u64::BITS as usize;
+    if trailing_bits != 0 {
+        if let Some(last) = bits.last_mut() {
+            *last = (1_u64 << trailing_bits) - 1;
+        }
+    }
+    bits
+}
+
+/// Builds an empty block bitset with enough words for the function block count.
+fn empty_block_bitset(block_count: usize) -> Vec<u64> {
+    vec![0; block_bitset_word_count(block_count)]
+}
+
+/// Returns the number of machine words needed to represent one block bitset.
+fn block_bitset_word_count(block_count: usize) -> usize {
+    block_count.div_ceil(u64::BITS as usize)
+}
+
+/// Marks one block index as present in a dominator bitset.
+fn set_block_bit(bits: &mut [u64], block_index: usize) {
+    let word = block_index / u64::BITS as usize;
+    let bit = block_index % u64::BITS as usize;
+    bits[word] |= 1_u64 << bit;
+}
+
+/// Intersects a dominator bitset in place with another predecessor bitset.
+fn bitset_and_assign(left: &mut [u64], right: &[u64]) {
+    for (left_word, right_word) in left.iter_mut().zip(right.iter()) {
+        *left_word &= *right_word;
+    }
+}
+
+/// Converts dense dominator bitsets back to the validator's public block-id map.
+fn dominator_bitsets_to_map(
+    function: &Function,
+    dominators: &[Vec<u64>],
+) -> HashMap<BlockId, HashSet<BlockId>> {
+    let mut map = HashMap::with_capacity(function.blocks.len());
+    for (block_index, block) in function.blocks.iter().enumerate() {
+        let mut set = HashSet::new();
+        for (candidate_index, candidate) in function.blocks.iter().enumerate() {
+            if block_bit_is_set(&dominators[block_index], candidate_index) {
+                set.insert(candidate.id);
+            }
+        }
+        map.insert(block.id, set);
+    }
+    map
+}
+
+/// Returns whether a block index is present in a dominator bitset.
+fn block_bit_is_set(bits: &[u64], block_index: usize) -> bool {
+    let word = block_index / u64::BITS as usize;
+    let bit = block_index % u64::BITS as usize;
+    bits.get(word)
+        .is_some_and(|word_bits| (word_bits & (1_u64 << bit)) != 0)
 }
 
 /// Computes the set of blocks reachable from the entry over the same edge set as
@@ -999,25 +1082,6 @@ fn successors(term: &Terminator) -> Vec<BlockId> {
         | Terminator::Fatal { .. }
         | Terminator::Unreachable => Vec::new(),
     }
-}
-
-/// Intersects dominator sets for all predecessors.
-fn intersection_of_predecessors(
-    predecessors: &[BlockId],
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
-    fallback: &HashSet<BlockId>,
-) -> HashSet<BlockId> {
-    let mut iter = predecessors.iter();
-    let Some(first) = iter.next() else {
-        return HashSet::new();
-    };
-    let mut result = dominators.get(first).cloned().unwrap_or_else(|| fallback.clone());
-    for pred in iter {
-        if let Some(set) = dominators.get(pred) {
-            result = result.intersection(set).copied().collect();
-        }
-    }
-    result
 }
 
 /// Returns true when PHP type metadata can use the given EIR storage type.
