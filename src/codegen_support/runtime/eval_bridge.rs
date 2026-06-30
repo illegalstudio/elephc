@@ -2376,7 +2376,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
     emitter.instruction("mov rax, rdi");                                        // move the boxed cell into mixed_unbox input
     emitter.instruction("call __rt_mixed_unbox");                               // expose the boxed payload words
-    emitter.instruction("mov rax, rsi");                                        // return the high payload word to Rust
+    emitter.instruction("mov rax, rdx");                                        // return the high payload word to Rust
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the raw high payload word
 

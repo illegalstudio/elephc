@@ -1008,6 +1008,48 @@ return $box->value . "|" . $box->apply($callback) . "|" .
     assert_eq!(out, "5:integer:5|9:integer:9|13:integer:13");
 }
 
+/// Verifies eval dynamic callable descriptors preserve AOT mixed by-ref slots.
+#[test]
+fn test_eval_dynamic_callable_params_write_back_aot_mixed_by_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_dynamic_callable_mixed_replace(mixed &$value, mixed $next): string {
+    $value = $next;
+    return gettype($value) . ":" . $value;
+}
+
+class EvalDynamicCallableMixedRefBridgeBox {
+    public string $value = "";
+
+    public function __construct(callable $callback, mixed $seed) {
+        $value = $seed;
+        $this->value = $callback($value, "ctor") . ":" . gettype($value) . ":" . $value;
+    }
+
+    public function apply(callable $callback, mixed $seed): string {
+        $value = $seed;
+        return $callback($value, "method") . ":" . gettype($value) . ":" . $value;
+    }
+
+    public static function applyStatic(callable $callback, mixed $seed): string {
+        $value = $seed;
+        return $callback($value, "static") . ":" . gettype($value) . ":" . $value;
+    }
+}
+
+echo eval('$callback = Closure::fromCallable("eval_dynamic_callable_mixed_replace");
+$box = new EvalDynamicCallableMixedRefBridgeBox($callback, 2);
+return $box->value . "|" . $box->apply($callback, 4) . "|" .
+    EvalDynamicCallableMixedRefBridgeBox::applyStatic($callback, 6);');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "string:ctor:string:ctor|string:method:string:method|string:static:string:static"
+    );
+}
+
 /// Verifies `Closure::call()` rebinds `fromCallable()` method closures to a same-class receiver.
 #[test]
 fn test_eval_closure_from_callable_call_rebinds_same_class_method_and_invokable_targets() {
