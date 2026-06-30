@@ -969,6 +969,45 @@ return implode("|", $out);');
     );
 }
 
+/// Verifies eval dynamic callable descriptors preserve AOT caller by-ref variables.
+#[test]
+fn test_eval_dynamic_callable_params_write_back_aot_by_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_dynamic_callable_ref_add(int &$value, int $delta): int {
+    $value = $value + $delta;
+    return $value;
+}
+
+class EvalDynamicCallableRefBridgeBox {
+    public string $value = "";
+
+    public function __construct(callable $callback) {
+        $value = 2;
+        $this->value = $callback($value, 3) . ":" . gettype($value) . ":" . $value;
+    }
+
+    public function apply(callable $callback): string {
+        $value = 4;
+        return $callback($value, 5) . ":" . gettype($value) . ":" . $value;
+    }
+
+    public static function applyStatic(callable $callback): string {
+        $value = 6;
+        return $callback($value, 7) . ":" . gettype($value) . ":" . $value;
+    }
+}
+
+echo eval('$callback = Closure::fromCallable("eval_dynamic_callable_ref_add");
+$box = new EvalDynamicCallableRefBridgeBox($callback);
+return $box->value . "|" . $box->apply($callback) . "|" .
+    EvalDynamicCallableRefBridgeBox::applyStatic($callback);');
+"#,
+    );
+
+    assert_eq!(out, "5:integer:5|9:integer:9|13:integer:13");
+}
+
 /// Verifies `Closure::call()` rebinds `fromCallable()` method closures to a same-class receiver.
 #[test]
 fn test_eval_closure_from_callable_call_rebinds_same_class_method_and_invokable_targets() {

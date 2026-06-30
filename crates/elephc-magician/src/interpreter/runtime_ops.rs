@@ -574,8 +574,10 @@ pub(super) const EVAL_TAG_BOOL: u64 = 3;
 pub(super) const EVAL_TAG_ARRAY: u64 = 4;
 pub(super) const EVAL_TAG_ASSOC: u64 = 5;
 pub(super) const EVAL_TAG_OBJECT: u64 = 6;
+pub(super) const EVAL_TAG_MIXED: u64 = 7;
 pub(super) const EVAL_TAG_NULL: u64 = 8;
 pub(super) const EVAL_TAG_RESOURCE: u64 = 9;
+pub(super) const EVAL_TAG_INVOKER_REF_CELL: u64 = 11;
 
 pub(super) const EVAL_REFLECTION_OWNER_CLASS: u64 = 0;
 pub(super) const EVAL_REFLECTION_OWNER_METHOD: u64 = 1;

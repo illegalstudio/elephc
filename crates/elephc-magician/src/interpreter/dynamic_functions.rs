@@ -303,6 +303,8 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
                         return Err(status);
                     }
                 };
+                let (value, ref_target) =
+                    eval_invoker_ref_arg_value_and_target(value, ref_target, values)?;
                 EvaluatedCallArg {
                     name: None,
                     value,
@@ -326,6 +328,8 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
                         return Err(status);
                     }
                 };
+                let (value, ref_target) =
+                    eval_invoker_ref_arg_value_and_target(value, ref_target, values)?;
                 EvaluatedCallArg {
                     name: Some(name),
                     value,
@@ -341,6 +345,43 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
         evaluated_args.push(arg);
     }
     Ok(())
+}
+
+/// Converts a descriptor-invoker ref marker into an eval-visible value and writeback target.
+fn eval_invoker_ref_arg_value_and_target(
+    value: RuntimeCellHandle,
+    ref_target: Option<EvalReferenceTarget>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_INVOKER_REF_CELL {
+        return Ok((value, ref_target));
+    }
+    let slot = values.raw_value_word(value)? as usize;
+    let source_tag = values.raw_value_high_word(value)?;
+    let value = eval_invoker_ref_slot_value(slot, source_tag, values)?;
+    Ok((
+        value,
+        ref_target.or(Some(EvalReferenceTarget::InvokerSlot { slot, source_tag })),
+    ))
+}
+
+/// Reads the current PHP value from a native descriptor-invoker by-reference slot.
+fn eval_invoker_ref_slot_value(
+    slot: usize,
+    source_tag: u64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match source_tag {
+        EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL | EVAL_TAG_RESOURCE => {
+            let word = unsafe { *(slot as *const u64) };
+            values.raw_word_value(source_tag, word)
+        }
+        EVAL_TAG_MIXED => {
+            let value = unsafe { *(slot as *const RuntimeCellHandle) };
+            values.retain(value)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Binds evaluated positional and named values to declared parameter order.

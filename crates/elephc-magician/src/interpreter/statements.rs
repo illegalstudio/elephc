@@ -5613,6 +5613,9 @@ pub(in crate::interpreter) fn eval_reference_target_value(
             result
         }
         EvalReferenceTarget::Cell { cell } => Ok(*cell),
+        EvalReferenceTarget::InvokerSlot { slot, source_tag } => {
+            eval_invoker_slot_ref_target_value(*slot, *source_tag, values)
+        }
     }
 }
 
@@ -10037,6 +10040,16 @@ fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalReferenceTarge
             EvalReferenceTarget::Cell { cell: right_cell },
         ) => left_cell == right_cell,
         (
+            EvalReferenceTarget::InvokerSlot {
+                slot: left_slot,
+                source_tag: left_source_tag,
+            },
+            EvalReferenceTarget::InvokerSlot {
+                slot: right_slot,
+                source_tag: right_source_tag,
+            },
+        ) => left_slot == right_slot && left_source_tag == right_source_tag,
+        (
             EvalReferenceTarget::StaticProperty {
                 class_name: left_class_name,
                 property: left_property,
@@ -10179,6 +10192,57 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             values,
         ),
         EvalReferenceTarget::Cell { .. } => Ok(()),
+        EvalReferenceTarget::InvokerSlot { slot, source_tag } => {
+            write_back_invoker_slot_ref_target(*slot, *source_tag, value, values)
+        }
+    }
+}
+
+/// Reads a value from a native descriptor-invoker by-reference slot.
+fn eval_invoker_slot_ref_target_value(
+    slot: usize,
+    source_tag: u64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match source_tag {
+        EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL | EVAL_TAG_RESOURCE => {
+            let word = unsafe { *(slot as *const u64) };
+            values.raw_word_value(source_tag, word)
+        }
+        EVAL_TAG_MIXED => {
+            let value = unsafe { *(slot as *const RuntimeCellHandle) };
+            values.retain(value)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Writes a value back into a native descriptor-invoker by-reference slot.
+fn write_back_invoker_slot_ref_target(
+    slot: usize,
+    source_tag: u64,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    match source_tag {
+        EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL | EVAL_TAG_RESOURCE => {
+            let word = values.raw_value_word(value)?;
+            unsafe {
+                *(slot as *mut u64) = word;
+            }
+            Ok(())
+        }
+        EVAL_TAG_MIXED => {
+            let retained = values.retain(value)?;
+            let replaced = unsafe {
+                let slot = slot as *mut RuntimeCellHandle;
+                let replaced = *slot;
+                *slot = retained;
+                replaced
+            };
+            values.release(replaced)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
     }
 }
 
