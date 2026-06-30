@@ -24,6 +24,24 @@ echo call_user_func_array($fn, ["right" => 6, "left" => 5]);');
     assert_eq!(out, "5:11");
 }
 
+/// Verifies eval closure literals are exposed as PHP `Closure` objects.
+#[test]
+fn test_eval_closure_literal_is_php_closure_object() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$fn = function() { return "ok"; };
+echo is_object($fn) ? "O" : "o"; echo ":";
+echo get_class($fn); echo ":";
+echo $fn instanceof Closure ? "I" : "i"; echo ":";
+echo class_exists("Closure") ? "K" : "k"; echo ":";
+echo is_callable($fn) ? "C" : "c"; echo ":";
+echo call_user_func($fn);');
+"#,
+    );
+
+    assert_eq!(out, "O:Closure:I:K:C:ok");
+}
+
 /// Verifies eval closure by-value captures snapshot the defining value for each call.
 #[test]
 fn test_eval_closure_by_value_capture_uses_snapshot() {

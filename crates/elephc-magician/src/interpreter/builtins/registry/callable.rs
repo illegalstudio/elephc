@@ -122,6 +122,9 @@ pub(in crate::interpreter) fn eval_object_callable(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedCallable, EvalStatus> {
     let identity = values.object_identity(callback)?;
+    if let Some(name) = context.closure_object_name(identity) {
+        return Ok(EvaluatedCallable::Named(name.to_string()));
+    }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = runtime_object_class_name(callback, values)?;
         let Some((_, _, is_static, is_abstract)) =

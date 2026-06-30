@@ -3151,7 +3151,7 @@ fn eval_reflection_function_new(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("function")], evaluated_args)?;
-    let requested_name = eval_reflection_string_arg(args[0], values)?;
+    let requested_name = eval_reflection_function_name_arg(args[0], context, values)?;
     let lookup_name = requested_name.trim_start_matches('\\').to_ascii_lowercase();
     if let Some(closure) = context.closure(&requested_name).cloned() {
         let function = closure.function();
@@ -10230,6 +10230,21 @@ fn eval_reflection_union_type_flags(type_metadata: &EvalReflectionUnionTypeMetad
     } else {
         0
     }
+}
+
+/// Converts a ReflectionFunction argument into a function or eval-closure name.
+fn eval_reflection_function_name_arg(
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    if values.type_tag(value)? == EVAL_TAG_OBJECT {
+        let identity = values.object_identity(value)?;
+        if let Some(name) = context.closure_object_name(identity) {
+            return Ok(name.to_string());
+        }
+    }
+    eval_reflection_string_arg(value, values)
 }
 
 /// Converts one reflection constructor argument to a Rust UTF-8 string.

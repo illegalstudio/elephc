@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - These cases exercise eval-only closure execution against fake runtime cells.
-//! - Reflection and PHP `Closure` object identity remain covered by later bridge work.
+//! - Closure values are PHP-visible `Closure` objects with eval-retained bodies.
 
 use super::super::*;
 use super::support::*;
@@ -103,11 +103,17 @@ echo call_user_func($fn);"#,
     execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("execute eval ir");
     let fn_cell = scope.visible_cell("fn").expect("scope should contain fn");
-    let FakeValue::String(name) = values.get(fn_cell) else {
-        panic!("temporary closure representation should be a callable name");
+    let FakeValue::Object(_) = values.get(fn_cell) else {
+        panic!("closure representation should be a PHP object");
     };
+    let identity = values
+        .object_identity(fn_cell)
+        .expect("closure object should have identity");
+    let name = context
+        .closure_object_name(identity)
+        .expect("closure object should map to callable name");
 
     assert_eq!(values.output, "Cok");
-    assert!(context.has_closure(&name));
-    assert!(!context.has_function(&name));
+    assert!(context.has_closure(name));
+    assert!(!context.has_function(name));
 }

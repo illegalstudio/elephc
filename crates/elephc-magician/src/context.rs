@@ -844,6 +844,7 @@ pub struct ElephcEvalContext {
     constants: HashMap<String, RuntimeCellHandle>,
     functions: HashMap<String, EvalFunction>,
     closures: HashMap<String, EvalClosure>,
+    closure_objects: HashMap<u64, String>,
     next_closure_id: usize,
     native_functions: HashMap<String, NativeFunction>,
     native_methods: HashMap<(String, String), NativeCallableSignature>,
@@ -915,6 +916,7 @@ impl ElephcEvalContext {
             constants: HashMap::new(),
             functions: HashMap::new(),
             closures: HashMap::new(),
+            closure_objects: HashMap::new(),
             next_closure_id: 0,
             native_functions: HashMap::new(),
             native_methods: HashMap::new(),
@@ -987,6 +989,7 @@ impl ElephcEvalContext {
             constants: HashMap::new(),
             functions: HashMap::new(),
             closures: HashMap::new(),
+            closure_objects: HashMap::new(),
             next_closure_id: 0,
             native_functions: HashMap::new(),
             native_methods: HashMap::new(),
@@ -1648,6 +1651,7 @@ impl ElephcEvalContext {
     /// Removes one dynamic object identity and all per-object eval metadata.
     pub fn forget_dynamic_object(&mut self, identity: u64) {
         self.dynamic_objects.remove(&identity);
+        self.closure_objects.remove(&identity);
         self.dynamic_destructing_objects.remove(&identity);
         self.dynamic_destructed_objects.remove(&identity);
         self.dynamic_property_aliases
@@ -1687,6 +1691,9 @@ impl ElephcEvalContext {
 
     /// Returns the PHP-visible eval class name associated with one dynamic object identity.
     pub fn dynamic_object_class_name(&self, identity: u64) -> Option<String> {
+        if self.closure_objects.contains_key(&identity) {
+            return Some(String::from("Closure"));
+        }
         if let Some(class) = self.dynamic_object_class(identity) {
             return Some(class.name().trim_start_matches('\\').to_string());
         }
@@ -1727,6 +1734,9 @@ impl ElephcEvalContext {
     /// Returns whether one dynamic object identity was registered with a class-like name.
     pub fn dynamic_object_is_class(&self, identity: u64, class_name: &str) -> bool {
         let class_name = normalize_class_name(class_name);
+        if class_name == "closure" && self.closure_objects.contains_key(&identity) {
+            return true;
+        }
         if self
             .dynamic_objects
             .get(&identity)
@@ -2778,6 +2788,17 @@ impl ElephcEvalContext {
         self.next_closure_id += 1;
         self.closures.insert(name.clone(), closure);
         name
+    }
+
+    /// Associates a PHP `Closure` object identity with an eval closure callable name.
+    pub fn register_closure_object(&mut self, identity: u64, closure_name: &str) {
+        self.closure_objects
+            .insert(identity, closure_name.to_string());
+    }
+
+    /// Returns the eval closure callable name bound to a PHP `Closure` object.
+    pub fn closure_object_name(&self, identity: u64) -> Option<&str> {
+        self.closure_objects.get(&identity).map(String::as_str)
     }
 
     /// Defines a generated native function callback, failing if the name already exists.

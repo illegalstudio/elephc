@@ -657,7 +657,7 @@ fn eval_instanceof_object_result(
         .map_or_else(|| values.object_is_a(value, target_class, false), Ok)
 }
 
-/// Materializes one eval closure literal as a synthetic callable stored in the context.
+/// Materializes one eval closure literal as a PHP-visible `Closure` object.
 fn eval_closure_expr(
     function: &EvalFunction,
     captures: &[crate::eval_ir::EvalClosureCapture],
@@ -672,7 +672,10 @@ fn eval_closure_expr(
     }
     let closure = EvalClosure::new(function.clone(), bindings, is_static);
     let name = context.define_closure(closure);
-    values.string(&name)
+    let object = values.new_object("stdClass")?;
+    let identity = values.object_identity(object)?;
+    context.register_closure_object(identity, &name);
+    Ok(object)
 }
 
 /// Evaluates one closure capture from the defining scope.
@@ -1014,9 +1017,16 @@ pub(in crate::interpreter) fn eval_dynamic_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_expr(callee, context, scope, values)?;
     if values.type_tag(callback)? == EVAL_TAG_OBJECT {
-        eval_invokable_object_precheck(callback, context, values)?;
-        let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-        return eval_invokable_object_call_result(callback, evaluated_args, context, values);
+        let is_closure_object = values
+            .object_identity(callback)
+            .ok()
+            .and_then(|identity| context.closure_object_name(identity))
+            .is_some();
+        if !is_closure_object {
+            eval_invokable_object_precheck(callback, context, values)?;
+            let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+            return eval_invokable_object_call_result(callback, evaluated_args, context, values);
+        }
     }
     let callback = eval_callable(callback, context, values)?;
     let evaluated_args = eval_call_arg_values(args, context, scope, values)?;

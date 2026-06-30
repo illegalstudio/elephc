@@ -187,6 +187,9 @@ pub(in crate::interpreter) fn eval_class_exists_name(
     let name = values.string_bytes(name)?;
     let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
     let name = name.trim_start_matches('\\');
+    if name.eq_ignore_ascii_case("Closure") {
+        return Ok(true);
+    }
     if context.has_class(name) {
         return Ok(true);
     }
@@ -628,6 +631,11 @@ pub(in crate::interpreter) fn dynamic_object_is_a(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<bool>, EvalStatus> {
     let identity = values.object_identity(object)?;
+    if context.dynamic_object_is_class(identity, "Closure") {
+        return Ok(Some(
+            !exclude_self && eval_class_like_name_matches("Closure", target_class),
+        ));
+    }
     let Some(class) = context.dynamic_object_class(identity) else {
         return Ok(None);
     };
