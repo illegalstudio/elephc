@@ -44,6 +44,9 @@ pub(in crate::interpreter) fn eval_expr(
         EvalExpr::Cast { target, expr } => eval_cast_expr(target, expr, context, scope, values),
         EvalExpr::Const(value) => eval_const(value, values),
         EvalExpr::ConstFetch(name) => eval_const_fetch(name, context, values),
+        EvalExpr::Closure { function, captures } => {
+            eval_closure_expr(function, captures, context, scope, values)
+        }
         EvalExpr::FunctionCallable {
             name,
             fallback_name,
@@ -650,6 +653,47 @@ fn eval_instanceof_object_result(
 ) -> Result<bool, EvalStatus> {
     dynamic_object_is_a(value, target_class, false, context, values)?
         .map_or_else(|| values.object_is_a(value, target_class, false), Ok)
+}
+
+/// Materializes one eval closure literal as a synthetic callable stored in the context.
+fn eval_closure_expr(
+    function: &EvalFunction,
+    captures: &[crate::eval_ir::EvalClosureCapture],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut bindings = Vec::with_capacity(captures.len());
+    for capture in captures {
+        bindings.push(eval_closure_capture(capture, context, scope, values)?);
+    }
+    let closure = EvalClosure::new(function.clone(), bindings);
+    let name = context.define_closure(closure);
+    values.string(&name)
+}
+
+/// Evaluates one closure capture from the defining scope.
+fn eval_closure_capture(
+    capture: &crate::eval_ir::EvalClosureCapture,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalClosureCaptureBinding, EvalStatus> {
+    if capture.by_ref() {
+        let expr = EvalExpr::LoadVar(capture.name().to_string());
+        let (value, target) = eval_call_arg_value(&expr, context, scope, values)?;
+        return Ok(EvalClosureCaptureBinding::new(
+            capture.name(),
+            value,
+            target,
+        ));
+    }
+    let value = if let Some(value) = visible_scope_cell(context, scope, capture.name()) {
+        values.retain(value)?
+    } else {
+        values.null()?
+    };
+    Ok(EvalClosureCaptureBinding::new(capture.name(), value, None))
 }
 
 /// Evaluates a PHP `match` expression with strict comparison and lazy arm values.

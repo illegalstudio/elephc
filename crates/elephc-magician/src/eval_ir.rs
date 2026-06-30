@@ -343,6 +343,33 @@ pub struct EvalCatch {
     pub body: Vec<EvalStmt>,
 }
 
+/// One lexical variable captured by a runtime eval closure literal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalClosureCapture {
+    name: String,
+    by_ref: bool,
+}
+
+impl EvalClosureCapture {
+    /// Creates one closure capture with its source variable name and reference mode.
+    pub fn new(name: impl Into<String>, by_ref: bool) -> Self {
+        Self {
+            name: name.into(),
+            by_ref,
+        }
+    }
+
+    /// Returns the captured variable name without the leading `$`.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns whether this capture was declared as `use (&$name)`.
+    pub const fn by_ref(&self) -> bool {
+        self.by_ref
+    }
+}
+
 /// Runtime user function declared by an eval fragment.
 #[derive(Debug, Clone)]
 pub struct EvalFunction {
@@ -2520,6 +2547,10 @@ pub enum EvalExpr {
     },
     Const(EvalConst),
     ConstFetch(String),
+    Closure {
+        function: EvalFunction,
+        captures: Vec<EvalClosureCapture>,
+    },
     FunctionCallable {
         name: String,
         fallback_name: Option<String>,

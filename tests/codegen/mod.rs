@@ -19,6 +19,7 @@ mod benchmarks;
 mod echo_vars;
 mod eval;
 mod eval_builtin_parity;
+mod eval_closures;
 mod operators;
 mod control_flow;
 mod scalar_strings;

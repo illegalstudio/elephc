@@ -992,7 +992,9 @@ fn eval_callable_probe_exists(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     match callback {
-        EvaluatedCallable::Named(name) => Ok(eval_function_probe_exists(context, name)),
+        EvaluatedCallable::Named(name) => {
+            Ok(context.has_closure(name) || eval_function_probe_exists(context, name))
+        }
         EvaluatedCallable::InvokableObject { object } => {
             eval_object_method_callable_probe(*object, "__invoke", context, values)
         }

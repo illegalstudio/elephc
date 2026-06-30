@@ -302,6 +302,68 @@ struct EvalObjectCallableMetadata {
     bridge_scope: String,
 }
 
+/// Runtime value captured by an eval closure literal.
+#[derive(Clone)]
+pub struct EvalClosureCaptureBinding {
+    name: String,
+    value: RuntimeCellHandle,
+    by_ref_target: Option<EvalReferenceTarget>,
+}
+
+impl EvalClosureCaptureBinding {
+    /// Creates one captured runtime value with optional caller-side by-reference storage.
+    pub fn new(
+        name: impl Into<String>,
+        value: RuntimeCellHandle,
+        by_ref_target: Option<EvalReferenceTarget>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            value,
+            by_ref_target,
+        }
+    }
+
+    /// Returns the captured variable name without the leading `$`.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the runtime cell captured by the closure.
+    pub const fn value(&self) -> RuntimeCellHandle {
+        self.value
+    }
+
+    /// Returns caller-side writeback metadata for by-reference captures.
+    pub fn by_ref_target(&self) -> Option<&EvalReferenceTarget> {
+        self.by_ref_target.as_ref()
+    }
+}
+
+/// One eval closure instance retained by a synthetic callable name.
+#[derive(Clone)]
+pub struct EvalClosure {
+    function: EvalFunction,
+    captures: Vec<EvalClosureCaptureBinding>,
+}
+
+impl EvalClosure {
+    /// Creates one closure instance from its function body and captured values.
+    pub fn new(function: EvalFunction, captures: Vec<EvalClosureCaptureBinding>) -> Self {
+        Self { function, captures }
+    }
+
+    /// Returns the executable eval function payload for this closure.
+    pub fn function(&self) -> &EvalFunction {
+        &self.function
+    }
+
+    /// Returns the captured runtime values attached to this closure instance.
+    pub fn captures(&self) -> &[EvalClosureCaptureBinding] {
+        &self.captures
+    }
+}
+
 /// Native AOT function callback metadata visible to runtime eval fragments.
 #[derive(Clone)]
 pub struct NativeFunction {
@@ -767,6 +829,8 @@ pub struct ElephcEvalContext {
     enum_case_values: HashMap<(String, String), RuntimeCellHandle>,
     constants: HashMap<String, RuntimeCellHandle>,
     functions: HashMap<String, EvalFunction>,
+    closures: HashMap<String, EvalClosure>,
+    next_closure_id: usize,
     native_functions: HashMap<String, NativeFunction>,
     native_methods: HashMap<(String, String), NativeCallableSignature>,
     native_static_methods: HashMap<(String, String), NativeCallableSignature>,
@@ -836,6 +900,8 @@ impl ElephcEvalContext {
             enum_case_values: HashMap::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
+            closures: HashMap::new(),
+            next_closure_id: 0,
             native_functions: HashMap::new(),
             native_methods: HashMap::new(),
             native_static_methods: HashMap::new(),
@@ -906,6 +972,8 @@ impl ElephcEvalContext {
             enum_case_values: HashMap::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
+            closures: HashMap::new(),
+            next_closure_id: 0,
             native_functions: HashMap::new(),
             native_methods: HashMap::new(),
             native_static_methods: HashMap::new(),
@@ -2690,6 +2758,14 @@ impl ElephcEvalContext {
         Ok(())
     }
 
+    /// Stores one eval closure instance under a context-local synthetic callable name.
+    pub fn define_closure(&mut self, closure: EvalClosure) -> String {
+        let name = format!("{{closure:eval:{}}}", self.next_closure_id);
+        self.next_closure_id += 1;
+        self.closures.insert(name.clone(), closure);
+        name
+    }
+
     /// Defines a generated native function callback, failing if the name already exists.
     pub fn define_native_function(
         &mut self,
@@ -2707,6 +2783,11 @@ impl ElephcEvalContext {
     /// Returns a dynamic user function by its lowercase PHP function name.
     pub fn function(&self, name: &str) -> Option<&EvalFunction> {
         self.functions.get(name)
+    }
+
+    /// Returns a dynamic eval closure by its synthetic callable name.
+    pub fn closure(&self, name: &str) -> Option<&EvalClosure> {
+        self.closures.get(name)
     }
 
     /// Returns a native AOT function callback by its lowercase PHP function name.
@@ -3383,6 +3464,11 @@ impl ElephcEvalContext {
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
     pub fn has_function(&self, name: &str) -> bool {
         self.functions.contains_key(name) || self.native_functions.contains_key(name)
+    }
+
+    /// Returns true when the context has a closure registered under this synthetic name.
+    pub fn has_closure(&self, name: &str) -> bool {
+        self.closures.contains_key(name)
     }
 
     /// Returns a stored static local cell for an eval-declared function.

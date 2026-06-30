@@ -47,6 +47,7 @@ mod builtins_symbols;
 mod builtins_system_network;
 mod class_constants;
 mod classes;
+mod closures;
 mod control_flow;
 mod core;
 mod dynamic_calls;

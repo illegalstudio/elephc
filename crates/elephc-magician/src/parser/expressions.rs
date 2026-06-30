@@ -10,10 +10,12 @@
 
 use super::cursor::*;
 use super::state::*;
+use super::statements::{EvalTypePosition, ParsedMethodParams};
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalArrayElement, EvalBinOp, EvalCallArg, EvalCastType, EvalConst, EvalExpr,
-    EvalInstanceOfTarget, EvalMagicConst, EvalMatchArm, EvalUnaryOp,
+    EvalArrayElement, EvalBinOp, EvalCallArg, EvalCastType, EvalClosureCapture, EvalConst,
+    EvalExpr, EvalFunction, EvalInstanceOfTarget, EvalMagicConst, EvalMatchArm, EvalSourceLocation,
+    EvalUnaryOp,
 };
 use crate::lexer::TokenKind;
 
@@ -691,6 +693,13 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 Ok(EvalExpr::Print(Box::new(expr)))
             }
+            TokenKind::Ident(name) if ident_eq(name, "function") => self.parse_closure_expr(false),
+            TokenKind::Ident(name)
+                if ident_eq(name, "static")
+                    && matches!(self.peek(), TokenKind::Ident(next) if ident_eq(next, "function")) =>
+            {
+                self.parse_closure_expr(true)
+            }
             TokenKind::Ident(_) if self.current_starts_legacy_array_literal() => {
                 self.parse_legacy_array_literal()
             }
@@ -1287,6 +1296,80 @@ impl Parser {
             EvalArrayElement::Value(receiver),
             EvalArrayElement::Value(method),
         ])
+    }
+
+    /// Parses an anonymous function expression into a runtime eval closure payload.
+    fn parse_closure_expr(&mut self, is_static: bool) -> Result<EvalExpr, EvalParseError> {
+        let source_start_line = self.current_line();
+        if is_static {
+            self.advance();
+        }
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let ParsedMethodParams {
+            params,
+            parameter_attributes,
+            parameter_types,
+            parameter_defaults,
+            parameter_is_by_ref,
+            parameter_is_variadic,
+            promoted_properties,
+            promoted_assignments,
+        } = self.parse_method_params("", false)?;
+        if !promoted_properties.is_empty() || !promoted_assignments.is_empty() {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        let captures = self.parse_optional_closure_use_captures(&params)?;
+        let return_type = self.parse_optional_return_type(EvalTypePosition::FunctionReturn)?;
+        let (body, source_end_line) = self.parse_block_with_end_line()?;
+        let function = EvalFunction::new(next_closure_function_name(), params, body)
+            .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
+            .with_parameter_attributes(parameter_attributes)
+            .with_parameter_types(parameter_types)
+            .with_parameter_defaults(parameter_defaults)
+            .with_parameter_by_ref_flags(parameter_is_by_ref)
+            .with_parameter_variadic_flags(parameter_is_variadic)
+            .with_return_type(return_type);
+        Ok(EvalExpr::Closure { function, captures })
+    }
+
+    /// Parses an optional closure `use (...)` capture list.
+    fn parse_optional_closure_use_captures(
+        &mut self,
+        params: &[String],
+    ) -> Result<Vec<EvalClosureCapture>, EvalParseError> {
+        if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "use")) {
+            return Ok(Vec::new());
+        }
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        if self.consume(TokenKind::RParen) {
+            return Ok(Vec::new());
+        }
+        let mut captures = Vec::new();
+        loop {
+            let by_ref = self.consume(TokenKind::Ampersand);
+            let TokenKind::DollarIdent(name) = self.current() else {
+                return Err(EvalParseError::ExpectedVariable);
+            };
+            if params.iter().any(|param| param == name)
+                || captures
+                    .iter()
+                    .any(|capture: &EvalClosureCapture| capture.name() == name)
+            {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            captures.push(EvalClosureCapture::new(name.clone(), by_ref));
+            self.advance();
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+            if matches!(self.current(), TokenKind::RParen) {
+                return Err(EvalParseError::ExpectedVariable);
+            }
+        }
+        self.expect(TokenKind::RParen)?;
+        Ok(captures)
     }
 
     /// Parses an array literal with source-order optional key/value element expressions.

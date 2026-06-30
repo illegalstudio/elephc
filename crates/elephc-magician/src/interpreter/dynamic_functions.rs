@@ -1631,6 +1631,126 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     return_result
 }
 
+/// Evaluates one runtime eval closure after callback arguments preserve names and ref targets.
+pub(in crate::interpreter) fn eval_closure_with_evaluated_args(
+    closure: &EvalClosure,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let function = closure.function();
+    let static_names = static_var_names(function.body());
+    context.push_function(function.name());
+    let evaluated_args = match bind_evaluated_method_args(
+        function.params(),
+        function.parameter_types(),
+        function.parameter_defaults(),
+        function.parameter_is_by_ref(),
+        function.parameter_is_variadic(),
+        evaluated_args,
+        context,
+        values,
+    ) {
+        Ok(args) => args,
+        Err(status) => {
+            context.pop_function();
+            return Err(status);
+        }
+    };
+    let mut function_scope = ElephcEvalScope::new();
+    bind_closure_captures(&mut function_scope, closure.captures());
+    bind_method_scope_args(
+        &mut function_scope,
+        function.params(),
+        function.parameter_is_by_ref(),
+        &evaluated_args,
+    );
+    let result = execute_statements(function.body(), context, &mut function_scope, values);
+    let persist_result = persist_static_locals(
+        context,
+        function.name(),
+        &static_names,
+        &function_scope,
+        values,
+    );
+    let capture_writeback_result =
+        write_back_closure_ref_captures(closure.captures(), &function_scope, context, values);
+    let arg_writeback_result = write_back_method_ref_args(
+        function.params(),
+        &evaluated_args,
+        &function_scope,
+        context,
+        values,
+    );
+    let return_result = match (
+        persist_result,
+        capture_writeback_result,
+        arg_writeback_result,
+        result,
+    ) {
+        (Err(status), _, _, _)
+        | (_, Err(status), _, _)
+        | (_, _, Err(status), _)
+        | (_, _, _, Err(status)) => Err(status),
+        (Ok(()), Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            function.return_type(),
+            None,
+            None,
+            control,
+            context,
+            values,
+        ),
+    };
+    context.pop_function();
+    return_result
+}
+
+/// Seeds one closure activation scope with values captured when the closure was created.
+fn bind_closure_captures(
+    function_scope: &mut ElephcEvalScope,
+    captures: &[EvalClosureCaptureBinding],
+) {
+    for capture in captures {
+        if let Some(target) = capture.by_ref_target().cloned() {
+            function_scope.set_reference(
+                capture.name().to_string(),
+                capture.name().to_string(),
+                capture.value(),
+                ScopeCellOwnership::Borrowed,
+            );
+            function_scope.set_reference_target(capture.name().to_string(), target);
+        } else {
+            function_scope.set(
+                capture.name().to_string(),
+                capture.value(),
+                ScopeCellOwnership::Borrowed,
+            );
+        }
+    }
+}
+
+/// Writes modified by-reference closure captures back to their defining caller targets.
+fn write_back_closure_ref_captures(
+    captures: &[EvalClosureCaptureBinding],
+    function_scope: &ElephcEvalScope,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for capture in captures {
+        let Some(target) = capture.by_ref_target() else {
+            continue;
+        };
+        let Some(entry) = function_scope
+            .entry(capture.name())
+            .filter(|entry| entry.flags().is_visible() && entry.flags().by_ref)
+        else {
+            continue;
+        };
+        write_back_method_ref_target(target, entry.cell(), context, values)?;
+    }
+    Ok(())
+}
+
 /// Persists static local variables from one eval-declared function activation.
 pub(super) fn persist_static_locals(
     context: &mut ElephcEvalContext,

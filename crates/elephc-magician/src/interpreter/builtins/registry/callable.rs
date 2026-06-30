@@ -251,6 +251,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
         EvaluatedCallable::Named(name) => {
+            if let Some(closure) = context.closure(name).cloned() {
+                return eval_closure_with_evaluated_args(
+                    &closure,
+                    positional_args(evaluated_args),
+                    context,
+                    values,
+                );
+            }
             eval_callable_with_values(name, evaluated_args, context, values)
         }
         EvaluatedCallable::InvokableObject { object } => {
@@ -404,6 +412,14 @@ fn eval_named_callable_with_call_user_func_values(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? {
         return Ok(result);
+    }
+    if let Some(closure) = context.closure(name).cloned() {
+        return eval_closure_with_evaluated_args(
+            &closure,
+            positional_args(evaluated_args),
+            context,
+            values,
+        );
     }
     if let Some(function) = context.function(name).cloned() {
         let evaluated_args = positional_args(evaluated_args);
@@ -830,6 +846,14 @@ pub(in crate::interpreter) fn eval_callable_with_values(
     if let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? {
         return Ok(result);
     }
+    if let Some(closure) = context.closure(name).cloned() {
+        return eval_closure_with_evaluated_args(
+            &closure,
+            positional_args(evaluated_args),
+            context,
+            values,
+        );
+    }
     if let Some(function) = context.function(name).cloned() {
         return eval_dynamic_function_with_values(&function, evaluated_args, context, values);
     }
@@ -867,6 +891,9 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
             return Err(EvalStatus::UnsupportedConstruct);
         };
         return Ok(result);
+    }
+    if let Some(closure) = context.closure(name).cloned() {
+        return eval_closure_with_evaluated_args(&closure, evaluated_args, context, values);
     }
     if let Some(function) = context.function(name).cloned() {
         return eval_dynamic_function_with_evaluated_args(
