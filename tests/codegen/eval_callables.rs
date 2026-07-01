@@ -1419,6 +1419,62 @@ return call_user_func($static, $d, 9) . ":" . gettype($d) . ":" . $d;');
     assert_eq!(out, "5:string:2|19:string:4|23:string:6|17:string:8");
 }
 
+/// Verifies `call_user_func_array()` degrades non-reference `Closure::fromCallable()` args by value.
+#[test]
+fn test_eval_closure_from_callable_call_user_func_array_degrades_non_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_from_callable_call_user_func_array_ref_add(int &$value, int $delta): int {
+    $value = $value + $delta;
+    return $value;
+}
+
+class EvalFromCallableCallUserFuncArrayRefBox {
+    public int $base = 10;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public static function add(int &$value, int $delta): int {
+        $value = $value + $delta;
+        return $value;
+    }
+}
+
+echo eval('$function = Closure::fromCallable("eval_from_callable_call_user_func_array_ref_add");
+$a = "2";
+$aArgs = [$a, 3];
+echo call_user_func_array($function, $aArgs) . ":" . gettype($a) . ":" . $a . ":" . gettype($aArgs[0]) . ":" . $aArgs[0] . "|";
+
+$b = "4";
+$bArgs = [&$b, 5];
+echo call_user_func_array($function, $bArgs) . ":" . gettype($b) . ":" . $b . "|";
+
+$box = new EvalFromCallableCallUserFuncArrayRefBox();
+$method = Closure::fromCallable([$box, "bump"]);
+$c = "6";
+$cArgs = [$c, 7];
+echo call_user_func_array($method, $cArgs) . ":" . gettype($c) . ":" . $c . ":" . gettype($cArgs[0]) . ":" . $cArgs[0] . "|";
+
+$d = "8";
+$dArgs = [&$d, 9];
+echo call_user_func_array($method, $dArgs) . ":" . gettype($d) . ":" . $d . "|";
+
+$static = Closure::fromCallable(["EvalFromCallableCallUserFuncArrayRefBox", "add"]);
+$e = "10";
+$eArgs = [$e, 11];
+return call_user_func_array($static, $eArgs) . ":" . gettype($e) . ":" . $e . ":" . gettype($eArgs[0]) . ":" . $eArgs[0];');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "5:string:2:string:2|9:integer:9|23:string:6:string:6|27:integer:27|21:string:10:string:10"
+    );
+}
+
 /// Verifies `Closure::fromCallable()` values can cross eval into AOT callable parameters.
 #[test]
 fn test_eval_closure_from_callable_values_pass_to_aot_callable_params() {

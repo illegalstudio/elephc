@@ -882,14 +882,15 @@ fn native_function_regular_param_index(
         .position(|(index, param)| index < variadic_index && param == name)
 }
 
-/// Binds evaluated method arguments and fills omitted parameters from defaults.
-pub(in crate::interpreter) fn bind_evaluated_method_args(
+/// Binds evaluated method arguments using a selected by-reference target policy.
+pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
     params: &[String],
     parameter_types: &[Option<EvalParameterType>],
     parameter_defaults: &[Option<EvalExpr>],
     parameter_is_by_ref: &[bool],
     parameter_is_variadic: &[bool],
     evaluated_args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
@@ -931,12 +932,14 @@ pub(in crate::interpreter) fn bind_evaluated_method_args(
                 &name,
                 arg.value,
                 arg.ref_target,
+                by_ref_mode,
                 &mut variadic_named_args,
                 context,
                 values,
             )?;
         } else {
             bind_dynamic_positional_method_arg(
+                params,
                 &mut bound_args,
                 parameter_types,
                 parameter_is_by_ref,
@@ -945,6 +948,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args(
                 &mut next_variadic_index,
                 arg.value,
                 arg.ref_target,
+                by_ref_mode,
                 context,
                 values,
             )?;
@@ -1013,6 +1017,7 @@ fn evaluated_args_contain_named_variadic_values(
 
 /// Binds one positional method argument to a fixed parameter or variadic array.
 fn bind_dynamic_positional_method_arg(
+    params: &[String],
     bound_args: &mut [Option<BoundMethodArg>],
     parameter_types: &[Option<EvalParameterType>],
     parameter_is_by_ref: &[bool],
@@ -1021,10 +1026,19 @@ fn bind_dynamic_positional_method_arg(
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if variadic_index.is_some_and(|index| *next_positional >= index) {
+        let argument_number = variadic_index
+            .and_then(|index| {
+                usize::try_from(*next_variadic_index)
+                    .ok()
+                    .and_then(|offset| index.checked_add(offset))
+            })
+            .and_then(|index| index.checked_add(1))
+            .ok_or(EvalStatus::RuntimeFatal)?;
         let key = values.int(*next_variadic_index)?;
         *next_variadic_index = next_variadic_index
             .checked_add(1)
@@ -1036,8 +1050,15 @@ fn bind_dynamic_positional_method_arg(
             context,
             values,
         )?;
-        let ref_target =
-            method_parameter_ref_target(parameter_is_by_ref, variadic_index, ref_target)?;
+        let ref_target = method_parameter_ref_target(
+            params,
+            parameter_is_by_ref,
+            variadic_index,
+            argument_number,
+            ref_target,
+            by_ref_mode,
+            values,
+        )?;
         return bind_dynamic_variadic_arg(
             bound_args,
             variadic_index,
@@ -1051,8 +1072,15 @@ fn bind_dynamic_positional_method_arg(
     if param_index >= bound_args.len() || bound_args[param_index].is_some() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let ref_target =
-        method_parameter_ref_target(parameter_is_by_ref, Some(param_index), ref_target)?;
+    let ref_target = method_parameter_ref_target(
+        params,
+        parameter_is_by_ref,
+        Some(param_index),
+        param_index + 1,
+        ref_target,
+        by_ref_mode,
+        values,
+    )?;
     bound_args[param_index] = Some(BoundMethodArg {
         value,
         ref_target,
@@ -1072,6 +1100,7 @@ fn bind_dynamic_named_method_arg(
     name: &str,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
     variadic_named_args: &mut std::collections::HashSet<String>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -1080,8 +1109,15 @@ fn bind_dynamic_named_method_arg(
         if bound_args[param_index].is_some() {
             return Err(EvalStatus::RuntimeFatal);
         }
-        let ref_target =
-            method_parameter_ref_target(parameter_is_by_ref, Some(param_index), ref_target)?;
+        let ref_target = method_parameter_ref_target(
+            params,
+            parameter_is_by_ref,
+            Some(param_index),
+            param_index + 1,
+            ref_target,
+            by_ref_mode,
+            values,
+        )?;
         bound_args[param_index] = Some(BoundMethodArg {
             value,
             ref_target,
@@ -1100,15 +1136,30 @@ fn bind_dynamic_named_method_arg(
         context,
         values,
     )?;
-    let ref_target = method_parameter_ref_target(parameter_is_by_ref, variadic_index, ref_target)?;
+    let argument_number = variadic_index
+        .and_then(|index| index.checked_add(1))
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let ref_target = method_parameter_ref_target(
+        params,
+        parameter_is_by_ref,
+        variadic_index,
+        argument_number,
+        ref_target,
+        by_ref_mode,
+        values,
+    )?;
     bind_dynamic_variadic_arg(bound_args, variadic_index, key, value, ref_target, values)
 }
 
 /// Returns the caller writeback target required by a by-reference method parameter.
 fn method_parameter_ref_target(
+    params: &[String],
     parameter_is_by_ref: &[bool],
     param_index: Option<usize>,
+    argument_number: usize,
     ref_target: Option<EvalReferenceTarget>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalReferenceTarget>, EvalStatus> {
     let Some(param_index) = param_index else {
         return Ok(None);
@@ -1120,7 +1171,44 @@ fn method_parameter_ref_target(
     {
         return Ok(None);
     }
-    ref_target.map(Some).ok_or(EvalStatus::RuntimeFatal)
+    if let Some(ref_target) = ref_target {
+        return Ok(Some(ref_target));
+    }
+    match by_ref_mode {
+        EvalByRefBindingMode::RequireTarget => Err(EvalStatus::RuntimeFatal),
+        EvalByRefBindingMode::WarnByValue { callable_name } => {
+            let param_name = params
+                .get(param_index)
+                .map(String::as_str)
+                .unwrap_or("arg");
+            values.warning(&format!(
+                "{callable_name}(): Argument #{} (${param_name}) must be passed by reference, value given",
+                argument_number
+            ))?;
+            Ok(None)
+        }
+    }
+}
+
+/// Returns the by-reference flags that should be installed into the callee scope.
+pub(in crate::interpreter) fn method_scope_parameter_ref_flags(
+    parameter_is_by_ref: &[bool],
+    bound_args: &[BoundMethodArg],
+    by_ref_mode: EvalByRefBindingMode<'_>,
+) -> Vec<bool> {
+    if matches!(by_ref_mode, EvalByRefBindingMode::RequireTarget) {
+        return parameter_is_by_ref.to_vec();
+    }
+    parameter_is_by_ref
+        .iter()
+        .enumerate()
+        .map(|(position, is_by_ref)| {
+            *is_by_ref
+                && bound_args.get(position).is_some_and(|arg| {
+                    arg.ref_target.is_some() || !arg.variadic_ref_targets.is_empty()
+                })
+        })
+        .collect()
 }
 
 /// Applies a variadic parameter type to one captured argument value.
@@ -1642,15 +1730,35 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_dynamic_function_with_evaluated_args_and_ref_mode(
+        function,
+        parameter_is_by_ref,
+        evaluated_args,
+        EvalByRefBindingMode::RequireTarget,
+        context,
+        values,
+    )
+}
+
+/// Evaluates an eval-declared function with caller-selected by-ref mode.
+pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_mode(
+    function: &EvalFunction,
+    parameter_is_by_ref: &[bool],
+    evaluated_args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let static_names = static_var_names(function.body());
     context.push_function(function.name());
-    let evaluated_args = match bind_evaluated_method_args(
+    let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
         parameter_is_by_ref,
         function.parameter_is_variadic(),
         evaluated_args,
+        by_ref_mode,
         context,
         values,
     ) {
@@ -1660,11 +1768,13 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
             return Err(status);
         }
     };
+    let scope_parameter_is_by_ref =
+        method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
     let mut function_scope = ElephcEvalScope::new();
     bind_method_scope_args(
         &mut function_scope,
         function.params(),
-        parameter_is_by_ref,
+        &scope_parameter_is_by_ref,
         &evaluated_args,
     );
     let result = execute_statements(function.body(), context, &mut function_scope, values);
@@ -1707,6 +1817,7 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args(
     eval_closure_with_optional_binding(
         closure,
         function_ref_flags(closure),
+        EvalByRefBindingMode::RequireTarget,
         None,
         evaluated_args,
         context,
@@ -1732,6 +1843,7 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_this_sc
     eval_closure_with_optional_binding(
         closure,
         function_ref_flags(closure),
+        EvalByRefBindingMode::RequireTarget,
         Some(EvalClosureBinding {
             this_object: Some(bound_this),
             class_scope,
@@ -1762,6 +1874,39 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_this_sc
     eval_closure_with_optional_binding(
         closure,
         parameter_is_by_ref,
+        EvalByRefBindingMode::RequireTarget,
+        Some(EvalClosureBinding {
+            this_object: Some(bound_this),
+            class_scope,
+            called_class,
+        }),
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Evaluates a runtime eval closure with `$this`, scope, and caller-selected by-ref mode.
+pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_this_scope_ref_mode(
+    closure: &EvalClosure,
+    bound_this: RuntimeCellHandle,
+    bound_scope: Option<String>,
+    parameter_is_by_ref: &[bool],
+    evaluated_args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if closure.is_static() {
+        values.warning("Cannot bind an instance to a static closure")?;
+        return values.null();
+    }
+    let called_class = eval_closure_bound_object_class_name(bound_this, context, values)?;
+    let class_scope = bound_scope.unwrap_or_else(|| called_class.clone());
+    eval_closure_with_optional_binding(
+        closure,
+        parameter_is_by_ref,
+        by_ref_mode,
         Some(EvalClosureBinding {
             this_object: Some(bound_this),
             class_scope,
@@ -1787,6 +1932,7 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_scope(
     eval_closure_with_optional_binding(
         closure,
         function_ref_flags(closure),
+        EvalByRefBindingMode::RequireTarget,
         Some(EvalClosureBinding {
             this_object: None,
             called_class: class_scope.clone(),
@@ -1811,6 +1957,7 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_scope_r
         return eval_closure_with_optional_binding(
             closure,
             parameter_is_by_ref,
+            EvalByRefBindingMode::RequireTarget,
             None,
             evaluated_args,
             context,
@@ -1820,6 +1967,43 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_scope_r
     eval_closure_with_optional_binding(
         closure,
         parameter_is_by_ref,
+        EvalByRefBindingMode::RequireTarget,
+        Some(EvalClosureBinding {
+            this_object: None,
+            called_class: class_scope.clone(),
+            class_scope,
+        }),
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Evaluates a scope-only runtime eval closure with caller-selected by-ref mode.
+pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_scope_ref_mode(
+    closure: &EvalClosure,
+    bound_scope: Option<String>,
+    parameter_is_by_ref: &[bool],
+    evaluated_args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(class_scope) = bound_scope else {
+        return eval_closure_with_optional_binding(
+            closure,
+            parameter_is_by_ref,
+            by_ref_mode,
+            None,
+            evaluated_args,
+            context,
+            values,
+        );
+    };
+    eval_closure_with_optional_binding(
+        closure,
+        parameter_is_by_ref,
+        by_ref_mode,
         Some(EvalClosureBinding {
             this_object: None,
             called_class: class_scope.clone(),
@@ -1847,6 +2031,7 @@ fn function_ref_flags(closure: &EvalClosure) -> &[bool] {
 fn eval_closure_with_optional_binding(
     closure: &EvalClosure,
     parameter_is_by_ref: &[bool],
+    by_ref_mode: EvalByRefBindingMode<'_>,
     binding: Option<EvalClosureBinding>,
     evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
@@ -1860,13 +2045,14 @@ fn eval_closure_with_optional_binding(
         context.push_class_scope(binding.class_scope.clone());
         context.push_called_class_scope(binding.called_class.clone());
     }
-    let evaluated_args = match bind_evaluated_method_args(
+    let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
         parameter_is_by_ref,
         function.parameter_is_variadic(),
         evaluated_args,
+        by_ref_mode,
         context,
         values,
     ) {
@@ -1885,10 +2071,12 @@ fn eval_closure_with_optional_binding(
     if let Some(object) = binding.and_then(|binding| binding.this_object) {
         function_scope.set("this", object, ScopeCellOwnership::Borrowed);
     }
+    let scope_parameter_is_by_ref =
+        method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
     bind_method_scope_args(
         &mut function_scope,
         function.params(),
-        parameter_is_by_ref,
+        &scope_parameter_is_by_ref,
         &evaluated_args,
     );
     let result = execute_statements(function.body(), context, &mut function_scope, values);

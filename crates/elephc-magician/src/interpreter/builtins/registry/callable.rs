@@ -672,6 +672,40 @@ fn eval_bound_closure_with_call_args_ref_flags(
     }
 }
 
+/// Invokes a bound eval closure with caller-selected by-reference binding mode.
+fn eval_bound_closure_with_call_args_ref_mode(
+    closure: &EvalClosure,
+    bound_this: Option<RuntimeCellHandle>,
+    bound_scope: Option<String>,
+    parameter_is_by_ref: &[bool],
+    evaluated_args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match bound_this {
+        Some(this_object) => eval_closure_with_evaluated_args_and_bound_this_scope_ref_mode(
+            closure,
+            this_object,
+            bound_scope,
+            parameter_is_by_ref,
+            evaluated_args,
+            by_ref_mode,
+            context,
+            values,
+        ),
+        None => eval_closure_with_evaluated_args_and_bound_scope_ref_mode(
+            closure,
+            bound_scope,
+            parameter_is_by_ref,
+            evaluated_args,
+            by_ref_mode,
+            context,
+            values,
+        ),
+    }
+}
+
 /// Invokes a normalized callback through `call_user_func()` by-value argument semantics.
 fn eval_evaluated_callable_with_call_user_func_values(
     callback: &EvaluatedCallable,
@@ -1122,21 +1156,17 @@ fn eval_object_method_call_user_func_result(
         if method.is_static() || method.is_abstract() {
             return Ok(None);
         }
-        let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
-            &format!("{}::{}", declaring_class.trim_start_matches('\\'), method.name()),
-            method.params(),
-            method.parameter_is_by_ref(),
-            method.parameter_is_variadic(),
-            evaluated_args.len(),
-            values,
-        )?;
-        return eval_dynamic_method_with_values_and_ref_flags(
+        let callable_name = format!("{}::{}", declaring_class.trim_start_matches('\\'), method.name());
+        return eval_dynamic_method_with_values_and_ref_mode(
             &declaring_class,
             &called_class_name,
             &method,
             object,
-            &parameter_is_by_ref,
+            method.parameter_is_by_ref(),
             evaluated_args,
+            EvalByRefBindingMode::WarnByValue {
+                callable_name: &callable_name,
+            },
             context,
             values,
         )
@@ -1321,20 +1351,16 @@ fn eval_static_method_call_user_func_result(
         if !method.is_static() || method.is_abstract() {
             return Ok(None);
         }
-        let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
-            &format!("{}::{}", declaring_class.trim_start_matches('\\'), method.name()),
-            method.params(),
-            method.parameter_is_by_ref(),
-            method.parameter_is_variadic(),
-            evaluated_args.len(),
-            values,
-        )?;
-        return eval_dynamic_static_method_with_values_and_ref_flags(
+        let callable_name = format!("{}::{}", declaring_class.trim_start_matches('\\'), method.name());
+        return eval_dynamic_static_method_with_values_and_ref_mode(
             &declaring_class,
             &called_class,
             &method,
-            &parameter_is_by_ref,
+            method.parameter_is_by_ref(),
             evaluated_args,
+            EvalByRefBindingMode::WarnByValue {
+                callable_name: &callable_name,
+            },
             context,
             values,
         )
@@ -1453,17 +1479,21 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 .closure(name)
                 .cloned()
                 .ok_or(EvalStatus::UnsupportedConstruct)?;
-            eval_bound_closure_with_call_args(
+            eval_bound_closure_with_call_args_ref_mode(
                 &closure,
                 *bound_this,
                 bound_scope.clone(),
+                closure.function().parameter_is_by_ref(),
                 evaluated_args,
+                EvalByRefBindingMode::WarnByValue {
+                    callable_name: closure.function().name(),
+                },
                 context,
                 values,
             )
         }
         EvaluatedCallable::InvokableObject { object } => {
-            eval_invokable_object_call_result(*object, evaluated_args, context, values)
+            eval_invokable_object_with_call_user_func_args(*object, evaluated_args, context, values)
         }
         EvaluatedCallable::ObjectMethod {
             object,
@@ -1472,7 +1502,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
             native_class,
             bridge_scope,
         } => match native_class {
-            Some(native_class) => eval_native_method_with_evaluated_args_unchecked_bridge_scope(
+            Some(native_class) => eval_native_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
                 *object,
                 native_class,
                 method,
@@ -1482,7 +1512,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 context,
                 values,
             ),
-            None => eval_method_call_result_with_evaluated_args(
+            None => eval_object_method_with_call_user_func_args(
                 *object,
                 method,
                 evaluated_args,
@@ -1498,7 +1528,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
             bridge_scope,
         } => match native_class {
             Some(native_class) => {
-                eval_native_static_method_with_evaluated_args_unchecked_bridge_scope(
+                eval_native_static_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
                     native_class,
                     method,
                     evaluated_args,
@@ -1509,10 +1539,10 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 )
             }
             None => match called_class {
-                Some(called_class) => eval_static_method_call_result_with_called_class(
+                Some(called_class) => eval_static_method_with_call_user_func_args(
                     class_name,
-                    called_class,
                     method,
+                    Some(called_class),
                     evaluated_args,
                     context,
                     values,
@@ -1520,9 +1550,10 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 None if eval_callable_array_receiver_is_special_class_name(class_name) => {
                     eval_throw_class_not_found_error(class_name, context, values)
                 }
-                None => eval_static_method_call_result(
+                None => eval_static_method_with_call_user_func_args(
                     class_name,
                     method,
+                    None,
                     evaluated_args,
                     context,
                     values,
@@ -1569,13 +1600,6 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if evaluated_args
-        .iter()
-        .all(|arg| arg.name.is_none() && arg.ref_target.is_none())
-    {
-        let evaluated_args = evaluated_args.into_iter().map(|arg| arg.value).collect();
-        return eval_callable_with_values(name, evaluated_args, context, values);
-    }
     if let Some(result) =
         eval_date_procedural_alias_with_evaluated_args(name, evaluated_args.clone(), context, values)?
     {
@@ -1594,19 +1618,38 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
         return Ok(result);
     }
     if let Some(closure) = context.closure(name).cloned() {
-        return eval_closure_with_evaluated_args(&closure, evaluated_args, context, values);
+        return eval_closure_with_evaluated_args_and_bound_scope_ref_mode(
+            &closure,
+            None,
+            closure.function().parameter_is_by_ref(),
+            evaluated_args,
+            EvalByRefBindingMode::WarnByValue {
+                callable_name: closure.function().name(),
+            },
+            context,
+            values,
+        );
     }
     if let Some(function) = context.function(name).cloned() {
-        return eval_dynamic_function_with_evaluated_args(
+        return eval_dynamic_function_with_evaluated_args_and_ref_mode(
             &function,
+            function.parameter_is_by_ref(),
             evaluated_args,
+            EvalByRefBindingMode::WarnByValue {
+                callable_name: function.name(),
+            },
             context,
             values,
         );
     }
     if let Some(function) = context.native_function(name) {
-        let evaluated_args =
-            bind_evaluated_native_function_args(&function, evaluated_args, context, values)?;
+        let evaluated_args = bind_evaluated_native_function_args_for_call_user_func(
+            name,
+            &function,
+            evaluated_args,
+            context,
+            values,
+        )?;
         return eval_native_function_with_values(function, evaluated_args, context, values);
     }
     Err(EvalStatus::UnsupportedConstruct)

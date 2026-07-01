@@ -157,6 +157,55 @@ echo ":" . gettype($second) . ":" . $second;');
     assert_eq!(out, "5:string:2|19:string:4");
 }
 
+/// Verifies eval `call_user_func_array()` degrades non-reference closure args by value.
+#[test]
+fn test_eval_closure_call_user_func_array_degrades_non_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalClosureCallUserFuncArrayBox {
+    public int $base = 10;
+}
+
+$fn = function(int &$value, int $delta): int {
+    $value = $value + $delta;
+    return $value;
+};
+$first = "2";
+$firstArgs = [$first, 3];
+echo call_user_func_array($fn, $firstArgs);
+echo ":" . gettype($first) . ":" . $first;
+echo ":" . gettype($firstArgs[0]) . ":" . $firstArgs[0] . "|";
+
+$second = "4";
+$secondArgs = [&$second, 5];
+echo call_user_func_array($fn, $secondArgs);
+echo ":" . gettype($second) . ":" . $second . "|";
+
+$box = new EvalClosureCallUserFuncArrayBox();
+$method = function(int &$value, int $delta): int {
+    $value = $value + $this->base + $delta;
+    return $value;
+};
+$bound = $method->bindTo($box);
+$third = "6";
+$thirdArgs = [$third, 7];
+echo call_user_func_array($bound, $thirdArgs);
+echo ":" . gettype($third) . ":" . $third;
+echo ":" . gettype($thirdArgs[0]) . ":" . $thirdArgs[0] . "|";
+
+$fourth = "8";
+$fourthArgs = [&$fourth, 9];
+echo call_user_func_array($bound, $fourthArgs);
+echo ":" . gettype($fourth) . ":" . $fourth;');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "5:string:2:string:2|9:integer:9|23:string:6:string:6|27:integer:27"
+    );
+}
+
 /// Verifies eval `Closure::bind()` and `bindTo()` persist `$this` across later calls.
 #[test]
 fn test_eval_closure_bind_persists_this_and_by_ref_args() {
