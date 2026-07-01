@@ -30,8 +30,7 @@ builtin! {
 /// Returns `PhpType::Pointer(None)` unconditionally (no arguments to validate).
 ///
 /// The registry's `check_arity` handles arity enforcement (exactly 0 arguments).
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let _ = cx;
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Pointer(None))
 }
 

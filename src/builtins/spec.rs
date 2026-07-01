@@ -50,7 +50,7 @@ pub enum Area {
 ///
 /// Add variants here only as the builtin migration surfaces the need; do not
 /// pre-populate variants that are not yet referenced by any registered builtin.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TypeSpec {
     /// PHP `int`.
     Int,
@@ -219,6 +219,7 @@ inventory::collect!(BuiltinSpec);
 #[cfg(test)]
 mod macro_tests {
     use crate::builtins::spec::*;
+    /// No-op `LowerFn` used to satisfy the `builtin!` macro in this test module.
     fn lower(_c: &mut crate::codegen_ir::context::FunctionContext, _i: &crate::ir::Instruction)
         -> Result<(), crate::codegen_ir::CodegenIrError> { Ok(()) }
     builtin! { name: "__macro_probe", area: Internal, params: [x: Int], returns: Int, lower: lower, summary: "probe", internal: true }
@@ -248,6 +249,7 @@ mod tests {
         assert_eq!(S.name, "strlen");
         assert_eq!(S.params.len(), 1);
     }
+    /// No-op `LowerFn` used to satisfy the `BuiltinSpec` struct literal in this test module.
     fn noop_lower(_c: &mut crate::codegen_ir::context::FunctionContext, _i: &crate::ir::Instruction)
         -> Result<(), crate::codegen_ir::CodegenIrError> { Ok(()) }
 }

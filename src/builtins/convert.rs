@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn float_default_converts() {
         let e = default_spec_to_expr(&DefaultSpec::Float(1.5));
-        assert!(matches!(e.kind, ExprKind::FloatLiteral(_)));
+        assert!(matches!(e.kind, ExprKind::FloatLiteral(v) if v == 1.5));
     }
 
     /// Verifies string DefaultSpec produces a StringLiteral expression matching string_lit().

@@ -37,8 +37,7 @@ builtin! {
 ///
 /// Arguments are pre-inferred by the registry; this hook only refines the return type
 /// beyond what the scalar `returns: Mixed` field can express.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let _ = cx;
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::stream_resource())
 }
 

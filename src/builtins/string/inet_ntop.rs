@@ -35,8 +35,7 @@ builtin! {
 /// inline in the `builtin!` macro so a check hook is required.
 /// Argument types are inferred by the common registry dispatch path before this hook fires;
 /// arity (exactly 1 arg) is pre-validated by the registry.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let _ = cx;
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Union(vec![PhpType::Str, PhpType::Bool]))
 }
 

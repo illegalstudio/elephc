@@ -34,8 +34,7 @@ builtin! {
 ///
 /// A check hook is required because the `builtin!` macro cannot express a
 /// parameterized array return type inline.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let _ = cx;
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Array(Box::new(PhpType::Str)))
 }
 

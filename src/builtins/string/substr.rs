@@ -37,8 +37,7 @@ builtin! {
 /// `check_builtin` before this hook fires; the hook only needs to return
 /// the correct return type. Arity is pre-validated by the registry before
 /// the hook fires, so no inline count check is needed.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let _ = cx; // arguments already inferred by the common registry dispatch path
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Str)
 }
 

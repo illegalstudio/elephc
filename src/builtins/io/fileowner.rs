@@ -33,7 +33,6 @@ builtin! {
 ///
 /// The registry pre-infers arguments before calling this hook.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let _ = cx;
     Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::Bool]))
 }
 

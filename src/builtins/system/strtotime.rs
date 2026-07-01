@@ -30,8 +30,7 @@ builtin! {
 /// Returns `Union(Int, Bool)` to reflect that `strtotime` can return a timestamp or `false`.
 ///
 /// The registry pre-infers arguments before calling this hook.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let _ = cx;
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Union(vec![PhpType::Int, PhpType::Bool]))
 }
 

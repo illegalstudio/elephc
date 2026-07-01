@@ -40,8 +40,7 @@ builtin! {
 /// A check hook is required because the `builtin!` macro cannot express a union return
 /// type inline. Argument types are inferred by the common registry dispatch path before
 /// this hook fires; arity (capped to 2 via `max_args`) is validated by the registry.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let _ = cx; // arguments already inferred; arity already checked by registry
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Union(vec![PhpType::Int, PhpType::Bool]))
 }
 

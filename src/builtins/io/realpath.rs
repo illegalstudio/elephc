@@ -32,8 +32,7 @@ builtin! {
 /// Returns `Union(Str, Bool)` reflecting that `realpath` can return a path or `false`.
 ///
 /// The registry pre-infers arguments before calling this hook.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let _ = cx;
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Union(vec![PhpType::Str, PhpType::Bool]))
 }
 

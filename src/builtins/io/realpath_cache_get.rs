@@ -34,8 +34,7 @@ builtin! {
 /// Returns `AssocArray{Str, Mixed}` reflecting the realpath cache structure.
 ///
 /// The registry enforces 0-argument arity via `arity_error` before calling this hook.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let _ = cx;
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::AssocArray {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),

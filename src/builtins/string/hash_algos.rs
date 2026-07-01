@@ -34,8 +34,7 @@ builtin! {
 /// A check hook is required because the `builtin!` macro cannot express array return
 /// types inline. No bridge library is required. Arity (0 args) is pre-validated by
 /// the registry before this hook fires.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let _ = cx; // no arguments; arity already checked by registry
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Array(Box::new(PhpType::Str)))
 }
 
