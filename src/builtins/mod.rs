@@ -19,5 +19,6 @@ mod convert;
 mod array;
 mod string;
 mod math;
+mod spl;
 #[cfg(test)]
 mod parity_tests;

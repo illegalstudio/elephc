@@ -35,7 +35,7 @@ pub(crate) mod math;
 mod pointers;
 mod regex;
 mod serialize;
-mod spl;
+pub(crate) mod spl;
 mod system;
 pub(crate) mod strings;
 mod types;
@@ -331,18 +331,6 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "is_infinite" => math::lower_is_infinite(ctx, inst),
         "is_finite" => math::lower_is_finite(ctx, inst),
         "hash_file" => io::lower_hash_file(ctx, inst),
-        "spl_autoload_register" => spl::lower_spl_autoload_bool(ctx, inst, "spl_autoload_register"),
-        "spl_autoload_unregister" => spl::lower_spl_autoload_bool(ctx, inst, "spl_autoload_unregister"),
-        "spl_autoload_functions" => spl::lower_spl_autoload_functions(ctx, inst),
-        "spl_autoload_extensions" => spl::lower_spl_autoload_extensions(ctx, inst),
-        "spl_autoload_call" => spl::lower_spl_autoload_void(ctx, inst, "spl_autoload_call"),
-        "spl_autoload" => spl::lower_spl_autoload_void(ctx, inst, "spl_autoload"),
-        "spl_object_id" => spl::lower_spl_object_id(ctx, inst),
-        "spl_object_hash" => spl::lower_spl_object_hash(ctx, inst),
-        "spl_classes" => spl::lower_spl_classes(ctx, inst),
-        "iterator_apply" => spl::lower_iterator_apply(ctx, inst),
-        "iterator_count" => spl::lower_iterator_count(ctx, inst),
-        "iterator_to_array" => spl::lower_iterator_to_array(ctx, inst),
         _ => Err(CodegenIrError::unsupported(format!("builtin call {}", name))),
     }
 }

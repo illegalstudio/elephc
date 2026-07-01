@@ -14,7 +14,7 @@ mod catalog;
 mod io;
 mod numeric;
 mod pointers;
-mod spl;
+pub(crate) mod spl;
 mod strings;
 mod system;
 
