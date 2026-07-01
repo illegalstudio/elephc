@@ -1,9 +1,15 @@
 //! Purpose:
-//! Type-checks the callables PHP builtin family.
-//! Validates arity, argument types, warning-producing cases, and inferred return types for direct calls.
+//! Shared callback/callable type-checking library for the callables builtin family.
+//! Holds the per-builtin `pub(crate)` check functions (`check_call_user_func`,
+//! `check_call_user_func_array`, `check_function_exists`, `check_preg_replace_callback_first_class_call`)
+//! relocated out of the old `check_builtin` dispatcher, plus the shared callback-validation helpers
+//! (`check_callback_builtin_call`, `array_element_type`, dummy-argument builders, etc.) reused across
+//! the array and spl builtin checkers.
 //!
 //! Called from:
-//! - `crate::types::checker::builtins::check_builtin()`
+//! - The callables registry homes under `src/builtins/callables/` (via the `pub(crate) use`
+//!   re-exports in `crate::types::checker::builtins`).
+//! - Array/spl builtin checkers and first-class-callable inference in `crate::types::checker::inference`.
 //!
 //! Key details:
 //! - Signatures, callable aliases, optimizer effects, and codegen builtin dispatch must remain in lockstep.
