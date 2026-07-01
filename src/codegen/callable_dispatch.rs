@@ -568,6 +568,40 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             // from runtime string-callable dispatch; direct and first-class-callable
             // use still work through the EIR path.
             | "serialize" | "unserialize"
+            // array_merge / array_merge_recursive have a registry sig of
+            // variadic(&[], "arrays") — 0 regular params, 1 variadic.  The wrapper
+            // body emitted by function_wrapper_body() is therefore
+            // `array_merge(...$arrays)`, a single spread argument.  The frozen legacy
+            // emitter (src/codegen/builtins/arrays/array_merge.rs) expects exactly two
+            // positional array args and unconditionally indexes args[1], causing an
+            // index-out-of-bounds panic.  Before these builtins were migrated into the
+            // registry first_class_callable_builtin_sig returned None for them, so no
+            // wrapper was emitted.  Excluding them here restores that pre-migration
+            // behaviour: direct calls and EIR first-class-callable use are unaffected.
+            | "array_merge" | "array_merge_recursive"
+            // gzcompress / gzdeflate / gzinflate / gzuncompress are zlib-backed
+            // builtins whose legacy emitters (src/codegen/builtins/strings/gz*.rs)
+            // emit inline calls to compress2 / compressBound / uncompress /
+            // inflateInit2_ etc.  The type-checker adds -lz only when one of these
+            // builtins appears in user code; a wrapper-only reference is not detected,
+            // so any program that triggers string-callable dispatch without calling
+            // gz* directly fails to link.  Before these builtins were migrated into
+            // the registry first_class_callable_builtin_sig returned None for them,
+            // so no wrapper was emitted.  Excluding them restores that behaviour.
+            | "gzcompress" | "gzdeflate" | "gzinflate" | "gzuncompress"
+            // The following builtins have no frozen legacy-backend emitter in
+            // src/codegen/builtins/arrays/; they are EIR-only.  When the wrapper
+            // body emitted by function_wrapper_body() calls any of them, the legacy
+            // backend falls through to a user-function-call path and emits an
+            // unresolved _fn_<name> reference that the linker cannot satisfy.
+            // Before these builtins were migrated into the registry
+            // first_class_callable_builtin_sig returned None for them, so no wrapper
+            // was emitted.  Excluding them restores that pre-migration behaviour.
+            | "array_diff_assoc" | "array_intersect_assoc"
+            | "array_is_list"
+            | "array_key_first" | "array_key_last"
+            | "array_multisort"
+            | "array_replace" | "array_replace_recursive"
     )
 }
 
