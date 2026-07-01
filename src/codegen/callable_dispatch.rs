@@ -705,6 +705,20 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             | "fopen" | "fclose" | "fread" | "fwrite" | "fprintf" | "vfprintf"
             | "fscanf" | "fgets" | "feof" | "fseek" | "ftell" | "rewind"
             | "fgetc" | "fpassthru"
+            // These 10 io batch D2 builtins had no pre-migration first-class-callable
+            // wrapper: general_first_class_callable_builtin_sig returned None for them
+            // (they are not in that table), so no wrapper was emitted. Registering them
+            // in the builtin registry makes first_class_callable_builtin_sig return Some,
+            // which would newly emit a deferred-closure wrapper; excluding them here
+            // restores the exact pre-migration (no-wrapper) behaviour and is provably
+            // behaviour-neutral. These builtins take stream/dir-handle/by-ref/spread
+            // arguments that are unsuited to a generic string-callable wrapper. Direct
+            // calls and EIR first-class-callable use still work through the EIR path.
+            // (fsync, fflush, fdatasync, readline are kept enabled — they were already
+            // in general_first_class_callable_builtin_sig pre-migration.)
+            | "fgetcsv" | "fputcsv" | "flock" | "tmpfile"
+            | "popen" | "pclose"
+            | "opendir" | "readdir" | "closedir" | "rewinddir"
     )
 }
 

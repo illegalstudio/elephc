@@ -307,7 +307,7 @@ pub(crate) fn lower_readfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 }
 
 /// Lowers `readline(prompt?)` by optionally writing a prompt and reading stdin.
-pub(super) fn lower_readline(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_readline(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "readline", 0, 1)?;
     if inst.operands.len() == 1 {
         let prompt = expect_operand(inst, 0)?;
@@ -2990,7 +2990,7 @@ pub(crate) fn lower_fgetc(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `fgetcsv(stream, separator?, enclosure?)` through the CSV row runtime helper.
-pub(super) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fgetcsv", 1, 3)?;
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "fgetcsv")?;
@@ -3002,7 +3002,7 @@ pub(super) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `fputcsv(stream, fields, separator?, enclosure?)` for string arrays.
-pub(super) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fputcsv", 2, 4)?;
     let stream = expect_operand(inst, 0)?;
     let fields = expect_operand(inst, 1)?;
@@ -3258,12 +3258,12 @@ pub(crate) fn lower_ftruncate(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `fsync(stream)` through the shared fd sync runtime helper.
-pub(super) fn lower_fsync(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fsync(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_unary_stream_bool_runtime(ctx, inst, "fsync", "__rt_fsync")
 }
 
 /// Lowers `fflush(stream)` through the shared fd flush runtime helper.
-pub(super) fn lower_fflush(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fflush(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "fflush", 1)?;
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "fflush")?;
@@ -3301,12 +3301,12 @@ pub(super) fn lower_fflush(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `fdatasync(stream)` through the shared fd data-sync runtime helper.
-pub(super) fn lower_fdatasync(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fdatasync(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_unary_stream_bool_runtime(ctx, inst, "fdatasync", "__rt_fdatasync")
 }
 
 /// Lowers `flock(stream, operation, would_block?)` through the libc flock wrapper.
-pub(super) fn lower_flock(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_flock(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "flock", 2, 3)?;
     let stream = expect_operand(inst, 0)?;
     let operation = expect_operand(inst, 1)?;
@@ -3544,7 +3544,7 @@ pub(super) fn lower_getservbyport(
 }
 
 /// Lowers `opendir(path)` and boxes the directory stream as `resource|false`.
-pub(super) fn lower_opendir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_opendir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "opendir", 1)?;
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "opendir path")?;
@@ -3554,7 +3554,7 @@ pub(super) fn lower_opendir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `readdir(dir_handle)` for libc, glob, and userspace-wrapper handles.
-pub(super) fn lower_readdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_readdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "readdir", 1)?;
     let handle = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, handle, "readdir")?;
@@ -3569,7 +3569,7 @@ pub(super) fn lower_readdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `closedir(dir_handle)` for libc, glob, and userspace-wrapper handles.
-pub(super) fn lower_closedir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_closedir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "closedir", 1)?;
     let handle = expect_operand(inst, 0)?;
     let captured = capture_resource_box_for_release(ctx, handle)?;
@@ -3585,7 +3585,7 @@ pub(super) fn lower_closedir(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 }
 
 /// Lowers `rewinddir(dir_handle)` for libc, glob, and userspace-wrapper handles.
-pub(super) fn lower_rewinddir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_rewinddir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "rewinddir", 1)?;
     let handle = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, handle, "rewinddir")?;
@@ -3599,7 +3599,7 @@ pub(super) fn lower_rewinddir(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `popen(command, mode)` and boxes the process pipe as `resource|false`.
-pub(super) fn lower_popen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_popen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "popen", 2)?;
     let command = expect_operand(inst, 0)?;
     let mode = expect_operand(inst, 1)?;
@@ -3627,7 +3627,7 @@ pub(super) fn lower_popen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `pclose(handle)` and returns the child process status.
-pub(super) fn lower_pclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_pclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "pclose", 1)?;
     let handle = expect_operand(inst, 0)?;
     let captured = capture_resource_box_for_release(ctx, handle)?;
@@ -5413,7 +5413,7 @@ pub(crate) fn lower_sys_get_temp_dir(
 }
 
 /// Lowers `tmpfile()` and boxes the anonymous stream descriptor or PHP false.
-pub(super) fn lower_tmpfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_tmpfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "tmpfile", 0)?;
     abi::emit_call_label(ctx.emitter, "__rt_tmpfile");
     box_stream_fd_or_false_result(ctx, "tmpfile");
