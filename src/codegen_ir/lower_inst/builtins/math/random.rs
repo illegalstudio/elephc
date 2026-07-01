@@ -46,6 +46,34 @@ pub(in crate::codegen_ir::lower_inst::builtins) fn lower_random_int(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `random_bytes()` into an owned CSPRNG binary string of the given length.
+///
+/// Materializes the single length operand as an integer, passes it to the
+/// `__rt_random_bytes` runtime helper (length in `x0` on AArch64, `rdi` on
+/// x86_64), and stores the returned owned string result (`x1`/`x2` on AArch64,
+/// `rax`/`rdx` on x86_64) into the instruction's result slot. The runtime helper
+/// owns allocation, the cryptographic fill, and the fatal paths for a length
+/// below 1 or an unavailable entropy source.
+pub(in crate::codegen_ir::lower_inst::builtins) fn lower_random_bytes(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "random_bytes", 1)?;
+    let length = expect_operand(inst, 0)?;
+    load_numeric_as_int(ctx, length, "random_bytes")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // length already sits in the AArch64 integer result register (x0),
+            // which is exactly where __rt_random_bytes expects it.
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the requested byte length as the SysV first argument
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_random_bytes");
+    store_if_result(ctx, inst)
+}
+
 /// Emits the shared inclusive-range lowering for random integer builtins.
 fn lower_random_range(
     ctx: &mut FunctionContext<'_>,

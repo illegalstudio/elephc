@@ -2,7 +2,7 @@
 title: "isset()"
 description: "Determines whether a variable is set and is not null."
 sidebar:
-  order: 277
+  order: 278
 ---
 
 ## isset()

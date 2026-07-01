@@ -8,7 +8,10 @@
 //! Key details:
 //! - Register choices must match the platform entry convention before normal PHP frame setup begins.
 
-use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::{
+    emit::Emitter,
+    platform::{Arch, Platform},
+};
 
 use super::{
     emit_load_int_immediate, emit_store_reg_to_symbol,
@@ -48,18 +51,25 @@ pub fn emit_copy_frame_pointer(emitter: &mut Emitter, dest: &str) {
 /// This routine never returns to the calling code. The syscall consumes the current execution context.
 pub fn emit_exit(emitter: &mut Emitter, code: u32) {
     match (emitter.target.platform, emitter.target.arch) {
-        (super::super::platform::Platform::MacOS, Arch::AArch64)
-        | (super::super::platform::Platform::Linux, Arch::AArch64) => {
+        (Platform::MacOS, Arch::AArch64)
+        | (Platform::Linux, Arch::AArch64) => {
             emitter.instruction(&format!("mov x0, #{}", code));                 // load the requested process exit code into the ABI return register
             emitter.syscall(1);
         }
-        (super::super::platform::Platform::Linux, Arch::X86_64) => {
+        (Platform::Linux, Arch::X86_64) => {
             emitter.instruction(&format!("mov edi, {}", code));                 // load the requested process exit code into the SysV first-argument register
             emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall 60 = exit
             emitter.instruction("syscall");                                     // terminate the process through the Linux x86_64 syscall ABI
         }
-        (super::super::platform::Platform::MacOS, Arch::X86_64) => {
+        (Platform::MacOS, Arch::X86_64) => {
             panic!("process exit emission is not implemented yet for target macos-x86_64");
+        }
+        (Platform::Windows, Arch::X86_64) => {
+            emitter.instruction(&format!("mov rax, {}", code));                 // load exit code into return register (CRT calls ExitProcess)
+            emitter.instruction("ret");                                         // return to MinGW CRT which calls ExitProcess
+        }
+        (Platform::Windows, Arch::AArch64) => {
+            panic!("Windows ARM64 target is not yet supported (see issue #379)");
         }
     }
 }
@@ -81,17 +91,23 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
 /// This routine never returns to the calling code.
 pub fn emit_exit_with_result_reg(emitter: &mut Emitter) {
     match (emitter.target.platform, emitter.target.arch) {
-        (super::super::platform::Platform::MacOS, Arch::AArch64)
-        | (super::super::platform::Platform::Linux, Arch::AArch64) => {
+        (Platform::MacOS, Arch::AArch64)
+        | (Platform::Linux, Arch::AArch64) => {
             emitter.syscall(1);
         }
-        (super::super::platform::Platform::Linux, Arch::X86_64) => {
+        (Platform::Linux, Arch::X86_64) => {
             emitter.instruction("mov edi, eax");                                // move the C return value into the SysV exit argument register
             emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall 60 = exit
             emitter.instruction("syscall");                                     // terminate the process with the bridge return code
         }
-        (super::super::platform::Platform::MacOS, Arch::X86_64) => {
+        (Platform::MacOS, Arch::X86_64) => {
             panic!("process exit emission is not implemented yet for target macos-x86_64");
+        }
+        (Platform::Windows, Arch::X86_64) => {
+            emitter.instruction("ret");                                         // return to MinGW CRT with rax as exit code
+        }
+        (Platform::Windows, Arch::AArch64) => {
+            panic!("Windows ARM64 target is not yet supported (see issue #379)");
         }
     }
 }

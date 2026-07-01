@@ -270,6 +270,7 @@ sidebar:
 | [`pow()`](./builtins/math/pow.md) | `(float $num, float $exponent): float` | `float` |
 | [`rad2deg()`](./builtins/math/rad2deg.md) | `(float $num): float` | `float` |
 | [`rand()`](./builtins/math/rand.md) | `(int $min, int $max): int` | `int` |
+| [`random_bytes()`](./builtins/math/random_bytes.md) | `(int $length): string` | `string` |
 | [`random_int()`](./builtins/math/random_int.md) | `(int $min, int $max): int` | `int` |
 | [`round()`](./builtins/math/round.md) | `(float $num, int $precision): float` | `float` |
 | [`sin()`](./builtins/math/sin.md) | `(float $num): float` | `float` |

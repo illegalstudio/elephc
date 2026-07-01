@@ -2,7 +2,7 @@
 title: "tanh()"
 description: "tanh() — math builtin supported by Elephc."
 sidebar:
-  order: 268
+  order: 269
 ---
 
 ## tanh()

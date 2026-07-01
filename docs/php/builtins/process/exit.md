@@ -2,7 +2,7 @@
 title: "exit()"
 description: "exit() — process builtin supported by Elephc."
 sidebar:
-  order: 302
+  order: 303
 ---
 
 ## exit()

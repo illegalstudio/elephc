@@ -325,6 +325,14 @@ pub(crate) fn link(
             }
             cmd
         }
+        Platform::Windows => {
+            let mut cmd = Command::new(target.linker_cmd());
+            cmd.arg("-o").arg(bin_path);
+            cmd.arg(obj_path);
+            cmd.arg(runtime_object_path);
+            cmd.args(["-lkernel32", "-lmsvcrt", "-lwinmm", "-lws2_32", "-lbcrypt", "-lshlwapi"]);
+            cmd
+        }
     };
     // Search paths for the located bridge staticlibs.
     for (_, dir) in &needed_bridges {
@@ -396,6 +404,8 @@ pub(crate) fn link(
                 }
                 dedup_scratch = Some(scratch);
             }
+            Platform::Windows => {
+            }
         }
     }
     for lib in extra_link_libs {
@@ -421,6 +431,11 @@ pub(crate) fn link(
                         ld_cmd.arg("-force_load").arg(path);
                     }
                     Platform::Linux => {
+                        ld_cmd.arg("-Wl,--whole-archive");
+                        ld_cmd.arg(format!("-l{}", bridge.lib_name));
+                        ld_cmd.arg("-Wl,--no-whole-archive");
+                    }
+                    Platform::Windows => {
                         ld_cmd.arg("-Wl,--whole-archive");
                         ld_cmd.arg(format!("-l{}", bridge.lib_name));
                         ld_cmd.arg("-Wl,--no-whole-archive");

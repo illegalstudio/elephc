@@ -333,6 +333,7 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "clamp" => Some(fixed(&["value", "min", "max"])),
         "min" | "max" => Some(variadic(&["value"], "values")),
         "rand" | "mt_rand" | "random_int" => Some(fixed(&["min", "max"])),
+        "random_bytes" => Some(fixed(&["length"])),
         "round" => Some(optional(&["num", "precision"], 1, vec![int_lit(0)])),
 
         "sleep" => Some(fixed(&["seconds"])),
@@ -886,6 +887,11 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             name,
             &[PhpType::Int, PhpType::Int],
             PhpType::Int,
+        )),
+        "random_bytes" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Int],
+            PhpType::Str,
         )),
         "date" | "gmdate" | "php_uname" | "readline" => {
             let mut sig = builtin_call_sig(name)?;

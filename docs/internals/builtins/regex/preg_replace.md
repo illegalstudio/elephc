@@ -2,7 +2,7 @@
 title: "preg_replace() — internals"
 description: "Compiler internals for preg_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 316
+  order: 317
 ---
 
 ## `preg_replace()` — internals

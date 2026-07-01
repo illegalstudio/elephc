@@ -225,6 +225,7 @@ jobs:
       - codegen-tests
       - image-api-sync
       - builtins-docs-sync
+      - windows-pe-cross-compile
     if: always()
     steps:
       - name: Verify test jobs
@@ -233,6 +234,7 @@ jobs:
           test "${{ needs.codegen-tests.result }}" = "success"
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
+          test "${{ needs.windows-pe-cross-compile.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite
@@ -262,3 +264,102 @@ jobs:
           path: |
             benchmark-results.json
             benchmark-results.md
+
+  windows-pe-cross-compile:
+    name: Windows PE Cross-Compile Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # Silence Wine's diagnostic chatter so it never pollutes captured stdout/stderr.
+      WINEDEBUG: -all
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-windows-pe-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-windows-pe-
+
+      - name: Install MinGW-w64 cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils-mingw-w64-x86-64 \
+            gcc-mingw-w64-x86-64 \
+            file
+
+      - name: Install Wine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine64 wine
+          # On ubuntu-24.04 the wine64 package only ships the internal
+          # /usr/lib/wine/wine64 loader; the callable binary on PATH is `wine`
+          # (dispatches to the 64-bit loader since wine32/i386 is not installed
+          # and is not needed for x86_64-only PE binaries).
+          command -v wine64 >/dev/null 2>&1 && wine64 --version || wine --version
+
+      - name: Initialize Wine prefix
+        run: |
+          wineboot --init || true
+          wineserver --wait || true
+
+      - name: Check (no warnings)
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
+          ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Run Windows PE tests
+        run: cargo test --test codegen_tests -- windows_pe --nocapture
+
+      - name: Cross-compile hello-world
+        run: |
+          echo '<?php echo "Hello from Windows!\n";' > /tmp/hello.php
+          cargo run -- --target windows-x86_64 /tmp/hello.php
+          file /tmp/hello.exe
+          # Verify it is a valid PE32+ executable
+          file /tmp/hello.exe | grep -q "PE32+ executable (console) x86-64"
+          # Verify imports include kernel32
+          x86_64-w64-mingw32-objdump -x /tmp/hello.exe | grep -q "KERNEL32.dll"
+
+      - name: Run hello-world under Wine
+        run: |
+          WINE_BIN=wine64
+          command -v wine64 >/dev/null 2>&1 || WINE_BIN=wine
+          "$WINE_BIN" /tmp/hello.exe > /tmp/hello.out
+          cat /tmp/hello.out
+          grep -q "Hello from Windows!" /tmp/hello.out
+
+      - name: Cross-compile arithmetic test
+        run: |
+          echo '<?php echo 1 + 2 * 3;' > /tmp/arith.php
+          cargo run -- --target windows-x86_64 /tmp/arith.php
+          file /tmp/arith.exe | grep -q "PE32+ executable"
+
+      - name: Cross-compile function call test
+        run: |
+          echo '<?php function add($a, $b) { return $a + $b; } echo add(10, 20);' > /tmp/func.php
+          cargo run -- --target windows-x86_64 /tmp/func.php
+          file /tmp/func.exe | grep -q "PE32+ executable"
+
+      - name: Cross-compile loop test
+        run: |
+          echo '<?php for ($i = 0; $i < 5; $i++) { echo $i; }' > /tmp/loop.php
+          cargo run -- --target windows-x86_64 /tmp/loop.php
+          file /tmp/loop.exe | grep -q "PE32+ executable"
+
+      - name: Cross-compile string concatenation test
+        run: |
+          echo '<?php echo "Hello" . " " . "World";' > /tmp/concat.php
+          cargo run -- --target windows-x86_64 /tmp/concat.php
+          file /tmp/concat.exe | grep -q "PE32+ executable"

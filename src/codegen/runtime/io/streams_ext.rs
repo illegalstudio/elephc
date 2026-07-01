@@ -227,10 +227,12 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     let errno_func = match emitter.platform {
         Platform::MacOS => "__error",
         Platform::Linux => "__errno_location",
+        Platform::Windows => "__errno_location", // Windows shims against msvcrt errno
     };
     let would_block_errno = match emitter.platform {
         Platform::MacOS => 35,
         Platform::Linux => 11,
+        Platform::Windows => 11, // EAGAIN — msvcrt uses the POSIX value via the shim
     };
     emitter.bl_c(errno_func);                                                    // fetch thread-local errno storage after flock() failure
     emitter.instruction("ldr w9, [x0]");                                        // load errno value set by libc flock()

@@ -11,7 +11,8 @@
 use super::{
     DIRNAME_LEVELS_MSG, HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG,
-    PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
+    PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, RANDOM_BYTES_LENGTH_MSG,
+    RANDOM_BYTES_SOURCE_MSG, STR_REPEAT_TIMES_MSG,
 };
 use super::super::system;
 use crate::codegen::platform::Target;
@@ -140,6 +141,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&format!(
         ".globl _str_repeat_times_msg\n_str_repeat_times_msg:\n    .ascii {:?}\n",
         STR_REPEAT_TIMES_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _random_bytes_length_msg\n_random_bytes_length_msg:\n    .ascii {:?}\n",
+        RANDOM_BYTES_LENGTH_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _random_bytes_source_msg\n_random_bytes_source_msg:\n    .ascii {:?}\n",
+        RANDOM_BYTES_SOURCE_MSG
     ));
     out.push_str(&format!(
         ".globl _hash_unknown_algo_msg\n_hash_unknown_algo_msg:\n    .ascii {:?}\n",

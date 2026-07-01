@@ -2,7 +2,7 @@
 title: "gzcompress()"
 description: "Lowers `gzcompress(data, level?)` through inline zlib `compress2` calls."
 sidebar:
-  order: 343
+  order: 344
 ---
 
 ## gzcompress()

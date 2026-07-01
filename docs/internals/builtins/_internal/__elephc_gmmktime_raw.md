@@ -2,7 +2,7 @@
 title: "__elephc_gmmktime_raw() — internals"
 description: "Compiler internals for __elephc_gmmktime_raw(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 269
+  order: 270
 ---
 
 ## `__elephc_gmmktime_raw()` — internals

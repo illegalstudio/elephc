@@ -2,7 +2,7 @@
 title: "exec()"
 description: "Lowers `exec(command)` by capturing shell stdout through the shared runtime helper."
 sidebar:
-  order: 301
+  order: 302
 ---
 
 ## exec()

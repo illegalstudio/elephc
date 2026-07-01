@@ -2,7 +2,7 @@
 title: "str_ireplace()"
 description: "str_ireplace() — string builtin supported by Elephc."
 sidebar:
-  order: 379
+  order: 380
 ---
 
 ## str_ireplace()

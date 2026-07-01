@@ -357,6 +357,9 @@ pub(crate) fn link_binary(
                 String::from_utf8_lossy(&ld_out.stderr)
             );
         }
+        Platform::Windows => {
+            panic!("Windows target is not yet supported (see issue #379)");
+        }
     }
 }
 

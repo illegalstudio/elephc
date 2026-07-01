@@ -2,7 +2,7 @@
 title: "hash()"
 description: "Lowers `hash(algo, data, binary?)` through the shared runtime digest dispatcher."
 sidebar:
-  order: 347
+  order: 348
 ---
 
 ## hash()

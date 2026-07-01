@@ -2,7 +2,7 @@
 title: "rawurlencode() — internals"
 description: "Compiler internals for rawurlencode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 375
+  order: 376
 ---
 
 ## `rawurlencode()` — internals

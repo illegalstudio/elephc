@@ -10,6 +10,7 @@
 
 use super::linux_transform::{map_syscall, needs_at_fdcwd, transform_for_linux};
 use super::toolchain::host_has_native_aarch64_toolchain;
+use super::windows_transform::transform_for_windows;
 
 /// Target platform for code generation.
 ///
@@ -21,6 +22,7 @@ use super::toolchain::host_has_native_aarch64_toolchain;
 pub enum Platform {
     MacOS,
     Linux,
+    Windows,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,10 +42,13 @@ pub struct Target {
 impl Platform {
     /// Detects the host operating system from the Rust compile-time target OS.
     ///
-    /// Returns `Platform::MacOS` when compiling on macOS, otherwise `Platform::Linux`.
+    /// Returns `Platform::MacOS` when compiling on macOS, `Platform::Windows` on Windows,
+    /// otherwise `Platform::Linux`.
     pub fn detect_host() -> Self {
         if cfg!(target_os = "macos") {
             Platform::MacOS
+        } else if cfg!(target_os = "windows") {
+            Platform::Windows
         } else {
             Platform::Linux
         }
@@ -56,6 +61,7 @@ impl Platform {
         match self {
             Platform::MacOS => "Darwin",
             Platform::Linux => "Linux",
+            Platform::Windows => "WINNT",
         }
     }
 
@@ -68,6 +74,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x601,
             Platform::Linux => 0x241,
+            Platform::Windows => 0x241,
         }
     }
 
@@ -77,6 +84,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x4048_7413,
             Platform::Linux => 0x5401,
+            Platform::Windows => 0x5401,
         }
     }
 
@@ -86,6 +94,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x0004,
             Platform::Linux => 0x0800,
+            Platform::Windows => 0x0800,
         }
     }
 
@@ -95,6 +104,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0xffff,
             Platform::Linux => 1,
+            Platform::Windows => 1,
         }
     }
 
@@ -104,6 +114,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x1006,
             Platform::Linux => 20,
+            Platform::Windows => 20,
         }
     }
 
@@ -126,6 +137,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x0200,
             Platform::Linux => 15,
+            Platform::Windows => 15,
         }
     }
 
@@ -136,6 +148,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x0020,
             Platform::Linux => 6,
+            Platform::Windows => 6,
         }
     }
 
@@ -153,6 +166,7 @@ impl Platform {
         match self {
             Platform::MacOS => 27,
             Platform::Linux => 26,
+            Platform::Windows => 26,
         }
     }
 
@@ -162,6 +176,7 @@ impl Platform {
         match self {
             Platform::MacOS => 61,
             Platform::Linux => 111,
+            Platform::Windows => 111,
         }
     }
 
@@ -172,6 +187,7 @@ impl Platform {
         match self {
             Platform::MacOS => 30,
             Platform::Linux => 10,
+            Platform::Windows => 10,
         }
     }
 
@@ -185,6 +201,7 @@ impl Platform {
         match self {
             Platform::MacOS => 32,
             Platform::Linux => 24,
+            Platform::Windows => 24,
         }
     }
 
@@ -195,6 +212,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x201,
             Platform::Linux => 0x41,
+            Platform::Windows => 0x41,
         }
     }
 
@@ -205,6 +223,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x209,
             Platform::Linux => 0x441,
+            Platform::Windows => 0x441,
         }
     }
 
@@ -216,6 +235,7 @@ impl Platform {
         match self {
             Platform::MacOS => format!("b.cc {}", label),
             Platform::Linux => format!("b.ge {}", label),
+            Platform::Windows => format!("b.ge {}", label),
         }
     }
 
@@ -224,7 +244,7 @@ impl Platform {
     /// Linux syscall results need a comparison against zero before branching on error,
     /// whereas macOS uses the condition flags set directly by `svc`.
     pub fn needs_cmp_before_error_branch(&self) -> bool {
-        matches!(self, Platform::Linux)
+        matches!(self, Platform::Linux | Platform::Windows)
     }
 
     /// Returns the platform errno value for `EAGAIN`/`EWOULDBLOCK`.
@@ -235,6 +255,7 @@ impl Platform {
         match self {
             Platform::MacOS => 35,
             Platform::Linux => 11,
+            Platform::Windows => 11,
         }
     }
 
@@ -245,6 +266,7 @@ impl Platform {
         match self {
             Platform::MacOS => 144,
             Platform::Linux => 128,
+            Platform::Windows => 128,
         }
     }
 
@@ -253,6 +275,7 @@ impl Platform {
         match self {
             Platform::MacOS => 4,
             Platform::Linux => 16,
+            Platform::Windows => 16,
         }
     }
 
@@ -264,6 +287,7 @@ impl Platform {
         match self {
             Platform::MacOS => format!("ldrh {}, [{}, #{}]", dest, base, offset),
             Platform::Linux => format!("ldr {}, [{}, #{}]", dest, base, offset),
+            Platform::Windows => format!("ldr {}, [{}, #{}]", dest, base, offset),
         }
     }
 
@@ -272,6 +296,7 @@ impl Platform {
         match self {
             Platform::MacOS => 96,
             Platform::Linux => 48,
+            Platform::Windows => 48,
         }
     }
 
@@ -280,6 +305,7 @@ impl Platform {
         match self {
             Platform::MacOS => 2168,
             Platform::Linux => 128,
+            Platform::Windows => 128,
         }
     }
 
@@ -288,6 +314,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0,
             Platform::Linux => 8,
+            Platform::Windows => 8,
         }
     }
 
@@ -296,6 +323,7 @@ impl Platform {
         match self {
             Platform::MacOS => 8,
             Platform::Linux => 16,
+            Platform::Windows => 16,
         }
     }
 
@@ -304,6 +332,7 @@ impl Platform {
         match self {
             Platform::MacOS => 24,
             Platform::Linux => 32,
+            Platform::Windows => 32,
         }
     }
 
@@ -312,6 +341,7 @@ impl Platform {
         match self {
             Platform::MacOS => 48,
             Platform::Linux => 88,
+            Platform::Windows => 88,
         }
     }
 
@@ -320,6 +350,7 @@ impl Platform {
         match self {
             Platform::MacOS => 32,
             Platform::Linux => 72,
+            Platform::Windows => 72,
         }
     }
 
@@ -328,6 +359,7 @@ impl Platform {
         match self {
             Platform::MacOS => 64,
             Platform::Linux => 104,
+            Platform::Windows => 104,
         }
     }
 
@@ -336,6 +368,7 @@ impl Platform {
         match self {
             Platform::MacOS => 8,
             Platform::Linux => 8,
+            Platform::Windows => 8,
         }
     }
 
@@ -344,6 +377,7 @@ impl Platform {
         match self {
             Platform::MacOS => 16,
             Platform::Linux => 24,
+            Platform::Windows => 24,
         }
     }
 
@@ -352,6 +386,7 @@ impl Platform {
         match self {
             Platform::MacOS => 20,
             Platform::Linux => 28,
+            Platform::Windows => 28,
         }
     }
 
@@ -363,6 +398,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0,
             Platform::Linux => 0,
+            Platform::Windows => 0,
         }
     }
 
@@ -371,6 +407,7 @@ impl Platform {
         match self {
             Platform::MacOS => 24,
             Platform::Linux => 32,
+            Platform::Windows => 32,
         }
     }
 
@@ -379,6 +416,7 @@ impl Platform {
         match self {
             Platform::MacOS => 6,
             Platform::Linux => 20,
+            Platform::Windows => 20,
         }
     }
 
@@ -387,6 +425,7 @@ impl Platform {
         match self {
             Platform::MacOS => 112,
             Platform::Linux => 56,
+            Platform::Windows => 56,
         }
     }
 
@@ -395,6 +434,7 @@ impl Platform {
         match self {
             Platform::MacOS => 104,
             Platform::Linux => 64,
+            Platform::Windows => 64,
         }
     }
 
@@ -406,6 +446,7 @@ impl Platform {
         match self {
             Platform::MacOS => format!("ldrsw {}, [{}, #{}]", dest_x, base, offset),
             Platform::Linux => format!("ldr {}, [{}, #{}]", dest_x, base, offset),
+            Platform::Windows => format!("ldr {}, [{}, #{}]", dest_x, base, offset),
         }
     }
 
@@ -416,6 +457,7 @@ impl Platform {
         match self {
             Platform::MacOS => format!("ldrsw {}, [{}, #{}]", dest_x, base, offset),
             Platform::Linux => format!("ldr {}, [{}, #{}]", dest_x, base, offset),
+            Platform::Windows => format!("ldr {}, [{}, #{}]", dest_x, base, offset),
         }
     }
 
@@ -426,6 +468,7 @@ impl Platform {
         match self {
             Platform::MacOS => format!("ldrh {}, [{}, #{}]", dest_w, base, offset),
             Platform::Linux => format!("ldr {}, [{}, #{}]", dest_w, base, offset),
+            Platform::Windows => format!("ldr {}, [{}, #{}]", dest_w, base, offset),
         }
     }
 
@@ -437,6 +480,7 @@ impl Platform {
         match self {
             Platform::MacOS => -2,
             Platform::Linux => -100,
+            Platform::Windows => -100,
         }
     }
 
@@ -448,6 +492,7 @@ impl Platform {
         match self {
             Platform::MacOS => -1,
             Platform::Linux => 0x3FFF_FFFF,
+            Platform::Windows => 0x3FFF_FFFF,
         }
     }
 
@@ -456,6 +501,7 @@ impl Platform {
         match self {
             Platform::MacOS => 21,
             Platform::Linux => 19,
+            Platform::Windows => 19,
         }
     }
 
@@ -464,6 +510,7 @@ impl Platform {
         match self {
             Platform::MacOS => 32,
             Platform::Linux => 8,
+            Platform::Windows => 8,
         }
     }
 
@@ -482,6 +529,7 @@ impl Platform {
         match self {
             Platform::MacOS => 2,
             Platform::Linux => 0,
+            Platform::Windows => 0,
         }
     }
 
@@ -536,7 +584,9 @@ impl Target {
     ///
     /// Supported values: `macos-aarch64`, `macos-arm64`, `aarch64-apple-darwin`,
     /// `macos-x86_64`, `x86_64-apple-darwin`, `linux-aarch64`, `linux-arm64`,
-    /// `aarch64-unknown-linux-gnu`, `linux-x86_64`, `x86_64-unknown-linux-gnu`.
+    /// `aarch64-unknown-linux-gnu`, `linux-x86_64`, `x86_64-unknown-linux-gnu`,
+    /// `windows-x86_64`, `x86_64-pc-windows-gnu`. elephc links Windows targets via
+    /// MinGW (GNU ABI / msvcrt), so the MSVC triple is intentionally not accepted.
     /// Returns an error for any unrecognized string.
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
@@ -552,8 +602,11 @@ impl Target {
             "linux-x86_64" | "x86_64-unknown-linux-gnu" => {
                 Ok(Self::new(Platform::Linux, Arch::X86_64))
             }
+            "windows-x86_64" | "x86_64-pc-windows-gnu" => {
+                Ok(Self::new(Platform::Windows, Arch::X86_64))
+            }
             _ => Err(format!(
-                "unsupported target '{}'; expected one of: macos-aarch64, macos-x86_64, linux-aarch64, linux-x86_64",
+                "unsupported target '{}'; expected one of: macos-aarch64, macos-x86_64, linux-aarch64, linux-x86_64, windows-x86_64",
                 value
             )),
         }
@@ -568,6 +621,8 @@ impl Target {
             (Platform::MacOS, Arch::X86_64) => "macos-x86_64",
             (Platform::Linux, Arch::AArch64) => "linux-aarch64",
             (Platform::Linux, Arch::X86_64) => "linux-x86_64",
+            (Platform::Windows, Arch::X86_64) => "windows-x86_64",
+            (Platform::Windows, Arch::AArch64) => "windows-aarch64",
         }
     }
 
@@ -580,6 +635,7 @@ impl Target {
             (Platform::MacOS, Arch::AArch64)
                 | (Platform::Linux, Arch::AArch64)
                 | (Platform::Linux, Arch::X86_64)
+                | (Platform::Windows, Arch::X86_64)
         )
     }
 
@@ -615,6 +671,7 @@ impl Target {
         match (self.platform, self.arch) {
             (Platform::MacOS, Arch::AArch64) => asm.to_string(),
             (Platform::Linux, Arch::AArch64) => transform_for_linux(asm),
+            (Platform::Windows, Arch::X86_64) => transform_for_windows(asm),
             _ => asm.to_string(),
         }
     }
@@ -626,6 +683,7 @@ impl Target {
         match (self.platform, self.arch) {
             (Platform::MacOS, Arch::AArch64) => ";",
             (Platform::Linux, Arch::AArch64) => "//",
+            (Platform::Windows, Arch::AArch64) => "//",
             (_, Arch::X86_64) => "#",
         }
     }
@@ -704,6 +762,7 @@ impl Target {
         match self.platform {
             Platform::MacOS => format!("_{}", name),
             Platform::Linux => name.to_string(),
+            Platform::Windows => name.to_string(),
         }
     }
 
@@ -711,6 +770,7 @@ impl Target {
     ///
     /// On macOS always uses `as`. On Linux ARM64 uses `as` if a native toolchain
     /// is available, otherwise `aarch64-linux-gnu-as`. On Linux x86_64 uses `as`.
+    /// On Windows x86_64 uses `x86_64-w64-mingw32-as` (MinGW GAS).
     pub fn assembler_cmd(&self) -> &'static str {
         match (self.platform, self.arch) {
             (Platform::MacOS, Arch::AArch64 | Arch::X86_64) => "as",
@@ -722,6 +782,10 @@ impl Target {
                 }
             }
             (Platform::Linux, Arch::X86_64) => "as",
+            (Platform::Windows, Arch::X86_64) => "x86_64-w64-mingw32-as",
+            (Platform::Windows, Arch::AArch64) => {
+                panic!("Windows ARM64 target is not yet supported (see issue #379)")
+            }
         }
     }
 
@@ -729,6 +793,7 @@ impl Target {
     ///
     /// On macOS always uses `ld`. On Linux ARM64 uses `gcc` if a native toolchain
     /// is available, otherwise `aarch64-linux-gnu-gcc`. On Linux x86_64 uses `gcc`.
+    /// On Windows x86_64 uses `x86_64-w64-mingw32-gcc` (MinGW GCC).
     pub fn linker_cmd(&self) -> &'static str {
         match (self.platform, self.arch) {
             (Platform::MacOS, Arch::AArch64 | Arch::X86_64) => "ld",
@@ -740,6 +805,10 @@ impl Target {
                 }
             }
             (Platform::Linux, Arch::X86_64) => "gcc",
+            (Platform::Windows, Arch::X86_64) => "x86_64-w64-mingw32-gcc",
+            (Platform::Windows, Arch::AArch64) => {
+                panic!("Windows ARM64 target is not yet supported (see issue #379)")
+            }
         }
     }
 }

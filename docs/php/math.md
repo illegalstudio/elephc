@@ -24,6 +24,7 @@ sidebar:
 | `rand()` | `rand([$min, $max]): int` | Random integer |
 | `mt_rand()` | `mt_rand([$min, $max]): int` | Alias for rand() |
 | `random_int()` | `random_int($min, $max): int` | Cryptographic random |
+| `random_bytes()` | `random_bytes(int $length): string` | Cryptographically secure random bytes (binary string) |
 | `sin()` | `sin($angle): float` | Sine (radians) |
 | `cos()` | `cos($angle): float` | Cosine (radians) |
 | `tan()` | `tan($angle): float` | Tangent (radians) |

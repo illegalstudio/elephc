@@ -2,7 +2,7 @@
 title: "wordwrap()"
 description: "Lowers `wordwrap(string, width?, break?, cut?)` through the shared runtime helper."
 sidebar:
-  order: 404
+  order: 405
 ---
 
 ## wordwrap()

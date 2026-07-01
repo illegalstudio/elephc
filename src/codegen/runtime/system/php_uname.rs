@@ -34,6 +34,7 @@ fn uts_field_len(platform: Platform) -> usize {
     match platform {
         Platform::MacOS => 256,
         Platform::Linux => 65,
+        Platform::Windows => 65, // msvcrt utsname uses 65-byte fields, same as Linux
     }
 }
 

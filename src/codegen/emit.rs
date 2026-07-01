@@ -111,11 +111,15 @@ impl Emitter {
     /// Emit a label that is visible across object files (for two-object linking).
     /// On Linux, places each global symbol in its own `.text.<name>` section so
     /// that `--gc-sections` can eliminate unreachable helpers at link time.
+    /// On Windows, emits `.globl` only (PE/COFF does not support per-function sections via GAS).
     pub fn label_global(&mut self, name: &str) {
         if self.platform == Platform::Linux {
             let _ = writeln!(self.buf, ".section .text.{},\"ax\",@progbits", name);
             let _ = writeln!(self.buf, ".globl {}", name);
             let _ = writeln!(self.buf, ".type {}, %function", name);
+            let _ = writeln!(self.buf, "{}:", name);
+        } else if self.platform == Platform::Windows {
+            let _ = writeln!(self.buf, ".globl {}", name);
             let _ = writeln!(self.buf, "{}:", name);
         } else {
             let _ = writeln!(self.buf, ".globl {}", name);
@@ -166,6 +170,7 @@ impl Emitter {
         match self.platform {
             Platform::MacOS => self.instruction(&format!("adrp {}, {}@PAGE", reg, sym)),
             Platform::Linux => self.instruction(&format!("adrp {}, {}", reg, sym)),
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
 
@@ -176,6 +181,7 @@ impl Emitter {
         match self.platform {
             Platform::MacOS => self.instruction(&format!("add {}, {}, {}@PAGEOFF", dst, src, sym)),
             Platform::Linux => self.instruction(&format!("add {}, {}, :lo12:{}", dst, src, sym)),
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
 
@@ -187,6 +193,7 @@ impl Emitter {
                 self.instruction(&format!("ldr {}, [{}, {}@PAGEOFF]", reg, base, sym))
             }
             Platform::Linux => self.instruction(&format!("ldr {}, [{}, :lo12:{}]", reg, base, sym)),
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
 
@@ -197,6 +204,7 @@ impl Emitter {
         match self.platform {
             Platform::MacOS => self.instruction(&format!("adrp {}, {}@GOTPAGE", reg, sym)),
             Platform::Linux => self.instruction(&format!("adrp {}, :got:{}", reg, sym)),
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
 
@@ -210,6 +218,7 @@ impl Emitter {
             Platform::Linux => {
                 self.instruction(&format!("ldr {}, [{}, :got_lo12:{}]", reg, base, sym))
             }
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
 
@@ -229,6 +238,7 @@ impl Emitter {
                 let target = self.target;
                 target.emit_linux_syscall(self, macos_num);
             }
+            Platform::Windows => panic!("Windows does not use AArch64 syscalls (see issue #379)"),
         }
     }
 
@@ -240,22 +250,33 @@ impl Emitter {
             (Platform::MacOS, Arch::AArch64) => self.instruction(&format!("bl _{}", func)),
             (Platform::Linux, Arch::AArch64) => self.instruction(&format!("bl {}", func)),
             (Platform::Linux, Arch::X86_64) => self.instruction(&format!("call {}", func)),
+            (Platform::Windows, Arch::X86_64) => self.instruction(&format!("call {}", func)),
             (Platform::MacOS, Arch::X86_64) => {
                 panic!("C symbol calls are not implemented yet for target macos-x86_64");
+            }
+            (Platform::Windows, Arch::AArch64) => {
+                panic!("Windows ARM64 target is not yet supported (see issue #379)");
             }
         }
     }
 
     // ── Platform-aware entry point ───────────────────────────────────
 
-    /// Emit the program entry point label: `_main` (macOS) or `main` (Linux).
+    /// Emit the program entry point label: `_main` (macOS), `main` (Linux),
+    /// or `__elephc_main` (Windows — the Win32 shim emits the real `main` wrapper).
     pub fn entry_label(&mut self) {
         match self.target.arch {
             Arch::AArch64 => match self.platform {
                 Platform::MacOS => self.label_global("_main"),
                 Platform::Linux => self.label_global("main"),
+                Platform::Windows => {
+                    panic!("Windows ARM64 target is not yet supported (see issue #379)");
+                }
             },
-            Arch::X86_64 => self.label_global("main"),
+            Arch::X86_64 => match self.platform {
+                Platform::Windows => self.label_global("__elephc_main"),
+                _ => self.label_global("main"),
+            },
         }
     }
 }

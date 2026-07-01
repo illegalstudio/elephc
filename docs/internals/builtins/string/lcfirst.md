@@ -2,7 +2,7 @@
 title: "lcfirst() — internals"
 description: "Compiler internals for lcfirst(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 366
+  order: 367
 ---
 
 ## `lcfirst()` — internals

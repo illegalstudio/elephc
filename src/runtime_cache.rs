@@ -59,8 +59,14 @@ pub fn prepare_runtime_object(
     fs::create_dir_all(&cache_dir)
         .map_err(|err| format!("failed to create runtime cache '{}': {}", cache_dir.display(), err))?;
 
-    let runtime_asm =
+    let mut runtime_asm =
         codegen::generate_runtime_with_features_pic(heap_size, target, features, pic);
+    // On Windows, rewrite the shared x86_64 runtime's raw `mov eax, N; syscall`
+    // sequences into `call __rt_sys_<name>` shim calls before hashing, so the cache
+    // key reflects the final assembled bytes. Linux/macOS runtime asm is untouched.
+    if target.platform == Platform::Windows {
+        runtime_asm = codegen::platform::transform_for_windows(&runtime_asm);
+    }
     let runtime_hash = runtime_asm_hash(&runtime_asm);
     let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target, runtime_hash));
     if cache_path.exists() {
@@ -105,22 +111,28 @@ pub fn prepare_runtime_object(
             err
         )
     })?;
-    let _ = fs::remove_file(&temp_asm_path);
     if !assembler_status.success() {
         let _ = fs::remove_file(&temp_obj_path);
         return Err(format!(
-            "runtime assembler failed while building '{}'",
-            cache_path.display()
+            "runtime assembler failed while building '{}' (asm left at {})",
+            cache_path.display(),
+            temp_asm_path.display()
         ));
     }
 
     match fs::rename(&temp_obj_path, &cache_path) {
-        Ok(()) => Ok(PreparedRuntimeObject {
-            path: cache_path,
-            status: RuntimeCacheStatus::Miss,
-        }),
+        Ok(()) => {
+            // Object is safely in place — remove the temporary assembly source.
+            let _ = fs::remove_file(&temp_asm_path);
+            Ok(PreparedRuntimeObject {
+                path: cache_path,
+                status: RuntimeCacheStatus::Miss,
+            })
+        }
         Err(_err) if cache_path.exists() => {
+            // A concurrent run already produced the object — drop our temporaries.
             let _ = fs::remove_file(&temp_obj_path);
+            let _ = fs::remove_file(&temp_asm_path);
             Ok(PreparedRuntimeObject {
                 path: cache_path,
                 status: RuntimeCacheStatus::Hit,

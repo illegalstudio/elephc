@@ -55,3 +55,4 @@ mod iterators;
 mod spl;
 mod generators;
 mod dead_strip;
+mod windows_pe;

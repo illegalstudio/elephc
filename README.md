@@ -21,11 +21,11 @@
 </p>
 
 <p align="center">
-  <strong>3 native targets &middot; no Zend Engine &middot; zero runtime dependencies &middot; single standalone binary</strong>
+  <strong>4 native targets &middot; no Zend Engine &middot; zero runtime dependencies &middot; single standalone binary</strong>
 </p>
 
 <p align="center">
-  A PHP-to-native compiler that takes a subset of PHP and compiles it directly to native assembly, producing standalone binaries for <strong>macOS ARM64</strong>, <strong>Linux ARM64</strong>, and <strong>Linux x86_64</strong>. No opcode fallback, just real machine code.
+  A PHP-to-native compiler that takes a subset of PHP and compiles it directly to native assembly, producing standalone binaries for <strong>macOS ARM64</strong>, <strong>Linux ARM64</strong>, and <strong>Linux x86_64</strong>, plus an experimental <strong>Windows x86_64</strong> cross-compilation target. No opcode fallback, just real machine code.
 </p>
 
 <p align="center">
@@ -187,9 +187,10 @@ elephc --no-ir-opt hot.php
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
 # Explicit target selection
-# Supported targets today: macos-aarch64, linux-aarch64, linux-x86_64
+# Supported targets today: macos-aarch64, linux-aarch64, linux-x86_64, windows-x86_64 (experimental)
 elephc --target linux-aarch64 hello.php
 elephc --target linux-x86_64 hello.php
+elephc --target windows-x86_64 hello.php  # experimental cross-compilation, requires MinGW-w64
 
 # Compile a standalone prefork HTTP server binary
 elephc --web app.php

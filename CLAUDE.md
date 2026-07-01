@@ -6,7 +6,7 @@ A PHP-to-native compiler written in Rust. Compiles a static subset of PHP to nat
 
 ## Supported target policy
 
-All supported targets are first-class targets. The supported target matrix is currently `macos-aarch64`, `linux-aarch64`, and `linux-x86_64`.
+All supported targets are first-class targets. The supported target matrix is currently `macos-aarch64`, `linux-aarch64`, and `linux-x86_64`, plus `windows-x86_64` as a newly added, experimental cross-compilation target (runtime shim coverage and end-to-end execution testing are not yet at parity with the other three).
 
 Do not design or land codegen/runtime features as ARM64-first with x86_64 treated as a later port. New features, builtins, runtime helpers, optimizer assumptions that affect emitted code, ABI behavior, and ownership/GC paths must either support every supported target in the same change or clearly isolate an intentionally unsupported path with diagnostics, tests, and documentation. A feature is not considered done while any supported target has a missing runtime symbol, reduced semantics, stale documentation, or an untested target-specific lowering path.
 

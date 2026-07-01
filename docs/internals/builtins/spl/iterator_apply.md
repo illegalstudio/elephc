@@ -2,7 +2,7 @@
 title: "iterator_apply() — internals"
 description: "Compiler internals for iterator_apply(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 319
+  order: 320
 ---
 
 ## `iterator_apply()` — internals

@@ -11,8 +11,10 @@
 mod linux_transform;
 mod target;
 mod toolchain;
+mod windows_transform;
 
 pub use target::{Arch, Platform, Target};
+pub use windows_transform::transform_for_windows;
 
 #[cfg(test)]
 mod tests {
