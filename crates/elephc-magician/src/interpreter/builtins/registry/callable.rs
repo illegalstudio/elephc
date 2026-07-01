@@ -1394,6 +1394,21 @@ fn eval_static_method_call_user_func_result(
             values,
         )?
     else {
+        if context
+            .native_static_method_signature(&native_class, method_name)
+            .is_some()
+        {
+            return eval_native_static_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
+                &native_class,
+                method_name,
+                evaluated_args,
+                None,
+                Some(&called_class),
+                context,
+                values,
+            )
+            .map(Some);
+        }
         return Ok(None);
     };
     if !is_static || is_abstract {
