@@ -7718,6 +7718,17 @@ fn eval_closure_bind_target(
     match target {
         EvalClosureObjectTarget::Named(name) | EvalClosureObjectTarget::BoundNamed { name, .. } => {
             let Some(closure) = context.closure(&name) else {
+                if eval_function_probe_exists(context, &name) {
+                    return eval_closure_object_from_target(
+                        EvalClosureObjectTarget::BoundNamed {
+                            name,
+                            bound_this: Some(bound_this),
+                            bound_scope,
+                        },
+                        context,
+                        values,
+                    );
+                }
                 return eval_closure_call_warning_null(
                     "Cannot rebind scope of closure created from function",
                     values,
