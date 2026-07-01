@@ -220,6 +220,7 @@ enum EvalReflectionFunctionMethodTarget {
         closure_captures: Vec<EvalClosureCaptureBinding>,
         parameters: Vec<EvalReflectionParameterMetadata>,
         source_location: Option<EvalSourceLocation>,
+        closure_target: Option<EvalClosureObjectTarget>,
         is_variadic: bool,
         is_static: bool,
         is_closure: bool,
@@ -1376,9 +1377,19 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
             eval_reflection_bind_no_args(evaluated_args)?;
             eval_reflection_function_closure_used_variables_result(&target, values).map(Some)
         }
-        "getclosurethis" | "getclosurescopeclass" | "getclosurecalledclass" => {
+        "getclosurethis" => {
             eval_reflection_bind_no_args(evaluated_args)?;
-            values.null().map(Some)
+            eval_reflection_function_closure_this_result(&target, values).map(Some)
+        }
+        "getclosurescopeclass" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            eval_reflection_function_closure_scope_class_result(&target, context, values)
+                .map(Some)
+        }
+        "getclosurecalledclass" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            eval_reflection_function_closure_called_class_result(&target, context, values)
+                .map(Some)
         }
         _ => Ok(None),
     }
@@ -2817,6 +2828,15 @@ fn eval_reflection_class_owner_object_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let Some(metadata) = eval_reflection_class_like_attributes(reflected_name, context) else {
+        if reflected_name
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("Closure")
+        {
+            return eval_reflection_builtin_closure_class_object_result(
+                owner_kind, context, values,
+            )
+            .map(Some);
+        }
         let Some((flags, modifiers)) = eval_reflection_aot_class_flags(reflected_name, values)?
         else {
             return Ok(None);
@@ -2885,6 +2905,38 @@ fn eval_reflection_class_owner_object_result(
         values,
     )
     .map(Some)
+}
+
+/// Builds the minimal ReflectionClass metadata object for PHP's builtin Closure class.
+fn eval_reflection_builtin_closure_class_object_result(
+    owner_kind: u64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let flags = EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_INTERNAL;
+    let modifiers = eval_reflection_class_modifiers(true, false, false, false);
+    eval_reflection_owner_object(
+        owner_kind,
+        "Closure",
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        None,
+        &[],
+        None,
+        None,
+        None,
+        None,
+        flags,
+        modifiers,
+        0,
+        None,
+        None,
+        context,
+        values,
+    )
 }
 
 /// Builds an eval-backed `ReflectionEnum` object for a declared enum.
@@ -3151,7 +3203,11 @@ fn eval_reflection_function_new(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("function")], evaluated_args)?;
-    let requested_name = eval_reflection_function_name_arg(args[0], context, values)?;
+    let closure_target = eval_reflection_function_closure_target_arg(args[0], context, values)?;
+    let requested_name = match closure_target.as_ref() {
+        Some(target) => eval_reflection_function_closure_target_name(target),
+        None => eval_reflection_function_name_arg(args[0], context, values)?,
+    };
     let lookup_name = requested_name.trim_start_matches('\\').to_ascii_lowercase();
     if let Some(closure) = context.closure(&requested_name).cloned() {
         let function = closure.function();
@@ -3177,6 +3233,14 @@ fn eval_reflection_function_new(
             context,
             values,
         )
+        .and_then(|object| {
+            eval_reflection_attach_function_closure_target(
+                object,
+                closure_target,
+                context,
+                values,
+            )
+        })
         .map(Some);
     }
     if let Some(function) = context.function(&lookup_name).cloned() {
@@ -3202,6 +3266,14 @@ fn eval_reflection_function_new(
             context,
             values,
         )
+        .and_then(|object| {
+            eval_reflection_attach_function_closure_target(
+                object,
+                closure_target,
+                context,
+                values,
+            )
+        })
         .map(Some);
     }
     if let Some(function) = context.native_function(&lookup_name) {
@@ -3216,9 +3288,75 @@ fn eval_reflection_function_new(
             context,
             values,
         )
+        .and_then(|object| {
+            eval_reflection_attach_function_closure_target(
+                object,
+                closure_target,
+                context,
+                values,
+            )
+        })
+        .map(Some);
+    }
+    if closure_target.is_some() {
+        return eval_reflection_function_object_result(
+            &requested_name,
+            &[],
+            &[],
+            0,
+            context,
+            values,
+        )
+        .and_then(|object| {
+            eval_reflection_attach_function_closure_target(
+                object,
+                closure_target,
+                context,
+                values,
+            )
+        })
         .map(Some);
     }
     Ok(None)
+}
+
+/// Returns the retained callable target when a ReflectionFunction argument is a Closure object.
+fn eval_reflection_function_closure_target_arg(
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalClosureObjectTarget>, EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_OBJECT {
+        return Ok(None);
+    }
+    let identity = values.object_identity(value)?;
+    Ok(context.closure_object_target(identity).cloned())
+}
+
+/// Returns the function-like name exposed for a Closure-backed ReflectionFunction.
+fn eval_reflection_function_closure_target_name(target: &EvalClosureObjectTarget) -> String {
+    match target {
+        EvalClosureObjectTarget::Named(name)
+        | EvalClosureObjectTarget::BoundNamed { name, .. } => name.clone(),
+        EvalClosureObjectTarget::InvokableObject { .. } => String::from("__invoke"),
+        EvalClosureObjectTarget::ObjectMethod { method, .. }
+        | EvalClosureObjectTarget::StaticMethod { method, .. } => method.clone(),
+    }
+}
+
+/// Attaches original Closure target metadata to a synthetic ReflectionFunction object.
+fn eval_reflection_attach_function_closure_target(
+    object: RuntimeCellHandle,
+    closure_target: Option<EvalClosureObjectTarget>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(closure_target) = closure_target else {
+        return Ok(object);
+    };
+    let identity = values.object_identity(object)?;
+    context.register_eval_reflection_function_closure_target(identity, closure_target);
+    Ok(object)
 }
 
 /// Returns parameter names for a registered native function, filling missing bridge names.
@@ -5208,6 +5346,16 @@ fn eval_reflection_full_class_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("Closure")
+    {
+        return eval_reflection_builtin_closure_class_object_result(
+            EVAL_REFLECTION_OWNER_CLASS,
+            context,
+            values,
+        );
+    }
     let Some(metadata) = eval_reflection_class_like_attributes(class_name, context) else {
         let Some((flags, modifiers)) = eval_reflection_aot_class_flags(class_name, values)? else {
             return values.bool_value(false);
@@ -9379,6 +9527,9 @@ fn eval_reflection_function_method_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalReflectionFunctionMethodTarget>, EvalStatus> {
     if let Some(name) = context.eval_reflection_function_name(identity) {
+        let closure_target = context
+            .eval_reflection_function_closure_target(identity)
+            .cloned();
         if let Some(closure) = context.closure(name) {
             let function = closure.function();
             let is_variadic = function.parameter_is_variadic().iter().any(|flag| *flag);
@@ -9407,6 +9558,7 @@ fn eval_reflection_function_method_target(
                 closure_captures: closure.captures().to_vec(),
                 parameters,
                 source_location,
+                closure_target,
                 is_variadic,
                 is_static: closure.is_static(),
                 is_closure: true,
@@ -9445,9 +9597,10 @@ fn eval_reflection_function_method_target(
                 closure_captures: Vec::new(),
                 parameters,
                 source_location,
+                closure_target: closure_target.clone(),
                 is_variadic,
-                is_static: false,
-                is_closure: false,
+                is_static: eval_reflection_closure_target_is_static(closure_target.as_ref()),
+                is_closure: closure_target.is_some(),
                 is_deprecated,
                 return_type_metadata,
             }));
@@ -9466,9 +9619,10 @@ fn eval_reflection_function_method_target(
                 closure_captures: Vec::new(),
                 parameters,
                 source_location: None,
+                closure_target: closure_target.clone(),
                 is_variadic,
-                is_static: false,
-                is_closure: false,
+                is_static: eval_reflection_closure_target_is_static(closure_target.as_ref()),
+                is_closure: closure_target.is_some(),
                 is_deprecated: false,
                 return_type_metadata,
             }));
@@ -9480,9 +9634,10 @@ fn eval_reflection_function_method_target(
             closure_captures: Vec::new(),
             parameters: Vec::new(),
             source_location: None,
+            closure_target: closure_target.clone(),
             is_variadic: false,
-            is_static: false,
-            is_closure: false,
+            is_static: eval_reflection_closure_target_is_static(closure_target.as_ref()),
+            is_closure: closure_target.is_some(),
             is_deprecated: false,
             return_type_metadata: None,
         }));
@@ -9816,6 +9971,11 @@ fn eval_reflection_function_method_is_static(target: &EvalReflectionFunctionMeth
     }
 }
 
+/// Returns whether retained Closure target metadata represents a static callable.
+fn eval_reflection_closure_target_is_static(target: Option<&EvalClosureObjectTarget>) -> bool {
+    matches!(target, Some(EvalClosureObjectTarget::StaticMethod { .. }))
+}
+
 /// Returns whether the reflected function-like target carries `#[Deprecated]`.
 fn eval_reflection_function_method_is_deprecated(
     target: &EvalReflectionFunctionMethodTarget,
@@ -9846,6 +10006,158 @@ fn eval_reflection_function_closure_used_variables_result(
         result = values.array_set(result, key, value)?;
     }
     Ok(result)
+}
+
+/// Builds `ReflectionFunction::getClosureThis()` from retained Closure target metadata.
+fn eval_reflection_function_closure_this_result(
+    target: &EvalReflectionFunctionMethodTarget,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(target) = eval_reflection_function_closure_target(target) else {
+        return values.null();
+    };
+    match target {
+        EvalClosureObjectTarget::BoundNamed {
+            bound_this: Some(object),
+            ..
+        }
+        | EvalClosureObjectTarget::InvokableObject { object }
+        | EvalClosureObjectTarget::ObjectMethod { object, .. } => values.retain(*object),
+        EvalClosureObjectTarget::Named(_)
+        | EvalClosureObjectTarget::BoundNamed {
+            bound_this: None, ..
+        }
+        | EvalClosureObjectTarget::StaticMethod { .. } => values.null(),
+    }
+}
+
+/// Builds `ReflectionFunction::getClosureScopeClass()` from retained Closure metadata.
+fn eval_reflection_function_closure_scope_class_result(
+    target: &EvalReflectionFunctionMethodTarget,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let class_name =
+        eval_reflection_function_closure_scope_class_name(target, context, values)?;
+    eval_reflection_function_closure_class_object_result(class_name, context, values)
+}
+
+/// Builds `ReflectionFunction::getClosureCalledClass()` from retained Closure metadata.
+fn eval_reflection_function_closure_called_class_result(
+    target: &EvalReflectionFunctionMethodTarget,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let class_name =
+        eval_reflection_function_closure_called_class_name(target, context, values)?;
+    eval_reflection_function_closure_class_object_result(class_name, context, values)
+}
+
+/// Returns the retained callable target for a Closure-backed ReflectionFunction.
+fn eval_reflection_function_closure_target(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> Option<&EvalClosureObjectTarget> {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function { closure_target, .. } => {
+            closure_target.as_ref()
+        }
+        EvalReflectionFunctionMethodTarget::Method { .. } => None,
+    }
+}
+
+/// Resolves the PHP closure scope class name for retained Closure target metadata.
+fn eval_reflection_function_closure_scope_class_name(
+    target: &EvalReflectionFunctionMethodTarget,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let Some(target) = eval_reflection_function_closure_target(target) else {
+        return Ok(None);
+    };
+    match target {
+        EvalClosureObjectTarget::Named(_) => Ok(None),
+        EvalClosureObjectTarget::BoundNamed {
+            name,
+            bound_this,
+            bound_scope,
+        } => {
+            if context.closure(name).is_none() {
+                return Ok(bound_this.map(|_| String::from("Closure")));
+            }
+            if let Some(bound_scope) = bound_scope {
+                return Ok(Some(bound_scope.clone()));
+            }
+            match bound_this {
+                Some(object) => eval_closure_bound_object_class_name(*object, context, values)
+                    .map(Some),
+                None => Ok(None),
+            }
+        }
+        EvalClosureObjectTarget::InvokableObject { object }
+        | EvalClosureObjectTarget::ObjectMethod { object, .. } => {
+            eval_closure_bound_object_class_name(*object, context, values).map(Some)
+        }
+        EvalClosureObjectTarget::StaticMethod { class_name, .. } => {
+            Ok(Some(class_name.trim_start_matches('\\').to_string()))
+        }
+    }
+}
+
+/// Resolves the PHP closure called class name for retained Closure target metadata.
+fn eval_reflection_function_closure_called_class_name(
+    target: &EvalReflectionFunctionMethodTarget,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let Some(target) = eval_reflection_function_closure_target(target) else {
+        return Ok(None);
+    };
+    match target {
+        EvalClosureObjectTarget::Named(_) => Ok(None),
+        EvalClosureObjectTarget::BoundNamed {
+            bound_this,
+            bound_scope,
+            ..
+        } => match bound_this {
+            Some(object) => eval_closure_bound_object_class_name(*object, context, values)
+                .map(Some),
+            None => Ok(bound_scope.clone()),
+        },
+        EvalClosureObjectTarget::InvokableObject { object } => {
+            eval_closure_bound_object_class_name(*object, context, values).map(Some)
+        }
+        EvalClosureObjectTarget::ObjectMethod {
+            object,
+            called_class,
+            ..
+        } => match called_class {
+            Some(called_class) => Ok(Some(called_class.clone())),
+            None => eval_closure_bound_object_class_name(*object, context, values).map(Some),
+        },
+        EvalClosureObjectTarget::StaticMethod {
+            class_name,
+            called_class,
+            ..
+        } => Ok(Some(
+            called_class
+                .as_deref()
+                .unwrap_or(class_name)
+                .trim_start_matches('\\')
+                .to_string(),
+        )),
+    }
+}
+
+/// Materializes a nullable ReflectionClass result for Closure scope metadata.
+fn eval_reflection_function_closure_class_object_result(
+    class_name: Option<String>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(class_name) = class_name else {
+        return values.null();
+    };
+    eval_reflection_full_class_object_result(&class_name, context, values)
 }
 
 /// Returns the retained return type metadata for a reflected function or method.

@@ -2260,3 +2260,78 @@ return is_null(Closure::bind($eval, null, "EvalBindFromCallableScopeBox")) ? "f"
 
     assert_eq!(out, "A:x|A:y|a|b|E:u|E:v|e|f");
 }
+
+/// Verifies ReflectionFunction reports retained metadata for Closure callables.
+#[test]
+fn test_eval_reflection_function_reports_from_callable_closure_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_reflect_closure_meta_aot_function(): string {
+    return "aot";
+}
+
+class EvalReflectClosureMetaAotBox {
+    public function method(): string { return "method"; }
+    public static function stat(): string { return "static"; }
+    public function __invoke(): string { return "invoke"; }
+}
+
+echo eval('function eval_reflect_closure_meta_dump(string $label, $closure): string {
+    try {
+        $ref = new ReflectionFunction($closure);
+        $this = $ref->getClosureThis();
+        $scope = $ref->getClosureScopeClass();
+        $called = $ref->getClosureCalledClass();
+        return $label . ":" .
+            (is_object($this) ? get_class($this) : "null") . ":" .
+            ($scope ? $scope->getName() : "null") . ":" .
+            ($called ? $called->getName() : "null") . ":" .
+            ($ref->isStatic() ? "S" : "s");
+    } catch (Throwable $e) {
+        return $label . ":ERR:" . get_class($e) . ":" . $e->getMessage();
+    }
+}
+
+function eval_reflect_closure_meta_eval_function(): string {
+    return "eval";
+}
+
+class EvalReflectClosureMetaEvalBox {
+    public function method(): string { return "method"; }
+    public static function stat(): string { return "static"; }
+    public function __invoke(): string { return "invoke"; }
+}
+
+$aot = new EvalReflectClosureMetaAotBox();
+$eval = new EvalReflectClosureMetaEvalBox();
+
+$out = [];
+$out[] = eval_reflect_closure_meta_dump(
+    "aot-fn",
+    Closure::bind(Closure::fromCallable("eval_reflect_closure_meta_aot_function"), $aot)
+);
+$out[] = eval_reflect_closure_meta_dump(
+    "eval-fn",
+    Closure::bind(Closure::fromCallable("eval_reflect_closure_meta_eval_function"), $eval)
+);
+$out[] = eval_reflect_closure_meta_dump("aot-method", Closure::fromCallable([$aot, "method"]));
+$out[] = eval_reflect_closure_meta_dump("eval-method", Closure::fromCallable([$eval, "method"]));
+$out[] = eval_reflect_closure_meta_dump("aot-invoke", Closure::fromCallable($aot));
+$out[] = eval_reflect_closure_meta_dump(
+    "eval-static",
+    Closure::fromCallable(["EvalReflectClosureMetaEvalBox", "stat"])
+);
+return implode("|", $out);');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "aot-fn:EvalReflectClosureMetaAotBox:Closure:EvalReflectClosureMetaAotBox:s|\
+eval-fn:EvalReflectClosureMetaEvalBox:Closure:EvalReflectClosureMetaEvalBox:s|\
+aot-method:EvalReflectClosureMetaAotBox:EvalReflectClosureMetaAotBox:EvalReflectClosureMetaAotBox:s|\
+eval-method:EvalReflectClosureMetaEvalBox:EvalReflectClosureMetaEvalBox:EvalReflectClosureMetaEvalBox:s|\
+aot-invoke:EvalReflectClosureMetaAotBox:EvalReflectClosureMetaAotBox:EvalReflectClosureMetaAotBox:s|\
+eval-static:null:EvalReflectClosureMetaEvalBox:EvalReflectClosureMetaEvalBox:S"
+    );
+}

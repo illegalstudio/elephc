@@ -905,6 +905,7 @@ pub struct ElephcEvalContext {
     eval_reflection_attributes: HashMap<u64, EvalReflectionAttributeMetadata>,
     eval_reflection_classes: HashMap<u64, String>,
     eval_reflection_functions: HashMap<u64, String>,
+    eval_reflection_function_closure_targets: HashMap<u64, EvalClosureObjectTarget>,
     eval_reflection_methods: HashMap<u64, (String, String)>,
     eval_reflection_properties: HashMap<u64, (String, String)>,
     eval_dynamic_reflection_properties: HashSet<u64>,
@@ -977,6 +978,7 @@ impl ElephcEvalContext {
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
             eval_reflection_functions: HashMap::new(),
+            eval_reflection_function_closure_targets: HashMap::new(),
             eval_reflection_methods: HashMap::new(),
             eval_reflection_properties: HashMap::new(),
             eval_dynamic_reflection_properties: HashSet::new(),
@@ -1050,6 +1052,7 @@ impl ElephcEvalContext {
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
             eval_reflection_functions: HashMap::new(),
+            eval_reflection_function_closure_targets: HashMap::new(),
             eval_reflection_methods: HashMap::new(),
             eval_reflection_properties: HashMap::new(),
             eval_dynamic_reflection_properties: HashSet::new(),
@@ -1952,6 +1955,25 @@ impl ElephcEvalContext {
         self.eval_reflection_functions
             .get(&identity)
             .map(String::as_str)
+    }
+
+    /// Records the callable target behind a `Closure` reflected as a function.
+    pub fn register_eval_reflection_function_closure_target(
+        &mut self,
+        identity: u64,
+        target: EvalClosureObjectTarget,
+    ) {
+        self.eval_reflection_function_closure_targets
+            .insert(identity, target);
+    }
+
+    /// Returns the callable target retained for a reflected `Closure` object.
+    pub fn eval_reflection_function_closure_target(
+        &self,
+        identity: u64,
+    ) -> Option<&EvalClosureObjectTarget> {
+        self.eval_reflection_function_closure_targets
+            .get(&identity)
     }
 
     /// Records reflected method metadata for one synthetic ReflectionMethod object.

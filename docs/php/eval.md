@@ -919,11 +919,13 @@ static AST -> EIR -> native codegen pipeline used for ordinary elephc source.
 Unsupported constructs and missing class names during eval object construction
 fail at runtime with an eval fatal diagnostic.
 
-The fragment subset is broad but not the full elephc language surface. In
-particular, advanced native callable descriptors and full PHP `Closure` APIs
-such as arbitrary scope mutation and reflection over every first-class callable
-shape are still outside eval fragments. Runtime/AOT free-function,
-object-method, static-method, and
+The fragment subset is broad but not the full elephc language surface. Eval
+retains `ReflectionFunction` closure metadata for common
+`Closure::fromCallable()` targets, including bound free functions, object
+methods, static methods, and invokable objects. Advanced native callable
+descriptors and full PHP `Closure` APIs, such as arbitrary scope mutation and
+reflection over every first-class callable shape, are still outside eval
+fragments. Runtime/AOT free-function, object-method, static-method, and
 constructor fallback from eval
 can bind registered names, defaults, and positional variadic tails; method,
 static-method, and constructor fallback can also bind by-reference lvalue
