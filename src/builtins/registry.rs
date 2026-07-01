@@ -368,6 +368,16 @@ mod tests {
         internal: true,
     }
 
+    builtin! {
+        name: "__registry_probe_byref",
+        area: Internal,
+        params: [ref target: Mixed, value: Int],
+        returns: Mixed,
+        lower: noop_lower,
+        summary: "registry by-ref param probe",
+        internal: true,
+    }
+
     /// Verifies the registry derives FunctionSig arity/return for a registered builtin.
     #[test]
     fn registry_derives_signature() {
@@ -559,5 +569,17 @@ mod tests {
     #[test]
     fn arity_bounds_returns_none_for_unknown() {
         assert!(arity_bounds("__nonexistent_builtin_xyz").is_none());
+    }
+
+    /// Verifies the `ref` param marker sets `ParamSpec.by_ref`, so the derived
+    /// `FunctionSig.ref_params` reports the first param as by-reference and the rest not.
+    #[test]
+    fn ref_marker_sets_ref_params() {
+        let sig = function_sig("__registry_probe_byref").expect("probe registered");
+        assert_eq!(sig.ref_params, vec![true, false]);
+        // Param names/defaults unaffected by the marker.
+        assert_eq!(sig.params.len(), 2);
+        assert_eq!(sig.params[0].0, "target");
+        assert_eq!(sig.params[1].0, "value");
     }
 }

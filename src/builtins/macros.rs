@@ -13,8 +13,8 @@
 //!   Defaults are written as full `DefaultSpec::` paths (unit or data-carrying), e.g.
 //!   `= DefaultSpec::Null`, `= DefaultSpec::Int(5)`, `= DefaultSpec::Bool(false)`.
 //!   This avoids `macro_rules!`' limitation that `expr` fragments cannot be spliced after `::`.
-//! - `by_ref` params are not yet needed; `by_ref: false` is hardcoded. Add a marker token
-//!   (e.g. `ref name: Ty`) when an area needs it (YAGNI).
+//! - An optional leading `ref` per parameter marks it as by-reference (`by_ref: true`).
+//!   Syntax: `params: [ref array: Mixed, offset: Int]`. Parameters without `ref` are by-value.
 //! - A trailing comma after the last field is optional.
 //!
 //! Canonical field order:
@@ -51,7 +51,8 @@
 /// The `params` list uses `[name: TypeSpec]` or `[name: TypeSpec = DefaultSpec::Variant]`
 /// syntax. Defaults are full `DefaultSpec` paths: `DefaultSpec::Null`, `DefaultSpec::Int(5)`,
 /// `DefaultSpec::Bool(false)`, etc. Unit and data-carrying variants are both supported.
-/// `by_ref` is always `false` at this stage (YAGNI — add a `ref` marker when needed).
+/// An optional leading `ref` per parameter marks it as by-reference: `params: [ref array: Mixed, ...]`
+/// emits `by_ref: true` for that parameter. Parameters without `ref` are by-value (`by_ref: false`).
 #[macro_export]
 macro_rules! builtin {
     // Entry rule: all fields in canonical order; optional fields handled via helper rules.
@@ -60,7 +61,7 @@ macro_rules! builtin {
     (
         name: $name:expr,
         area: $area:ident,
-        params: [ $($pname:tt : $pty:ident $(= $pdefault:expr)?),* $(,)? ],
+        params: [ $($params:tt)* ],
         $(variadic: $variadic:expr,)?
         $(min_args: $min_args:expr,)?
         $(max_args: $max_args:expr,)?
@@ -81,16 +82,8 @@ macro_rules! builtin {
                 name: $name,
                 area: $crate::builtins::spec::Area::$area,
                 params: {
-                    const PARAMS: &[$crate::builtins::spec::ParamSpec] = &[
-                        $(
-                            $crate::builtins::spec::ParamSpec {
-                                name: builtin!(@name_str $pname),
-                                ty: $crate::builtins::spec::TypeSpec::$pty,
-                                default: builtin!(@default $($pdefault)?),
-                                by_ref: false,
-                            },
-                        )*
-                    ];
+                    const PARAMS: &[$crate::builtins::spec::ParamSpec] =
+                        builtin!(@params [ $($params)* ] -> []);
                     PARAMS
                 },
                 variadic: builtin!(@opt_str $($variadic)?),
@@ -108,6 +101,61 @@ macro_rules! builtin {
                 internal: builtin!(@opt_bool $($internal)?),
             }
         }
+    };
+
+    // @params muncher: accumulator-style recursive parser for the params list.
+    // Arms with a leading `ref` keyword must appear BEFORE the normal arms so the
+    // keyword is consumed as the by-reference marker before the normal name-match fires.
+
+    // Done: emit the accumulated ParamSpec list as a const-promotable slice.
+    (@params [] -> [$($acc:tt)*]) => { &[ $($acc)* ] };
+
+    // by-ref param WITH default.
+    (@params [ ref $pname:tt : $pty:ident = $pdefault:expr $(, $($rest:tt)*)? ] -> [$($acc:tt)*]) => {
+        builtin!(@params [ $($($rest)*)? ] -> [ $($acc)*
+            $crate::builtins::spec::ParamSpec {
+                name: builtin!(@name_str $pname),
+                ty: $crate::builtins::spec::TypeSpec::$pty,
+                default: Some($pdefault),
+                by_ref: true,
+            },
+        ])
+    };
+
+    // by-ref param WITHOUT default.
+    (@params [ ref $pname:tt : $pty:ident $(, $($rest:tt)*)? ] -> [$($acc:tt)*]) => {
+        builtin!(@params [ $($($rest)*)? ] -> [ $($acc)*
+            $crate::builtins::spec::ParamSpec {
+                name: builtin!(@name_str $pname),
+                ty: $crate::builtins::spec::TypeSpec::$pty,
+                default: None,
+                by_ref: true,
+            },
+        ])
+    };
+
+    // normal param WITH default.
+    (@params [ $pname:tt : $pty:ident = $pdefault:expr $(, $($rest:tt)*)? ] -> [$($acc:tt)*]) => {
+        builtin!(@params [ $($($rest)*)? ] -> [ $($acc)*
+            $crate::builtins::spec::ParamSpec {
+                name: builtin!(@name_str $pname),
+                ty: $crate::builtins::spec::TypeSpec::$pty,
+                default: Some($pdefault),
+                by_ref: false,
+            },
+        ])
+    };
+
+    // normal param WITHOUT default.
+    (@params [ $pname:tt : $pty:ident $(, $($rest:tt)*)? ] -> [$($acc:tt)*]) => {
+        builtin!(@params [ $($($rest)*)? ] -> [ $($acc)*
+            $crate::builtins::spec::ParamSpec {
+                name: builtin!(@name_str $pname),
+                ty: $crate::builtins::spec::TypeSpec::$pty,
+                default: None,
+                by_ref: false,
+            },
+        ])
     };
 
     // Helper: convert a param-name token to a &'static str.
