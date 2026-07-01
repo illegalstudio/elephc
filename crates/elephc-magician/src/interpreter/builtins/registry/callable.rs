@@ -531,10 +531,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
             bound_this,
             bound_scope,
         } => {
-            let closure = context
-                .closure(name)
-                .cloned()
-                .ok_or(EvalStatus::UnsupportedConstruct)?;
+            let Some(closure) = context.closure(name).cloned() else {
+                return eval_callable_with_values(name, evaluated_args, context, values);
+            };
             eval_bound_closure_with_call_args(
                 &closure,
                 *bound_this,
@@ -722,10 +721,14 @@ fn eval_evaluated_callable_with_call_user_func_values(
             bound_this,
             bound_scope,
         } => {
-            let closure = context
-                .closure(name)
-                .cloned()
-                .ok_or(EvalStatus::UnsupportedConstruct)?;
+            let Some(closure) = context.closure(name).cloned() else {
+                return eval_named_callable_with_call_user_func_values(
+                    name,
+                    evaluated_args,
+                    context,
+                    values,
+                );
+            };
             let evaluated_args = positional_args(evaluated_args);
             let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
                 closure.function().name(),
@@ -827,10 +830,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
             bound_this,
             bound_scope,
         } => {
-            let closure = context
-                .closure(name)
-                .cloned()
-                .ok_or(EvalStatus::UnsupportedConstruct)?;
+            let Some(closure) = context.closure(name).cloned() else {
+                return eval_named_callable_with_call_user_func_args(
+                    name,
+                    evaluated_args,
+                    context,
+                    values,
+                );
+            };
             let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
                 closure.function().name(),
                 closure.function().params(),
@@ -1475,10 +1482,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
             bound_this,
             bound_scope,
         } => {
-            let closure = context
-                .closure(name)
-                .cloned()
-                .ok_or(EvalStatus::UnsupportedConstruct)?;
+            let Some(closure) = context.closure(name).cloned() else {
+                return eval_callable_with_call_array_args(name, evaluated_args, context, values);
+            };
             eval_bound_closure_with_call_args_ref_mode(
                 &closure,
                 *bound_this,

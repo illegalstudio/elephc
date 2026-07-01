@@ -2176,3 +2176,42 @@ echo is_null(Closure::bind($static, $bound)) ? "S" : "s";');
 
     assert_eq!(out, "25:integer:25|29:integer:29|S");
 }
+
+/// Verifies binding function `fromCallable()` closures returns callable closures.
+#[test]
+fn test_eval_closure_bind_from_callable_function_targets_remain_callable() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_bind_from_callable_function_target(string $value): string {
+    return "A:" . $value;
+}
+
+class EvalBindFromCallableFunctionBox {}
+
+echo eval('function eval_declared_bind_from_callable_function_target(string $value): string {
+    return "E:" . $value;
+}
+
+$box = new EvalBindFromCallableFunctionBox();
+
+$aot = Closure::fromCallable("eval_bind_from_callable_function_target");
+$aotBoundTo = $aot->bindTo($box);
+echo is_object($aotBoundTo) ? get_class($aotBoundTo) . ":" . $aotBoundTo("x") : "bad";
+echo "|";
+
+$aotBound = Closure::bind(closure: $aot, newThis: $box);
+echo is_object($aotBound) ? get_class($aotBound) . ":" . $aotBound("y") : "bad";
+echo "|";
+
+$eval = Closure::fromCallable("eval_declared_bind_from_callable_function_target");
+$evalBoundTo = $eval->bindTo($box);
+echo is_object($evalBoundTo) ? get_class($evalBoundTo) . ":" . $evalBoundTo("u") : "bad";
+echo "|";
+
+$evalBound = Closure::bind($eval, $box);
+return is_object($evalBound) ? get_class($evalBound) . ":" . $evalBound("v") : "bad";');
+"#,
+    );
+
+    assert_eq!(out, "Closure:A:x|Closure:A:y|Closure:E:u|Closure:E:v");
+}
