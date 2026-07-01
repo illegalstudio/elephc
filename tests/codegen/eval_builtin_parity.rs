@@ -285,6 +285,35 @@ foreach ($assoc as $key => $entry) {
     assert_eq!(out, "S1,2,3|Tinteger:42|1:ab:a:b|Ka1b2");
 }
 
+/// Verifies eval `call_user_func()` keeps ref-like builtin Closure args by value.
+#[test]
+fn test_eval_call_user_func_ref_like_builtin_closures_use_by_value_args() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$sort = sort(...);
+$items = [3, 1, 2];
+echo call_user_func($sort, $items) ? "S:" : "s:";
+echo implode(",", $items) . "|";
+
+$settype = Closure::fromCallable("settype");
+$value = "42";
+echo call_user_func($settype, $value, "integer") ? "T:" : "t:";
+echo gettype($value) . ":" . $value . "|";
+
+$preg = preg_match(...);
+$matches = [];
+echo call_user_func($preg, "/(a)(b)/", "ab", $matches);
+echo ":" . count($matches) . "|";
+
+$push = Closure::fromCallable("array_push");
+$front = ["a"];
+echo call_user_func($push, $front, "b") . ":" . implode(",", $front);');
+"#,
+    );
+
+    assert_eq!(out, "S:3,1,2|T:string:42|1:0|2:a");
+}
+
 /// Verifies additional eval ref-like builtin callables write back through Closure dispatch.
 #[test]
 fn test_eval_ref_like_builtin_closures_write_back_extended_aliases() {
