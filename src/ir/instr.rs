@@ -301,6 +301,10 @@ pub enum Op {
     MethodLookup,
     MethodCall,
     StaticMethodCall,
+    /// Coerces a PHP numeric string operand to its integer value for an int-backed enum
+    /// `from()`/`tryFrom()` call. Operand: the string. Immediate: data id of the PHP
+    /// `TypeError` message thrown when the string is not numeric. Result: `I64`.
+    EnumBackingStringToInt,
     ClassConstant,
     ScopedConstantGet,
     ClassAttrNames,
@@ -441,6 +445,7 @@ impl Op {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
+            EnumBackingStringToInt => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW,
             Call | FunctionVariantCall | BuiltinCall | RuntimeCall | ClosureCall | ExprCall
             | CallableDescriptorInvoke | PipeCall | FiberRuntimeCall => {
                 E::all().difference(E::REFCOUNT_OP)
@@ -624,6 +629,7 @@ impl Op {
             MethodLookup => "method_lookup",
             MethodCall => "method_call",
             StaticMethodCall => "static_method_call",
+            EnumBackingStringToInt => "enum_backing_string_to_int",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",
             ClassAttrNames => "class_attr_names",
