@@ -7786,7 +7786,9 @@ fn eval_closure_bind_target(
             )
         }
         EvalClosureObjectTarget::InvokableObject { object } => {
-            if !eval_closure_call_bound_class_matches(object, bound_this, context, values)? {
+            if !eval_closure_bind_bound_class_matches_method(
+                object, "__invoke", bound_this, context, values,
+            )? {
                 return eval_closure_call_warning_null(
                     "Cannot rebind scope of closure created from method",
                     values,
@@ -7805,7 +7807,9 @@ fn eval_closure_bind_target(
             bridge_scope,
             ..
         } => {
-            if !eval_closure_call_bound_class_matches(object, bound_this, context, values)? {
+            if !eval_closure_bind_bound_class_matches_method(
+                object, &method, bound_this, context, values,
+            )? {
                 return eval_closure_call_warning_null(
                     "Cannot rebind scope of closure created from method",
                     values,
@@ -9551,6 +9555,66 @@ fn eval_closure_call_bound_class_matches(
     let original_class = eval_closure_bound_object_class_name(original_object, context, values)?;
     let bound_class = eval_closure_bound_object_class_name(bound_this, context, values)?;
     Ok(original_class.eq_ignore_ascii_case(&bound_class))
+}
+
+/// Returns whether `Closure::bind()` may bind a method closure to the new object.
+fn eval_closure_bind_bound_class_matches_method(
+    original_object: RuntimeCellHandle,
+    method_name: &str,
+    bound_this: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some(declaring_class) =
+        eval_closure_bind_method_declaring_class(original_object, method_name, context, values)?
+    else {
+        return Ok(false);
+    };
+    eval_closure_object_is_instance_of(bound_this, &declaring_class, context, values)
+}
+
+/// Resolves the class that declares the method captured by a method Closure target.
+fn eval_closure_bind_method_declaring_class(
+    original_object: RuntimeCellHandle,
+    method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let original_class = eval_closure_bound_object_class_name(original_object, context, values)?;
+    if let Some((declaring_class, method)) = context.class_method(&original_class, method_name) {
+        if method.is_static() || method.is_abstract() {
+            return Ok(None);
+        }
+        return Ok(Some(declaring_class));
+    }
+    let native_class = context
+        .class_native_parent_name(&original_class)
+        .unwrap_or_else(|| original_class.clone());
+    let Some((_, _, is_static, is_abstract)) =
+        eval_aot_method_dispatch_metadata_in_hierarchy(&native_class, method_name, context, values)?
+    else {
+        return Ok(None);
+    };
+    if is_static || is_abstract {
+        return Ok(None);
+    }
+    let declaring_class = eval_aot_method_declaring_class(&native_class, method_name, values)?;
+    Ok(Some(declaring_class))
+}
+
+/// Returns whether an object is an instance of the requested eval or generated class name.
+fn eval_closure_object_is_instance_of(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let object_class = eval_closure_bound_object_class_name(object, context, values)?;
+    Ok(eval_static_syntax_object_matches_class(
+        &object_class,
+        class_name,
+        context,
+    ))
 }
 
 /// Emits PHP's `Closure::call()` warning and returns `null`.
