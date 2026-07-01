@@ -118,6 +118,10 @@ or `float`), string raw storage, or one-word heap raw storage (`array`,
 layouts, and other unsupported raw-storage by-reference free-function
 parameters remain metadata-only until the function bridge has typed
 staging/writeback for those ABI layouts.
+Generated/AOT `&...$variadic` by-reference parameter tails are also
+metadata-visible but not PHP-compatible through eval yet: the bridge currently
+builds a temporary variadic array and does not propagate element-level writes
+back to the caller variables.
 `call_user_func()` remains by-value for registered AOT free-function
 by-reference parameters.
 
