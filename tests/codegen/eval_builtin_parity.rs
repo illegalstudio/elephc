@@ -314,6 +314,40 @@ echo call_user_func($push, $front, "b") . ":" . implode(",", $front);');
     assert_eq!(out, "S:3,1,2|T:string:42|1:0|2:a");
 }
 
+/// Verifies eval `call_user_func_array()` keeps non-reference builtin Closure args by value.
+#[test]
+fn test_eval_call_user_func_array_ref_like_builtin_closures_keep_non_ref_args_by_value() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$sort = sort(...);
+$items = [3, 1, 2];
+$sortArgs = [$items];
+echo call_user_func_array($sort, $sortArgs) ? "S:" : "s:";
+echo implode(",", $items) . ":" . implode(",", $sortArgs[0]) . "|";
+
+$settype = Closure::fromCallable("settype");
+$value = "42";
+$setArgs = [$value, "integer"];
+echo call_user_func_array($settype, $setArgs) ? "T:" : "t:";
+echo gettype($value) . ":" . $value . ":" . gettype($setArgs[0]) . ":" . $setArgs[0] . "|";
+
+$preg = preg_match(...);
+$matches = [];
+$pregArgs = ["/(a)(b)/", "ab", $matches];
+echo call_user_func_array($preg, $pregArgs);
+echo ":" . count($matches) . ":" . count($pregArgs[2]) . "|";
+
+$push = Closure::fromCallable("array_push");
+$front = ["a"];
+$pushArgs = [$front, "b"];
+echo call_user_func_array($push, $pushArgs) . ":" .
+    implode(",", $front) . ":" . implode(",", $pushArgs[0]);');
+"#,
+    );
+
+    assert_eq!(out, "S:3,1,2:3,1,2|T:string:42:string:42|1:0:0|2:a:a");
+}
+
 /// Verifies additional eval ref-like builtin callables write back through Closure dispatch.
 #[test]
 fn test_eval_ref_like_builtin_closures_write_back_extended_aliases() {
