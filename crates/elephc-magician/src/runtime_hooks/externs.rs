@@ -287,7 +287,7 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_release_raw_string(ptr: u64, len: u64);
     /// Retains one raw heap payload word for a staged native by-reference slot.
     pub(super) fn __elephc_eval_value_retain_raw_heap_word(word: u64) -> u64;
-    /// Boxes one raw scalar payload word back into a runtime value.
+    /// Boxes one one-word raw payload back into a runtime value using a known tag.
     pub(super) fn __elephc_eval_value_from_raw_word(
         source_tag: u64,
         word: u64,
