@@ -471,6 +471,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_print_r_value(emitter);
     io::emit_print_r_indexed(emitter);
     io::emit_print_r_hash(emitter);
+    io::emit_pr_append(emitter);
+    io::emit_pr_write(emitter);
+    io::emit_pr_finish(emitter);
     io::emit_file_get_contents(emitter);
     io::emit_file_put_contents(emitter);
     io::emit_file(emitter);

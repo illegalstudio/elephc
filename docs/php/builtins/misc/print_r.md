@@ -8,7 +8,7 @@ sidebar:
 ## print_r()
 
 ```php
-function print_r(...$values): void
+function print_r(...$values): string
 ```
 
 Prints human-readable information about a variable.
@@ -16,7 +16,7 @@ Prints human-readable information about a variable.
 **Parameters**:
 - `...$values` — variadic: collects excess arguments into `$values`.
 
-**Returns**: `void`
+**Returns**: `string`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

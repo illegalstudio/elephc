@@ -288,7 +288,7 @@ sidebar:
 | [`isset()`](./builtins/misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` |
 | [`php_uname()`](./builtins/misc/php_uname.md) | `(string $mode): string` | `string` |
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(string $extension = null): string` | `string` |
-| [`print_r()`](./builtins/misc/print_r.md) | `(...$values): void` | `void` |
+| [`print_r()`](./builtins/misc/print_r.md) | `(...$values): string` | `string` |
 | [`serialize()`](./builtins/misc/serialize.md) | `(mixed $value): string` | `string` |
 | [`unserialize()`](./builtins/misc/unserialize.md) | `(mixed $data, mixed $options): mixed` | `mixed` |
 | [`unset()`](./builtins/misc/unset.md) | `(mixed $var, ...$vars): void` | `void` |

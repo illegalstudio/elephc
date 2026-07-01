@@ -462,6 +462,7 @@ fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
         Emit::Cdylib => match target.platform {
             Platform::MacOS => format!("lib{}.dylib", stem),
             Platform::Linux => format!("lib{}.so", stem),
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         },
     };
     OutputPaths {

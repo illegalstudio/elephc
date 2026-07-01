@@ -5610,6 +5610,7 @@ fn call_return_type_for_args(
         "array_map" => array_map_builtin_return_type(ctx, args, operands),
         "iterator_to_array" => iterator_to_array_builtin_return_type(ctx, args, operands),
         "microtime" => microtime_builtin_return_type_for_args(args),
+        "print_r" => print_r_builtin_return_type_for_args(args),
         _ => None,
     }
 }
@@ -5628,6 +5629,24 @@ fn microtime_builtin_return_type_for_args(args: &[Expr]) -> Option<PhpType> {
             _ => None,
         },
         None => Some(PhpType::Str),
+    }
+}
+
+/// Returns `print_r()` metadata when the literal `$return` flag is still available.
+///
+/// `print_r($v, true)` returns a `Str` (the rendered output); `print_r($v)` /
+/// `print_r($v, false)` echoes and returns `Bool` (true). A non-literal flag returns
+/// `None` so the result type falls back to the `Mixed` declared in `call_return_type`.
+/// This must match the checker (`src/types/checker/builtins/io/debug.rs`) and the EIR
+/// backend dispatch in `lower_print_r`.
+fn print_r_builtin_return_type_for_args(args: &[Expr]) -> Option<PhpType> {
+    match args.get(1) {
+        Some(arg) => match &arg.kind {
+            ExprKind::BoolLiteral(true) => Some(PhpType::Str),
+            ExprKind::BoolLiteral(false) => Some(PhpType::Bool),
+            _ => None,
+        },
+        None => Some(PhpType::Bool),
     }
 }
 
@@ -7847,6 +7866,42 @@ pub(crate) fn lower_ref_assign_call(
 ) {
     let cell_ptr = lower_expr(ctx, source);
     let value_type = ctx.builder.value_php_type(cell_ptr.value);
+    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+}
+
+/// Lowers `$target =& $arr[idx]`: promotes the indexed-array element's inline storage to a
+/// reference cell and binds `$target` to it non-owning. The returned cell pointer addresses
+/// the element within the array payload, so writes through `$target` propagate to `$arr[idx]`
+/// and vice versa. The array must remain live while the alias is in use (the local does not
+/// own the storage). Operands: the lowered array value and the lowered index value.
+pub(crate) fn lower_ref_assign_array_elem(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let ExprKind::ArrayAccess { array, index } = &source.kind else {
+        return;
+    };
+    let array_value = lower_expr(ctx, array);
+    let mut index_value = lower_expr(ctx, index);
+    index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+    // Use the array's declared element type (the inline storage shape), not the
+    // null-capable `TaggedScalar` result type that `array_access_result_type` widens
+    // Int elements to. The ref-cell aliases the raw element slot, so loads and stores
+    // through the alias must match the element's storage width, not the read result.
+    let value_type = match ctx.builder.value_php_type(array_value.value).codegen_repr() {
+        PhpType::Array(elem_ty) => normalize_value_php_type(*elem_ty),
+        _ => array_access_result_type(ctx, array_value.value, Op::ArrayGet, source),
+    };
+    let cell_ptr = ctx.emit_value(
+        Op::LoadArrayElemRefCell,
+        vec![array_value.value, index_value.value],
+        None,
+        value_type.clone(),
+        Op::LoadArrayElemRefCell.default_effects(),
+        Some(span),
+    );
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
 }
 

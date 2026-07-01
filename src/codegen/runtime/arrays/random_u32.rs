@@ -69,6 +69,7 @@ pub fn emit_random_u32(emitter: &mut Emitter) {
             emitter.instruction("add sp, sp, #32");                             // release the temporary stack frame
             emitter.instruction("ret");                                         // return the random uint32
         }
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
     }
 }
 

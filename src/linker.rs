@@ -325,6 +325,7 @@ pub(crate) fn link(
             }
             cmd
         }
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
     };
     // Search paths for the located bridge staticlibs.
     for (_, dir) in &needed_bridges {
@@ -396,6 +397,7 @@ pub(crate) fn link(
                 }
                 dedup_scratch = Some(scratch);
             }
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
     for lib in extra_link_libs {
@@ -425,6 +427,7 @@ pub(crate) fn link(
                         ld_cmd.arg(format!("-l{}", bridge.lib_name));
                         ld_cmd.arg("-Wl,--no-whole-archive");
                     }
+                    Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
                 }
             }
             None => {

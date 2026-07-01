@@ -63,6 +63,7 @@ pub(crate) fn collect_constants(
     let (fnm_noescape, fnm_pathname) = match target_platform {
         Platform::MacOS => (1, 2),
         Platform::Linux => (2, 1),
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
     };
     constants.insert(
         "FNM_NOESCAPE".to_string(),

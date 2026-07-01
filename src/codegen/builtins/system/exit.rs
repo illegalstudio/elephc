@@ -61,6 +61,9 @@ pub fn emit(
         (Platform::MacOS, Arch::X86_64) => {
             panic!("exit() is not implemented yet for target macos-x86_64");
         }
+        (Platform::Windows, _) => {
+            panic!("Windows target is not yet supported (see issue #379)");
+        }
     }
 
     Some(PhpType::Void)

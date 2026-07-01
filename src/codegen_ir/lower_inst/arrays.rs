@@ -218,6 +218,116 @@ pub(super) fn lower_array_get(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     }
 }
 
+/// Lowers `LoadArrayElemRefCell`: computes the address of an indexed-array element's inline
+/// storage and returns it as a single-word cell pointer. The caller binds a local to this
+/// pointer non-owning (`$b =& $a[0]`); subsequent stores through the local write directly to
+/// the array element, and reads of `$a[0]` observe the same cell. Out-of-bounds or negative
+/// indices produce a null pointer (the bind then aliases a null cell, matching PHP's
+/// undefined-element reference behavior). The array must remain live while the alias is used.
+pub(super) fn lower_load_array_elem_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    let array_ty = ctx.value_php_type(array)?;
+    let elem_ty = indexed_array_element_type(&array_ty, inst)?;
+    let elem_size = ref_cell_element_size(&elem_ty.codegen_repr());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_load_array_elem_ref_cell_aarch64(ctx, inst, array, index, elem_size),
+        Arch::X86_64 => lower_load_array_elem_ref_cell_x86_64(ctx, inst, array, index, elem_size),
+    }
+}
+
+/// Returns the inline storage width for an indexed-array element from its value type.
+///
+/// `Str` and `TaggedScalar` elements occupy a 16-byte `{ptr,len}` / `{payload,tag}` slot; all
+/// other scalar and refcounted-pointer elements occupy a single 8-byte word.
+fn ref_cell_element_size(elem_ty: &PhpType) -> i64 {
+    if matches!(elem_ty, PhpType::Str | PhpType::TaggedScalar) {
+        16
+    } else {
+        8
+    }
+}
+
+/// Lowers `LoadArrayElemRefCell` for AArch64: returns the element address in the int result reg.
+fn lower_load_array_elem_ref_cell_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    index: ValueId,
+    elem_size: i64,
+) -> Result<()> {
+    let array_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let idx_reg = abi::int_result_reg(ctx.emitter);
+    let len_reg = abi::secondary_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(array, array_reg)?;
+    ctx.load_value_to_reg(index, idx_reg)?;
+    let null_label = ctx.next_label("array_elem_ref_null");
+    let done_label = ctx.next_label("array_elem_ref_done");
+    ctx.emitter.instruction(&format!("cmp {}, #0", idx_reg));                   // check whether the indexed-array offset is negative
+    ctx.emitter.instruction(&format!("b.lt {}", null_label));                   // negative offsets yield a null cell pointer
+    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);            // load the indexed-array logical length
+    ctx.emitter.instruction(&format!("cmp {}, {}", idx_reg, len_reg));          // compare the requested offset against the array length
+    ctx.emitter.instruction(&format!("b.ge {}", null_label));                   // out-of-bounds offsets yield a null cell pointer
+    ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
+    if elem_size == 16 {
+        ctx.emitter.instruction(&format!("lsl {}, {}, #4", idx_reg, idx_reg));  // scale the offset by the 16-byte element slot width
+    } else {
+        ctx.emitter.instruction(&format!("lsl {}, {}, #3", idx_reg, idx_reg));  // scale the offset by the 8-byte element slot width
+    }
+    ctx.emitter.instruction(&format!("add {}, {}, {}", idx_reg, array_reg, idx_reg)); // compute the element address within the array payload
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the null fallback after computing the element address
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, idx_reg, 0);                      // materialize a null cell pointer for invalid indices
+    ctx.emitter.label(&done_label);
+    store_ref_cell_pointer_result(ctx, inst)
+}
+
+/// Lowers `LoadArrayElemRefCell` for x86_64: returns the element address in the int result reg.
+fn lower_load_array_elem_ref_cell_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    index: ValueId,
+    elem_size: i64,
+) -> Result<()> {
+    let array_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let idx_reg = abi::int_result_reg(ctx.emitter);
+    let len_reg = abi::secondary_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(array, array_reg)?;
+    ctx.load_value_to_reg(index, idx_reg)?;
+    let null_label = ctx.next_label("array_elem_ref_null");
+    let done_label = ctx.next_label("array_elem_ref_done");
+    ctx.emitter.instruction(&format!("cmp {}, 0", idx_reg));                    // check whether the indexed-array offset is negative
+    ctx.emitter.instruction(&format!("jl {}", null_label));                     // negative offsets yield a null cell pointer
+    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);            // load the indexed-array logical length
+    ctx.emitter.instruction(&format!("cmp {}, {}", idx_reg, len_reg));          // compare the requested offset against the array length
+    ctx.emitter.instruction(&format!("jge {}", null_label));                    // out-of-bounds offsets yield a null cell pointer
+    ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
+    if elem_size == 16 {
+        ctx.emitter.instruction(&format!("shl {}, 4", idx_reg));                // scale the offset by the 16-byte element slot width
+    } else {
+        ctx.emitter.instruction(&format!("shl {}, 3", idx_reg));                // scale the offset by the 8-byte element slot width
+    }
+    ctx.emitter.instruction(&format!("add {}, {}, {}", idx_reg, array_reg, idx_reg)); // compute the element address within the array payload
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the null fallback after computing the element address
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, idx_reg, 0);                      // materialize a null cell pointer for invalid indices
+    ctx.emitter.label(&done_label);
+    store_ref_cell_pointer_result(ctx, inst)
+}
+
+/// Stores the materialized reference-cell pointer (in the integer result register) into the
+/// instruction's result value as a single machine word, mirroring `LoadPropRefCell` codegen.
+fn store_ref_cell_pointer_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(result) = inst.result {
+        ctx.store_int_result_value(result)?;
+    }
+    Ok(())
+}
+
 /// Lowers an indexed-array element write through target-aware runtime helpers.
 pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;

@@ -284,6 +284,11 @@ pub enum Op {
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return
     /// `$this->prop` by reference. Operand: object; immediate: property name data id.
     LoadPropRefCell,
+    /// Promotes an indexed-array element to a reference cell and returns the cell
+    /// pointer. Used to alias a local to `$a[idx]` (`$b =& $a[0]`). The returned pointer
+    /// addresses the element's inline storage within the array; the local aliases it
+    /// non-owning (the array owns the storage). Operands: array, index. No immediate.
+    LoadArrayElemRefCell,
     /// Binds a local slot as a non-owning reference alias to a ref-cell pointer value.
     /// Operand: the cell pointer (SSA value); immediate: target local slot. The local
     /// does not own the cell (no release at scope exit); the owner is the object/source.
@@ -409,6 +414,7 @@ impl Op {
             ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet | LoadPropRefCell => {
                 E::READS_HEAP
             }
+            LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
@@ -597,6 +603,7 @@ impl Op {
             PropGet => "prop_get",
             PropSet => "prop_set",
             LoadPropRefCell => "load_prop_ref_cell",
+            LoadArrayElemRefCell => "load_array_elem_ref_cell",
             BindRefCellPtr => "bind_ref_cell_ptr",
             DynamicPropGet => "dynamic_prop_get",
             DynamicPropSet => "dynamic_prop_set",
