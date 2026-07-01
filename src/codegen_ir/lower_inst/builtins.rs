@@ -57,21 +57,6 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         return (def.spec.lower)(ctx, inst);
     }
     match key.as_str() {
-        "abs" => math::lower_abs(ctx, inst),
-        "clamp" => math::lower_clamp(ctx, inst),
-        "round" => math::lower_round(ctx, inst),
-        "intdiv" => math::lower_intdiv(ctx, inst),
-        "fdiv" => math::lower_fdiv(ctx, inst),
-        "fmod" => math::lower_fmod(ctx, inst),
-        "pow" => math::lower_pow(ctx, inst),
-        "log" => math::lower_log(ctx, inst),
-        "atan2" => math::lower_atan2(ctx, inst),
-        "hypot" => math::lower_hypot(ctx, inst),
-        "rand" | "mt_rand" => math::lower_rand(ctx, inst, key.as_str()),
-        "random_int" => math::lower_random_int(ctx, inst),
-        "min" => math::lower_min_max(ctx, inst, false),
-        "max" => math::lower_min_max(ctx, inst, true),
-        "pi" => lower_pi(ctx, inst),
         "phpversion" => lower_phpversion(ctx, inst),
         "strlen" => lower_strlen(ctx, inst),
         "closure_bind" => lower_closure_bind(ctx, inst),
@@ -417,22 +402,6 @@ fn emit_duplicate_define_warning(ctx: &mut FunctionContext<'_>) {
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
-}
-
-/// Lowers `pi()` as the same data-section float constant used by the legacy backend.
-fn lower_pi(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "pi", 0)?;
-    let label = ctx.data.add_float(std::f64::consts::PI);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.adrp("x9", &label);                                     // load the page address that contains the M_PI floating constant
-            ctx.emitter.ldr_lo12("d0", "x9", &label);                          // load the M_PI floating constant into the floating result register
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd xmm0, QWORD PTR [rip + {}]", label)); // load the M_PI floating constant into the floating result register
-        }
-    }
-    store_if_result(ctx, inst)
 }
 
 /// Lowers `gettype(value)` for statically concrete PHP types.

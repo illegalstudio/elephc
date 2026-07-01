@@ -27,11 +27,7 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 /// - Type checks: `is_bool`, `boolval`, `is_callable`, `is_null`, `is_float`, `is_int`,
 ///   `is_iterable`, `is_string`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`,
 ///   `is_resource`, `is_array`, `is_object`, `is_scalar`
-/// - Numeric: `abs`, `atan2`, `hypot`,
-///   `pi`, `round`, `pow`, `intdiv`, `fmod`, `fdiv`, `log`
-/// - Random: `rand`, `mt_rand`, `random_int`
 /// - Cast/retype: `floatval`, `settype`, `gettype`
-/// - Array/string helpers: `min`, `max`
 /// - Control: `exit`, `die`, `empty`
 /// - Unset: `unset`
 /// - Buffers: `buffer_len`, `buffer_free`
@@ -104,137 +100,6 @@ pub(super) fn check_builtin(
             }
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Float))
-        }
-        "abs" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "abs() takes exactly 1 argument"));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            Ok(Some(abs_result_type(&ty)))
-        }
-        "log" => {
-            if args.is_empty() || args.len() > 2 {
-                return Err(CompileError::new(span, "log() takes 1 or 2 arguments"));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Float))
-        }
-        "atan2" | "hypot" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 2 arguments", name),
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Float))
-        }
-        "pi" => {
-            if !args.is_empty() {
-                return Err(CompileError::new(span, "pi() takes no arguments"));
-            }
-            Ok(Some(PhpType::Float))
-        }
-        "round" => {
-            if args.is_empty() || args.len() > 2 {
-                return Err(CompileError::new(span, "round() takes 1 or 2 arguments"));
-            }
-            checker.infer_type(&args[0], env)?;
-            if args.len() == 2 {
-                checker.infer_type(&args[1], env)?;
-            }
-            Ok(Some(PhpType::Float))
-        }
-        "pow" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "pow() takes exactly 2 arguments"));
-            }
-            checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Float))
-        }
-        "min" | "max" => {
-            if args.len() < 2 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() requires at least 2 arguments", name),
-                ));
-            }
-            let mut has_float = false;
-            for arg in args {
-                let t = checker.infer_type(arg, env)?;
-                if t == PhpType::Float {
-                    has_float = true;
-                }
-            }
-            if has_float {
-                Ok(Some(PhpType::Float))
-            } else {
-                Ok(Some(PhpType::Int))
-            }
-        }
-        "clamp" => {
-            if args.len() != 3 {
-                return Err(CompileError::new(span, "clamp() takes exactly 3 arguments"));
-            }
-            let mut arg_types = Vec::with_capacity(args.len());
-            for arg in args {
-                arg_types.push(checker.infer_type(arg, env)?);
-            }
-            if arg_types.iter().all(|ty| *ty == PhpType::Str) {
-                Ok(Some(PhpType::Str))
-            } else if arg_types.iter().all(|ty| *ty == PhpType::Int) {
-                Ok(Some(PhpType::Int))
-            } else if arg_types
-                .iter()
-                .all(|ty| matches!(ty, PhpType::Int | PhpType::Float))
-            {
-                Ok(Some(PhpType::Float))
-            } else {
-                Ok(Some(PhpType::Mixed))
-            }
-        }
-        "intdiv" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "intdiv() takes exactly 2 arguments"));
-            }
-            checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Int))
-        }
-        "fmod" | "fdiv" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 2 arguments", name),
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Float))
-        }
-        "rand" | "mt_rand" => {
-            if !args.is_empty() && args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes 0 or 2 arguments", name),
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Int))
-        }
-        "random_int" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "random_int() takes exactly 2 arguments"));
-            }
-            checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Int))
         }
         "gettype" => {
             if args.len() != 1 {
@@ -338,20 +203,5 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Void))
         }
         _ => Ok(None),
-    }
-}
-
-/// Returns the most precise supported result type for `abs($value)`.
-fn abs_result_type(ty: &PhpType) -> PhpType {
-    match ty {
-        PhpType::Float => PhpType::Float,
-        PhpType::Mixed => PhpType::Mixed,
-        PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Float) => {
-            PhpType::Mixed
-        }
-        PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Mixed) => {
-            PhpType::Mixed
-        }
-        _ => PhpType::Int,
     }
 }
