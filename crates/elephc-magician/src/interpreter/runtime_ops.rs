@@ -168,6 +168,18 @@ pub trait RuntimeValueOps {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Converts a generated native call result into an eval result or pending throwable status.
+    fn native_call_result(
+        &mut self,
+        result: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        if result.is_null() {
+            Err(EvalStatus::RuntimeFatal)
+        } else {
+            Ok(result)
+        }
+    }
+
     /// Materializes a synthetic `ReflectionAttribute` object through generated private-layout code.
     fn reflection_attribute_new(
         &mut self,

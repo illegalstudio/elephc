@@ -2377,11 +2377,14 @@ pub(super) fn eval_native_function_with_values(
         cleanup_native_function_ref_args(&bound_args, values)?;
         return Err(status);
     }
-    write_back_native_function_ref_args(&bound_args, context, values)?;
-    if result.is_null() {
-        return Err(EvalStatus::RuntimeFatal);
+    let result = values.native_call_result(result);
+    let writeback = write_back_native_function_ref_args(&bound_args, context, values);
+    match (result, writeback) {
+        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Ok(result), Ok(())) => {
+            eval_declared_native_return_value(function.return_type(), None, None, result, context, values)
+        }
     }
-    eval_declared_native_return_value(function.return_type(), None, None, result, context, values)
 }
 
 /// Builds the positional runtime array passed to descriptor-compatible native invokers.

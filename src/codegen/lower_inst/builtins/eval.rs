@@ -16,6 +16,7 @@ use std::path::Path;
 
 use crate::codegen::eval_ref_arg_helpers::eval_signature_ref_params_supported;
 use crate::codegen::platform::Arch;
+use crate::codegen::runtime_callable_invoker::RuntimeCallableInvoker;
 use crate::codegen::{
     abi, callable_descriptor, emit_box_current_value_as_mixed, CodegenIrError, Result,
 };
@@ -29,8 +30,7 @@ use crate::types::{
 
 use super::super::super::context::FunctionContext;
 use super::super::{
-    emit_runtime_callable_invoker_inline, expect_data, expect_operand, function_signature_from_eir,
-    store_if_result,
+    expect_data, expect_operand, function_signature_from_eir, store_if_result,
 };
 
 const EVAL_STATUS_PARSE_ERROR: i64 = 1;
@@ -3475,7 +3475,7 @@ fn register_eval_native_function(
     context_offset: usize,
     registration: &EvalNativeFunctionRegistration,
 ) -> Result<()> {
-    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &registration.signature, &[]);
+    let invoker_label = emit_eval_native_function_invoker_inline(ctx, &registration.signature);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &function_symbol(&registration.name),
@@ -3591,6 +3591,29 @@ fn register_eval_native_function(
         );
     }
     Ok(())
+}
+
+/// Emits an eval-safe descriptor invoker for a registered native free function.
+fn emit_eval_native_function_invoker_inline(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+) -> String {
+    let label = ctx.next_label("eval_callable_invoker");
+    let done_label = ctx.next_label("eval_callable_invoker_done");
+    let captures: [(String, PhpType, bool); 0] = [];
+    let invoker = RuntimeCallableInvoker {
+        label: &label,
+        sig,
+        captures: &captures,
+    };
+    abi::emit_jump(ctx.emitter, &done_label);
+    crate::codegen::runtime_callable_invoker::emit_runtime_callable_invoker_with_exception_boundary(
+        ctx.emitter,
+        ctx.data,
+        &invoker,
+    );
+    ctx.emitter.label(&done_label);
+    label
 }
 
 /// Emits one native method signature registration call into the eval context.

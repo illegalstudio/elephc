@@ -318,6 +318,14 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         self.handle_native_call_result(result)
     }
 
+    /// Converts a native free-function result into eval status, preserving pending throwables.
+    fn native_call_result(
+        &mut self,
+        result: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.handle_native_call_result(result.as_ptr())
+    }
+
     /// Materializes a populated synthetic `ReflectionAttribute` object for eval metadata.
     fn reflection_attribute_new(
         &mut self,
