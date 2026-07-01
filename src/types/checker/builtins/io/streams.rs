@@ -16,17 +16,20 @@ use crate::types::{PhpType, TypeEnv};
 use super::common::{ensure_stream_resource, BuiltinResult};
 use super::super::super::Checker;
 
-/// Type-checks stream I/O builtins: `fopen`, `fclose`, `fread`, `fwrite`, `fgets`, `feof`,
-/// `readline`, `fseek`, `ftell`, `rewind`, `fgetcsv`, `fputcsv`, `ftruncate`, `fsync`,
-/// `fflush`, `fdatasync`, `fgetc`, `fpassthru`, `flock`, and `tmpfile`.
+/// Type-checks the stream I/O builtins not yet migrated to the `builtin!` registry:
+/// `readline`, `fgetcsv`, `fputcsv`, `fsync`, `fflush`, `fdatasync`, `flock`, `tmpfile`,
+/// and the `stream_*` / socket / directory / host-lookup families below. The file-handle
+/// read/write/seek family (`fopen`, `fclose`, `fread`, `fwrite`, `fprintf`, `vfprintf`,
+/// `fscanf`, `fgets`, `feof`, `fseek`, `ftell`, `rewind`, `ftruncate`, `fgetc`,
+/// `fpassthru`) now lives in `src/builtins/io/` and is dispatched by the registry.
 ///
 /// Matches `name` against known stream builtins, validates arity and argument types via
 /// `checker.infer_type()` using `env`, and returns `Some(PhpType)` on match or `None` if
 /// `name` is not a recognized stream function. Errors are reported at `span`.
 ///
 /// Notable behaviors: `flock` requires a variable (not arbitrary expression) for its
-/// optional third `$would_block` parameter; `fgetc` returns `Str|Bool` on EOF; `fopen`
-/// and `tmpfile` return `stream_resource|Bool` to reflect PHP's false-on-failure pattern.
+/// optional third `$would_block` parameter; `tmpfile` returns `stream_resource|Bool` to
+/// reflect PHP's false-on-failure pattern.
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,
@@ -35,141 +38,6 @@ pub(super) fn check_builtin(
     env: &TypeEnv,
 ) -> BuiltinResult {
     match name {
-        "fopen" => {
-            if args.len() < 2 || args.len() > 4 {
-                return Err(CompileError::new(span, "fopen() takes 2 to 4 arguments"));
-            }
-            // An `https://` literal pulls in the elephc-tls staticlib at link
-            // time. Detect the scheme here so the runner adds -lelephc_tls
-            // only for programs that actually open TLS streams.
-            if let Some(crate::parser::ast::ExprKind::StringLiteral(s)) =
-                args.first().map(|a| &a.kind)
-            {
-                if s.starts_with("https://") || s.starts_with("ftps://") {
-                    checker.require_builtin_library("elephc_tls");
-                }
-                if s.starts_with("compress.zlib://") {
-                    // compress.zlib:// attaches a zlib.inflate filter, which
-                    // pulls in libz.
-                    checker.require_builtin_library("z");
-                }
-                if s.starts_with("compress.bzip2://") {
-                    // compress.bzip2:// calls libbz2's
-                    // BZ2_bzBuffToBuffDecompress at fopen time.
-                    checker.require_builtin_library("bz2");
-                }
-                // phar:// write mode uses the elephc-phar read-modify-write
-                // bridge when available and keeps the elephc-crypto SHA1 path
-                // as the assembly fallback. Reads need neither write bridge nor
-                // crypto here.
-                if s.starts_with("phar://") {
-                    let write_mode = matches!(
-                        args.get(1).map(|a| &a.kind),
-                        Some(crate::parser::ast::ExprKind::StringLiteral(m))
-                            if matches!(m.as_bytes().first(), Some(b'w') | Some(b'a') | Some(b'c') | Some(b'x'))
-                    );
-                    if write_mode {
-                        checker.require_builtin_library("elephc_phar");
-                        checker.require_builtin_library("elephc_crypto");
-                    }
-                }
-            } else {
-                // Non-literal paths can route to a phar:// entry at run time
-                // for reads or write-mode opens. Reads may use tar/zip and
-                // compressed entries through the elephc-phar/zlib/bz2 bridge.
-                checker.require_builtin_library("elephc_phar");
-                checker.require_builtin_library("z");
-                checker.require_builtin_library("bz2");
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            // The 3rd ($use_include_path) and 4th ($context) args are
-            // accepted but not yet honored by the codegen / runtime; the
-            // global _stream_context_options slot (set by
-            // stream_context_create / set_option) is the effective context
-            // until the consumer integration lands. Documented v1.5 limit.
-            Ok(Some(checker.normalize_union_type(vec![
-                PhpType::stream_resource(),
-                PhpType::Bool,
-            ])))
-        }
-        "fclose" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "fclose() takes exactly 1 argument"));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            Ok(Some(PhpType::Bool))
-        }
-        "fread" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "fread() takes exactly 2 arguments"));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Str))
-        }
-        "fwrite" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "fwrite() takes exactly 2 arguments"));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Int))
-        }
-        "fprintf" => {
-            if args.len() < 2 {
-                return Err(CompileError::new(span, "fprintf() takes at least 2 arguments"));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            for arg in &args[1..] {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Int))
-        }
-        "vfprintf" => {
-            if args.len() != 3 {
-                return Err(CompileError::new(
-                    span,
-                    "vfprintf() takes exactly 3 arguments (stream, format, values)",
-                ));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            for arg in &args[1..] {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Int))
-        }
-        "fscanf" => {
-            if args.len() < 2 {
-                return Err(CompileError::new(span, "fscanf() takes at least 2 arguments"));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            for arg in &args[1..] {
-                checker.infer_type(arg, env)?;
-            }
-            // v1 supports the 2-argument form: returns an array of matched
-            // fields (the by-ref output form is not yet supported, mirroring
-            // sscanf()).
-            Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
-        }
-        "fgets" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "fgets() takes exactly 1 argument"));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            // PHP fgets() returns `string|false`: false on EOF with no bytes
-            // read, the line bytes otherwise. The checker exposes this as
-            // Mixed so user code that compares against `false` works.
-            Ok(Some(PhpType::Mixed))
-        }
-        "feof" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "feof() takes exactly 1 argument"));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            Ok(Some(PhpType::Bool))
-        }
         "readline" => {
             if !args.is_empty() && args.len() > 1 {
                 return Err(CompileError::new(span, "readline() takes 0 or 1 arguments"));
@@ -181,33 +49,6 @@ pub(super) fn check_builtin(
                 PhpType::Str,
                 PhpType::Bool,
             ])))
-        }
-        "fseek" => {
-            if args.len() < 2 || args.len() > 3 {
-                return Err(CompileError::new(span, "fseek() takes 2 or 3 arguments"));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            for arg in args.iter().skip(1) {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(checker.normalize_union_type(vec![
-                PhpType::Int,
-                PhpType::Bool,
-            ])))
-        }
-        "ftell" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "ftell() takes exactly 1 argument"));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            Ok(Some(PhpType::Int))
-        }
-        "rewind" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "rewind() takes exactly 1 argument"));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            Ok(Some(PhpType::Bool))
         }
         "fgetcsv" => {
             if args.is_empty() || args.len() > 3 {
@@ -229,17 +70,6 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Int))
         }
-        "ftruncate" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    "ftruncate() takes exactly 2 arguments",
-                ));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Bool))
-        }
         "fsync" | "fflush" | "fdatasync" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
@@ -249,26 +79,6 @@ pub(super) fn check_builtin(
             }
             ensure_stream_resource(checker, name, &args[0], env)?;
             Ok(Some(PhpType::Bool))
-        }
-        "fgetc" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "fgetc() takes exactly 1 argument"));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            Ok(Some(checker.normalize_union_type(vec![
-                PhpType::Str,
-                PhpType::Bool,
-            ])))
-        }
-        "fpassthru" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "fpassthru() takes exactly 1 argument",
-                ));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            Ok(Some(PhpType::Int))
         }
         "flock" => {
             if args.len() < 2 || args.len() > 3 {

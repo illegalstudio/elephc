@@ -337,7 +337,7 @@ pub(super) fn lower_readline(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 }
 
 /// Lowers `fopen(filename, mode)` and boxes stream resources or PHP false.
-pub(super) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fopen", 2, 4)?;
     let filename = expect_operand(inst, 0)?;
     let mode = expect_operand(inst, 1)?;
@@ -2704,7 +2704,7 @@ pub(super) fn lower_stream_socket_sendto(
 }
 
 /// Lowers `fclose(stream)` after validating and unboxing the stream handle.
-pub(super) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "fclose", 1)?;
     let stream = expect_operand(inst, 0)?;
     let captured = capture_resource_box_for_release(ctx, stream)?;
@@ -2813,7 +2813,7 @@ pub(super) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `fread(stream, length)` using the shared runtime file-read helper.
-pub(super) fn lower_fread(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fread(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "fread", 2)?;
     let stream = expect_operand(inst, 0)?;
     let length = expect_operand(inst, 1)?;
@@ -2835,7 +2835,7 @@ pub(super) fn lower_fread(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `fwrite(stream, data)` and returns the number of bytes written.
-pub(super) fn lower_fwrite(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fwrite(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "fwrite", 2)?;
     let stream = expect_operand(inst, 0)?;
     let data = expect_operand(inst, 1)?;
@@ -2859,7 +2859,7 @@ pub(super) fn lower_fwrite(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `fprintf(stream, format, values...)` as `sprintf()` plus stream write.
-pub(super) fn lower_fprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fprintf", 2, usize::MAX)?;
     let stream = expect_operand(inst, 0)?;
     let format = expect_operand(inst, 1)?;
@@ -2895,7 +2895,7 @@ pub(super) fn lower_fprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `vfprintf(stream, format, values)` through `__rt_vsprintf` then fwrite.
-pub(super) fn lower_vfprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_vfprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "vfprintf", 3)?;
     let stream = expect_operand(inst, 0)?;
     let format = expect_operand(inst, 1)?;
@@ -2935,7 +2935,7 @@ pub(super) fn lower_vfprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 }
 
 /// Lowers `fscanf(stream, format)` through `__rt_fgets` and `__rt_sscanf`.
-pub(super) fn lower_fscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fscanf", 2, usize::MAX)?;
     let stream = expect_operand(inst, 0)?;
     let format = expect_operand(inst, 1)?;
@@ -2964,7 +2964,7 @@ pub(super) fn lower_fscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `fgets(stream)` through the shared line-read runtime helper.
-pub(super) fn lower_fgets(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fgets(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "fgets", 1)?;
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "fgets")?;
@@ -2977,7 +2977,7 @@ pub(super) fn lower_fgets(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `fgetc(stream)` and boxes the one-byte string or PHP false result.
-pub(super) fn lower_fgetc(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fgetc(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "fgetc", 1)?;
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "fgetc")?;
@@ -3024,7 +3024,7 @@ pub(super) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `fpassthru(stream)` through the remaining-bytes stream runtime helper.
-pub(super) fn lower_fpassthru(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fpassthru(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "fpassthru", 1)?;
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "fpassthru")?;
@@ -3118,7 +3118,7 @@ fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Lowers `feof(stream)` through the runtime EOF-flag table helper.
-pub(super) fn lower_feof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_feof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "feof", 1)?;
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "feof")?;
@@ -3130,7 +3130,7 @@ pub(super) fn lower_feof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 }
 
 /// Lowers `ftell(stream)` as `lseek(fd, 0, SEEK_CUR)`.
-pub(super) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "ftell", 1)?;
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "ftell")?;
@@ -3169,7 +3169,7 @@ pub(super) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `fseek(stream, offset, whence?)` and clears EOF state on success.
-pub(super) fn lower_fseek(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fseek(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fseek", 2, 3)?;
     let stream = expect_operand(inst, 0)?;
     let offset = expect_operand(inst, 1)?;
@@ -3193,7 +3193,7 @@ pub(super) fn lower_fseek(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `rewind(stream)` as `lseek(fd, 0, SEEK_SET)` and clears EOF state on success.
-pub(super) fn lower_rewind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_rewind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "rewind", 1)?;
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "rewind")?;
@@ -3207,7 +3207,7 @@ pub(super) fn lower_rewind(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `ftruncate(stream, size)` through the shared fd truncate runtime helper.
-pub(super) fn lower_ftruncate(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ftruncate(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "ftruncate", 2)?;
     let stream = expect_operand(inst, 0)?;
     let size = expect_operand(inst, 1)?;

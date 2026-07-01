@@ -691,6 +691,20 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             // link, readlink — were already FCC-wrapped pre-migration and stay enabled.)
             | "file_put_contents" | "copy" | "rename" | "unlink" | "mkdir" | "rmdir"
             | "chdir" | "scandir" | "glob" | "lchown" | "lchgrp" | "umask" | "readfile"
+            // These 14 io batch D1 file-handle builtins had no pre-migration
+            // first-class-callable wrapper: general_first_class_callable_builtin_sig
+            // returned None for them (they are not in that table), so no wrapper was
+            // emitted. Registering them in the builtin registry makes
+            // first_class_callable_builtin_sig return Some, which would newly emit a
+            // deferred-closure wrapper; excluding them here restores the exact
+            // pre-migration (no-wrapper) behaviour and is provably behaviour-neutral.
+            // They take stream resource arguments or variadic args unsuited to a
+            // generic string-callable wrapper. Direct calls and EIR first-class-callable
+            // use still work through the EIR path. (ftruncate is kept enabled — it was
+            // already in general_first_class_callable_builtin_sig pre-migration.)
+            | "fopen" | "fclose" | "fread" | "fwrite" | "fprintf" | "vfprintf"
+            | "fscanf" | "fgets" | "feof" | "fseek" | "ftell" | "rewind"
+            | "fgetc" | "fpassthru"
     )
 }
 
