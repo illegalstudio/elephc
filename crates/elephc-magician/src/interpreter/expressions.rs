@@ -430,6 +430,11 @@ pub(in crate::interpreter) fn eval_array_get_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if values.type_tag(array)? != EVAL_TAG_OBJECT {
+        if let Some(target) = eval_array_reference_key(index, values)?
+            .and_then(|key| context.array_element_alias(array, &key).cloned())
+        {
+            return eval_reference_target_value(&target, context, values);
+        }
         return values.array_get(array, index);
     }
     if !eval_array_access_object_matches(array, context, values)? {

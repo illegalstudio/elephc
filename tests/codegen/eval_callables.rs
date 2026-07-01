@@ -1450,7 +1450,7 @@ echo call_user_func_array($function, $aArgs) . ":" . gettype($a) . ":" . $a . ":
 
 $b = "4";
 $bArgs = [&$b, 5];
-echo call_user_func_array($function, $bArgs) . ":" . gettype($b) . ":" . $b . "|";
+echo call_user_func_array($function, $bArgs) . ":" . gettype($b) . ":" . $b . ":" . gettype($bArgs[0]) . ":" . $bArgs[0] . "|";
 
 $box = new EvalFromCallableCallUserFuncArrayRefBox();
 $method = Closure::fromCallable([$box, "bump"]);
@@ -1460,7 +1460,7 @@ echo call_user_func_array($method, $cArgs) . ":" . gettype($c) . ":" . $c . ":" 
 
 $d = "8";
 $dArgs = [&$d, 9];
-echo call_user_func_array($method, $dArgs) . ":" . gettype($d) . ":" . $d . "|";
+echo call_user_func_array($method, $dArgs) . ":" . gettype($d) . ":" . $d . ":" . gettype($dArgs[0]) . ":" . $dArgs[0] . "|";
 
 $static = Closure::fromCallable(["EvalFromCallableCallUserFuncArrayRefBox", "add"]);
 $e = "10";
@@ -1471,7 +1471,7 @@ return call_user_func_array($static, $eArgs) . ":" . gettype($e) . ":" . $e . ":
 
     assert_eq!(
         out,
-        "5:string:2:string:2|9:integer:9|23:string:6:string:6|27:integer:27|21:string:10:string:10"
+        "5:string:2:string:2|9:integer:9:integer:9|23:string:6:string:6|27:integer:27:integer:27|21:string:10:string:10"
     );
 }
 

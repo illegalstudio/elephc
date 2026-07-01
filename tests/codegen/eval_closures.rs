@@ -179,7 +179,8 @@ echo ":" . gettype($firstArgs[0]) . ":" . $firstArgs[0] . "|";
 $second = "4";
 $secondArgs = [&$second, 5];
 echo call_user_func_array($fn, $secondArgs);
-echo ":" . gettype($second) . ":" . $second . "|";
+echo ":" . gettype($second) . ":" . $second;
+echo ":" . gettype($secondArgs[0]) . ":" . $secondArgs[0] . "|";
 
 $box = new EvalClosureCallUserFuncArrayBox();
 $method = function(int &$value, int $delta): int {
@@ -196,13 +197,14 @@ echo ":" . gettype($thirdArgs[0]) . ":" . $thirdArgs[0] . "|";
 $fourth = "8";
 $fourthArgs = [&$fourth, 9];
 echo call_user_func_array($bound, $fourthArgs);
-echo ":" . gettype($fourth) . ":" . $fourth;');
+echo ":" . gettype($fourth) . ":" . $fourth;
+echo ":" . gettype($fourthArgs[0]) . ":" . $fourthArgs[0];');
 "#,
     );
 
     assert_eq!(
         out,
-        "5:string:2:string:2|9:integer:9|23:string:6:string:6|27:integer:27"
+        "5:string:2:string:2|9:integer:9:integer:9|23:string:6:string:6|27:integer:27:integer:27"
     );
 }
 
