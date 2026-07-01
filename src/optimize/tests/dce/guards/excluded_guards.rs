@@ -21,6 +21,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_zero_guard() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -70,6 +71,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_null_guard() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -124,6 +126,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_empty_string_g
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -181,6 +184,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_string_zero_gu
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -238,6 +242,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_float_guard() 
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(

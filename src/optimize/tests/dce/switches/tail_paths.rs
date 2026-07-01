@@ -33,6 +33,7 @@ fn test_eliminate_dead_code_drops_trailing_empty_switch_cases() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -92,6 +93,7 @@ fn test_eliminate_dead_code_sinks_tail_into_switch_exit_paths() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![
@@ -142,6 +144,7 @@ fn test_eliminate_dead_code_sinks_tail_into_switch_break_paths() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![

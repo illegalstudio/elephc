@@ -964,6 +964,7 @@ pub(super) fn check_builtin(
                 if let ExprKind::Closure {
                     params,
                     variadic,
+                    variadic_by_ref,
                     return_type,
                     body,
                     captures,
@@ -974,6 +975,7 @@ pub(super) fn check_builtin(
                     checker.infer_closure_type_with_param_hints(
                         params,
                         variadic,
+                        *variadic_by_ref,
                         return_type,
                         body,
                         captures,

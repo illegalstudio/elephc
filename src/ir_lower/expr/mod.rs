@@ -104,6 +104,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             return_type,
             body,
             captures,
@@ -113,6 +114,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
             ctx,
             params,
             variadic.as_deref(),
+            *variadic_by_ref,
             return_type.as_ref(),
             body,
             captures,
@@ -4370,6 +4372,7 @@ fn lower_value_sort_comparator_closure(
     let ExprKind::Closure {
         params,
         variadic,
+        variadic_by_ref,
         return_type,
         body,
         captures,
@@ -4383,6 +4386,7 @@ fn lower_value_sort_comparator_closure(
         ctx,
         params,
         variadic.as_deref(),
+        *variadic_by_ref,
         return_type.as_ref(),
         body,
         captures,
@@ -4536,6 +4540,7 @@ fn lower_preg_replace_callback_closure(
     let ExprKind::Closure {
         params,
         variadic,
+        variadic_by_ref,
         return_type,
         body,
         captures,
@@ -4549,6 +4554,7 @@ fn lower_preg_replace_callback_closure(
         ctx,
         params,
         variadic.as_deref(),
+        *variadic_by_ref,
         return_type.as_ref(),
         body,
         captures,
@@ -5800,13 +5806,18 @@ fn lower_named_variadic_tail_array(
         Some(span),
     );
     let elem_ty = indexed_array_literal_element_type(&array_ty);
+    let by_ref_variadic = variadic_param_is_by_ref(sig);
     for source in tail {
         if source.param_idx().is_some() {
             continue;
         }
-        let value = source_values[source.source_index()];
-        let value = lowered_value_from_id(ctx, value);
-        let value = coerce_variadic_tail_value(ctx, value, &array_ty, source.expr().span);
+        let value = lower_variadic_tail_source_value(
+            ctx,
+            source.expr(),
+            by_ref_variadic,
+            Some(source_values[source.source_index()]),
+            &array_ty,
+        );
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -5853,6 +5864,7 @@ fn lower_named_variadic_tail_hash(
         Some(span),
     );
     let mut next_positional_key = 0usize;
+    let by_ref_variadic = variadic_param_is_by_ref(sig);
     for source in tail {
         if source.param_idx().is_some() {
             continue;
@@ -5864,10 +5876,13 @@ fn lower_named_variadic_tail_hash(
             next_positional_key += 1;
             key
         };
-        let value = source_values[source.source_index()];
-        let value = lowered_value_from_id(ctx, value);
-        let array_ty = PhpType::Array(Box::new(value_ty.clone()));
-        let value = coerce_variadic_tail_value(ctx, value, &array_ty, source.expr().span);
+        let value = lower_variadic_tail_source_value(
+            ctx,
+            source.expr(),
+            by_ref_variadic,
+            Some(source_values[source.source_index()]),
+            &PhpType::Array(Box::new(value_ty.clone())),
+        );
         ctx.emit_void(
             Op::HashSet,
             vec![hash.value, key.value, value.value],
@@ -5907,9 +5922,9 @@ fn lower_variadic_tail_array(
         Some(span),
     );
     let elem_ty = indexed_array_literal_element_type(&array_ty);
+    let by_ref_variadic = variadic_param_is_by_ref(sig);
     for item in tail {
-        let value = lower_expr(ctx, item);
-        let value = coerce_variadic_tail_value(ctx, value, &array_ty, item.span);
+        let value = lower_variadic_tail_source_value(ctx, item, by_ref_variadic, None, &array_ty);
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -5922,8 +5937,43 @@ fn lower_variadic_tail_array(
     array
 }
 
+/// Lowers one value stored into a variadic tail container.
+fn lower_variadic_tail_source_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    by_ref_variadic: bool,
+    prelowered: Option<crate::ir::ValueId>,
+    array_ty: &PhpType,
+) -> LoweredValue {
+    if by_ref_variadic {
+        if let ExprKind::Variable(name) = &expr.kind {
+            return lower_invoker_ref_arg_marker(ctx, name, expr.span);
+        }
+    }
+    let value = prelowered
+        .map(|value| lowered_value_from_id(ctx, value))
+        .unwrap_or_else(|| lower_expr(ctx, expr));
+    coerce_variadic_tail_value(ctx, value, array_ty, expr.span)
+}
+
+/// Returns whether the synthetic variadic parameter slot is by-reference.
+fn variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
+    let Some(variadic_name) = sig.variadic.as_ref() else {
+        return false;
+    };
+    sig.params
+        .iter()
+        .position(|(name, _)| name == variadic_name)
+        .and_then(|index| sig.ref_params.get(index))
+        .copied()
+        .unwrap_or(false)
+}
+
 /// Returns the element type expected inside a variadic tail container.
 fn variadic_tail_value_type(sig: &FunctionSig) -> PhpType {
+    if variadic_param_is_by_ref(sig) {
+        return PhpType::Mixed;
+    }
     let Some(variadic_name) = sig.variadic.as_ref() else {
         return PhpType::Mixed;
     };
@@ -5939,6 +5989,9 @@ fn variadic_tail_value_type(sig: &FunctionSig) -> PhpType {
 
 /// Returns the runtime array type used for a variadic parameter slot.
 fn variadic_array_type(sig: &FunctionSig) -> PhpType {
+    if variadic_param_is_by_ref(sig) {
+        return PhpType::Array(Box::new(PhpType::Mixed));
+    }
     let Some(variadic_name) = sig.variadic.as_ref() else {
         return PhpType::Array(Box::new(PhpType::Mixed));
     };
@@ -7698,6 +7751,7 @@ fn lower_closure(
     ctx: &mut LoweringContext<'_, '_>,
     params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     variadic: Option<&str>,
+    variadic_by_ref: bool,
     return_type: Option<&TypeExpr>,
     body: &[crate::parser::ast::Stmt],
     captures: &[String],
@@ -7708,6 +7762,7 @@ fn lower_closure(
         ctx,
         params,
         variadic,
+        variadic_by_ref,
         return_type,
         body,
         captures,
@@ -7727,6 +7782,7 @@ pub(crate) fn lower_closure_for_assignment(
     let ExprKind::Closure {
         params,
         variadic,
+        variadic_by_ref,
         return_type,
         body,
         captures,
@@ -7743,6 +7799,7 @@ pub(crate) fn lower_closure_for_assignment(
         ctx,
         params,
         variadic.as_deref(),
+        *variadic_by_ref,
         return_type.as_ref(),
         body,
         captures,
@@ -7758,6 +7815,7 @@ fn lower_closure_with_context(
     ctx: &mut LoweringContext<'_, '_>,
     params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     variadic: Option<&str>,
+    variadic_by_ref: bool,
     return_type: Option<&TypeExpr>,
     body: &[crate::parser::ast::Stmt],
     captures: &[String],
@@ -7802,6 +7860,7 @@ fn lower_closure_with_context(
             &name,
             params,
             variadic,
+            variadic_by_ref,
             return_type,
             body,
             &capture_params,
@@ -7813,6 +7872,7 @@ fn lower_closure_with_context(
             &name,
             params,
             variadic,
+            variadic_by_ref,
             return_type,
             body,
             &capture_params,

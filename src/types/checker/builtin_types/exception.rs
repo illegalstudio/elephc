@@ -73,6 +73,7 @@ pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
         ],
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: None,
         body: vec![
@@ -262,6 +263,7 @@ fn concrete_throwable_method(name: &str, return_type: TypeExpr, value: Expr) -> 
         params: Vec::new(),
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(return_type),
         body: vec![Stmt::new(
@@ -285,6 +287,7 @@ fn abstract_throwable_method(name: &str, return_type: TypeExpr) -> ClassMethod {
         params: Vec::new(),
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(return_type),
         body: Vec::new(),

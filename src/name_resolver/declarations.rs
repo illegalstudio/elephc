@@ -41,6 +41,7 @@ pub(super) fn resolve_decl_stmt(
             params,
             param_attributes,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -55,6 +56,7 @@ pub(super) fn resolve_decl_stmt(
                         .map(|groups| resolve_attribute_groups(groups, namespace, imports, symbols))
                         .collect(),
                     variadic: variadic.clone(),
+                    variadic_by_ref: *variadic_by_ref,
                     variadic_type: variadic_type.clone(),
                     return_type: return_type
                         .as_ref()

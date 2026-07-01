@@ -217,6 +217,8 @@ pub struct ClassMethod {
     /// This vector is parallel to `params`, plus one trailing entry when `variadic` is present.
     pub param_attributes: Vec<Vec<AttributeGroup>>,
     pub variadic: Option<String>,
+    /// Whether the variadic parameter was declared by reference (`&...$args`).
+    pub variadic_by_ref: bool,
     /// Declared element type hint on the variadic parameter (`int ...$xs`), if any. Each argument
     /// collected into the variadic is checked against this type.
     pub variadic_type: Option<TypeExpr>,

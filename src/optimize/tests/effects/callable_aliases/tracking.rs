@@ -21,6 +21,7 @@ fn test_program_function_effects_track_closure_alias_locals() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![
@@ -31,6 +32,7 @@ fn test_program_function_effects_track_closure_alias_locals() {
                             ExprKind::Closure {
                                 params: Vec::new(),
                                 variadic: None,
+                                variadic_by_ref: false,
                                 variadic_type: None,
                                 return_type: None,
                                 body: vec![Stmt::new(
@@ -87,6 +89,7 @@ fn test_program_function_effects_track_callable_alias_through_ternary() {
             params: vec![("flag".to_string(), None, None, false)],
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![
@@ -148,6 +151,7 @@ fn test_program_function_effects_track_callable_alias_through_match() {
             params: vec![("flag".to_string(), None, None, false)],
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![
@@ -212,6 +216,7 @@ fn test_program_function_effects_track_callable_alias_through_null_coalesce() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![
@@ -272,6 +277,7 @@ fn test_program_function_effects_track_callable_alias_locals() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![

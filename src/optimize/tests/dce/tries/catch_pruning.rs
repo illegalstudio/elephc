@@ -22,6 +22,7 @@ fn test_eliminate_dead_code_drops_unreachable_catches_after_non_throwing_try() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -61,6 +62,7 @@ fn test_eliminate_dead_code_drops_unreachable_catches_before_finally() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -100,6 +102,7 @@ fn test_eliminate_dead_code_drops_catches_shadowed_by_throwable() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -155,6 +158,7 @@ fn test_eliminate_dead_code_drops_duplicate_shadowed_catch_types() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -212,6 +216,7 @@ fn test_eliminate_dead_code_merges_identical_catches_exposed_by_shadow_drop() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(

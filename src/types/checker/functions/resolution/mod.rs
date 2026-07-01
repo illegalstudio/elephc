@@ -188,7 +188,14 @@ impl Checker {
                     decl.variadic
                         .iter()
                         .cloned()
-                        .map(|name| (name, PhpType::Array(Box::new(PhpType::Int)))),
+                        .map(|name| {
+                            let elem_ty = if decl.variadic_by_ref {
+                                PhpType::Mixed
+                            } else {
+                                PhpType::Int
+                            };
+                            (name, PhpType::Array(Box::new(elem_ty)))
+                        }),
                 )
                 .collect(),
             param_type_exprs: decl
@@ -401,7 +408,9 @@ impl Checker {
         }
 
         if let Some(ref vp) = decl.variadic {
-            if let Some(declared) = &decl.variadic_type {
+            if decl.variadic_by_ref {
+                param_types.push((vp.clone(), PhpType::Array(Box::new(PhpType::Mixed))));
+            } else if let Some(declared) = &decl.variadic_type {
                 // A declared element type (`int ...$xs`) constrains every collected argument;
                 // it takes precedence over inference so call validation enforces the hint.
                 let elem_ty = self.resolve_declared_param_type_hint(

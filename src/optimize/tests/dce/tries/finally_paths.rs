@@ -24,6 +24,7 @@ fn test_eliminate_dead_code_drops_statements_after_try_finally_exit() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![
@@ -72,6 +73,7 @@ fn test_eliminate_dead_code_preserves_outer_guard_for_finally_when_only_other_lo
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -131,6 +133,7 @@ fn test_eliminate_dead_code_sinks_tail_into_safe_finally_path() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![

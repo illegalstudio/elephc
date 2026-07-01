@@ -19,6 +19,7 @@ fn test_eliminate_dead_code_prunes_truthy_switch_cases_and_default() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -84,6 +85,7 @@ fn test_eliminate_dead_code_prunes_falsy_scalar_labels_from_truthy_switch_subjec
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -147,6 +149,7 @@ fn test_eliminate_dead_code_combines_exclusion_and_truthy_switch_guards() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(

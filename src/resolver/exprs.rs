@@ -223,6 +223,7 @@ pub(super) fn resolve_expr(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -233,6 +234,7 @@ pub(super) fn resolve_expr(
         } => ExprKind::Closure {
             params: resolve_params(params, base_dir, declared_once, include_chain, state, function_variants)?,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body: resolve_isolated(

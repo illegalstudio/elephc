@@ -39,12 +39,19 @@ impl Checker {
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
+        variadic_by_ref: bool,
         captures: &[String],
         span: Span,
         env: &TypeEnv,
     ) -> Result<ClosureSignatureContext, CompileError> {
         self.prepare_closure_signature_context_with_param_hints(
-            params, variadic, captures, span, env, &[],
+            params,
+            variadic,
+            variadic_by_ref,
+            captures,
+            span,
+            env,
+            &[],
         )
     }
 
@@ -61,6 +68,7 @@ impl Checker {
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
+        variadic_by_ref: bool,
         captures: &[String],
         span: Span,
         env: &TypeEnv,
@@ -117,7 +125,7 @@ impl Checker {
             param_types.push((name.clone(), PhpType::Array(Box::new(PhpType::Mixed))));
             param_type_exprs.push(None);
             defaults.push(None);
-            ref_params.push(false);
+            ref_params.push(variadic_by_ref);
             declared_params.push(false);
         }
 
@@ -222,6 +230,7 @@ impl Checker {
             ExprKind::Closure {
                 params,
                 variadic,
+                variadic_by_ref,
                 return_type,
                 body,
                 captures,
@@ -231,6 +240,7 @@ impl Checker {
                 let closure_sig = self.prepare_closure_signature_context(
                     params,
                     variadic,
+                    *variadic_by_ref,
                     captures,
                     expr.span,
                     env,

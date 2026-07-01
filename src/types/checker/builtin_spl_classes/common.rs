@@ -80,6 +80,7 @@ pub(super) fn class_method_with_body(
         params,
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type,
         body,

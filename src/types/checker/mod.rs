@@ -163,6 +163,8 @@ pub(crate) struct FnDecl {
     pub defaults: Vec<Option<Expr>>,
     pub ref_params: Vec<bool>,
     pub variadic: Option<String>,
+    /// Whether the variadic parameter was declared by reference (`&...$args`).
+    pub variadic_by_ref: bool,
     /// Declared element type hint on the variadic parameter (`int ...$xs`), if any.
     pub variadic_type: Option<TypeExpr>,
     pub return_type: Option<TypeExpr>,

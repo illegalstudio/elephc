@@ -182,6 +182,7 @@ fn method_vis(
         params,
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type,
         body,
@@ -616,6 +617,7 @@ fn date_period_create_from_iso8601_string() -> ClassMethod {
         ],
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         // PHP 8.3+: returns a `DatePeriod` or throws (never `false`).
         return_type: Some(TypeExpr::Named(Name::unqualified("DatePeriod"))),

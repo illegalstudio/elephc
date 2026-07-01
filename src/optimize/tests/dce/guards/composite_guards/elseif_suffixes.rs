@@ -43,6 +43,7 @@ fn test_eliminate_dead_code_rebuilds_empty_elseif_tail_as_needed_guard() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -101,6 +102,7 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_cumulative_fal
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -167,6 +169,7 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_negated_compos
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -241,6 +244,7 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_demorgan_equiv
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(

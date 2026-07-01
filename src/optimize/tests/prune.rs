@@ -129,6 +129,7 @@ fn test_prune_block_drops_statements_after_return() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![
@@ -158,6 +159,7 @@ fn test_prune_drops_pure_expr_stmt() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![
@@ -232,6 +234,7 @@ fn test_prune_block_drops_statements_after_exhaustive_if() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![
@@ -277,6 +280,7 @@ fn test_prune_block_drops_statements_after_exhaustive_switch() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![

@@ -313,6 +313,7 @@ fn regex_capture_closure_expr(
     expr(ExprKind::Closure {
         params: vec![("matches".to_string(), None, None, false)],
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Str),
         body,

@@ -39,7 +39,8 @@ pub(super) fn parse_function_decl(
         &Token::LParen,
         "Expected '(' after function name",
     )?;
-    let (params, param_attributes, variadic, variadic_type) = parse_params(tokens, pos, span)?;
+    let (params, param_attributes, variadic, variadic_by_ref, variadic_type) =
+        parse_params(tokens, pos, span)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after parameters")?;
 
     // Parse optional return type: `: TypeExpr`
@@ -58,6 +59,7 @@ pub(super) fn parse_function_decl(
             params,
             param_attributes,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -337,6 +339,7 @@ pub(super) fn parse_params(
         Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         Vec<Vec<AttributeGroup>>,
         Option<String>,
+        bool,
         Option<TypeExpr>,
     ),
     CompileError,
@@ -344,6 +347,7 @@ pub(super) fn parse_params(
     let mut params = Vec::new();
     let mut param_attributes = Vec::new();
     let mut variadic = None;
+    let mut variadic_by_ref = false;
     let mut variadic_type = None;
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         if !params.is_empty() || variadic.is_some() {
@@ -385,6 +389,7 @@ pub(super) fn parse_params(
             match tokens.get(*pos).map(|(t, _)| t) {
                 Some(Token::Variable(n)) => {
                     variadic = Some(n.clone());
+                    variadic_by_ref = is_ref;
                     variadic_type = type_ann;
                     param_attributes.push(attributes);
                     *pos += 1;
@@ -409,7 +414,13 @@ pub(super) fn parse_params(
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
         }
     }
-    Ok((params, param_attributes, variadic, variadic_type))
+    Ok((
+        params,
+        param_attributes,
+        variadic,
+        variadic_by_ref,
+        variadic_type,
+    ))
 }
 
 /// Parses a comma-separated list of `Name`s until a token that does not start a name is

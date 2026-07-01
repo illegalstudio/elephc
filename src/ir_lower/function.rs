@@ -343,13 +343,16 @@ pub(crate) fn method_signature_from_ast(method: &ClassMethod) -> FunctionSig {
         &method.params,
         method.return_type.as_ref(),
         method.variadic.as_deref(),
+        method.variadic_by_ref,
     );
-    if let Some(variadic_type) = &method.variadic_type {
-        if let Some((_, php_type)) = signature.params.last_mut() {
-            *php_type = type_expr_to_php_type(variadic_type);
-        }
-        if let Some(declared) = signature.declared_params.last_mut() {
-            *declared = true;
+    if !method.variadic_by_ref {
+        if let Some(variadic_type) = &method.variadic_type {
+            if let Some((_, php_type)) = signature.params.last_mut() {
+                *php_type = type_expr_to_php_type(variadic_type);
+            }
+            if let Some(declared) = signature.declared_params.last_mut() {
+                *declared = true;
+            }
         }
     }
     signature
@@ -461,12 +464,14 @@ pub(crate) fn lower_closure_function(
     name: &str,
     params: &AstParams,
     variadic: Option<&str>,
+    variadic_by_ref: bool,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
 ) -> FunctionSig {
-    let signature = closure_signature_from_ast(params, variadic, return_type, body, captures);
+    let signature =
+        closure_signature_from_ast(params, variadic, variadic_by_ref, return_type, body, captures);
     lower_closure_function_with_signature(
         parent,
         name,
@@ -483,13 +488,15 @@ pub(crate) fn lower_closure_function_with_context(
     name: &str,
     params: &AstParams,
     variadic: Option<&str>,
+    variadic_by_ref: bool,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     contextual_arg_types: &[PhpType],
     self_ref_callable_capture: Option<&str>,
 ) -> FunctionSig {
-    let mut signature = closure_signature_from_ast(params, variadic, return_type, body, captures);
+    let mut signature =
+        closure_signature_from_ast(params, variadic, variadic_by_ref, return_type, body, captures);
     for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
         if type_ann.is_none() {
             if let Some(contextual_ty) = contextual_arg_types.get(idx) {
@@ -969,18 +976,20 @@ fn params_with_closure_captures(
 
 /// Builds a fallback function signature from AST syntax when checker metadata is unavailable.
 fn signature_from_ast(params: &AstParams, return_type: Option<&TypeExpr>) -> FunctionSig {
-    signature_from_ast_with_variadic(params, return_type, None)
+    signature_from_ast_with_variadic(params, return_type, None, false)
 }
 
 /// Builds an EIR closure signature and infers fallthrough-only closures as `void`.
 fn closure_signature_from_ast(
     params: &AstParams,
     variadic: Option<&str>,
+    variadic_by_ref: bool,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
 ) -> FunctionSig {
-    let mut signature = signature_from_ast_with_variadic(params, return_type, variadic);
+    let mut signature =
+        signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
     if crate::types::checker::yield_validation::body_contains_yield(body) {
         signature.return_type = PhpType::Object("Generator".to_string());
         return signature;
@@ -1108,6 +1117,7 @@ fn signature_from_ast_with_variadic(
     params: &AstParams,
     return_type: Option<&TypeExpr>,
     variadic: Option<&str>,
+    variadic_by_ref: bool,
 ) -> FunctionSig {
     let mut signature = FunctionSig {
         params: params
@@ -1134,12 +1144,12 @@ fn signature_from_ast_with_variadic(
         variadic: variadic.map(str::to_string),
         deprecation: None,
     };
-    append_variadic_param_slot(&mut signature);
+    append_variadic_param_slot(&mut signature, variadic_by_ref);
     signature
 }
 
 /// Adds the variadic `array<mixed>` parameter slot omitted from parsed parameter tuples.
-fn append_variadic_param_slot(signature: &mut FunctionSig) {
+fn append_variadic_param_slot(signature: &mut FunctionSig, variadic_by_ref: bool) {
     let Some(variadic) = signature.variadic.clone() else {
         return;
     };
@@ -1151,7 +1161,7 @@ fn append_variadic_param_slot(signature: &mut FunctionSig) {
         .push((variadic, PhpType::Array(Box::new(PhpType::Mixed))));
     signature.param_type_exprs.push(None);
     signature.defaults.push(None);
-    signature.ref_params.push(false);
+    signature.ref_params.push(variadic_by_ref);
     signature.declared_params.push(false);
 }
 

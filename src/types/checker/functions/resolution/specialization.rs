@@ -141,7 +141,10 @@ impl Checker {
                 }
                 seen_idx += 1;
             }
-            if stored_sig.variadic.is_some() && seen_idx > regular_param_count {
+            if stored_sig.variadic.is_some()
+                && seen_idx > regular_param_count
+                && !variadic_param_is_by_ref(stored_sig)
+            {
                 let regular_names: Vec<String> = stored_sig.params[..regular_param_count]
                     .iter()
                     .map(|(name, _)| name.clone())
@@ -262,6 +265,19 @@ fn is_callable_array_type(ty: &PhpType) -> bool {
         PhpType::AssocArray { value, .. } => value.as_ref() == &PhpType::Callable,
         _ => false,
     }
+}
+
+/// Returns whether a stored function signature has a by-reference variadic slot.
+fn variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
+    let Some(variadic_name) = sig.variadic.as_ref() else {
+        return false;
+    };
+    sig.params
+        .iter()
+        .position(|(name, _)| name == variadic_name)
+        .and_then(|index| sig.ref_params.get(index))
+        .copied()
+        .unwrap_or(false)
 }
 
 /// Extracts parameter types from a generic `param_types` list, mapping them to the

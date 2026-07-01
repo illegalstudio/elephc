@@ -79,6 +79,7 @@ fn test_program_function_effects_recognize_pure_user_functions() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -112,6 +113,7 @@ fn test_program_function_effects_propagate_throwing_calls() {
                 params: Vec::new(),
                 param_attributes: Vec::new(),
                 variadic: None,
+                variadic_by_ref: false,
                 variadic_type: None,
                 return_type: None,
                 body: vec![Stmt::new(
@@ -133,6 +135,7 @@ fn test_program_function_effects_propagate_throwing_calls() {
                 params: Vec::new(),
                 param_attributes: Vec::new(),
                 variadic: None,
+                variadic_by_ref: false,
                 variadic_type: None,
                 return_type: None,
                 body: vec![Stmt::new(

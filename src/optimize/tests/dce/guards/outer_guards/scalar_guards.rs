@@ -22,6 +22,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_guard() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -71,6 +72,7 @@ fn test_eliminate_dead_code_invalidates_outer_guard_after_local_write() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -122,6 +124,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_null_guard() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -177,6 +180,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_zero_guard() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -224,6 +228,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_empty_string_guar
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -275,6 +280,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_string_zero_guard
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
@@ -326,6 +332,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_zero_float_guard(
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(

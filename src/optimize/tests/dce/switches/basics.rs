@@ -33,6 +33,7 @@ fn test_eliminate_dead_code_drops_empty_switch_shell_created_by_branch_dce() {
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(

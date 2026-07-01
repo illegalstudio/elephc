@@ -95,6 +95,7 @@ fn stub_method_returning_null(name: &str) -> ClassMethod {
         params: Vec::new(),
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
         body: vec![Stmt::new(
@@ -121,6 +122,7 @@ fn stub_method_returning_null_with_param(name: &str, param: &str) -> ClassMethod
         params: vec![(param.to_string(), None, None, false)],
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
         body: vec![Stmt::new(
@@ -145,6 +147,7 @@ fn stub_method_returning_false(name: &str) -> ClassMethod {
         params: Vec::new(),
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Bool),
         body: vec![Stmt::new(
@@ -172,6 +175,7 @@ fn stub_void_method(name: &str) -> ClassMethod {
         params: Vec::new(),
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Void),
         body: Vec::new(),

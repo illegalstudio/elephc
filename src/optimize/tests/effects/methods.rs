@@ -34,6 +34,7 @@ fn test_program_static_method_effects_recognize_pure_static_methods() {
                 params: Vec::new(),
                 param_attributes: Vec::new(),
                 variadic: None,
+                variadic_by_ref: false,
                 variadic_type: None,
                 return_type: None,
                 body: vec![Stmt::new(
@@ -87,6 +88,7 @@ fn test_program_static_method_effects_resolve_self_receiver() {
                     params: Vec::new(),
                     param_attributes: Vec::new(),
                     variadic: None,
+                    variadic_by_ref: false,
                     variadic_type: None,
                     return_type: None,
                     body: vec![Stmt::new(
@@ -112,6 +114,7 @@ fn test_program_static_method_effects_resolve_self_receiver() {
                     params: Vec::new(),
                     param_attributes: Vec::new(),
                     variadic: None,
+                    variadic_by_ref: false,
                     variadic_type: None,
                     return_type: None,
                     body: vec![Stmt::new(
@@ -168,6 +171,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
                     params: Vec::new(),
                     param_attributes: Vec::new(),
                     variadic: None,
+                    variadic_by_ref: false,
                     variadic_type: None,
                     return_type: None,
                     body: vec![Stmt::new(
@@ -207,6 +211,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
                     params: Vec::new(),
                     param_attributes: Vec::new(),
                     variadic: None,
+                    variadic_by_ref: false,
                     variadic_type: None,
                     return_type: None,
                     body: vec![Stmt::new(
@@ -261,6 +266,7 @@ fn test_program_private_instance_method_effects_recognize_private_methods() {
                 params: Vec::new(),
                 param_attributes: Vec::new(),
                 variadic: None,
+                variadic_by_ref: false,
                 variadic_type: None,
                 return_type: None,
                 body: vec![Stmt::new(

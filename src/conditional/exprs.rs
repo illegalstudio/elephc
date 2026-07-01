@@ -122,6 +122,7 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -137,6 +138,7 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
                 })
                 .collect(),
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body: apply_stmts(body, defines),
