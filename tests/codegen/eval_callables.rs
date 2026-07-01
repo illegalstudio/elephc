@@ -172,6 +172,68 @@ return $invokable(delta: 13, value: $f) . ":" . gettype($f) . ":" . $f;');
     );
 }
 
+/// Verifies eval `call_user_func()` keeps AOT callable by-reference args by value.
+#[test]
+fn test_eval_call_user_func_aot_callable_forms_use_by_value_args() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_call_user_func_aot_ref_add(int &$value, int $delta): int {
+    $value = $value + $delta;
+    return $value;
+}
+
+class EvalCallUserFuncAotRefBox {
+    public int $base = 10;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public static function add(int &$value, int $delta): int {
+        $value = $value + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+}
+
+echo eval('$string = "eval_call_user_func_aot_ref_add";
+$a = "2";
+echo call_user_func($string, $a, 3) . ":" . gettype($a) . ":" . $a . "|";
+
+$first = eval_call_user_func_aot_ref_add(...);
+$b = "4";
+echo call_user_func($first, $b, 5) . ":" . gettype($b) . ":" . $b . "|";
+
+$box = new EvalCallUserFuncAotRefBox();
+$array = [$box, "bump"];
+$c = "6";
+echo call_user_func($array, $c, 7) . ":" . gettype($c) . ":" . $c . "|";
+
+$staticArray = ["EvalCallUserFuncAotRefBox", "add"];
+$d = "8";
+echo call_user_func($staticArray, $d, 9) . ":" . gettype($d) . ":" . $d . "|";
+
+$staticString = "EvalCallUserFuncAotRefBox::add";
+$e = "10";
+echo call_user_func($staticString, $e, 11) . ":" . gettype($e) . ":" . $e . "|";
+
+$invokable = new EvalCallUserFuncAotRefBox();
+$f = "12";
+return call_user_func($invokable, $f, 13) . ":" . gettype($f) . ":" . $f;');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "5:string:2|9:string:4|23:string:6|17:string:8|21:string:10|35:string:12"
+    );
+}
+
 /// Verifies eval-declared callable forms preserve by-ref writeback.
 #[test]
 fn test_eval_declared_callable_forms_preserve_by_ref_writeback() {
