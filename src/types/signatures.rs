@@ -61,10 +61,26 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
         }
     }
 
-    let variadic_attributes = if wrapper_sig.param_attributes.len() > wrapper_sig.params.len() {
-        wrapper_sig.param_attributes.remove(wrapper_sig.params.len())
+    let variadic_index = wrapper_sig.params.len();
+    let variadic_type_expr = if wrapper_sig.param_type_exprs.len() > variadic_index {
+        wrapper_sig.param_type_exprs.remove(variadic_index)
+    } else {
+        None
+    };
+    let variadic_attributes = if wrapper_sig.param_attributes.len() > variadic_index {
+        wrapper_sig.param_attributes.remove(variadic_index)
     } else {
         Vec::new()
+    };
+    let variadic_ref = if wrapper_sig.ref_params.len() > variadic_index {
+        wrapper_sig.ref_params.remove(variadic_index)
+    } else {
+        false
+    };
+    let variadic_declared = if wrapper_sig.declared_params.len() > variadic_index {
+        wrapper_sig.declared_params.remove(variadic_index)
+    } else {
+        false
     };
 
     wrapper_sig.params.push((
@@ -72,9 +88,9 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
         PhpType::Array(Box::new(PhpType::Mixed)),
     ));
     wrapper_sig.defaults.push(None);
-    wrapper_sig.ref_params.push(false);
-    wrapper_sig.declared_params.push(false);
-    wrapper_sig.param_type_exprs.push(None);
+    wrapper_sig.ref_params.push(variadic_ref);
+    wrapper_sig.declared_params.push(variadic_declared);
+    wrapper_sig.param_type_exprs.push(variadic_type_expr);
     wrapper_sig.param_attributes.push(variadic_attributes);
     wrapper_sig
 }

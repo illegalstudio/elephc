@@ -11,8 +11,10 @@
 
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
-    emit_release_pushed_refcounted_temp_after_array_push, runtime_value_tag,
+    emit_box_runtime_payload_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
+    runtime_value_tag,
 };
+use crate::codegen::builtins::arrays::call_user_func_array::INVOKER_ARG_REF_CELL_TAG;
 use crate::codegen::platform::Arch;
 use crate::codegen::sentinels::TAGGED_SCALAR_ARRAY_VALUE_TYPE;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
@@ -801,7 +803,7 @@ fn emit_array_get_in_bounds_aarch64(
         PhpType::Mixed => {
             ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach Mixed cell payloads
             ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); // load the selected boxed Mixed cell
-            abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
+            emit_mixed_array_get_deref_invoker_ref_cell(ctx, index_reg);
         }
         other if other.is_refcounted() => {
             ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads
@@ -863,7 +865,7 @@ fn emit_array_get_in_bounds_x86_64(
         PhpType::Mixed => {
             ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach Mixed cell payloads
             ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); // load the selected boxed Mixed cell
-            abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
+            emit_mixed_array_get_deref_invoker_ref_cell(ctx, index_reg);
         }
         other if other.is_refcounted() => {
             ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads
@@ -878,6 +880,80 @@ fn emit_array_get_in_bounds_x86_64(
         }
     }
     Ok(())
+}
+
+/// Dereferences descriptor-style ref-cell markers loaded from Mixed array slots.
+fn emit_mixed_array_get_deref_invoker_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    mixed_reg: &str,
+) {
+    let ref_label = ctx.next_label("array_get_mixed_ref_cell");
+    let done_label = ctx.next_label("array_get_mixed_done");
+    let tag_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, tag_reg, mixed_reg, 0);
+    emit_branch_if_invoker_ref_cell_tag(ctx, tag_reg, &ref_label);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&ref_label);
+    emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, mixed_reg);
+    ctx.emitter.label(&done_label);
+}
+
+/// Boxes the current value referenced by a loaded invoker ref-cell marker.
+fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
+    ctx: &mut FunctionContext<'_>,
+    mixed_reg: &str,
+) {
+    let ref_cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let tag_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let lo_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    let hi_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x12",
+        Arch::X86_64 => "rdx",
+    };
+    let string_hi_label = ctx.next_label("array_get_mixed_ref_string_hi");
+    let box_label = ctx.next_label("array_get_mixed_ref_box");
+
+    abi::emit_load_from_address(ctx.emitter, ref_cell_reg, mixed_reg, 8);
+    abi::emit_load_from_address(ctx.emitter, tag_reg, mixed_reg, 16);
+    abi::emit_load_from_address(ctx.emitter, lo_reg, ref_cell_reg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, hi_reg, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #1", tag_reg));           // check whether the referenced value is a string slot
+            ctx.emitter.instruction(&format!("b.eq {}", string_hi_label));      // load string length only for string ref-cells
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, 1", tag_reg));            // check whether the referenced value is a string slot
+            ctx.emitter.instruction(&format!("je {}", string_hi_label));        // load string length only for string ref-cells
+        }
+    }
+    abi::emit_jump(ctx.emitter, &box_label);
+
+    ctx.emitter.label(&string_hi_label);
+    abi::emit_load_from_address(ctx.emitter, hi_reg, ref_cell_reg, 8);
+
+    ctx.emitter.label(&box_label);
+    emit_box_runtime_payload_as_mixed(ctx.emitter, tag_reg, lo_reg, hi_reg);
+}
+
+/// Branches when a loaded Mixed tag is an invoker ref-cell marker.
+fn emit_branch_if_invoker_ref_cell_tag(
+    ctx: &mut FunctionContext<'_>,
+    tag_reg: &str,
+    label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #{}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); // check for a by-reference variadic marker
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // dereference marker slots instead of returning the marker
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); // check for a by-reference variadic marker
+            ctx.emitter.instruction(&format!("je {}", label));                  // dereference marker slots instead of returning the marker
+        }
+    }
 }
 
 /// Emits PHP's undefined integer array-key warning for the key in the result register.
@@ -1387,16 +1463,22 @@ fn lower_mixed_array_set_aarch64(
     value: ValueId,
     value_ty: &PhpType,
 ) -> Result<()> {
-    if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-        ctx.load_value_to_result(value)?;
-        abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
+    let value_ty = value_ty.codegen_repr();
+    let fresh_boxed_value = !matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
+    if fresh_boxed_value {
+        box_value_for_mixed_container(ctx, value, &value_ty)?;
     } else {
-        box_value_for_mixed_container(ctx, value, value_ty)?;
+        ctx.load_value_to_result(value)?;
+        abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
     }
     abi::emit_push_reg(ctx.emitter, "x0");
     ctx.load_value_to_reg(array, "x0")?;
     ctx.load_value_to_reg(index, "x1")?;
     abi::emit_pop_reg(ctx.emitter, "x2");
+    if fresh_boxed_value {
+        emit_mixed_array_set_ref_marker_writeback_aarch64(ctx);
+        return Ok(());
+    }
     abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed");
     Ok(())
 }
@@ -1409,18 +1491,88 @@ fn lower_mixed_array_set_x86_64(
     value: ValueId,
     value_ty: &PhpType,
 ) -> Result<()> {
-    if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-        ctx.load_value_to_result(value)?;
-        abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
+    let value_ty = value_ty.codegen_repr();
+    let fresh_boxed_value = !matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
+    if fresh_boxed_value {
+        box_value_for_mixed_container(ctx, value, &value_ty)?;
     } else {
-        box_value_for_mixed_container(ctx, value, value_ty)?;
+        ctx.load_value_to_result(value)?;
+        abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
     }
     abi::emit_push_reg(ctx.emitter, "rax");
     ctx.load_value_to_reg(array, "rdi")?;
     ctx.load_value_to_reg(index, "rsi")?;
     abi::emit_pop_reg(ctx.emitter, "rdx");
+    if fresh_boxed_value {
+        emit_mixed_array_set_ref_marker_writeback_x86_64(ctx);
+        return Ok(());
+    }
     abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed");
     Ok(())
+}
+
+/// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on AArch64.
+fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'_>) {
+    let runtime_label = ctx.next_label("mixed_array_set_runtime");
+    let done_label = ctx.next_label("mixed_array_set_done");
+
+    ctx.emitter.instruction("cmp x1, #0");                                      // reject negative indexes before checking for by-reference markers
+    ctx.emitter.instruction(&format!("b.lt {}", runtime_label));                // let the runtime setter drop ignored negative-index writes
+    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the current logical length of the indexed array
+    ctx.emitter.instruction("cmp x1, x9");                                      // only existing slots can hold by-reference marker cells
+    ctx.emitter.instruction(&format!("b.hs {}", runtime_label));                // delegate appends and gap writes to the runtime setter
+    ctx.emitter.instruction("add x10, x0, #24");                                // compute the boxed-Mixed payload base for indexed slots
+    ctx.emitter.instruction("ldr x11, [x10, x1, lsl #3]");                      // load the existing boxed Mixed slot
+    ctx.emitter.instruction(&format!("cbz x11, {}", runtime_label));            // null gap slots are ordinary array writes
+    ctx.emitter.instruction("ldr x12, [x11]");                                  // load the existing Mixed tag for marker detection
+    ctx.emitter.instruction(&format!("cmp x12, #{}", INVOKER_ARG_REF_CELL_TAG)); // check whether the slot aliases caller storage
+    ctx.emitter.instruction(&format!("b.ne {}", runtime_label));                // ordinary boxed Mixed slots are replaced by the runtime setter
+    ctx.emitter.instruction("ldr x10, [x11, #8]");                              // load the caller ref-cell address from the marker payload
+    ctx.emitter.instruction("ldr x12, [x2, #8]");                               // load the replacement Mixed low payload word
+    ctx.emitter.instruction("str x12, [x10]");                                  // write the replacement low word through the caller ref-cell
+    ctx.emitter.instruction("ldr x12, [x2, #16]");                              // load the replacement Mixed high payload word
+    ctx.emitter.instruction("str x12, [x10, #8]");                              // write the replacement high word through the caller ref-cell
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the array result while freeing only the Mixed wrapper
+    ctx.emitter.instruction("mov x0, x2");                                      // pass the consumed fresh Mixed wrapper to heap_free
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the array pointer as the ArraySet result
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the runtime setter after marker write-through
+
+    ctx.emitter.label(&runtime_label);
+    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed");
+    ctx.emitter.label(&done_label);
+}
+
+/// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on x86_64.
+fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_>) {
+    let runtime_label = ctx.next_label("mixed_array_set_runtime");
+    let done_label = ctx.next_label("mixed_array_set_done");
+
+    ctx.emitter.instruction("cmp rsi, 0");                                      // reject negative indexes before checking for by-reference markers
+    ctx.emitter.instruction(&format!("jl {}", runtime_label));                  // let the runtime setter drop ignored negative-index writes
+    ctx.emitter.instruction("mov r9, QWORD PTR [rdi]");                         // load the current logical length of the indexed array
+    ctx.emitter.instruction("cmp rsi, r9");                                     // only existing slots can hold by-reference marker cells
+    ctx.emitter.instruction(&format!("jae {}", runtime_label));                 // delegate appends and gap writes to the runtime setter
+    ctx.emitter.instruction("mov r10, QWORD PTR [rdi + 24 + rsi * 8]");         // load the existing boxed Mixed slot
+    ctx.emitter.instruction("test r10, r10");                                   // check whether the existing slot is a null gap
+    ctx.emitter.instruction(&format!("jz {}", runtime_label));                  // null gap slots are ordinary array writes
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the existing Mixed tag for marker detection
+    ctx.emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG)); // check whether the slot aliases caller storage
+    ctx.emitter.instruction(&format!("jne {}", runtime_label));                 // ordinary boxed Mixed slots are replaced by the runtime setter
+    ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                    // load the caller ref-cell address from the marker payload
+    ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 8]");                    // load the replacement Mixed low payload word
+    ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // write the replacement low word through the caller ref-cell
+    ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 16]");                   // load the replacement Mixed high payload word
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r11");                    // write the replacement high word through the caller ref-cell
+    abi::emit_push_reg(ctx.emitter, "rdi");
+    ctx.emitter.instruction("mov rax, rdx");                                    // pass the consumed fresh Mixed wrapper to heap_free
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    abi::emit_pop_reg(ctx.emitter, "rax");
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the runtime setter after marker write-through
+
+    ctx.emitter.label(&runtime_label);
+    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed");
+    ctx.emitter.label(&done_label);
 }
 
 /// Boxes a value for a Mixed array, consuming owned producers when possible.

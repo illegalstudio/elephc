@@ -25,6 +25,7 @@ type ParsedMethodParams = (
     Vec<MethodParam>,
     Vec<Vec<AttributeGroup>>,
     Option<String>,
+    bool,
     Option<TypeExpr>,
     Vec<ClassProperty>,
     Vec<Stmt>,
@@ -48,6 +49,7 @@ pub(super) fn parse_method_params(
     let mut params = Vec::new();
     let mut param_attributes = Vec::new();
     let mut variadic = None;
+    let mut variadic_by_ref = false;
     let mut variadic_type = None;
     let mut promoted_properties = Vec::new();
     let mut promoted_assignments = Vec::new();
@@ -108,6 +110,7 @@ pub(super) fn parse_method_params(
             match tokens.get(*pos).map(|(t, _)| t) {
                 Some(Token::Variable(n)) => {
                     variadic = Some(n.clone());
+                    variadic_by_ref = is_ref;
                     variadic_type = type_ann;
                     param_attributes.push(attributes);
                     *pos += 1;
@@ -167,6 +170,7 @@ pub(super) fn parse_method_params(
         params,
         param_attributes,
         variadic,
+        variadic_by_ref,
         variadic_type,
         promoted_properties,
         promoted_assignments,

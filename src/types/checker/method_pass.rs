@@ -115,11 +115,16 @@ impl Checker {
                         method_env.insert(pname.clone(), ty);
                     }
                     if let Some(variadic_name) = &method.variadic {
+                        let fallback_ty = if method.variadic_by_ref {
+                            PhpType::Array(Box::new(PhpType::Mixed))
+                        } else {
+                            PhpType::Array(Box::new(PhpType::Int))
+                        };
                         let ty = sig_params
                             .as_ref()
                             .and_then(|p| p.get(method.params.len()))
                             .map(|(_, t)| t.clone())
-                            .unwrap_or(PhpType::Array(Box::new(PhpType::Int)));
+                            .unwrap_or(fallback_ty);
                         method_env.insert(variadic_name.clone(), ty);
                     }
                     if method_key == "__construct" {

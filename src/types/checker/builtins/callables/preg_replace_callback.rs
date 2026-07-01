@@ -58,6 +58,7 @@ fn contextual_closure_sig(
     let ExprKind::Closure {
         params,
         variadic,
+        variadic_by_ref,
         return_type,
         body,
         captures,
@@ -131,7 +132,7 @@ fn contextual_closure_sig(
         param_types.push((name.clone(), PhpType::Array(Box::new(PhpType::Mixed))));
         param_type_exprs.push(None);
         defaults.push(None);
-        ref_params.push(false);
+        ref_params.push(*variadic_by_ref);
         declared_params.push(false);
     }
 

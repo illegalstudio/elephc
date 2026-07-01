@@ -57,7 +57,7 @@ pub(crate) fn build_method_sig(
         })
         .collect::<Result<Vec<_>, CompileError>>()?;
     let defaults: Vec<Option<Expr>> = method.params.iter().map(|(_, _, d, _)| d.clone()).collect();
-    let ref_params: Vec<bool> = method.params.iter().map(|(_, _, _, r)| *r).collect();
+    let mut ref_params: Vec<bool> = method.params.iter().map(|(_, _, _, r)| *r).collect();
     for ((param_name, type_ann, default, _), (_, resolved_ty)) in
         method.params.iter().zip(params.iter())
     {
@@ -78,6 +78,9 @@ pub(crate) fn build_method_sig(
         )?,
         None => super::super::infer_return_type_syntactic(&method.body),
     };
+    if method.variadic.is_some() {
+        ref_params.push(method.variadic_by_ref);
+    }
     let mut sig = Checker::callable_wrapper_sig(&FunctionSig {
         params,
         param_type_exprs: method
@@ -109,17 +112,19 @@ pub(crate) fn build_method_sig(
     // A declared element type on the variadic (`int ...$xs`) constrains every collected argument.
     // `callable_wrapper_sig` defaults the variadic container to `array<mixed>`; refine it to the
     // declared element type so call validation enforces it.
-    if let Some(variadic_type) = &method.variadic_type {
-        let elem_ty = checker.resolve_declared_param_type_hint(
-            variadic_type,
-            method.span,
-            &format!(
-                "Method variadic parameter ${}",
-                method.variadic.as_deref().unwrap_or_default()
-            ),
-        )?;
-        if let Some((_, ty)) = sig.params.last_mut() {
-            *ty = PhpType::Array(Box::new(elem_ty));
+    if !method.variadic_by_ref {
+        if let Some(variadic_type) = &method.variadic_type {
+            let elem_ty = checker.resolve_declared_param_type_hint(
+                variadic_type,
+                method.span,
+                &format!(
+                    "Method variadic parameter ${}",
+                    method.variadic.as_deref().unwrap_or_default()
+                ),
+            )?;
+            if let Some((_, ty)) = sig.params.last_mut() {
+                *ty = PhpType::Array(Box::new(elem_ty));
+            }
         }
     }
     Ok(sig)

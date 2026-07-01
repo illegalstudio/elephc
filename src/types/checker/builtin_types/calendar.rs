@@ -43,6 +43,7 @@ fn cal_method(
         has_body: true,
         params,
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(ret),
         by_ref_return: false,

@@ -672,13 +672,29 @@ fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
     if signature.params.iter().any(|(name, _)| name == &variadic) {
         return;
     }
+    let variadic_index = signature.params.len();
+    let variadic_type_expr = if signature.param_type_exprs.len() > variadic_index {
+        signature.param_type_exprs.remove(variadic_index)
+    } else {
+        None
+    };
+    let variadic_ref = if signature.ref_params.len() > variadic_index {
+        signature.ref_params.remove(variadic_index)
+    } else {
+        false
+    };
+    let variadic_declared = if signature.declared_params.len() > variadic_index {
+        signature.declared_params.remove(variadic_index)
+    } else {
+        false
+    };
     signature
         .params
         .push((variadic, PhpType::Array(Box::new(PhpType::Mixed))));
     signature.defaults.push(None);
-    signature.ref_params.push(false);
-    signature.declared_params.push(false);
-    signature.param_type_exprs.push(None);
+    signature.ref_params.push(variadic_ref);
+    signature.declared_params.push(variadic_declared);
+    signature.param_type_exprs.push(variadic_type_expr);
 }
 
 /// Lowers a concrete include-loaded function variant activation marker.

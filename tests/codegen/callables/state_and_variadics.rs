@@ -286,6 +286,34 @@ echo $x;
     assert_eq!(out, "15");
 }
 
+/// Verifies by-reference variadic function and method element assignments mutate caller variables.
+#[test]
+fn test_by_ref_variadic_function_and_method_element_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+function f(&...$items) {
+    $items[0] = $items[0] . "-f";
+    $items[1] = $items[1] . "-g";
+}
+class C {
+    public function m(&...$items) {
+        $items[0] = $items[0] . "-m";
+        $items[1] = $items[1] . "-n";
+    }
+}
+$a = "A";
+$b = "B";
+f($a, $b);
+echo $a . ":" . $b . "|";
+$c = "C";
+$d = "D";
+(new C())->m($c, $d);
+echo $c . ":" . $d;
+"#,
+    );
+    assert_eq!(out, "A-f:B-g|C-m:D-n");
+}
+
 // --- Variadic functions ---
 
 /// Verifies a variadic function collects exactly three positional arguments into the rest array.

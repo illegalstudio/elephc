@@ -179,6 +179,8 @@ pub enum StmtKind {
         /// plus the variadic parameter when present.
         param_attributes: Vec<Vec<AttributeGroup>>,
         variadic: Option<String>,
+        /// Whether the variadic parameter was declared by reference (`&...$args`).
+        variadic_by_ref: bool,
         /// Declared element type hint on the variadic parameter (`int ...$xs`), if any. Each
         /// argument collected into the variadic is checked against this type.
         variadic_type: Option<TypeExpr>,

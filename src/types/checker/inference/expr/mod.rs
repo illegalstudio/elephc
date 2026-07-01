@@ -479,6 +479,7 @@ impl Checker {
             ExprKind::Closure {
                 params,
                 variadic,
+                variadic_by_ref,
                 variadic_type: _,
                 return_type,
                 body,
@@ -494,6 +495,7 @@ impl Checker {
                 self.infer_closure_type(
                     params,
                     variadic,
+                    *variadic_by_ref,
                     return_type,
                     body,
                     captures,

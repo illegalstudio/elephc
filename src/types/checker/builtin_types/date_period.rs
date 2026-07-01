@@ -181,6 +181,7 @@ fn method_vis(
         has_body: true,
         params,
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type,
         by_ref_return: false,
@@ -613,6 +614,7 @@ fn date_period_create_from_iso8601_string() -> ClassMethod {
             param("options", Some(TypeExpr::Int), Some(int_lit(0))),
         ],
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         // PHP 8.3+: returns a `DatePeriod` or throws (never `false`).
         return_type: Some(TypeExpr::Named(Name::unqualified("DatePeriod"))),

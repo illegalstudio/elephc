@@ -431,11 +431,14 @@ fn trait_method_reflection_sig(method: &ClassMethod) -> FunctionSig {
         .iter()
         .map(|(_, _, default, _)| default.clone())
         .collect();
-    let ref_params = method
+    let mut ref_params: Vec<bool> = method
         .params
         .iter()
         .map(|(_, _, _, by_ref)| *by_ref)
         .collect();
+    if method.variadic.is_some() {
+        ref_params.push(method.variadic_by_ref);
+    }
     callable_wrapper_sig(&FunctionSig {
         params,
         param_type_exprs: method

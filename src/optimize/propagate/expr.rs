@@ -197,6 +197,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -214,6 +215,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             ExprKind::Closure {
                 params: propagate_params(params),
                 variadic,
+                variadic_by_ref,
                 variadic_type,
                 return_type,
                 body: super::stmt::with_function_scope(|| {

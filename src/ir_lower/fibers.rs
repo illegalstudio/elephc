@@ -159,8 +159,15 @@ fn direct_new_fiber_callback_sig(expr: &Expr) -> Option<FunctionSig> {
     let callback = args.first()?;
     match &callback.kind {
         ExprKind::Closure {
-            params, variadic, ..
-        } => Some(callback_sig_from_closure_params(params, variadic.as_deref())),
+            params,
+            variadic,
+            variadic_by_ref,
+            ..
+        } => Some(callback_sig_from_closure_params(
+            params,
+            variadic.as_deref(),
+            *variadic_by_ref,
+        )),
         _ => None,
     }
 }
@@ -172,8 +179,15 @@ fn callback_sig_for_expr(
 ) -> Option<FunctionSig> {
     match &callback.kind {
         ExprKind::Closure {
-            params, variadic, ..
-        } => Some(callback_sig_from_closure_params(params, variadic.as_deref())),
+            params,
+            variadic,
+            variadic_by_ref,
+            ..
+        } => Some(callback_sig_from_closure_params(
+            params,
+            variadic.as_deref(),
+            *variadic_by_ref,
+        )),
         ExprKind::Variable(name) => ctx
             .callable_param_signature(name)
             .cloned()
@@ -296,6 +310,7 @@ fn class_method_sig(
 fn callback_sig_from_closure_params(
     params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
     variadic: Option<&str>,
+    variadic_by_ref: bool,
 ) -> FunctionSig {
     let mut sig = FunctionSig {
         params: params
@@ -332,7 +347,7 @@ fn callback_sig_from_closure_params(
                 .push((variadic_name.to_string(), PhpType::Array(Box::new(PhpType::Mixed))));
             sig.param_type_exprs.push(None);
             sig.defaults.push(None);
-            sig.ref_params.push(false);
+            sig.ref_params.push(variadic_by_ref);
             sig.declared_params.push(false);
         }
     }

@@ -512,11 +512,15 @@ impl Checker {
                     sig,
                     regular_param_count,
                     env,
-                ) {
+                ) && !method_variadic_param_is_by_ref(sig)
+                {
                     if let Some((_, variadic_ty)) = sig.params.last_mut() {
                         *variadic_ty = PhpType::Iterable;
                     }
-                } else if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                } else if sig.variadic.is_some()
+                    && arg_types.len() > regular_param_count
+                    && !method_variadic_param_is_by_ref(sig)
+                {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
@@ -1018,11 +1022,15 @@ impl Checker {
                     sig,
                     regular_param_count,
                     env,
-                ) {
+                ) && !method_variadic_param_is_by_ref(sig)
+                {
                     if let Some((_, variadic_ty)) = sig.params.last_mut() {
                         *variadic_ty = PhpType::Iterable;
                     }
-                } else if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                } else if sig.variadic.is_some()
+                    && arg_types.len() > regular_param_count
+                    && !method_variadic_param_is_by_ref(sig)
+                {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
@@ -1076,7 +1084,10 @@ impl Checker {
                         }
                     }
                 }
-                if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                if sig.variadic.is_some()
+                    && arg_types.len() > regular_param_count
+                    && !method_variadic_param_is_by_ref(sig)
+                {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
@@ -1124,6 +1135,19 @@ fn method_variadic_tail_needs_iterable(
                     .any(|(param_name, _)| param_name == name)
         )
     })
+}
+
+/// Returns whether a method signature stores its variadic slot by reference.
+fn method_variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
+    let Some(variadic_name) = sig.variadic.as_ref() else {
+        return false;
+    };
+    sig.params
+        .iter()
+        .position(|(name, _)| name == variadic_name)
+        .and_then(|index| sig.ref_params.get(index))
+        .copied()
+        .unwrap_or(false)
 }
 
 /// Returns true when a spread source can carry string keys into a variadic method tail.

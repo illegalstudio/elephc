@@ -912,6 +912,7 @@ fn lower_function_declarations(
                 name,
                 params,
                 variadic: _,
+                variadic_by_ref: _,
                 variadic_type: _,
                 return_type,
                 body,

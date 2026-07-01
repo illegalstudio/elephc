@@ -295,6 +295,7 @@ fn lowers_every_expr_variant_smoke() {
         expr(ExprKind::Closure {
             params: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -444,6 +445,7 @@ fn lowers_every_stmt_variant_smoke() {
             params: vec![("x".to_string(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: Some(TypeExpr::Int),
             by_ref_return: false,
@@ -501,6 +503,7 @@ fn class_method(name: &str, is_static: bool) -> ClassMethod {
         params: Vec::new(),
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Int),
         by_ref_return: false,

@@ -55,6 +55,7 @@ impl Checker {
                 params,
                 param_attributes,
                 variadic,
+                variadic_by_ref,
                 variadic_type,
                 return_type,
                 by_ref_return,
@@ -84,7 +85,10 @@ impl Checker {
                     params.iter().map(|(_, t, _, _)| t.clone()).collect();
                 let defaults: Vec<Option<Expr>> =
                     params.iter().map(|(_, _, d, _)| d.clone()).collect();
-                let ref_flags: Vec<bool> = params.iter().map(|(_, _, _, r)| *r).collect();
+                let mut ref_flags: Vec<bool> = params.iter().map(|(_, _, _, r)| *r).collect();
+                if variadic.is_some() {
+                    ref_flags.push(*variadic_by_ref);
+                }
                 self.fn_decls.insert(
                     name.clone(),
                     FnDecl {
@@ -94,6 +98,7 @@ impl Checker {
                         defaults,
                         ref_params: ref_flags,
                         variadic: variadic.clone(),
+                        variadic_by_ref: *variadic_by_ref,
                         variadic_type: variadic_type.clone(),
                         return_type: return_type.clone(),
                         by_ref_return: *by_ref_return,

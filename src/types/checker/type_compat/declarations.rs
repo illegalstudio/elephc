@@ -240,7 +240,9 @@ impl Checker {
             }
         }
         if let Some(variadic_name) = decl.variadic.as_ref() {
-            let elem_ty = if let Some(type_ann) = decl.variadic_type.as_ref() {
+            let elem_ty = if decl.variadic_by_ref {
+                PhpType::Mixed
+            } else if let Some(type_ann) = decl.variadic_type.as_ref() {
                 self.resolve_declared_param_type_hint(
                     type_ann,
                     decl.span,

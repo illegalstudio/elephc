@@ -152,6 +152,21 @@ fn test_parse_class_decl_with_extends() {
     }
 }
 
+/// Verifies that class methods preserve `&...$items` as by-reference variadic metadata.
+#[test]
+fn test_parse_method_by_ref_variadic_param() {
+    let stmts = parse_source("<?php class Box { public function collect(&...$items) {} }");
+    match &stmts[0].kind {
+        StmtKind::ClassDecl { methods, .. } => {
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].name, "collect");
+            assert_eq!(methods[0].variadic.as_deref(), Some("items"));
+            assert!(methods[0].variadic_by_ref);
+        }
+        _ => panic!("Expected ClassDecl"),
+    }
+}
+
 /// Verifies that `<?php interface Named extends Renderable, Jsonable { public function name(); }`
 /// parses to `InterfaceDecl` with multiple extends names, one abstract method (no body),
 /// and confirms `is_abstract` and `has_body` flags are set correctly.
