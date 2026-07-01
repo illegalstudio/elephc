@@ -1888,7 +1888,7 @@ fn eval_closure_with_optional_binding(
     bind_method_scope_args(
         &mut function_scope,
         function.params(),
-        function.parameter_is_by_ref(),
+        parameter_is_by_ref,
         &evaluated_args,
     );
     let result = execute_statements(function.body(), context, &mut function_scope, values);

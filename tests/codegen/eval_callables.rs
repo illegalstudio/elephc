@@ -1368,6 +1368,57 @@ return call_user_func_array($named, [&$d, 9]) . ":" . gettype($d) . ":" . $d;');
     );
 }
 
+/// Verifies `call_user_func()` invokes `Closure::fromCallable()` targets by value.
+#[test]
+fn test_eval_closure_from_callable_call_user_func_uses_by_value_args() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_from_callable_call_user_func_ref_add(int &$value, int $delta): int {
+    $value = $value + $delta;
+    return $value;
+}
+
+class EvalFromCallableCallUserFuncRefBox {
+    public int $base = 10;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public static function add(int &$value, int $delta): int {
+        $value = $value + $delta;
+        return $value;
+    }
+}
+
+echo eval('$function = Closure::fromCallable("eval_from_callable_call_user_func_ref_add");
+$a = "2";
+echo call_user_func($function, $a, 3) . ":" . gettype($a) . ":" . $a . "|";
+
+$box = new EvalFromCallableCallUserFuncRefBox();
+$method = Closure::fromCallable([$box, "bump"]);
+$b = "4";
+echo call_user_func($method, $b, 5) . ":" . gettype($b) . ":" . $b . "|";
+
+$invoke = Closure::fromCallable($box);
+$c = "6";
+echo call_user_func($invoke, $c, 7) . ":" . gettype($c) . ":" . $c . "|";
+
+$static = Closure::fromCallable(["EvalFromCallableCallUserFuncRefBox", "add"]);
+$d = "8";
+return call_user_func($static, $d, 9) . ":" . gettype($d) . ":" . $d;');
+"#,
+    );
+
+    assert_eq!(out, "5:string:2|19:string:4|23:string:6|17:string:8");
+}
+
 /// Verifies `Closure::fromCallable()` values can cross eval into AOT callable parameters.
 #[test]
 fn test_eval_closure_from_callable_values_pass_to_aot_callable_params() {

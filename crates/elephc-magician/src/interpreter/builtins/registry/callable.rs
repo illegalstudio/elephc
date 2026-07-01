@@ -692,11 +692,21 @@ fn eval_evaluated_callable_with_call_user_func_values(
                 .closure(name)
                 .cloned()
                 .ok_or(EvalStatus::UnsupportedConstruct)?;
-            eval_bound_closure_with_call_args(
+            let evaluated_args = positional_args(evaluated_args);
+            let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
+                closure.function().name(),
+                closure.function().params(),
+                closure.function().parameter_is_by_ref(),
+                closure.function().parameter_is_variadic(),
+                evaluated_args.len(),
+                values,
+            )?;
+            eval_bound_closure_with_call_args_ref_flags(
                 &closure,
                 *bound_this,
                 bound_scope.clone(),
-                positional_args(evaluated_args),
+                &parameter_is_by_ref,
+                evaluated_args,
                 context,
                 values,
             )
@@ -895,9 +905,20 @@ fn eval_named_callable_with_call_user_func_values(
         return Ok(result);
     }
     if let Some(closure) = context.closure(name).cloned() {
-        return eval_closure_with_evaluated_args(
+        let evaluated_args = positional_args(evaluated_args);
+        let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
+            closure.function().name(),
+            closure.function().params(),
+            closure.function().parameter_is_by_ref(),
+            closure.function().parameter_is_variadic(),
+            evaluated_args.len(),
+            values,
+        )?;
+        return eval_closure_with_evaluated_args_and_bound_scope_ref_flags(
             &closure,
-            positional_args(evaluated_args),
+            None,
+            &parameter_is_by_ref,
+            evaluated_args,
             context,
             values,
         );

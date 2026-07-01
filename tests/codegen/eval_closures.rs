@@ -125,6 +125,38 @@ echo $seed;');
     assert_eq!(out, "15:string:2");
 }
 
+/// Verifies eval `call_user_func()` invokes closures with by-value argument semantics.
+#[test]
+fn test_eval_closure_call_user_func_uses_by_value_args() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalClosureCallUserFuncBox {
+    public int $base = 10;
+}
+
+$fn = function(int &$value, int $delta): int {
+    $value = $value + $delta;
+    return $value;
+};
+$first = "2";
+echo call_user_func($fn, $first, 3);
+echo ":" . gettype($first) . ":" . $first . "|";
+
+$box = new EvalClosureCallUserFuncBox();
+$method = function(int &$value, int $delta): int {
+    $value = $value + $this->base + $delta;
+    return $value;
+};
+$bound = $method->bindTo($box);
+$second = "4";
+echo call_user_func($bound, $second, 5);
+echo ":" . gettype($second) . ":" . $second;');
+"#,
+    );
+
+    assert_eq!(out, "5:string:2|19:string:4");
+}
+
 /// Verifies eval `Closure::bind()` and `bindTo()` persist `$this` across later calls.
 #[test]
 fn test_eval_closure_bind_persists_this_and_by_ref_args() {
