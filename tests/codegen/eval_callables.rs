@@ -1512,9 +1512,9 @@ return $box->value . "|" . $box->apply($callback, 4) . "|" .
     );
 }
 
-/// Verifies `Closure::call()` rebinds `fromCallable()` method closures to a same-class receiver.
+/// Verifies `Closure::call()` rebinds method closures but passes later args by value.
 #[test]
-fn test_eval_closure_from_callable_call_rebinds_same_class_method_and_invokable_targets() {
+fn test_eval_closure_from_callable_call_rebinds_targets_and_uses_by_value_args() {
     let out = compile_and_run(
         r#"<?php
 function eval_from_callable_call_fn(): string {
@@ -1560,7 +1560,44 @@ echo is_null($static->call($bound, 1)) ? "S" : "s";');
 "#,
     );
 
-    assert_eq!(out, "25:integer:25|29:integer:29|F|S");
+    assert_eq!(out, "25:string:2|29:string:4|F|S");
+}
+
+/// Verifies `Closure::call()` preserves named argument mapping while using by-value args.
+#[test]
+fn test_eval_closure_from_callable_call_named_args_use_by_value_targets() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalFromCallableCallNamedBox {
+    public int $base = 0;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+}
+
+echo eval('$original = new EvalFromCallableCallNamedBox();
+$original->base = 10;
+$bound = new EvalFromCallableCallNamedBox();
+$bound->base = 20;
+
+$method = Closure::fromCallable([$original, "bump"]);
+$a = "2";
+echo $method->call(newThis: $bound, delta: 3, value: $a) . ":" . gettype($a) . ":" . $a . "|";
+
+$invoke = Closure::fromCallable($original);
+$b = "4";
+return $invoke->call(newThis: $bound, value: $b, delta: 5) . ":" . gettype($b) . ":" . $b;');
+"#,
+    );
+
+    assert_eq!(out, "25:string:2|29:string:4");
 }
 
 /// Verifies `Closure::bindTo()` persists rebinding for method and invokable callable targets.

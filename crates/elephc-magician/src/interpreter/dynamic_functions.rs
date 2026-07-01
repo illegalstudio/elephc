@@ -1704,20 +1704,9 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_closure_with_optional_binding(closure, None, evaluated_args, context, values)
-}
-
-/// Evaluates one runtime eval closure with `$this` bound by `Closure::call()`.
-pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_this(
-    closure: &EvalClosure,
-    bound_this: RuntimeCellHandle,
-    evaluated_args: Vec<EvaluatedCallArg>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_closure_with_evaluated_args_and_bound_this_scope(
+    eval_closure_with_optional_binding(
         closure,
-        bound_this,
+        function_ref_flags(closure),
         None,
         evaluated_args,
         context,
@@ -1742,6 +1731,37 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_this_sc
     let class_scope = bound_scope.unwrap_or_else(|| called_class.clone());
     eval_closure_with_optional_binding(
         closure,
+        function_ref_flags(closure),
+        Some(EvalClosureBinding {
+            this_object: Some(bound_this),
+            class_scope,
+            called_class,
+        }),
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Evaluates a runtime eval closure with `$this`, scope, and caller-selected by-ref flags.
+pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_this_scope_ref_flags(
+    closure: &EvalClosure,
+    bound_this: RuntimeCellHandle,
+    bound_scope: Option<String>,
+    parameter_is_by_ref: &[bool],
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if closure.is_static() {
+        values.warning("Cannot bind an instance to a static closure")?;
+        return values.null();
+    }
+    let called_class = eval_closure_bound_object_class_name(bound_this, context, values)?;
+    let class_scope = bound_scope.unwrap_or_else(|| called_class.clone());
+    eval_closure_with_optional_binding(
+        closure,
+        parameter_is_by_ref,
         Some(EvalClosureBinding {
             this_object: Some(bound_this),
             class_scope,
@@ -1766,6 +1786,40 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_scope(
     };
     eval_closure_with_optional_binding(
         closure,
+        function_ref_flags(closure),
+        Some(EvalClosureBinding {
+            this_object: None,
+            called_class: class_scope.clone(),
+            class_scope,
+        }),
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Evaluates a runtime eval closure with scope-only binding and caller-selected by-ref flags.
+pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_scope_ref_flags(
+    closure: &EvalClosure,
+    bound_scope: Option<String>,
+    parameter_is_by_ref: &[bool],
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(class_scope) = bound_scope else {
+        return eval_closure_with_optional_binding(
+            closure,
+            parameter_is_by_ref,
+            None,
+            evaluated_args,
+            context,
+            values,
+        );
+    };
+    eval_closure_with_optional_binding(
+        closure,
+        parameter_is_by_ref,
         Some(EvalClosureBinding {
             this_object: None,
             called_class: class_scope.clone(),
@@ -1784,9 +1838,15 @@ struct EvalClosureBinding {
     called_class: String,
 }
 
+/// Returns the closure function's declared by-reference parameter flags.
+fn function_ref_flags(closure: &EvalClosure) -> &[bool] {
+    closure.function().parameter_is_by_ref()
+}
+
 /// Evaluates one runtime eval closure with optional class and `$this` binding metadata.
 fn eval_closure_with_optional_binding(
     closure: &EvalClosure,
+    parameter_is_by_ref: &[bool],
     binding: Option<EvalClosureBinding>,
     evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
@@ -1804,7 +1864,7 @@ fn eval_closure_with_optional_binding(
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
-        function.parameter_is_by_ref(),
+        parameter_is_by_ref,
         function.parameter_is_variadic(),
         evaluated_args,
         context,

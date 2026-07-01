@@ -641,6 +641,37 @@ fn eval_bound_closure_with_call_args(
     }
 }
 
+/// Invokes a bound eval closure with caller-selected by-reference binding flags.
+fn eval_bound_closure_with_call_args_ref_flags(
+    closure: &EvalClosure,
+    bound_this: Option<RuntimeCellHandle>,
+    bound_scope: Option<String>,
+    parameter_is_by_ref: &[bool],
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match bound_this {
+        Some(this_object) => eval_closure_with_evaluated_args_and_bound_this_scope_ref_flags(
+            closure,
+            this_object,
+            bound_scope,
+            parameter_is_by_ref,
+            evaluated_args,
+            context,
+            values,
+        ),
+        None => eval_closure_with_evaluated_args_and_bound_scope_ref_flags(
+            closure,
+            bound_scope,
+            parameter_is_by_ref,
+            evaluated_args,
+            context,
+            values,
+        ),
+    }
+}
+
 /// Invokes a normalized callback through `call_user_func()` by-value argument semantics.
 fn eval_evaluated_callable_with_call_user_func_values(
     callback: &EvaluatedCallable,
@@ -735,6 +766,124 @@ fn eval_evaluated_callable_with_call_user_func_values(
     }
 }
 
+/// Invokes a normalized callback with by-value semantics while preserving named args.
+pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
+    callback: &EvaluatedCallable,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let evaluated_args = eval_clear_evaluated_arg_ref_targets(evaluated_args);
+    match callback {
+        EvaluatedCallable::Named { name, .. } => {
+            eval_named_callable_with_call_user_func_args(name, evaluated_args, context, values)
+        }
+        EvaluatedCallable::BoundClosure {
+            name,
+            bound_this,
+            bound_scope,
+        } => {
+            let closure = context
+                .closure(name)
+                .cloned()
+                .ok_or(EvalStatus::UnsupportedConstruct)?;
+            let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
+                closure.function().name(),
+                closure.function().params(),
+                closure.function().parameter_is_by_ref(),
+                closure.function().parameter_is_variadic(),
+                evaluated_args.len(),
+                values,
+            )?;
+            eval_bound_closure_with_call_args_ref_flags(
+                &closure,
+                *bound_this,
+                bound_scope.clone(),
+                &parameter_is_by_ref,
+                evaluated_args,
+                context,
+                values,
+            )
+        }
+        EvaluatedCallable::InvokableObject { object } => {
+            eval_invokable_object_with_call_user_func_args(
+                *object,
+                evaluated_args,
+                context,
+                values,
+            )
+        }
+        EvaluatedCallable::ObjectMethod {
+            object,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        } => match native_class {
+            Some(native_class) => {
+                eval_native_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
+                    *object,
+                    native_class,
+                    method,
+                    evaluated_args,
+                    bridge_scope.as_deref(),
+                    called_class.as_deref(),
+                    context,
+                    values,
+                )
+            }
+            None => eval_object_method_with_call_user_func_args(
+                *object,
+                method,
+                evaluated_args,
+                context,
+                values,
+            ),
+        },
+        EvaluatedCallable::StaticMethod {
+            class_name,
+            method,
+            called_class,
+            native_class,
+            bridge_scope,
+        } => match native_class {
+            Some(native_class) => {
+                eval_native_static_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
+                    native_class,
+                    method,
+                    evaluated_args,
+                    bridge_scope.as_deref(),
+                    called_class.as_deref(),
+                    context,
+                    values,
+                )
+            }
+            None => eval_static_method_with_call_user_func_args(
+                class_name,
+                method,
+                called_class.as_deref(),
+                evaluated_args,
+                context,
+                values,
+            ),
+        },
+    }
+}
+
+/// Removes caller writeback targets before a by-value callable API dispatch.
+fn eval_clear_evaluated_arg_ref_targets(
+    evaluated_args: Vec<EvaluatedCallArg>,
+) -> Vec<EvaluatedCallArg> {
+    evaluated_args
+        .into_iter()
+        .map(|arg| EvaluatedCallArg {
+            name: arg.name,
+            value: arg.value,
+            ref_target: None,
+        })
+        .collect()
+}
+
 /// Invokes a named callable through `call_user_func()` and warns for by-ref parameters.
 fn eval_named_callable_with_call_user_func_values(
     name: &str,
@@ -785,6 +934,73 @@ fn eval_named_callable_with_call_user_func_values(
     Err(EvalStatus::UnsupportedConstruct)
 }
 
+/// Invokes a named callable through by-value callable semantics with named args.
+fn eval_named_callable_with_call_user_func_args(
+    name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if evaluated_args
+        .iter()
+        .all(|arg| arg.name.is_none() && arg.ref_target.is_none())
+    {
+        let evaluated_values = evaluated_args.into_iter().map(|arg| arg.value).collect();
+        return eval_named_callable_with_call_user_func_values(
+            name,
+            evaluated_values,
+            context,
+            values,
+        );
+    }
+    if let Some(closure) = context.closure(name).cloned() {
+        let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
+            closure.function().name(),
+            closure.function().params(),
+            closure.function().parameter_is_by_ref(),
+            closure.function().parameter_is_variadic(),
+            evaluated_args.len(),
+            values,
+        )?;
+        return eval_closure_with_evaluated_args_and_bound_scope_ref_flags(
+            &closure,
+            None,
+            &parameter_is_by_ref,
+            evaluated_args,
+            context,
+            values,
+        );
+    }
+    if let Some(function) = context.function(name).cloned() {
+        let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
+            function.name(),
+            function.params(),
+            function.parameter_is_by_ref(),
+            function.parameter_is_variadic(),
+            evaluated_args.len(),
+            values,
+        )?;
+        return eval_dynamic_function_with_evaluated_args_and_ref_flags(
+            &function,
+            &parameter_is_by_ref,
+            evaluated_args,
+            context,
+            values,
+        );
+    }
+    if let Some(function) = context.native_function(name) {
+        let evaluated_args = bind_evaluated_native_function_args_for_call_user_func(
+            name,
+            &function,
+            evaluated_args,
+            context,
+            values,
+        )?;
+        return eval_native_function_with_values(function, evaluated_args, context, values);
+    }
+    Err(EvalStatus::UnsupportedConstruct)
+}
+
 /// Invokes an invokable object through `call_user_func()` by-value argument semantics.
 fn eval_invokable_object_with_call_user_func_values(
     object: RuntimeCellHandle,
@@ -801,6 +1017,16 @@ fn eval_invokable_object_with_call_user_func_values(
     )
 }
 
+/// Invokes an invokable object through by-value callable semantics with named args.
+fn eval_invokable_object_with_call_user_func_args(
+    object: RuntimeCellHandle,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_object_method_with_call_user_func_args(object, "__invoke", evaluated_args, context, values)
+}
+
 /// Invokes an object-method callable through `call_user_func()` by-value semantics.
 fn eval_object_method_with_call_user_func_values(
     object: RuntimeCellHandle,
@@ -810,6 +1036,26 @@ fn eval_object_method_with_call_user_func_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args = positional_args(evaluated_args);
+    if let Some(result) = eval_object_method_call_user_func_result(
+        object,
+        method,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    eval_method_call_result_with_evaluated_args(object, method, evaluated_args, context, values)
+}
+
+/// Invokes an object-method callable through by-value callable semantics with named args.
+fn eval_object_method_with_call_user_func_args(
+    object: RuntimeCellHandle,
+    method: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if let Some(result) = eval_object_method_call_user_func_result(
         object,
         method,
@@ -964,6 +1210,47 @@ fn eval_static_method_with_call_user_func_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args = positional_args(evaluated_args);
+    if let Some(result) = eval_static_method_call_user_func_result(
+        class_name,
+        method_name,
+        called_class,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    match called_class {
+        Some(called_class) => eval_static_method_call_result_with_called_class(
+            class_name,
+            called_class,
+            method_name,
+            evaluated_args,
+            context,
+            values,
+        ),
+        None if eval_callable_array_receiver_is_special_class_name(class_name) => {
+            eval_throw_class_not_found_error(class_name, context, values)
+        }
+        None => eval_static_method_call_result(
+            class_name,
+            method_name,
+            evaluated_args,
+            context,
+            values,
+        ),
+    }
+}
+
+/// Invokes a static-method callable through by-value callable semantics with named args.
+fn eval_static_method_with_call_user_func_args(
+    class_name: &str,
+    method_name: &str,
+    called_class: Option<&str>,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if let Some(result) = eval_static_method_call_user_func_result(
         class_name,
         method_name,

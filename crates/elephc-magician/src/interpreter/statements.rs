@@ -9283,13 +9283,14 @@ fn eval_closure_object_method_result(
     let (bound_this, call_args) = eval_closure_call_split_args(evaluated_args)?;
     match target {
         EvalClosureObjectTarget::Named(name) => {
-            if let Some(closure) = context.closure(&name).cloned() {
-                return eval_closure_with_evaluated_args_and_bound_this(
-                    &closure,
-                    bound_this,
-                    call_args,
-                    context,
-                    values,
+            if context.closure(&name).is_some() {
+                let callable = EvaluatedCallable::BoundClosure {
+                    name,
+                    bound_this: Some(bound_this),
+                    bound_scope: None,
+                };
+                return eval_evaluated_callable_with_by_value_call_args(
+                    &callable, call_args, context, values,
                 )
                 .map(Some);
             }
@@ -9302,14 +9303,14 @@ fn eval_closure_object_method_result(
         EvalClosureObjectTarget::BoundNamed {
             name, bound_scope, ..
         } => {
-            if let Some(closure) = context.closure(&name).cloned() {
-                return eval_closure_with_evaluated_args_and_bound_this_scope(
-                    &closure,
-                    bound_this,
+            if context.closure(&name).is_some() {
+                let callable = EvaluatedCallable::BoundClosure {
+                    name,
+                    bound_this: Some(bound_this),
                     bound_scope,
-                    call_args,
-                    context,
-                    values,
+                };
+                return eval_evaluated_callable_with_by_value_call_args(
+                    &callable, call_args, context, values,
                 )
                 .map(Some);
             }
@@ -9327,7 +9328,9 @@ fn eval_closure_object_method_result(
                 )
                 .map(Some);
             }
-            eval_invokable_object_call_result(bound_this, call_args, context, values).map(Some)
+            let callable = EvaluatedCallable::InvokableObject { object: bound_this };
+            eval_evaluated_callable_with_by_value_call_args(&callable, call_args, context, values)
+                .map(Some)
         }
         EvalClosureObjectTarget::ObjectMethod {
             object,
@@ -9353,7 +9356,9 @@ fn eval_closure_object_method_result(
                 native_class,
                 bridge_scope,
             };
-            eval_evaluated_callable_with_call_array_args(&callable, call_args, context, values)
+            eval_evaluated_callable_with_by_value_call_args(
+                &callable, call_args, context, values,
+            )
                 .map(Some)
         }
         EvalClosureObjectTarget::StaticMethod { .. } => eval_closure_call_warning_null(

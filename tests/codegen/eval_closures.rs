@@ -100,9 +100,9 @@ echo $ref->invokeArgs(["delta" => 5]);');
     assert_eq!(out, "C:A:s:C:S:1:4:7:9");
 }
 
-/// Verifies eval `Closure::call()` binds `$this` and preserves by-ref argument writeback.
+/// Verifies eval `Closure::call()` binds `$this` and passes later args by value.
 #[test]
-fn test_eval_closure_call_binds_this_and_writes_back_by_ref_args() {
+fn test_eval_closure_call_binds_this_and_uses_by_value_args() {
     let out = compile_and_run(
         r#"<?php
 eval('class EvalClosureCallBox {
@@ -122,7 +122,7 @@ echo $seed;');
 "#,
     );
 
-    assert_eq!(out, "15:integer:15");
+    assert_eq!(out, "15:string:2");
 }
 
 /// Verifies eval `Closure::bind()` and `bindTo()` persist `$this` across later calls.
