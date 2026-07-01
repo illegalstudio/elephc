@@ -719,6 +719,23 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             | "fgetcsv" | "fputcsv" | "flock" | "tmpfile"
             | "popen" | "pclose"
             | "opendir" | "readdir" | "closedir" | "rewinddir"
+            // These 18 io batch E stream context/filter/wrapper/bucket builtins had no
+            // pre-migration first-class-callable wrapper: general_first_class_callable_builtin_sig
+            // returned None for them (they are not in that table), so no wrapper was emitted.
+            // Registering them in the builtin registry makes first_class_callable_builtin_sig
+            // return Some, which would newly emit a deferred-closure wrapper; excluding them here
+            // restores the exact pre-migration (no-wrapper) behaviour and is provably
+            // behaviour-neutral. These builtins take stream resources, stream contexts, or
+            // brigade objects unsuited to a generic string-callable wrapper. Direct calls and
+            // EIR first-class-callable use still work through the EIR path.
+            | "stream_context_create" | "stream_context_get_default" | "stream_context_set_default"
+            | "stream_context_set_option" | "stream_context_set_params"
+            | "stream_context_get_options" | "stream_context_get_params"
+            | "stream_filter_append" | "stream_filter_prepend" | "stream_filter_remove"
+            | "stream_filter_register"
+            | "stream_bucket_make_writeable" | "stream_bucket_new"
+            | "stream_bucket_append" | "stream_bucket_prepend"
+            | "stream_wrapper_register" | "stream_wrapper_unregister" | "stream_wrapper_restore"
     )
 }
 

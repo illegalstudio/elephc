@@ -81,32 +81,12 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "getservbyname" => io::lower_getservbyname(ctx, inst),
         "getservbyport" => io::lower_getservbyport(ctx, inst),
         "fsockopen" | "pfsockopen" => io::lower_fsockopen(ctx, inst),
-        "stream_wrapper_register" => io::lower_stream_wrapper_register(ctx, inst),
-        "stream_wrapper_unregister" => io::lower_stream_wrapper_unregister(ctx, inst),
-        "stream_wrapper_restore" => io::lower_stream_wrapper_restore(ctx, inst),
-        "stream_context_create" => io::lower_stream_context_create(ctx, inst),
-        "stream_context_get_default" => io::lower_stream_context_get_default(ctx, inst),
-        "stream_context_set_default" => io::lower_stream_context_set_default(ctx, inst),
-        "stream_context_set_option" => io::lower_stream_context_set_option(ctx, inst),
-        "stream_context_set_params" => io::lower_stream_context_set_params(ctx, inst),
-        "stream_context_get_options" => io::lower_stream_context_get_options(ctx, inst),
-        "stream_context_get_params" => io::lower_stream_context_get_params(ctx, inst),
         "stream_get_contents" => io::lower_stream_get_contents(ctx, inst),
         "stream_get_line" => io::lower_stream_get_line(ctx, inst),
         "stream_get_meta_data" => io::lower_stream_get_meta_data(ctx, inst),
         "stream_get_wrappers" => io::lower_stream_get_wrappers(ctx, inst),
         "stream_get_transports" => io::lower_stream_get_transports(ctx, inst),
         "stream_get_filters" => io::lower_stream_get_filters(ctx, inst),
-        "stream_filter_register" => io::lower_stream_filter_register(ctx, inst),
-        "stream_filter_append" | "stream_filter_prepend" => {
-            io::lower_stream_filter_attach(ctx, inst, key.as_str())
-        }
-        "stream_filter_remove" => io::lower_stream_filter_remove(ctx, inst),
-        "stream_bucket_make_writeable" => io::lower_stream_bucket_make_writeable(ctx, inst),
-        "stream_bucket_new" => io::lower_stream_bucket_new(ctx, inst),
-        "stream_bucket_append" | "stream_bucket_prepend" => {
-            io::lower_stream_bucket_append_or_prepend(ctx, inst)
-        }
         "stream_is_local" => io::lower_stream_is_local(ctx, inst),
         "stream_supports_lock" => io::lower_stream_supports_lock(ctx, inst),
         "stream_isatty" => io::lower_stream_isatty(ctx, inst),

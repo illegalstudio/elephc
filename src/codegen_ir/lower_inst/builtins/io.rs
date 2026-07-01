@@ -997,7 +997,7 @@ fn literal_fopen_mode_is_write(ctx: &FunctionContext<'_>, mode: ValueId) -> Resu
 }
 
 /// Lowers `stream_wrapper_register(protocol, class, flags?)`.
-pub(super) fn lower_stream_wrapper_register(
+pub(crate) fn lower_stream_wrapper_register(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1027,7 +1027,7 @@ pub(super) fn lower_stream_wrapper_register(
 }
 
 /// Lowers `stream_wrapper_unregister(protocol)`.
-pub(super) fn lower_stream_wrapper_unregister(
+pub(crate) fn lower_stream_wrapper_unregister(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1049,7 +1049,7 @@ pub(super) fn lower_stream_wrapper_unregister(
 }
 
 /// Lowers `stream_wrapper_restore(protocol)` as a successful no-op.
-pub(super) fn lower_stream_wrapper_restore(
+pub(crate) fn lower_stream_wrapper_restore(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1061,7 +1061,7 @@ pub(super) fn lower_stream_wrapper_restore(
 }
 
 /// Lowers `stream_context_create(options?, params?)`.
-pub(super) fn lower_stream_context_create(
+pub(crate) fn lower_stream_context_create(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1075,7 +1075,7 @@ pub(super) fn lower_stream_context_create(
 }
 
 /// Lowers `stream_context_get_default(options?)`.
-pub(super) fn lower_stream_context_get_default(
+pub(crate) fn lower_stream_context_get_default(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1085,7 +1085,7 @@ pub(super) fn lower_stream_context_get_default(
 }
 
 /// Lowers `stream_context_set_default(options)`.
-pub(super) fn lower_stream_context_set_default(
+pub(crate) fn lower_stream_context_set_default(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1095,7 +1095,7 @@ pub(super) fn lower_stream_context_set_default(
 }
 
 /// Lowers `stream_context_set_option(context, options)` and the four-argument form.
-pub(super) fn lower_stream_context_set_option(
+pub(crate) fn lower_stream_context_set_option(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1115,7 +1115,7 @@ pub(super) fn lower_stream_context_set_option(
 }
 
 /// Lowers `stream_context_set_params(context, params)` as an accepted parameter update.
-pub(super) fn lower_stream_context_set_params(
+pub(crate) fn lower_stream_context_set_params(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1249,7 +1249,7 @@ fn clear_stream_notification_callback(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Lowers `stream_context_get_options(context)`.
-pub(super) fn lower_stream_context_get_options(
+pub(crate) fn lower_stream_context_get_options(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1288,7 +1288,7 @@ pub(super) fn lower_stream_context_get_options(
 }
 
 /// Lowers `stream_context_get_params(context)` to an empty associative hash.
-pub(super) fn lower_stream_context_get_params(
+pub(crate) fn lower_stream_context_get_params(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1518,7 +1518,7 @@ pub(super) fn lower_stream_get_filters(
 }
 
 /// Lowers `stream_filter_register(filter_name, class)` into the user-filter registry helper.
-pub(super) fn lower_stream_filter_register(
+pub(crate) fn lower_stream_filter_register(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1547,7 +1547,7 @@ pub(super) fn lower_stream_filter_register(
 }
 
 /// Lowers `stream_filter_append` and `stream_filter_prepend`.
-pub(super) fn lower_stream_filter_attach(
+pub(crate) fn lower_stream_filter_attach(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -1936,7 +1936,7 @@ fn emit_iconv_write_transform_for_current_fd(
 }
 
 /// Lowers `stream_filter_remove(filter)` and clears both direction tables for the fd.
-pub(super) fn lower_stream_filter_remove(
+pub(crate) fn lower_stream_filter_remove(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1967,7 +1967,7 @@ pub(super) fn lower_stream_filter_remove(
 }
 
 /// Lowers `stream_bucket_new(stream, data)` into a stdClass-backed bucket object.
-pub(super) fn lower_stream_bucket_new(
+pub(crate) fn lower_stream_bucket_new(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1984,7 +1984,7 @@ pub(super) fn lower_stream_bucket_new(
 }
 
 /// Lowers `stream_bucket_make_writeable(brigade)` by popping the brigade head.
-pub(super) fn lower_stream_bucket_make_writeable(
+pub(crate) fn lower_stream_bucket_make_writeable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2061,7 +2061,7 @@ pub(super) fn lower_stream_bucket_make_writeable(
 }
 
 /// Lowers `stream_bucket_append` and `stream_bucket_prepend` over the `_buckets` array.
-pub(super) fn lower_stream_bucket_append_or_prepend(
+pub(crate) fn lower_stream_bucket_append_or_prepend(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

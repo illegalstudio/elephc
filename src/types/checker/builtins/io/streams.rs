@@ -9,7 +9,6 @@
 //! - Return types and diagnostics must stay aligned with `crate::types::signatures` and builtin codegen emitters.
 
 use crate::errors::CompileError;
-use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
@@ -63,61 +62,6 @@ pub(super) fn check_builtin(
                 ));
             }
             Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
-        }
-        "stream_filter_append" | "stream_filter_prepend" => {
-            if args.len() < 2 || args.len() > 4 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes 2 to 4 arguments", name),
-                ));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            match &args[1].kind {
-                ExprKind::StringLiteral(filter) => {
-                    // The zlib.* filters call into the system zlib, so any
-                    // program that attaches one must link against libz.
-                    if filter.as_str() == "zlib.deflate" || filter.as_str() == "zlib.inflate" {
-                        checker.require_builtin_library("z");
-                    }
-                    // convert.iconv.* uses libc iconv: in libc on Linux
-                    // (glibc/musl) but a separate library on macOS, so only
-                    // macOS needs explicit -liconv linkage.
-                    if filter.starts_with("convert.iconv.") {
-                        checker.require_macos_builtin_library("iconv");
-                    }
-                    // The bzip2.* filters call into libbz2 (BZ2_bz*), so any
-                    // program that attaches one must link against -lbz2. The
-                    // existing compress.bzip2:// require fires only on the fopen
-                    // path, not here, so this is the filter path's own wiring.
-                    if filter.as_str() == "bzip2.compress" || filter.as_str() == "bzip2.decompress" {
-                        checker.require_builtin_library("bz2");
-                    }
-                    // Unknown built-in names are routed through the user
-                    // filter registry at runtime (Phase 10 tier 3); the
-                    // helper returns PHP false for unregistered names.
-                }
-                _ => {
-                    // Dynamic filter names resolve through the user filter
-                    // registry at runtime. The codegen pulls the name from
-                    // the expression result regs and the helper does the
-                    // lookup.
-                    checker.infer_type(&args[1], env)?;
-                }
-            }
-            for arg in &args[2..] {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Mixed))
-        }
-        "stream_filter_remove" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_filter_remove() takes exactly 1 argument",
-                ));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            Ok(Some(PhpType::Bool))
         }
         "stream_get_contents" => {
             if args.is_empty() || args.len() > 3 {
@@ -197,41 +141,6 @@ pub(super) fn check_builtin(
                 PhpType::Bool,
             ])))
         }
-        "stream_wrapper_register" => {
-            // stream_wrapper_register(protocol, class[, flags]) records a
-            // user-defined wrapper class for `$protocol://...` paths.
-            if args.len() < 2 || args.len() > 3 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_wrapper_register() takes 2 or 3 arguments",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            validate_registered_stream_class(checker, "stream_wrapper_register", &args[1], span)?;
-            Ok(Some(PhpType::Bool))
-        }
-        "stream_wrapper_unregister" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_wrapper_unregister() takes exactly 1 argument",
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Bool))
-        }
-        "stream_wrapper_restore" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_wrapper_restore() takes exactly 1 argument",
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Bool))
-        }
         "stream_socket_enable_crypto" => {
             // The builtin publishes the elephc-tls function pointers and
             // calls into elephc_tls_attach_fd, so programs that invoke it
@@ -249,52 +158,6 @@ pub(super) fn check_builtin(
             checker.require_builtin_library("elephc_tls");
             Ok(Some(PhpType::Bool))
         }
-        "stream_context_create" => {
-            if args.len() > 2 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_context_create() takes at most 2 arguments",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::stream_resource()))
-        }
-        "stream_context_get_default" => {
-            if args.len() > 1 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_context_get_default() takes at most 1 argument",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::stream_resource()))
-        }
-        "stream_context_set_default" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_context_set_default() takes exactly 1 argument",
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::stream_resource()))
-        }
-        "stream_context_set_params" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_context_set_params() takes exactly 2 arguments",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Bool))
-        }
         "stream_resolve_include_path" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
@@ -304,83 +167,6 @@ pub(super) fn check_builtin(
             }
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Mixed))
-        }
-        "stream_context_set_option" => {
-            // PHP accepts 2 forms: (ctx, options_array) or (ctx, wrapper,
-            // option, value). v1 accepts both shapes inertly.
-            if args.len() < 2 || args.len() > 4 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_context_set_option() takes 2 to 4 arguments",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Bool))
-        }
-        "stream_context_get_options" | "stream_context_get_params" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 1 argument", name),
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::AssocArray {
-                key: Box::new(PhpType::Str),
-                value: Box::new(PhpType::Mixed),
-            }))
-        }
-        "stream_filter_register" => {
-            // stream_filter_register(filter_name, class) records a
-            // user-defined filter class for stream_filter_append/prepend.
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_filter_register() takes exactly 2 arguments",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            validate_registered_stream_class(checker, "stream_filter_register", &args[1], span)?;
-            Ok(Some(PhpType::Bool))
-        }
-        "stream_bucket_make_writeable" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_bucket_make_writeable() takes exactly 1 argument",
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            // Returns an object (?stdClass-like with data + datalen) or null.
-            Ok(Some(PhpType::Mixed))
-        }
-        "stream_bucket_new" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_bucket_new() takes exactly 2 arguments",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Mixed))
-        }
-        "stream_bucket_append" | "stream_bucket_prepend" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 2 arguments", name),
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Void))
         }
         "stream_set_chunk_size" => {
             if args.len() != 2 {
@@ -748,32 +534,4 @@ fn accepts_int_or_null(ty: &PhpType) -> bool {
         PhpType::Union(members) => members.iter().all(accepts_int_or_null),
         _ => false,
     }
-}
-
-/// Validates a literal stream wrapper/filter class name against declared classes.
-fn validate_registered_stream_class(
-    checker: &Checker,
-    builtin: &str,
-    class_arg: &Expr,
-    span: crate::span::Span,
-) -> Result<(), CompileError> {
-    let ExprKind::StringLiteral(class_name) = &class_arg.kind else {
-        return Ok(());
-    };
-    if stream_registered_class_exists(checker, class_name) {
-        return Ok(());
-    }
-    Err(CompileError::new(
-        span,
-        &format!("{}(): undefined class '{}'", builtin, class_name),
-    ))
-}
-
-/// Returns true when `class_name` exists under PHP's case-insensitive class lookup.
-fn stream_registered_class_exists(checker: &Checker, class_name: &str) -> bool {
-    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
-    checker
-        .classes
-        .keys()
-        .any(|existing| php_symbol_key(existing) == class_key)
 }
