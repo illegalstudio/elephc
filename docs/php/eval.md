@@ -118,10 +118,12 @@ or `float`), string raw storage, or one-word heap raw storage (`array`,
 layouts, and other unsupported raw-storage by-reference free-function
 parameters remain metadata-only until the function bridge has typed
 staging/writeback for those ABI layouts.
-Generated/AOT `&...$variadic` by-reference parameter tails are also
-metadata-visible but not PHP-compatible through eval yet: the bridge currently
-builds a temporary variadic array and does not propagate element-level writes
-back to the caller variables.
+Generated/AOT positional `&...$variadic` by-reference parameter tails are
+supported for eval direct, variable-function, first-class callable,
+`Closure::fromCallable()`, and `call_user_func_array()` dispatch when the
+passed tail arguments have lvalue/ref-cell storage; element-level writes
+propagate back to the caller variables, while rebinding the variadic container
+itself remains local to the callee.
 `call_user_func()` remains by-value for registered AOT free-function
 by-reference parameters.
 
@@ -567,11 +569,14 @@ the native bridge with parameter names, supported defaults, named arguments, and
 indexed or string-keyed runtime argument arrays. Direct eval calls, variable
 function calls, and `call_user_func()` paths can also invoke registered
 generated/AOT free functions with positional variadic tails when the generated
-signature has no by-reference parameters. Direct and variable-function calls
-can additionally invoke generated/AOT free functions whose by-reference
+signature has no by-reference parameters. Direct, variable-function,
+first-class callable, `Closure::fromCallable()`, and `call_user_func_array()`
+paths can additionally invoke generated/AOT free functions whose by-reference
 parameters use boxed Mixed/union storage or one-word scalar raw storage
 (`int`, `bool`, or `float`), string raw storage, or one-word heap raw storage
-(`array`, `iterable`, and object/class parameters). Registered generated/AOT free-function parameter
+(`array`, `iterable`, and object/class parameters), including positional
+`&...` variadic tails when the tail arguments have lvalue/ref-cell storage.
+Registered generated/AOT free-function parameter
 names, declared types, return types, by-reference and variadic flags,
 required/optional counts, and supported defaults are also exposed through
 `ReflectionFunction` / `ReflectionParameter` metadata. Unsupported
@@ -925,7 +930,9 @@ static-method, and constructor signatures whose generated ABI storage is
 scalar/string, callable descriptor, boxed Mixed/union, array/hash, iterable, or
 object, plus free-function signatures using the descriptor invoker ABI when
 by-reference parameters, if any, use boxed Mixed/union storage or raw one-word
-scalar storage (`int`, `bool`, or `float`).
+scalar storage (`int`, `bool`, or `float`), string raw storage, or one-word heap
+storage (`array`, `iterable`, and object/class parameters), including
+positional `&...` variadic tail element writeback.
 Registered type specs validate nullable and union members, intersection object
 parameters, and intersection object returns before or after the generated AOT
 call. By-reference method and constructor parameters remain limited to the

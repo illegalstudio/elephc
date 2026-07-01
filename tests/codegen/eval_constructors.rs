@@ -140,6 +140,32 @@ return $box->name;');
     assert_eq!(out, "A-ctor|B-head:tail|C-ctor");
 }
 
+/// Verifies AOT constructor by-reference variadic args write back caller variables.
+#[test]
+fn test_eval_dynamic_new_constructor_by_ref_variadic_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCtorVariadicRefBridge {
+    public string $label;
+
+    public function __construct(&...$items) {
+        $items[0] = $items[0] . "-ctor";
+        $items[1] = $items[1] . "-tail";
+        $this->label = $items[0] . ":" . $items[1];
+    }
+}
+
+echo eval('$a = "A";
+$b = "B";
+$box = new EvalCtorVariadicRefBridge($a, $b);
+echo $box->label . "|";
+return $a . ":" . $b;');
+"#,
+    );
+
+    assert_eq!(out, "A-ctor:B-tail|A-ctor:B-tail");
+}
+
 /// Verifies AOT constructor by-reference writeback happens before a catchable throw.
 #[test]
 fn test_eval_dynamic_new_constructor_by_ref_lvalue_writeback_before_throw() {

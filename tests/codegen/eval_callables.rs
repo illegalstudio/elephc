@@ -9,7 +9,7 @@
 //! - Fixtures verify by-reference writeback through string, callable-array, and
 //!   first-class callable forms instead of only direct method/function syntax.
 
-use crate::support::compile_and_run;
+use crate::support::{compile_and_run, compile_and_run_capture};
 
 /// Verifies eval string and first-class AOT function callables preserve by-ref writeback.
 #[test]
@@ -298,6 +298,117 @@ return call_user_func_array($closure, $args) . ":" . $i . ":" . $j . ":" .
         concat!(
             "A-i:B-n:A-i:B-n|C-i:D-n:C-i:D-n|E-i:F-n:E-i:F-n|",
             "G-s:H-sn:G-s:H-sn|I-i:J-n:I-i:J-n:I-i:J-n"
+        )
+    );
+}
+
+/// Verifies AOT function callable forms preserve by-ref variadic element writeback.
+#[test]
+fn test_eval_aot_function_callable_forms_preserve_by_ref_variadic_writeback() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function eval_aot_variadic_ref_collect(&...$items): string {
+    $items[0] = $items[0] . "-f";
+    $items[1] = $items[1] . "-g";
+    return $items[0] . ":" . $items[1];
+}
+
+echo eval('$string = "eval_aot_variadic_ref_collect";
+$a = "A";
+$b = "B";
+echo $string($a, $b) . ":" . $a . ":" . $b . "|";
+
+$first = eval_aot_variadic_ref_collect(...);
+$c = "C";
+$d = "D";
+echo $first($c, $d) . ":" . $c . ":" . $d . "|";
+
+$closure = Closure::fromCallable("eval_aot_variadic_ref_collect");
+$e = "E";
+$f = "F";
+echo $closure($e, $f) . ":" . $e . ":" . $f . "|";
+
+$g = "G";
+$h = "H";
+$args = [&$g, &$h];
+return call_user_func_array($closure, $args) . ":" . $g . ":" . $h . ":" .
+    $args[0] . ":" . $args[1];');
+"#,
+    );
+
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "A-f:B-g:A-f:B-g|C-f:D-g:C-f:D-g|E-f:F-g:E-f:F-g|",
+            "G-f:H-g:G-f:H-g:G-f:H-g"
+        )
+    );
+}
+
+/// Verifies AOT method callable forms preserve by-ref variadic element writeback.
+#[test]
+fn test_eval_aot_method_callable_forms_preserve_by_ref_variadic_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotVariadicRefCallableBox {
+    public function collect(&...$items): string {
+        $items[0] = $items[0] . "-i";
+        $items[1] = $items[1] . "-j";
+        return $items[0] . ":" . $items[1];
+    }
+
+    public static function collectStatic(&...$items): string {
+        $items[0] = $items[0] . "-s";
+        $items[1] = $items[1] . "-t";
+        return $items[0] . ":" . $items[1];
+    }
+}
+
+echo eval('$box = new EvalAotVariadicRefCallableBox();
+
+$array = [$box, "collect"];
+$a = "A";
+$b = "B";
+echo $array($a, $b) . ":" . $a . ":" . $b . "|";
+
+$first = $box->collect(...);
+$c = "C";
+$d = "D";
+echo $first($c, $d) . ":" . $c . ":" . $d . "|";
+
+$closure = Closure::fromCallable([$box, "collect"]);
+$e = "E";
+$f = "F";
+echo $closure($e, $f) . ":" . $e . ":" . $f . "|";
+
+$string = "EvalAotVariadicRefCallableBox::collectStatic";
+$g = "G";
+$h = "H";
+echo $string($g, $h) . ":" . $g . ":" . $h . "|";
+
+$static = EvalAotVariadicRefCallableBox::collectStatic(...);
+$i = "I";
+$j = "J";
+echo $static($i, $j) . ":" . $i . ":" . $j . "|";
+
+$k = "K";
+$l = "L";
+$args = [&$k, &$l];
+return call_user_func_array($closure, $args) . ":" . $k . ":" . $l . ":" .
+    $args[0] . ":" . $args[1];');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        concat!(
+            "A-i:B-j:A-i:B-j|C-i:D-j:C-i:D-j|E-i:F-j:E-i:F-j|",
+            "G-s:H-t:G-s:H-t|I-s:J-t:I-s:J-t|K-i:L-j:K-i:L-j:K-i:L-j"
         )
     );
 }

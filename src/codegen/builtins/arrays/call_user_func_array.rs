@@ -1052,9 +1052,15 @@ pub(crate) fn emit_loaded_array_callback_call(
     }
 
     if sig.variadic.is_some() {
+        let variadic_param_index = visible_param_count.saturating_sub(1);
+        let variadic_is_ref = sig
+            .ref_params
+            .get(variadic_param_index)
+            .copied()
+            .unwrap_or(false);
         let variadic_elem_ty = sig
             .params
-            .get(visible_param_count.saturating_sub(1))
+            .get(variadic_param_index)
             .and_then(|(_, ty)| match ty {
                 PhpType::Array(elem) => Some((**elem).clone()),
                 _ => None,
@@ -1288,7 +1294,12 @@ pub(crate) fn emit_loaded_array_callback_call(
         abi::emit_jump(emitter, &loop_label);
         emitter.label(&loop_done_label);
         emitter.label(&done_label);
-        arg_types.push(PhpType::Array(Box::new(variadic_elem_ty)));
+        if variadic_is_ref {
+            push_loaded_variadic_array_ref_arg(emitter);
+            arg_types.push(PhpType::Int);
+        } else {
+            arg_types.push(PhpType::Array(Box::new(variadic_elem_ty)));
+        }
     }
     callback_env::push_captures_as_hidden_args(&captures, emitter, ctx, &mut arg_types);
 
@@ -1406,6 +1417,24 @@ fn push_loaded_invoker_ref_cell_value_arg(
     pushed_ty
 }
 
+/// Converts the just-built variadic array stack slot into a temporary by-reference cell.
+fn push_loaded_variadic_array_ref_arg(emitter: &mut Emitter) {
+    let array_reg = abi::secondary_scratch_reg(emitter);
+    let cell_reg = abi::symbol_scratch_reg(emitter);
+
+    abi::emit_load_temporary_stack_slot(emitter, array_reg, 0);
+    abi::emit_release_temporary_stack(emitter, 16);
+    abi::emit_push_reg(emitter, array_reg);
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    abi::emit_reg_move(emitter, cell_reg, abi::int_result_reg(emitter));
+    abi::emit_pop_reg(emitter, array_reg);
+    abi::emit_store_to_address(emitter, array_reg, cell_reg, 0);
+    abi::emit_load_int_immediate(emitter, array_reg, 4);
+    abi::emit_store_to_address(emitter, array_reg, cell_reg, 8);
+    abi::emit_push_reg(emitter, cell_reg);
+}
+
 /// Boxes the value referenced by an invoker marker into an owned Mixed cell.
 fn emit_box_loaded_invoker_ref_cell_value_as_mixed(emitter: &mut Emitter, ctx: &mut Context) {
     let result_reg = abi::int_result_reg(emitter);
@@ -1417,7 +1446,9 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(emitter: &mut Emitter, ctx: &
         Arch::X86_64 => "rdx",
     };
     let string_hi_label = ctx.next_label("cufa_invoker_ref_string_hi");
+    let mixed_cell_label = ctx.next_label("cufa_invoker_ref_mixed_cell");
     let box_label = ctx.next_label("cufa_invoker_ref_box");
+    let done_label = ctx.next_label("cufa_invoker_ref_done");
 
     abi::emit_load_from_address(emitter, ref_cell_reg, result_reg, 8);
     abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
@@ -1425,10 +1456,14 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(emitter: &mut Emitter, ctx: &
     abi::emit_load_int_immediate(emitter, hi_reg, 0);
     match emitter.target.arch {
         Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, crate::codegen::runtime_value_tag(&PhpType::Mixed))); // check whether the ref-cell already stores a boxed Mixed handle
+            emitter.instruction(&format!("b.eq {}", mixed_cell_label));        // retain and forward boxed Mixed values without reboxing their pointer
             emitter.instruction(&format!("cmp {}, #1", tag_reg));               // does the referenced value use a two-word string slot?
             emitter.instruction(&format!("b.eq {}", string_hi_label));          // load the string length only for string reference cells
         }
         Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, {}", tag_reg, crate::codegen::runtime_value_tag(&PhpType::Mixed))); // check whether the ref-cell already stores a boxed Mixed handle
+            emitter.instruction(&format!("je {}", mixed_cell_label));          // retain and forward boxed Mixed values without reboxing their pointer
             emitter.instruction(&format!("cmp {}, 1", tag_reg));                // does the referenced value use a two-word string slot?
             emitter.instruction(&format!("je {}", string_hi_label));            // load the string length only for string reference cells
         }
@@ -1440,6 +1475,13 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(emitter: &mut Emitter, ctx: &
 
     emitter.label(&box_label);
     crate::codegen::emit_box_runtime_payload_as_mixed(emitter, tag_reg, lo_reg, hi_reg);
+    abi::emit_jump(emitter, &done_label);
+
+    emitter.label(&mixed_cell_label);
+    abi::emit_reg_move(emitter, result_reg, lo_reg);
+    abi::emit_incref_if_refcounted(emitter, &PhpType::Mixed);
+
+    emitter.label(&done_label);
 }
 
 /// Branches when a boxed Mixed element represents an invoker reference-cell marker.
