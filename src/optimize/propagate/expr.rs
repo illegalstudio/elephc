@@ -29,11 +29,18 @@ pub(crate) fn captured_constant_env(
 /// substitutions applied, followed by constant folding.
 pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     let empty_env;
-    let env = if expr_local_writes(&expr).is_some_and(|writes| !writes.is_empty()) {
-        empty_env = HashMap::new();
-        &empty_env
-    } else {
-        env
+    // Clear the environment when evaluating this expression may write locals. A
+    // known non-empty write set (e.g. an inline assignment) invalidates the facts,
+    // and so does an *unknown* write set (`None`, produced by calls whose by-ref
+    // parameters can mutate an argument variable). Treating `None` as "no writes"
+    // would keep a stale constant for a variable mutated by a by-ref call sequenced
+    // earlier in the same expression, e.g. `match(bump($i)) . "|" . $i` (issue #384).
+    let env = match expr_local_writes(&expr) {
+        Some(writes) if writes.is_empty() => env,
+        _ => {
+            empty_env = HashMap::new();
+            &empty_env
+        }
     };
     let span = expr.span;
     let kind = match expr.kind {
