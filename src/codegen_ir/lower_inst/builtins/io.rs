@@ -1298,7 +1298,7 @@ pub(crate) fn lower_stream_context_get_params(
 }
 
 /// Lowers `stream_get_contents(stream, length?, offset?)` to `string|false`.
-pub(super) fn lower_stream_get_contents(
+pub(crate) fn lower_stream_get_contents(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1357,7 +1357,7 @@ pub(super) fn lower_stream_get_contents(
 }
 
 /// Lowers `stream_copy_to_stream(from, to, length?, offset?)` through wrapper-aware read/write loops.
-pub(super) fn lower_stream_copy_to_stream(
+pub(crate) fn lower_stream_copy_to_stream(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1390,7 +1390,7 @@ pub(super) fn lower_stream_copy_to_stream(
 }
 
 /// Lowers `stream_get_line(stream, length, ending?)`.
-pub(super) fn lower_stream_get_line(
+pub(crate) fn lower_stream_get_line(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1443,7 +1443,7 @@ pub(super) fn lower_stream_get_line(
 }
 
 /// Lowers `stream_get_meta_data(stream)` through the metadata runtime helper.
-pub(super) fn lower_stream_get_meta_data(
+pub(crate) fn lower_stream_get_meta_data(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1458,7 +1458,7 @@ pub(super) fn lower_stream_get_meta_data(
 }
 
 /// Lowers `stream_get_wrappers()` to the static built-in wrapper list.
-pub(super) fn lower_stream_get_wrappers(
+pub(crate) fn lower_stream_get_wrappers(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1474,7 +1474,7 @@ pub(super) fn lower_stream_get_wrappers(
 }
 
 /// Lowers `stream_get_transports()` to the static transport list.
-pub(super) fn lower_stream_get_transports(
+pub(crate) fn lower_stream_get_transports(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1490,7 +1490,7 @@ pub(super) fn lower_stream_get_transports(
 }
 
 /// Lowers `stream_get_filters()` to the static built-in filter list.
-pub(super) fn lower_stream_get_filters(
+pub(crate) fn lower_stream_get_filters(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2100,7 +2100,7 @@ pub(crate) fn lower_stream_bucket_append_or_prepend(
 }
 
 /// Lowers `stream_is_local(stream)` as a true predicate after evaluating its argument.
-pub(super) fn lower_stream_is_local(
+pub(crate) fn lower_stream_is_local(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2112,7 +2112,7 @@ pub(super) fn lower_stream_is_local(
 }
 
 /// Lowers `stream_supports_lock(stream)` as true after resource unboxing.
-pub(super) fn lower_stream_supports_lock(
+pub(crate) fn lower_stream_supports_lock(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2124,7 +2124,7 @@ pub(super) fn lower_stream_supports_lock(
 }
 
 /// Lowers `stream_isatty(stream)`.
-pub(super) fn lower_stream_isatty(
+pub(crate) fn lower_stream_isatty(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2139,7 +2139,7 @@ pub(super) fn lower_stream_isatty(
 }
 
 /// Lowers `stream_set_blocking(stream, enable)`.
-pub(super) fn lower_stream_set_blocking(
+pub(crate) fn lower_stream_set_blocking(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2191,7 +2191,7 @@ pub(super) fn lower_stream_set_blocking(
 }
 
 /// Lowers `stream_set_chunk_size(stream, size)` and returns the previous size.
-pub(super) fn lower_stream_set_chunk_size(
+pub(crate) fn lower_stream_set_chunk_size(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2251,7 +2251,7 @@ pub(super) fn lower_stream_set_chunk_size(
 }
 
 /// Lowers stream read/write buffer setters as successful no-ops.
-pub(super) fn lower_stream_set_buffer(
+pub(crate) fn lower_stream_set_buffer(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2264,7 +2264,7 @@ pub(super) fn lower_stream_set_buffer(
 }
 
 /// Lowers `stream_set_timeout(stream, seconds, microseconds?)`.
-pub(super) fn lower_stream_set_timeout(
+pub(crate) fn lower_stream_set_timeout(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2313,7 +2313,7 @@ pub(super) fn lower_stream_set_timeout(
 }
 
 /// Lowers `stream_select(read, write, except, seconds, microseconds?)`.
-pub(super) fn lower_stream_select(
+pub(crate) fn lower_stream_select(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2358,7 +2358,7 @@ pub(super) fn lower_stream_select(
 }
 
 /// Lowers `stream_resolve_include_path(filename)` as realpath-backed `string|false`.
-pub(super) fn lower_stream_resolve_include_path(
+pub(crate) fn lower_stream_resolve_include_path(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

@@ -736,6 +736,21 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             | "stream_bucket_make_writeable" | "stream_bucket_new"
             | "stream_bucket_append" | "stream_bucket_prepend"
             | "stream_wrapper_register" | "stream_wrapper_unregister" | "stream_wrapper_restore"
+            // These 17 io batch F stream get/set/misc builtins had no pre-migration
+            // first-class-callable wrapper: general_first_class_callable_builtin_sig
+            // returned None for them (they are not in that table), so no wrapper was emitted.
+            // Registering them in the builtin registry makes first_class_callable_builtin_sig
+            // return Some, which would newly emit a deferred-closure wrapper; excluding them here
+            // restores the exact pre-migration (no-wrapper) behaviour and is provably
+            // behaviour-neutral. These builtins take stream resources or reference parameters
+            // unsuited to a generic string-callable wrapper. Direct calls and EIR
+            // first-class-callable use still work through the EIR path.
+            | "stream_is_local" | "stream_resolve_include_path" | "stream_select"
+            | "stream_set_chunk_size" | "stream_set_read_buffer" | "stream_set_write_buffer"
+            | "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers"
+            | "stream_isatty" | "stream_supports_lock" | "stream_set_blocking"
+            | "stream_set_timeout" | "stream_get_line" | "stream_get_meta_data"
+            | "stream_get_contents" | "stream_copy_to_stream"
     )
 }
 

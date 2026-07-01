@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Return types and diagnostics must stay aligned with `crate::types::signatures` and builtin codegen emitters.
+//! - The stream_get/set/misc family (io batch F) has been migrated to `src/builtins/io/`; only
+//!   socket/network arms remain here for io batch G.
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
@@ -34,87 +36,6 @@ pub(super) fn check_builtin(
     env: &TypeEnv,
 ) -> BuiltinResult {
     match name {
-        "stream_isatty" | "stream_supports_lock" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 1 argument", name),
-                ));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            Ok(Some(PhpType::Bool))
-        }
-        "stream_is_local" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_is_local() takes exactly 1 argument",
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Bool))
-        }
-        "stream_get_transports" | "stream_get_wrappers" | "stream_get_filters" => {
-            if !args.is_empty() {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes no arguments", name),
-                ));
-            }
-            Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
-        }
-        "stream_get_contents" => {
-            if args.is_empty() || args.len() > 3 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_get_contents() takes 1 to 3 arguments",
-                ));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            if let Some(length) = args.get(1) {
-                ensure_optional_int(checker, name, "length", length, env)?;
-            }
-            if let Some(offset) = args.get(2) {
-                ensure_int(checker, name, "offset", offset, env)?;
-            }
-            Ok(Some(checker.normalize_union_type(vec![
-                PhpType::Str,
-                PhpType::Bool,
-            ])))
-        }
-        "stream_get_meta_data" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_get_meta_data() takes exactly 1 argument",
-                ));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            Ok(Some(PhpType::AssocArray {
-                key: Box::new(PhpType::Str),
-                value: Box::new(PhpType::Mixed),
-            }))
-        }
-        "stream_copy_to_stream" => {
-            if args.len() < 2 || args.len() > 4 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_copy_to_stream() takes 2 to 4 arguments",
-                ));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            ensure_stream_resource(checker, name, &args[1], env)?;
-            if let Some(length) = args.get(2) {
-                ensure_optional_int(checker, name, "length", length, env)?;
-            }
-            if let Some(offset) = args.get(3) {
-                ensure_int(checker, name, "offset", offset, env)?;
-            }
-            Ok(Some(checker.normalize_union_type(vec![
-                PhpType::Int,
-                PhpType::Bool,
-            ])))
-        }
         "stream_socket_server" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
@@ -157,43 +78,6 @@ pub(super) fn check_builtin(
             }
             checker.require_builtin_library("elephc_tls");
             Ok(Some(PhpType::Bool))
-        }
-        "stream_resolve_include_path" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_resolve_include_path() takes exactly 1 argument",
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Mixed))
-        }
-        "stream_set_chunk_size" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_set_chunk_size() takes exactly 2 arguments",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            // PHP returns the previous chunk size on success or false on
-            // failure; v1 always reports the default chunk size.
-            Ok(Some(PhpType::Int))
-        }
-        "stream_set_read_buffer" | "stream_set_write_buffer" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 2 arguments", name),
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            // PHP returns 0 on success.
-            Ok(Some(PhpType::Int))
         }
         "fsockopen" | "pfsockopen" => {
             // [p]fsockopen(hostname, port, &error_code, &error_message, timeout).
@@ -249,42 +133,6 @@ pub(super) fn check_builtin(
                 PhpType::stream_resource(),
                 PhpType::Bool,
             ])))
-        }
-        "stream_get_line" => {
-            if args.len() < 2 || args.len() > 3 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_get_line() takes 2 or 3 arguments",
-                ));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            for arg in args.iter().skip(1) {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Str))
-        }
-        "stream_set_blocking" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_set_blocking() takes exactly 2 arguments",
-                ));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Bool))
-        }
-        "stream_select" => {
-            if args.len() < 4 || args.len() > 5 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_select() takes 4 or 5 arguments",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Int))
         }
         "stream_socket_shutdown" => {
             if args.len() != 2 {
@@ -383,20 +231,6 @@ pub(super) fn check_builtin(
                 PhpType::Bool,
             ])))
         }
-        "stream_set_timeout" => {
-            if args.len() < 2 || args.len() > 3 {
-                return Err(CompileError::new(
-                    span,
-                    "stream_set_timeout() takes 2 or 3 arguments",
-                ));
-            }
-            ensure_stream_resource(checker, name, &args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            if args.len() == 3 {
-                checker.infer_type(&args[2], env)?;
-            }
-            Ok(Some(PhpType::Bool))
-        }
         "stream_socket_sendto" => {
             if args.len() < 2 || args.len() > 4 {
                 return Err(CompileError::new(
@@ -477,61 +311,5 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Mixed))
         }
         _ => Ok(None),
-    }
-}
-
-/// Ensures a stream builtin argument is an `int`, emitting a parameter-specific
-/// compile error otherwise.
-fn ensure_int(
-    checker: &mut Checker,
-    builtin: &str,
-    param: &str,
-    arg: &Expr,
-    env: &TypeEnv,
-) -> Result<(), CompileError> {
-    let ty = checker.infer_type(arg, env)?;
-    if accepts_int(&ty) {
-        return Ok(());
-    }
-    Err(CompileError::new(
-        arg.span,
-        &format!("{}() {} must be int", builtin, param),
-    ))
-}
-
-/// Ensures a stream builtin length argument is `int|null`, matching PHP's
-/// nullable `$length` parameter while keeping codegen from seeing strings/floats.
-fn ensure_optional_int(
-    checker: &mut Checker,
-    builtin: &str,
-    param: &str,
-    arg: &Expr,
-    env: &TypeEnv,
-) -> Result<(), CompileError> {
-    let ty = checker.infer_type(arg, env)?;
-    if accepts_int_or_null(&ty) {
-        return Ok(());
-    }
-    Err(CompileError::new(
-        arg.span,
-        &format!("{}() {} must be int or null", builtin, param),
-    ))
-}
-
-/// Returns true when a type is statically compatible with an `int` parameter.
-fn accepts_int(ty: &PhpType) -> bool {
-    match ty {
-        PhpType::Int => true,
-        PhpType::Union(members) => members.iter().all(accepts_int),
-        _ => false,
-    }
-}
-
-/// Returns true when a type is statically compatible with an `int|null` parameter.
-fn accepts_int_or_null(ty: &PhpType) -> bool {
-    match ty {
-        PhpType::Int | PhpType::Void => true,
-        PhpType::Union(members) => members.iter().all(accepts_int_or_null),
-        _ => false,
     }
 }
