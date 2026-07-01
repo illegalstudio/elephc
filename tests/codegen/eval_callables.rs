@@ -2269,6 +2269,124 @@ echo $invoke($b, 5) . ":" . gettype($b) . ":" . $b;');
     assert_eq!(out, "25:integer:25|29:integer:29");
 }
 
+/// Verifies first-class eval method closures bind inherited method targets to subclasses.
+#[test]
+fn test_eval_first_class_closure_bind_accepts_inherited_eval_method_targets() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalFirstClassInheritedBindBase {
+    public int $base = 10;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+}
+
+class EvalFirstClassInheritedBindChild extends EvalFirstClassInheritedBindBase {}
+
+class EvalFirstClassInheritedBindOverrideChild extends EvalFirstClassInheritedBindBase {
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta + 100;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta + 100;
+        return $value;
+    }
+}
+
+$base = new EvalFirstClassInheritedBindBase();
+$child = new EvalFirstClassInheritedBindChild();
+$child->base = 20;
+
+$methodSource = $base->bump(...);
+$method = $methodSource->bindTo($child);
+$a = "2";
+echo $method($a, 3) . ":" . gettype($a) . ":" . $a . "|";
+
+$invokeSource = $base(...);
+$invoke = $invokeSource->bindTo($child);
+$b = "4";
+echo $invoke($b, 5) . ":" . gettype($b) . ":" . $b . "|";
+
+$callMethod = $base->bump(...);
+$c = "6";
+echo is_null($callMethod->call($child, $c, 7)) ? "C:" : "c:";
+echo gettype($c) . ":" . $c . "|";
+
+$callInvoke = $base(...);
+$d = "8";
+echo is_null($callInvoke->call($child, $d, 9)) ? "I:" : "i:";
+echo gettype($d) . ":" . $d . "|";
+
+$override = new EvalFirstClassInheritedBindOverrideChild();
+$overrideMethod = $override->bump(...);
+echo is_null($overrideMethod->bindTo($base)) ? "M" : "m";
+$overrideInvoke = $override(...);
+echo is_null($overrideInvoke->bindTo($base)) ? "I" : "i";');
+"#,
+    );
+
+    assert_eq!(out, "25:integer:25|29:integer:29|C:string:6|I:string:8|MI");
+}
+
+/// Verifies first-class AOT method closures bind inherited method targets to subclasses.
+#[test]
+fn test_eval_first_class_closure_bind_accepts_inherited_aot_method_targets() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotFirstClassInheritedBindBase {
+    public int $base = 10;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+}
+
+class EvalAotFirstClassInheritedBindChild extends EvalAotFirstClassInheritedBindBase {}
+
+echo eval('$base = new EvalAotFirstClassInheritedBindBase();
+$child = new EvalAotFirstClassInheritedBindChild();
+$child->base = 20;
+
+$methodSource = $base->bump(...);
+$method = $methodSource->bindTo($child);
+$a = "2";
+echo $method($a, 3) . ":" . gettype($a) . ":" . $a . "|";
+
+$invokeSource = $base(...);
+$invoke = $invokeSource->bindTo($child);
+$b = "4";
+echo $invoke($b, 5) . ":" . gettype($b) . ":" . $b . "|";
+
+$callMethod = $base->bump(...);
+$c = "6";
+echo is_null($callMethod->call($child, $c, 7)) ? "C:" : "c:";
+echo gettype($c) . ":" . $c . "|";
+
+$callInvoke = $base(...);
+$d = "8";
+echo is_null($callInvoke->call($child, $d, 9)) ? "I:" : "i:";
+echo gettype($d) . ":" . $d;');
+"#,
+    );
+
+    assert_eq!(out, "25:integer:25|29:integer:29|C:string:6|I:string:8");
+}
+
 /// Verifies binding function `fromCallable()` closures returns callable closures.
 #[test]
 fn test_eval_closure_bind_from_callable_function_targets_remain_callable() {
