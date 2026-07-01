@@ -8602,15 +8602,27 @@ fn eval_reflection_function_invoke_dispatch(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if let Some(closure) = context.closure(function_name).cloned() {
-        return eval_closure_with_evaluated_args(&closure, function_args, context, values);
+        return eval_closure_with_evaluated_args_and_bound_scope_ref_mode(
+            &closure,
+            None,
+            closure.function().parameter_is_by_ref(),
+            function_args,
+            EvalByRefBindingMode::WarnByValue {
+                callable_name: closure.function().name(),
+            },
+            context,
+            values,
+        );
     }
     let function_key = function_name.to_ascii_lowercase();
     if let Some(function) = context.function(&function_key).cloned() {
-        let by_value_parameters = vec![false; function.params().len()];
-        return eval_dynamic_function_with_evaluated_args_and_ref_flags(
+        return eval_dynamic_function_with_evaluated_args_and_ref_mode(
             &function,
-            &by_value_parameters,
+            function.parameter_is_by_ref(),
             function_args,
+            EvalByRefBindingMode::WarnByValue {
+                callable_name: function.name(),
+            },
             context,
             values,
         );
@@ -8634,27 +8646,37 @@ fn eval_reflection_method_invoke_dispatch(
         if method.is_abstract() {
             return Err(EvalStatus::RuntimeFatal);
         }
-        let by_value_parameters = vec![false; method.params().len()];
+        let callable_name = format!(
+            "{}::{}",
+            method_class.trim_start_matches('\\'),
+            method.name()
+        );
         if method.is_static() {
-            return eval_dynamic_static_method_with_values_and_ref_flags(
+            return eval_dynamic_static_method_with_values_and_ref_mode(
                 &method_class,
                 &method_class,
                 &method,
-                &by_value_parameters,
+                method.parameter_is_by_ref(),
                 method_args,
+                EvalByRefBindingMode::WarnByValue {
+                    callable_name: &callable_name,
+                },
                 context,
                 values,
             );
         }
         let called_class =
             eval_reflection_method_instance_called_class(declaring_class, object, context, values)?;
-        return eval_dynamic_method_with_values_and_ref_flags(
+        return eval_dynamic_method_with_values_and_ref_mode(
             &method_class,
             &called_class,
             &method,
             object,
-            &by_value_parameters,
+            method.parameter_is_by_ref(),
             method_args,
+            EvalByRefBindingMode::WarnByValue {
+                callable_name: &callable_name,
+            },
             context,
             values,
         );
@@ -8723,10 +8745,12 @@ fn eval_reflection_aot_method_invoke_dispatch(
     }
     if member.is_static {
         return eval_reflection_with_declaring_class_scope(declaring_class, context, |context| {
-            eval_native_static_method_with_evaluated_args(
+            eval_native_static_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
                 declaring_class,
                 method_name,
                 method_args,
+                Some(declaring_class),
+                Some(declaring_class),
                 context,
                 values,
             )
@@ -8745,12 +8769,15 @@ fn eval_reflection_aot_method_invoke_dispatch(
         )?;
         return Err(EvalStatus::UncaughtThrowable);
     }
+    let called_class = eval_reflection_object_class_name(object, context, values)?;
     eval_reflection_with_declaring_class_scope(declaring_class, context, |context| {
-        eval_native_method_with_evaluated_args(
+        eval_native_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
             object,
             declaring_class,
             method_name,
             method_args,
+            Some(declaring_class),
+            Some(&called_class),
             context,
             values,
         )
