@@ -9848,12 +9848,8 @@ fn eval_reflection_class_new_instance_result(
         return eval_reflection_public_constructor_scope(context, values, |context, values| {
             let constructor_name =
                 format!("{}::__construct", class.name().trim_start_matches('\\'));
-            let by_ref_mode = if direct_new_instance {
-                EvalByRefBindingMode::WarnByValue {
-                    callable_name: &constructor_name,
-                }
-            } else {
-                EvalByRefBindingMode::RequireTarget
+            let by_ref_mode = EvalByRefBindingMode::WarnByValue {
+                callable_name: &constructor_name,
             };
             let mut scope = ElephcEvalScope::new();
             eval_dynamic_class_new_object_with_ref_mode(
@@ -9876,12 +9872,8 @@ fn eval_reflection_class_new_instance_result(
     }
     eval_reflection_public_constructor_scope(context, values, |context, values| {
         let constructor_name = format!("{}::__construct", class_name.trim_start_matches('\\'));
-        let by_ref_mode = if direct_new_instance {
-            EvalByRefBindingMode::WarnByValue {
-                callable_name: &constructor_name,
-            }
-        } else {
-            EvalByRefBindingMode::RequireTarget
+        let by_ref_mode = EvalByRefBindingMode::WarnByValue {
+            callable_name: &constructor_name,
         };
         let instance = values.new_object(&class_name)?;
         eval_native_constructor_with_evaluated_args_and_ref_mode(

@@ -112,6 +112,10 @@ $argsValue = "2";
 $aotRef->newInstanceArgs([&$argsValue]);
 echo gettype($argsValue) . ":" . $argsValue . "|";
 
+$argsCopy = "5";
+$aotRef->newInstanceArgs([$argsCopy]);
+echo gettype($argsCopy) . ":" . $argsCopy . "|";
+
 class EvalReflectDeclaredCtorRefBridge {
     public function __construct(int &$value) {
         $value = $value + 7;
@@ -125,7 +129,11 @@ echo gettype($evalDirect) . ":" . $evalDirect . "|";
 
 $evalArgsValue = "4";
 $evalRef->newInstanceArgs([&$evalArgsValue]);
-return gettype($evalArgsValue) . ":" . $evalArgsValue;');
+echo gettype($evalArgsValue) . ":" . $evalArgsValue . "|";
+
+$evalArgsCopy = "6";
+$evalRef->newInstanceArgs([$evalArgsCopy]);
+return gettype($evalArgsCopy) . ":" . $evalArgsCopy;');
 "#,
     );
 
@@ -134,14 +142,18 @@ return gettype($evalArgsValue) . ":" . $evalArgsValue;');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "string:1|integer:7|string:3|integer:11");
+    assert_eq!(
+        out.stdout,
+        "string:1|integer:7|string:5|string:3|integer:11|string:6"
+    );
     for warning in [
         "EvalReflectAotCtorRefBridge::__construct(): Argument #1 ($value) must be passed by reference, value given",
         "EvalReflectDeclaredCtorRefBridge::__construct(): Argument #1 ($value) must be passed by reference, value given",
     ] {
+        let count = out.stderr.matches(warning).count();
         assert!(
-            out.stderr.contains(warning),
-            "missing by-ref warning {warning:?}: {}",
+            count >= 2,
+            "expected at least two by-ref warnings {warning:?}, saw {count}: {}",
             out.stderr
         );
     }
