@@ -813,9 +813,9 @@ pub(super) fn parse_new_object(
     if let Some(receiver) = scoped_receiver {
         *pos += 1;
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-            return Err(CompileError::new(
+            return Ok(Expr::new(
+                ExprKind::NewScopedObject { receiver, args: Vec::new() },
                 span,
-                "Expected '(' after self/static/parent",
             ));
         }
         *pos += 1;
@@ -832,9 +832,12 @@ pub(super) fn parse_new_object(
         let var_name = name.clone();
         *pos += 1;
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-            return Err(CompileError::new(
+            return Ok(Expr::new(
+                ExprKind::NewDynamic {
+                    name_expr: Box::new(Expr::new(ExprKind::Variable(var_name), span)),
+                    args: Vec::new(),
+                },
                 span,
-                "Expected '(' after class-name variable in 'new $var('",
             ));
         }
         *pos += 1;
@@ -850,7 +853,7 @@ pub(super) fn parse_new_object(
 
     let class_name = parse_name(tokens, pos, span, "Expected class name after 'new'")?;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-        return Err(CompileError::new(span, "Expected '(' after class name"));
+        return Ok(Expr::new(ExprKind::NewObject { class_name, args: Vec::new() }, span));
     }
     *pos += 1;
     let args = parse_args(tokens, pos, span)?;
