@@ -299,6 +299,14 @@ pub enum Op {
     /// `from()`/`tryFrom()` call. Operand: the string. Immediate: data id of the PHP
     /// `TypeError` message thrown when the string is not numeric. Result: `I64`.
     EnumBackingStringToInt,
+    /// Coerces a `Mixed` (dynamically-typed) operand to the integer backing value for an
+    /// int-backed enum `from()`/`tryFrom()` call, dispatching on the runtime tag: int/bool
+    /// forward the payload, float truncates, null becomes 0, a numeric string coerces (a
+    /// non-numeric string throws `TypeError`), and array/object/resource/callable throw
+    /// `TypeError`. Operand: the Mixed value. Immediate: data id of the PHP `TypeError`
+    /// message prefix (`"E::from(): Argument #1 ($value) must be of type int, "`), to which
+    /// codegen appends the runtime type word. Result: `I64`.
+    EnumBackingMixedToInt,
     ClassConstant,
     ScopedConstantGet,
     ClassAttrNames,
@@ -432,7 +440,9 @@ impl Op {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
-            EnumBackingStringToInt => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW,
+            EnumBackingStringToInt | EnumBackingMixedToInt => {
+                E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
+            }
             Call | FunctionVariantCall | BuiltinCall | RuntimeCall | ClosureCall | ExprCall
             | CallableDescriptorInvoke | PipeCall | FiberRuntimeCall => {
                 E::all().difference(E::REFCOUNT_OP)
@@ -611,6 +621,7 @@ impl Op {
             MethodCall => "method_call",
             StaticMethodCall => "static_method_call",
             EnumBackingStringToInt => "enum_backing_string_to_int",
+            EnumBackingMixedToInt => "enum_backing_mixed_to_int",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",
             ClassAttrNames => "class_attr_names",
