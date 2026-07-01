@@ -9,7 +9,7 @@
 //! - Rules here define accepted programs, so PHP covariance, inheritance, and extension-specific constraints must stay explicit.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, TypeExpr};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr};
 use crate::types::{callable_wrapper_sig, ClassInfo, FunctionSig, PhpType};
 
 use super::super::inference::syntactic::infer_expr_type_syntactic;
@@ -184,6 +184,23 @@ impl Checker {
         context: &str,
     ) -> Result<(), CompileError> {
         if let Some(default_expr) = default_expr {
+            // An enum-case access used as a parameter default (`E $x = E::Case`) has the
+            // enum object type, but purely-syntactic inference types every `::` access as
+            // Str (it has no class table, and enum cases are populated after this schema
+            // pass). When the declared type is an enum/class object and the default is a
+            // scoped access naming that same type, accept it here; the later semantic pass
+            // validates that the case actually exists.
+            if let PhpType::Object(expected_class) = expected_ty {
+                if let ExprKind::ScopedConstantAccess {
+                    receiver: StaticReceiver::Named(recv),
+                    ..
+                } = &default_expr.kind
+                {
+                    if recv.as_canonical() == *expected_class {
+                        return Ok(());
+                    }
+                }
+            }
             let default_ty = infer_expr_type_syntactic(default_expr);
             self.require_compatible_arg_type(expected_ty, &default_ty, span, context)?;
         }
