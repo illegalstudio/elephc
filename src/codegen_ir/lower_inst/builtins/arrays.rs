@@ -58,7 +58,7 @@ pub(crate) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruct
 }
 
 /// Lowers `array_push()` by appending one value and publishing the mutated array.
-pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_push", 2)?;
     let array = expect_operand(inst, 0)?;
     if matches!(
@@ -946,7 +946,7 @@ fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `array_splice()` by mutating an indexed source array and returning removed elements.
-pub(super) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_splice", 2, 3)?;
     let array = expect_operand(inst, 0)?;
     if matches!(
@@ -1045,7 +1045,7 @@ pub(crate) fn lower_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `array_pop()` for indexed arrays by mutating length and boxing `T|null` as Mixed.
-pub(super) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_pop", 1)?;
     let array = expect_operand(inst, 0)?;
     let elem_ty = array_pop_element_type(ctx.value_php_type(array)?)?;
@@ -1063,12 +1063,12 @@ pub(super) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `array_shift()` for indexed arrays by compacting slots and boxing `T|null` as Mixed.
-pub(super) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     shift::lower_array_shift(ctx, inst)
 }
 
 /// Lowers `array_unshift()` for indexed arrays by prepending a scalar payload.
-pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     unshift::lower_array_unshift(ctx, inst)
 }
 
