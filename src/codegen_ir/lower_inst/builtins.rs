@@ -61,9 +61,6 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "buffer_len" => buffers::lower_buffer_len(ctx, inst),
         "buffer_free" => buffers::lower_buffer_free(ctx, inst),
 
-        "call_user_func" | "call_user_func_array" => {
-            arrays::lower_call_user_func_builtin_escape(ctx, inst, key.as_str())
-        }
         "empty" => lower_empty(ctx, inst),
         "unset" => types::lower_unset_builtin(ctx, inst),
         "isset" => isset::lower_isset(ctx, inst),

@@ -15,8 +15,6 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "buffer_free",
     "buffer_len",
     "buffer_new",
-    "call_user_func",
-    "call_user_func_array",
     "die",
     "empty",
     "exit",

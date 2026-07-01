@@ -560,7 +560,17 @@ pub(crate) fn runtime_instance_method_case(
 fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
     matches!(
         name,
-        "iterator_apply" | "preg_replace_callback"
+        // call_user_func / call_user_func_array had no pre-migration first-class-callable wrapper:
+        // first_class_callable_builtin_sig / general_first_class_callable_builtin_sig returned
+        // None for them (they were not in either table), so no wrapper was emitted. Registering
+        // them in the builtin registry makes first_class_callable_builtin_sig return Some, which
+        // would newly emit a deferred-closure wrapper; excluding them here restores the exact
+        // pre-migration (no-wrapper) behaviour — this is provably behaviour-neutral.
+        // A generic string-callable wrapper cannot dispatch a variadic/array-spread callback
+        // builtin correctly. Direct calls and EIR first-class-callable use still work through
+        // the EIR path.
+        "call_user_func" | "call_user_func_array"
+            | "iterator_apply" | "preg_replace_callback"
             | "__elephc_mktime_raw" | "__elephc_gmmktime_raw" | "__elephc_strtotime_raw"
             // serialize/unserialize are EIR-only builtins with no legacy-backend
             // emitter, so the deferred runtime callable wrapper cannot dispatch them

@@ -35,7 +35,7 @@ mod unshift;
 pub(in crate::codegen_ir::lower_inst::builtins) mod values;
 
 /// Rejects `call_user_func*` calls that escaped the dedicated EIR callback lowering path.
-pub(super) fn lower_call_user_func_builtin_escape(
+pub(crate) fn lower_call_user_func_builtin_escape(
     _ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,

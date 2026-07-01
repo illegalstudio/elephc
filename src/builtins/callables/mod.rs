@@ -39,6 +39,10 @@ pub mod class_implements;
 pub mod class_parents;
 pub mod class_uses;
 
+// Callables batch B — lazy_check, delegates to checker::builtins::callables
+pub mod call_user_func;
+pub mod call_user_func_array;
+
 // Singletons
 pub mod class_alias;
 pub mod function_exists;
