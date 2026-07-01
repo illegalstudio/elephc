@@ -18,5 +18,6 @@ pub mod registry;
 mod convert;
 mod array;
 mod string;
+mod math;
 #[cfg(test)]
 mod parity_tests;

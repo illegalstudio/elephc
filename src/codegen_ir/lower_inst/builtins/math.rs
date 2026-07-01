@@ -25,7 +25,7 @@ mod libm;
 mod random;
 
 pub(super) use binary::{lower_fdiv, lower_fmod, lower_intdiv, lower_pow};
-pub(super) use libm::{
+pub(crate) use libm::{
     lower_atan2, lower_deg2rad, lower_hypot, lower_log, lower_rad2deg, lower_unary_libm,
 };
 pub(super) use random::{lower_rand, lower_random_int};
@@ -67,12 +67,12 @@ pub(super) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
 }
 
 /// Lowers `floor()` for concrete integer-like and floating operands.
-pub(super) fn lower_floor(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_floor(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_float_rounding_builtin(ctx, inst, "floor", "frintm", 1)
 }
 
 /// Lowers `ceil()` for concrete integer-like and floating operands.
-pub(super) fn lower_ceil(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ceil(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_float_rounding_builtin(ctx, inst, "ceil", "frintp", 2)
 }
 
@@ -94,7 +94,7 @@ pub(super) fn lower_clamp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `sqrt()` for concrete integer-like and floating operands.
-pub(super) fn lower_sqrt(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_sqrt(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "sqrt", 1)?;
     let value = expect_operand(inst, 0)?;
     load_numeric_as_float(ctx, value, "sqrt")?;

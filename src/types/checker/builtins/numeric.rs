@@ -27,8 +27,7 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 /// - Type checks: `is_bool`, `boolval`, `is_callable`, `is_null`, `is_float`, `is_int`,
 ///   `is_iterable`, `is_string`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`,
 ///   `is_resource`, `is_array`, `is_object`, `is_scalar`
-/// - Numeric: `abs`, `floor`, `ceil`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,
-///   `sinh`, `cosh`, `tanh`, `log2`, `log10`, `exp`, `deg2rad`, `rad2deg`, `atan2`, `hypot`,
+/// - Numeric: `abs`, `atan2`, `hypot`,
 ///   `pi`, `round`, `pow`, `intdiv`, `fmod`, `fdiv`, `log`
 /// - Random: `rand`, `mt_rand`, `random_int`
 /// - Cast/retype: `floatval`, `settype`, `gettype`
@@ -112,18 +111,6 @@ pub(super) fn check_builtin(
             }
             let ty = checker.infer_type(&args[0], env)?;
             Ok(Some(abs_result_type(&ty)))
-        }
-        "floor" | "ceil" | "sqrt" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
-        | "sinh" | "cosh" | "tanh" | "log2" | "log10" | "exp" | "deg2rad"
-        | "rad2deg" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 1 argument", name),
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Float))
         }
         "log" => {
             if args.is_empty() || args.len() > 2 {
