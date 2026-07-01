@@ -87,7 +87,7 @@ pub(crate) fn lower_preg_replace(
 }
 
 /// Lowers `preg_replace_callback(pattern, callback, subject)` through supported direct callbacks.
-pub(super) fn lower_preg_replace_callback(
+pub(crate) fn lower_preg_replace_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

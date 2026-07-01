@@ -19,8 +19,6 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "empty",
     "exit",
     "isset",
-    "preg_replace_callback",
-
     "unset",
 ];
 

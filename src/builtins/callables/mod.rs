@@ -46,3 +46,4 @@ pub mod call_user_func_array;
 // Singletons
 pub mod class_alias;
 pub mod function_exists;
+pub mod preg_replace_callback;

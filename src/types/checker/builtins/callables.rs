@@ -799,24 +799,6 @@ fn callback_builtin_allows_runtime_callable_array(label: &str) -> bool {
     )
 }
 
-/// Type-checks a callable-family builtin call.
-///
-/// Validates arity, argument types, warning-producing cases, and inferred return types.
-/// Returns `Ok(Some(PhpType))` for handled builtins, `Ok(None)` for unknown names,
-/// or a `CompileError` for type/arity violations.
-pub(super) fn check_builtin(
-    checker: &mut Checker,
-    name: &str,
-    args: &[Expr],
-    span: crate::span::Span,
-    env: &TypeEnv,
-) -> BuiltinResult {
-    match name {
-        "preg_replace_callback" => preg_replace_callback::check(checker, args, span, env),
-        _ => Ok(None),
-    }
-}
-
 
 /// Type-checks a `call_user_func_array` call: resolves the callback (first-class callable,
 /// variable-bound callable, string name, extern/builtin, or object/array descriptor),

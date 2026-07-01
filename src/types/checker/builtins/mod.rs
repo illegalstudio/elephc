@@ -123,9 +123,6 @@ impl Checker {
         if let Some(result) = arrays::check_builtin(self, name, args, span, env)? {
             return Ok(Some(result));
         }
-        if let Some(result) = callables::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
         if let Some(result) = spl::check_builtin(self, name, args, span, env)? {
             return Ok(Some(result));
         }
