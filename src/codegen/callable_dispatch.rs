@@ -767,6 +767,18 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             | "gethostname" | "gethostbyname" | "gethostbyaddr"
             | "getprotobyname" | "getprotobynumber"
             | "getservbyname" | "getservbyport"
+            // These 8 types-batch builtins had no pre-migration first-class-callable wrapper:
+            // general_first_class_callable_builtin_sig returned None for them (they were not in
+            // that table), so no wrapper was emitted. Registering them in the builtin registry
+            // makes first_class_callable_builtin_sig return Some, which would newly emit a
+            // deferred-closure wrapper; excluding them here restores the exact pre-migration
+            // (no-wrapper) behaviour and is provably behaviour-neutral. `settype` additionally
+            // takes a by-ref first argument that is semantically incorrect to drive through a
+            // generic string-callable wrapper body. Direct calls and EIR first-class-callable
+            // use still work through the EIR path.
+            | "is_array" | "is_object" | "is_scalar" | "is_callable" | "is_resource"
+            | "get_resource_type" | "get_resource_id"
+            | "settype"
     )
 }
 

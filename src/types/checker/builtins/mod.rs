@@ -14,7 +14,6 @@ mod catalog;
 pub(crate) mod io;
 mod numeric;
 pub(crate) mod spl;
-mod strings;
 
 use crate::errors::CompileError;
 use crate::parser::ast::Expr;
@@ -116,9 +115,6 @@ impl Checker {
             return Ok(Some(ret));
         }
 
-        if let Some(result) = strings::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
         if let Some(result) = numeric::check_builtin(self, name, args, span, env)? {
             return Ok(Some(result));
         }

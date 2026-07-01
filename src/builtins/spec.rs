@@ -33,6 +33,8 @@ pub enum Area {
     Io,
     /// System / process builtins (`exit`, `getenv`, …).
     System,
+    /// Type-inspection and conversion builtins (is_int, gettype, settype, …).
+    Types,
     /// Callable / closure builtins (`call_user_func`, …).
     Callables,
     /// SPL data-structure builtins.

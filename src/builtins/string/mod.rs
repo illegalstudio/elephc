@@ -69,6 +69,7 @@ pub mod str_starts_with;
 pub mod strcasecmp;
 pub mod strcmp;
 pub mod stripslashes;
+pub mod strlen;
 pub mod strpos;
 pub mod strrev;
 pub mod strrpos;

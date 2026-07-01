@@ -29,7 +29,7 @@ pub(crate) mod ctype;
 pub(crate) mod debug;
 pub(crate) mod io;
 mod isset;
-mod is_numeric;
+pub(crate) mod is_numeric;
 pub(crate) mod json;
 pub(crate) mod math;
 pub(crate) mod pointers;
@@ -38,7 +38,7 @@ pub(crate) mod serialize;
 pub(crate) mod spl;
 pub(crate) mod system;
 pub(crate) mod strings;
-mod types;
+pub(crate) mod types;
 
 const DEFINE_ALREADY_DEFINED_WARNING: &str =
     "Warning: define(): Constant already defined\n";
@@ -57,7 +57,6 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         return (def.spec.lower)(ctx, inst);
     }
     match key.as_str() {
-        "strlen" => lower_strlen(ctx, inst),
         "closure_bind" => lower_closure_bind(ctx, inst),
         "buffer_len" => buffers::lower_buffer_len(ctx, inst),
         "buffer_free" => buffers::lower_buffer_free(ctx, inst),
@@ -65,14 +64,9 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "call_user_func" | "call_user_func_array" => {
             arrays::lower_call_user_func_builtin_escape(ctx, inst, key.as_str())
         }
-        "intval" => lower_intval(ctx, inst),
-        "floatval" => lower_floatval(ctx, inst),
-        "boolval" => lower_boolval(ctx, inst),
         "empty" => lower_empty(ctx, inst),
-        "settype" => types::lower_settype(ctx, inst),
         "unset" => types::lower_unset_builtin(ctx, inst),
         "isset" => isset::lower_isset(ctx, inst),
-        "gettype" => lower_gettype(ctx, inst),
         "exit" | "die" => system::lower_exit(ctx, inst),
         "preg_replace_callback" => regex::lower_preg_replace_callback(ctx, inst),
         "function_exists" => lower_function_exists(ctx, inst),
@@ -88,23 +82,6 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
             types::lower_get_declared_names(ctx, inst, key.as_str())
         }
-        "is_callable" => lower_is_callable(ctx, inst),
-        "is_int" => lower_static_type_predicate(ctx, inst, "is_int", PhpType::Int),
-        "is_float" => lower_static_type_predicate(ctx, inst, "is_float", PhpType::Float),
-        "is_bool" => lower_static_type_predicate(ctx, inst, "is_bool", PhpType::Bool),
-        "is_null" => lower_is_null_builtin(ctx, inst),
-        "is_string" => lower_static_type_predicate(ctx, inst, "is_string", PhpType::Str),
-        "is_resource" => types::lower_is_resource(ctx, inst),
-        "is_iterable" => lower_is_iterable(ctx, inst),
-        "is_array" => lower_is_array(ctx, inst),
-        "is_object" => lower_is_object(ctx, inst),
-        "is_scalar" => lower_is_scalar(ctx, inst),
-        "get_resource_type" => types::lower_get_resource_type(ctx, inst),
-        "get_resource_id" => types::lower_get_resource_id(ctx, inst),
-        "is_numeric" => is_numeric::lower_is_numeric(ctx, inst),
-        "is_nan" => math::lower_is_nan(ctx, inst),
-        "is_infinite" => math::lower_is_infinite(ctx, inst),
-        "is_finite" => math::lower_is_finite(ctx, inst),
         _ => Err(CodegenIrError::unsupported(format!("builtin call {}", name))),
     }
 }
@@ -167,7 +144,7 @@ fn emit_duplicate_define_warning(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Lowers `gettype(value)` for statically concrete PHP types.
-fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "gettype", 1)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.raw_value_php_type(value)?;
@@ -357,7 +334,7 @@ fn lower_class_like_exists(
 }
 
 /// Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers.
-fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_callable", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)?.codegen_repr() {
@@ -531,7 +508,7 @@ fn lower_closure_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
 }
 
 /// Lowers `strlen()` by coercing string-like values and returning the byte length.
-fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "strlen", 1)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(value)?;
@@ -561,7 +538,7 @@ fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
 }
 
 /// Lowers `intval()` for concrete scalar operands.
-fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "intval", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
@@ -594,7 +571,7 @@ fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
 }
 
 /// Lowers `floatval()` for concrete scalar operands.
-fn lower_floatval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_floatval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "floatval", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
@@ -624,7 +601,7 @@ fn lower_floatval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<(
 }
 
 /// Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`.
-fn lower_boolval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_boolval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "boolval", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
@@ -774,7 +751,7 @@ fn invert_bool_result(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Lowers a static `is_*` predicate for concrete non-Mixed values.
-fn lower_static_type_predicate(
+pub(crate) fn lower_static_type_predicate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -832,7 +809,7 @@ fn emit_tagged_scalar_int_predicate(
 }
 
 /// Lowers `is_iterable()` for concrete values and boxed Mixed payloads.
-fn lower_is_iterable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_iterable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_iterable", 1)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.value_php_type(value)?;
@@ -1030,7 +1007,7 @@ fn normalized_type_name(type_name: &str) -> &str {
 }
 
 /// Lowers `is_null()` for concrete scalar values and boxed Mixed payloads.
-fn lower_is_null_builtin(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_null_builtin(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_null", 1)?;
     let value = expect_operand(inst, 0)?;
     predicates::emit_is_null_result(ctx, value)?;
@@ -1040,7 +1017,7 @@ fn lower_is_null_builtin(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 /// Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value
 /// whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is
 /// not treated as a definite array here (it may hold a Traversable); use `is_iterable` for that.
-fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_array", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
@@ -1055,7 +1032,7 @@ fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<(
 
 /// Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose
 /// runtime tag is an object (6).
-fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_object", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
@@ -1071,7 +1048,7 @@ fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
 /// Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed
 /// Mixed/Union value whose runtime tag is int (0), string (1), float (2), or bool (3). Null,
 /// arrays, objects, and resources are not scalars, matching PHP.
-fn lower_is_scalar(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_scalar(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_scalar", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {

@@ -110,7 +110,7 @@ pub(crate) fn lower_sqrt(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 }
 
 /// Lowers `is_nan()` by checking whether the normalized float is unordered with itself.
-pub(super) fn lower_is_nan(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_nan(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_nan", 1)?;
     let value = expect_operand(inst, 0)?;
     load_numeric_as_float(ctx, value, "is_nan")?;
@@ -129,7 +129,7 @@ pub(super) fn lower_is_nan(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `is_infinite()` by comparing the normalized float against +/- infinity.
-pub(super) fn lower_is_infinite(
+pub(crate) fn lower_is_infinite(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -166,7 +166,7 @@ pub(super) fn lower_is_infinite(
 }
 
 /// Lowers `is_finite()` by rejecting NaN and both infinities.
-pub(super) fn lower_is_finite(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_finite(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_finite", 1)?;
     let value = expect_operand(inst, 0)?;
     load_numeric_as_float(ctx, value, "is_finite")?;

@@ -23,5 +23,6 @@ mod math;
 mod spl;
 mod pointers;
 mod system;
+mod types;
 #[cfg(test)]
 mod parity_tests;

@@ -16,7 +16,7 @@ use super::super::Checker;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
-/// Type-checks numeric and type-inspection PHP builtins.
+/// Type-checks numeric and language-construct PHP builtins.
 ///
 /// Validates argument count, argument types, and special cases (e.g., `buffer_free`
 /// restriction on `$this`, locals-only) for the builtin functions in the numeric
@@ -24,10 +24,6 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 /// arity mismatch.
 ///
 /// ## Supported builtins
-/// - Type checks: `is_bool`, `boolval`, `is_callable`, `is_null`, `is_float`, `is_int`,
-///   `is_iterable`, `is_string`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`,
-///   `is_resource`, `is_array`, `is_object`, `is_scalar`
-/// - Cast/retype: `floatval`, `settype`, `gettype`
 /// - Control: `exit`, `die`, `empty`
 /// - Unset: `unset`
 /// - Buffers: `buffer_len`, `buffer_free`
@@ -62,52 +58,6 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Void))
         }
-        "is_bool" | "boolval" | "is_callable" | "is_null" | "is_float" | "is_int"
-        | "is_iterable" | "is_string" | "is_numeric" | "is_nan" | "is_finite"
-        | "is_infinite" | "is_resource" | "is_array" | "is_object" | "is_scalar" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 1 argument", name),
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Bool))
-        }
-        "get_resource_type" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "get_resource_type() takes exactly 1 argument",
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Str))
-        }
-        "get_resource_id" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "get_resource_id() takes exactly 1 argument",
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Int))
-        }
-        "floatval" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "floatval() takes exactly 1 argument"));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Float))
-        }
-        "gettype" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "gettype() takes exactly 1 argument"));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Str))
-        }
         "empty" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "empty() takes exactly 1 argument"));
@@ -132,20 +82,6 @@ pub(super) fn check_builtin(
                 checker.infer_type(arg, env)?;
             }
             Ok(Some(PhpType::Void))
-        }
-        "settype" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "settype() takes exactly 2 arguments"));
-            }
-            checker.infer_type(&args[0], env)?;
-            let ty = checker.infer_type(&args[1], env)?;
-            if ty != PhpType::Str {
-                return Err(CompileError::new(
-                    span,
-                    "settype() second argument must be a string",
-                ));
-            }
-            Ok(Some(PhpType::Bool))
         }
         "buffer_len" => {
             if args.len() != 1 {
