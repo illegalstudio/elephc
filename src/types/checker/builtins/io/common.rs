@@ -19,8 +19,10 @@ pub(super) type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
 /// Validates that `arg` is a stream resource (or a type that accepts a stream resource).
 ///
-/// Emits a type error if the argument is not a compatible stream type.
-pub(super) fn ensure_stream_resource(
+/// Emits a type error if the argument is not a compatible stream type. Widened to
+/// `pub(crate)` so `fstat`'s check hook in `src/builtins/io/fstat.rs` can call it;
+/// `streams.rs` continues to use it via `super::common::ensure_stream_resource`.
+pub(crate) fn ensure_stream_resource(
     checker: &mut Checker,
     name: &str,
     arg: &Expr,

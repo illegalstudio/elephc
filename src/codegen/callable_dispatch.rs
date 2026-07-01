@@ -669,6 +669,15 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             // zero arguments, making a parameterised wrapper redundant.
             // Direct calls and EIR first-class-callable use still work through the EIR path.
             | "var_dump" | "print_r" | "realpath_cache_get" | "realpath_cache_size"
+            // These 4 io batch B builtins had no pre-migration first-class-callable wrapper:
+            // general_first_class_callable_builtin_sig returned None for them (they are not
+            // in that table), so no wrapper was emitted. Excluding them restores that
+            // pre-migration behaviour — this is provably behaviour-neutral. `disk_free_space`
+            // and `disk_total_space` use an unrelated float-return calling convention.
+            // `clearstatcache` returns void. `fstat` takes a stream resource argument that
+            // is unsuited to generic string-callable dispatch. Direct calls and EIR
+            // first-class-callable use still work through the EIR path.
+            | "disk_free_space" | "disk_total_space" | "clearstatcache" | "fstat"
     )
 }
 

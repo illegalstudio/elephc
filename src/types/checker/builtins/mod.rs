@@ -11,7 +11,7 @@
 pub(crate) mod arrays;
 mod callables;
 mod catalog;
-mod io;
+pub(crate) mod io;
 mod numeric;
 pub(crate) mod spl;
 mod strings;

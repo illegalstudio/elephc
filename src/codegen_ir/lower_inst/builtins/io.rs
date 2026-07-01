@@ -3367,7 +3367,7 @@ pub(super) fn lower_flock(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `disk_free_space(path)` through the shared disk-space runtime helper.
-pub(super) fn lower_disk_free_space(
+pub(crate) fn lower_disk_free_space(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -3375,7 +3375,7 @@ pub(super) fn lower_disk_free_space(
 }
 
 /// Lowers `disk_total_space(path)` through the shared disk-space runtime helper.
-pub(super) fn lower_disk_total_space(
+pub(crate) fn lower_disk_total_space(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -4396,7 +4396,7 @@ fn emit_phar_list_entries_buffer_to_array_x86_64(ctx: &mut FunctionContext<'_>) 
 }
 
 /// Lowers `file_exists(path)` through the target-aware runtime stat helper.
-pub(super) fn lower_file_exists(
+pub(crate) fn lower_file_exists(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5421,7 +5421,7 @@ pub(super) fn lower_tmpfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `filesize(path)` through the target-aware runtime stat helper.
-pub(super) fn lower_filesize(
+pub(crate) fn lower_filesize(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5429,7 +5429,7 @@ pub(super) fn lower_filesize(
 }
 
 /// Lowers `filemtime(path)` through the target-aware runtime stat helper.
-pub(super) fn lower_filemtime(
+pub(crate) fn lower_filemtime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5437,7 +5437,7 @@ pub(super) fn lower_filemtime(
 }
 
 /// Lowers `linkinfo(path)` through the target-aware runtime lstat helper.
-pub(super) fn lower_linkinfo(
+pub(crate) fn lower_linkinfo(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5465,7 +5465,7 @@ pub(super) fn lower_readlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 }
 
 /// Lowers `fileatime(path)` and boxes the runtime integer-or-false result.
-pub(super) fn lower_fileatime(
+pub(crate) fn lower_fileatime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5473,7 +5473,7 @@ pub(super) fn lower_fileatime(
 }
 
 /// Lowers `filectime(path)` and boxes the runtime integer-or-false result.
-pub(super) fn lower_filectime(
+pub(crate) fn lower_filectime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5481,7 +5481,7 @@ pub(super) fn lower_filectime(
 }
 
 /// Lowers `fileperms(path)` and boxes the runtime integer-or-false result.
-pub(super) fn lower_fileperms(
+pub(crate) fn lower_fileperms(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5489,7 +5489,7 @@ pub(super) fn lower_fileperms(
 }
 
 /// Lowers `fileowner(path)` and boxes the runtime integer-or-false result.
-pub(super) fn lower_fileowner(
+pub(crate) fn lower_fileowner(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5497,7 +5497,7 @@ pub(super) fn lower_fileowner(
 }
 
 /// Lowers `filegroup(path)` and boxes the runtime integer-or-false result.
-pub(super) fn lower_filegroup(
+pub(crate) fn lower_filegroup(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5505,7 +5505,7 @@ pub(super) fn lower_filegroup(
 }
 
 /// Lowers `fileinode(path)` and boxes the runtime integer-or-false result.
-pub(super) fn lower_fileinode(
+pub(crate) fn lower_fileinode(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5513,7 +5513,7 @@ pub(super) fn lower_fileinode(
 }
 
 /// Lowers `filetype(path)` and boxes the runtime string-or-false result.
-pub(super) fn lower_filetype(
+pub(crate) fn lower_filetype(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5526,17 +5526,17 @@ pub(super) fn lower_filetype(
 }
 
 /// Lowers `stat(path)` and boxes the runtime stat array or PHP false result.
-pub(super) fn lower_stat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_stat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_unary_path_stat_array_or_false(ctx, inst, "stat", "__rt_stat_array")
 }
 
 /// Lowers `lstat(path)` and boxes the runtime lstat array or PHP false result.
-pub(super) fn lower_lstat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_lstat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_unary_path_stat_array_or_false(ctx, inst, "lstat", "__rt_lstat_array")
 }
 
 /// Lowers `fstat(stream)` and boxes the runtime stat array or PHP false result.
-pub(super) fn lower_fstat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fstat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "fstat", 1)?;
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "fstat")?;
@@ -5575,7 +5575,7 @@ pub(super) fn lower_fstat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `clearstatcache(...)` as an ordered no-op after EIR operand evaluation.
-pub(super) fn lower_clearstatcache(
+pub(crate) fn lower_clearstatcache(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5589,7 +5589,7 @@ pub(super) fn lower_clearstatcache(
 }
 
 /// Lowers `is_file(path)` through the target-aware runtime stat helper.
-pub(super) fn lower_is_file(
+pub(crate) fn lower_is_file(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5597,7 +5597,7 @@ pub(super) fn lower_is_file(
 }
 
 /// Lowers `is_dir(path)` through the target-aware runtime stat helper.
-pub(super) fn lower_is_dir(
+pub(crate) fn lower_is_dir(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5605,7 +5605,7 @@ pub(super) fn lower_is_dir(
 }
 
 /// Lowers `is_readable(path)` through the target-aware runtime access helper.
-pub(super) fn lower_is_readable(
+pub(crate) fn lower_is_readable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5613,7 +5613,7 @@ pub(super) fn lower_is_readable(
 }
 
 /// Lowers `is_writable(path)` through the target-aware runtime access helper.
-pub(super) fn lower_is_writable(
+pub(crate) fn lower_is_writable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5621,7 +5621,7 @@ pub(super) fn lower_is_writable(
 }
 
 /// Lowers `is_writeable(path)`, PHP's alias of `is_writable(path)`.
-pub(super) fn lower_is_writeable(
+pub(crate) fn lower_is_writeable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5629,7 +5629,7 @@ pub(super) fn lower_is_writeable(
 }
 
 /// Lowers `is_executable(path)` through the target-aware runtime access helper.
-pub(super) fn lower_is_executable(
+pub(crate) fn lower_is_executable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -5637,7 +5637,7 @@ pub(super) fn lower_is_executable(
 }
 
 /// Lowers `is_link(path)` through the target-aware runtime lstat helper.
-pub(super) fn lower_is_link(
+pub(crate) fn lower_is_link(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
