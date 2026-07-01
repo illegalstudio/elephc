@@ -8422,6 +8422,25 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_dynamic_class_new_object_with_ref_mode(
+        class,
+        evaluated_args,
+        EvalByRefBindingMode::RequireTarget,
+        context,
+        caller_scope,
+        values,
+    )
+}
+
+/// Creates an eval-declared object while using the selected constructor by-ref mode.
+fn eval_dynamic_class_new_object_with_ref_mode(
+    class: &EvalClass,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let object = eval_dynamic_class_allocate_object(class, context, caller_scope, values)?;
     if let Some((constructor_class, constructor)) =
         context.class_method(class.name(), "__construct")
@@ -8438,22 +8457,25 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
                 values,
             );
         }
-        let result = eval_dynamic_method_with_values(
+        let result = eval_dynamic_method_with_values_and_ref_mode(
             &constructor_class,
             class.name(),
             &constructor,
             object,
+            constructor.parameter_is_by_ref(),
             evaluated_args,
+            by_ref_mode,
             context,
             values,
         )?;
         eval_release_value(context, values, result)?;
     } else if !evaluated_args.is_empty() {
         if let Some(parent) = context.class_native_parent_name(class.name()) {
-            eval_native_constructor_with_evaluated_args(
+            eval_native_constructor_with_evaluated_args_and_ref_mode(
                 &parent,
                 object,
                 evaluated_args,
+                by_ref_mode,
                 context,
                 values,
             )?;
@@ -8469,10 +8491,11 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
         )?
         .is_some()
         {
-            eval_native_constructor_with_evaluated_args(
+            eval_native_constructor_with_evaluated_args_and_ref_mode(
                 &parent,
                 object,
                 Vec::new(),
+                by_ref_mode,
                 context,
                 values,
             )?;
@@ -9790,8 +9813,9 @@ fn eval_reflection_class_new_instance_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let constructor_args = if method_name.eq_ignore_ascii_case("newInstance") {
-        evaluated_args
+    let direct_new_instance = method_name.eq_ignore_ascii_case("newInstance");
+    let constructor_args = if direct_new_instance {
+        eval_reflection_constructor_by_value_args(evaluated_args)
     } else if method_name.eq_ignore_ascii_case("newInstanceArgs") {
         eval_reflection_class_new_instance_args(evaluated_args, context, values)?
     } else {
@@ -9822,9 +9846,25 @@ fn eval_reflection_class_new_instance_result(
             }
         }
         return eval_reflection_public_constructor_scope(context, values, |context, values| {
+            let constructor_name =
+                format!("{}::__construct", class.name().trim_start_matches('\\'));
+            let by_ref_mode = if direct_new_instance {
+                EvalByRefBindingMode::WarnByValue {
+                    callable_name: &constructor_name,
+                }
+            } else {
+                EvalByRefBindingMode::RequireTarget
+            };
             let mut scope = ElephcEvalScope::new();
-            eval_dynamic_class_new_object(&class, constructor_args, context, &mut scope, values)
-                .map(Some)
+            eval_dynamic_class_new_object_with_ref_mode(
+                &class,
+                constructor_args,
+                by_ref_mode,
+                context,
+                &mut scope,
+                values,
+            )
+            .map(Some)
         });
     }
     let class_name = context
@@ -9835,16 +9875,39 @@ fn eval_reflection_class_new_instance_result(
         return eval_throw_reflection_instantiation_error(error, context, values);
     }
     eval_reflection_public_constructor_scope(context, values, |context, values| {
+        let constructor_name = format!("{}::__construct", class_name.trim_start_matches('\\'));
+        let by_ref_mode = if direct_new_instance {
+            EvalByRefBindingMode::WarnByValue {
+                callable_name: &constructor_name,
+            }
+        } else {
+            EvalByRefBindingMode::RequireTarget
+        };
         let instance = values.new_object(&class_name)?;
-        eval_native_constructor_with_evaluated_args(
+        eval_native_constructor_with_evaluated_args_and_ref_mode(
             &class_name,
             instance,
             constructor_args,
+            by_ref_mode,
             context,
             values,
         )?;
         Ok(Some(instance))
     })
+}
+
+/// Removes caller writeback targets for ReflectionClass::newInstance() by-value forwarding.
+fn eval_reflection_constructor_by_value_args(
+    evaluated_args: Vec<EvaluatedCallArg>,
+) -> Vec<EvaluatedCallArg> {
+    evaluated_args
+        .into_iter()
+        .map(|arg| EvaluatedCallArg {
+            name: arg.name,
+            value: arg.value,
+            ref_target: None,
+        })
+        .collect()
 }
 
 /// Expands the single `ReflectionClass::newInstanceArgs()` array argument.
@@ -10795,22 +10858,6 @@ pub(in crate::interpreter) fn positional_evaluated_arg_values(
     Ok(args.into_iter().map(|arg| arg.value).collect())
 }
 
-/// Binds native AOT callable args while preserving by-reference caller targets.
-pub(in crate::interpreter) fn bind_native_callable_bound_args(
-    signature: Option<NativeCallableSignature>,
-    args: Vec<EvaluatedCallArg>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<BoundMethodArg>, EvalStatus> {
-    bind_native_callable_bound_args_with_mode(
-        signature,
-        args,
-        EvalByRefBindingMode::RequireTarget,
-        context,
-        values,
-    )
-}
-
 /// Binds native AOT callable args using the selected by-reference degradation mode.
 fn bind_native_callable_bound_args_with_mode(
     signature: Option<NativeCallableSignature>,
@@ -11703,15 +11750,35 @@ pub(in crate::interpreter) fn eval_native_constructor_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    eval_native_constructor_with_evaluated_args_and_ref_mode(
+        class_name,
+        object,
+        evaluated_args,
+        EvalByRefBindingMode::RequireTarget,
+        context,
+        values,
+    )
+}
+
+/// Runs one generated/AOT constructor with caller-selected by-ref binding behavior.
+fn eval_native_constructor_with_evaluated_args_and_ref_mode(
+    class_name: &str,
+    object: RuntimeCellHandle,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     if let Some(message) = eval_native_constructor_access_error(class_name, context, values)? {
         return eval_throw_error(&message, context, values);
     }
     let bridge_scope =
         eval_native_constructor_bridge_scope(class_name, context, values)?;
     let signature = context.native_constructor_signature(class_name);
-    let bound_args = bind_native_callable_bound_args(
+    let bound_args = bind_native_callable_bound_args_with_mode(
         signature,
         evaluated_args,
+        by_ref_mode,
         context,
         values,
     )?;

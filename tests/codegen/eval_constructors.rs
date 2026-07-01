@@ -92,6 +92,61 @@ return gettype(EvalCtorNamedRefTargetStatic::$value) . ":" . EvalCtorNamedRefTar
     assert_eq!(out, "integer:5|integer:9|integer:10|integer:15");
 }
 
+/// Verifies ReflectionClass construction uses PHP by-ref semantics for eval and AOT constructors.
+#[test]
+fn test_eval_reflection_class_constructor_by_ref_matches_php_ref_semantics() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalReflectAotCtorRefBridge {
+    public function __construct(int &$value) {
+        $value = $value + 5;
+    }
+}
+
+echo eval('$aotRef = new ReflectionClass("EvalReflectAotCtorRefBridge");
+$direct = "1";
+$aotRef->newInstance($direct);
+echo gettype($direct) . ":" . $direct . "|";
+
+$argsValue = "2";
+$aotRef->newInstanceArgs([&$argsValue]);
+echo gettype($argsValue) . ":" . $argsValue . "|";
+
+class EvalReflectDeclaredCtorRefBridge {
+    public function __construct(int &$value) {
+        $value = $value + 7;
+    }
+}
+
+$evalRef = new ReflectionClass("EvalReflectDeclaredCtorRefBridge");
+$evalDirect = "3";
+$evalRef->newInstance($evalDirect);
+echo gettype($evalDirect) . ":" . $evalDirect . "|";
+
+$evalArgsValue = "4";
+$evalRef->newInstanceArgs([&$evalArgsValue]);
+return gettype($evalArgsValue) . ":" . $evalArgsValue;');
+"#,
+    );
+
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "string:1|integer:7|string:3|integer:11");
+    for warning in [
+        "EvalReflectAotCtorRefBridge::__construct(): Argument #1 ($value) must be passed by reference, value given",
+        "EvalReflectDeclaredCtorRefBridge::__construct(): Argument #1 ($value) must be passed by reference, value given",
+    ] {
+        assert!(
+            out.stderr.contains(warning),
+            "missing by-ref warning {warning:?}: {}",
+            out.stderr
+        );
+    }
+}
+
 /// Verifies AOT constructor by-reference args write back refcounted string, array, and object values.
 #[test]
 fn test_eval_dynamic_new_constructor_by_ref_refcounted_writeback() {
