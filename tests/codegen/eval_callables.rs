@@ -244,6 +244,64 @@ return call_user_func_array($closureNamedStatic, [&$j, 9]) . ":" . gettype($j) .
     );
 }
 
+/// Verifies eval-declared callable forms preserve by-ref variadic element writeback.
+#[test]
+fn test_eval_declared_callable_forms_preserve_by_ref_variadic_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalDeclaredVariadicRefCallableBox {
+    public function collect(&...$items): string {
+        $items[0] = $items[0] . "-i";
+        $items["named"] = $items["named"] . "-n";
+        return $items[0] . ":" . $items["named"];
+    }
+
+    public static function collectStatic(&...$items): string {
+        $items[0] = $items[0] . "-s";
+        $items["named"] = $items["named"] . "-sn";
+        return $items[0] . ":" . $items["named"];
+    }
+}
+
+$box = new EvalDeclaredVariadicRefCallableBox();
+
+$array = [$box, "collect"];
+$a = "A";
+$b = "B";
+echo $array($a, named: $b) . ":" . $a . ":" . $b . "|";
+
+$first = $box->collect(...);
+$c = "C";
+$d = "D";
+echo $first($c, named: $d) . ":" . $c . ":" . $d . "|";
+
+$closure = Closure::fromCallable([$box, "collect"]);
+$e = "E";
+$f = "F";
+echo $closure($e, named: $f) . ":" . $e . ":" . $f . "|";
+
+$string = "EvalDeclaredVariadicRefCallableBox::collectStatic";
+$g = "G";
+$h = "H";
+echo $string($g, named: $h) . ":" . $g . ":" . $h . "|";
+
+$i = "I";
+$j = "J";
+$args = [&$i, "named" => &$j];
+return call_user_func_array($closure, $args) . ":" . $i . ":" . $j . ":" .
+    $args[0] . ":" . $args["named"];');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        concat!(
+            "A-i:B-n:A-i:B-n|C-i:D-n:C-i:D-n|E-i:F-n:E-i:F-n|",
+            "G-s:H-sn:G-s:H-sn|I-i:J-n:I-i:J-n:I-i:J-n"
+        )
+    );
+}
+
 /// Verifies eval first-class callables are PHP-visible `Closure` objects and remain invokable.
 #[test]
 fn test_eval_first_class_callables_are_php_closure_objects() {
