@@ -92,6 +92,54 @@ return gettype(EvalCtorNamedRefTargetStatic::$value) . ":" . EvalCtorNamedRefTar
     assert_eq!(out, "integer:5|integer:9|integer:10|integer:15");
 }
 
+/// Verifies AOT constructor by-reference args write back refcounted string, array, and object values.
+#[test]
+fn test_eval_dynamic_new_constructor_by_ref_refcounted_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCtorRefcountedPayload {
+    public string $name;
+    public function __construct(string $name) {
+        $this->name = $name;
+    }
+}
+
+class EvalCtorStringRefBridge {
+    public function __construct(string &$value) {
+        $value = $value . "-ctor";
+    }
+}
+
+class EvalCtorArrayRefBridge {
+    public function __construct(array &$items) {
+        $items[0] = $items[0] . "-head";
+        $items[] = "tail";
+    }
+}
+
+class EvalCtorObjectRefBridge {
+    public function __construct(EvalCtorRefcountedPayload &$box) {
+        $box = new EvalCtorRefcountedPayload($box->name . "-ctor");
+    }
+}
+
+echo eval('$text = "A";
+new EvalCtorStringRefBridge($text);
+echo $text . "|";
+
+$items = ["B"];
+new EvalCtorArrayRefBridge($items);
+echo $items[0] . ":" . $items[1] . "|";
+
+$box = new EvalCtorRefcountedPayload("C");
+new EvalCtorObjectRefBridge($box);
+return $box->name;');
+"#,
+    );
+
+    assert_eq!(out, "A-ctor|B-head:tail|C-ctor");
+}
+
 /// Verifies AOT constructor by-reference writeback happens before a catchable throw.
 #[test]
 fn test_eval_dynamic_new_constructor_by_ref_lvalue_writeback_before_throw() {
