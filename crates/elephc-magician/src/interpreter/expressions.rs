@@ -1256,6 +1256,18 @@ fn eval_native_static_method_callable_target(
             values,
         )?
     else {
+        if context
+            .native_static_method_signature(&native_class, &method_name)
+            .is_some()
+        {
+            return Ok(EvalClosureObjectTarget::StaticMethod {
+                class_name: dispatch_class,
+                method: method_name,
+                called_class,
+                native_class: None,
+                bridge_scope: None,
+            });
+        }
         if eval_native_static_magic_callable_for_class(&native_class, context, values)?
             || !values.class_exists(&native_class)?
         {
