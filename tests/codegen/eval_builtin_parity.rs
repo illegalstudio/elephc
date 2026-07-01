@@ -197,6 +197,39 @@ echo gettype(EvalBuiltinRefBridgeBox::$typed) . ":" . EvalBuiltinRefBridgeBox::$
     assert_eq!(out, "S1,2,3|Tinteger:42|2:3,1|Pinteger:123");
 }
 
+/// Verifies eval string-callable ref-like builtins write back through lvalue targets.
+#[test]
+fn test_eval_string_callable_ref_like_builtins_write_back_aliases() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalStringBuiltinRefBridgeBox {
+    public array $items = [3, 1, 2];
+    public static mixed $typed = "77";
+}
+
+eval('$sort = "sort";
+$items = [3, 1, 2];
+echo $sort($items) ? "S" : "s";
+echo implode(",", $items) . "|";
+
+$settype = "settype";
+$value = "42";
+echo $settype($value, "integer") ? "T" : "t";
+echo gettype($value) . ":" . $value . "|";
+
+$box = new EvalStringBuiltinRefBridgeBox();
+$pop = "array_pop";
+echo $pop($box->items) . ":" . implode(",", $box->items) . "|";
+
+$setter = "settype";
+echo $setter(EvalStringBuiltinRefBridgeBox::$typed, "integer") ? "P" : "p";
+echo gettype(EvalStringBuiltinRefBridgeBox::$typed) . ":" . EvalStringBuiltinRefBridgeBox::$typed;');
+"#,
+    );
+
+    assert_eq!(out, "S1,2,3|Tinteger:42|2:3,1|Pinteger:77");
+}
+
 /// Verifies eval `call_user_func_array()` preserves named ref-like builtin targets.
 #[test]
 fn test_eval_call_user_func_array_ref_like_builtins_write_back_named_aliases() {
