@@ -11,7 +11,6 @@
 //! - `INTERNAL_BUILTIN_FUNCTIONS` exists only for compiler-generated synthetic bodies.
 
 const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
-    "basename",
     "disk_free_space",
     "disk_total_space",
     "boolval",
@@ -27,7 +26,6 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "clearstatcache",
     "copy",
     "die",
-    "dirname",
     "empty",
     "exit",
     "fclose",
@@ -53,7 +51,6 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "filemtime",
     "filesize",
     "floatval",
-    "fnmatch",
     "fopen",
     "fpassthru",
     "fprintf",
@@ -118,15 +115,10 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "lchown",
     "lstat",
     "mkdir",
-    "pathinfo",
     "preg_replace_callback",
-    "print_r",
 
     "readline",
     "readlink",
-    "realpath",
-    "realpath_cache_get",
-    "realpath_cache_size",
     "rename",
     "rewind",
     "rmdir",
@@ -201,7 +193,6 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "umask",
     "unlink",
     "unset",
-    "var_dump",
     "vfprintf",
 ];
 

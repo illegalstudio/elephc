@@ -26,8 +26,8 @@ pub(crate) mod arrays;
 mod buffers;
 mod class_relations;
 pub(crate) mod ctype;
-mod debug;
-mod io;
+pub(crate) mod debug;
+pub(crate) mod io;
 mod isset;
 mod is_numeric;
 pub(crate) mod json;
@@ -160,9 +160,6 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "stream_socket_recvfrom" => io::lower_stream_socket_recvfrom(ctx, inst),
         "stream_socket_sendto" => io::lower_stream_socket_sendto(ctx, inst),
         "file" => io::lower_file(ctx, inst),
-        "realpath" => io::lower_realpath(ctx, inst),
-        "realpath_cache_get" => io::lower_realpath_cache_get(ctx, inst),
-        "realpath_cache_size" => io::lower_realpath_cache_size(ctx, inst),
         "file_put_contents" => io::lower_file_put_contents(ctx, inst),
         "__elephc_phar_set_compression" => io::lower_elephc_phar_set_compression(ctx, inst),
         "__elephc_phar_list_entries" => io::lower_elephc_phar_list_entries(ctx, inst),
@@ -210,10 +207,6 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "tempnam" => io::lower_tempnam(ctx, inst),
         "scandir" => io::lower_scandir(ctx, inst),
         "glob" => io::lower_glob(ctx, inst),
-        "basename" => io::lower_basename(ctx, inst),
-        "dirname" => io::lower_dirname(ctx, inst),
-        "fnmatch" => io::lower_fnmatch(ctx, inst),
-        "pathinfo" => io::lower_pathinfo(ctx, inst),
         "filesize" => io::lower_filesize(ctx, inst),
         "filemtime" => io::lower_filemtime(ctx, inst),
         "linkinfo" => io::lower_linkinfo(ctx, inst),
@@ -254,8 +247,6 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
             types::lower_get_declared_names(ctx, inst, key.as_str())
         }
         "is_callable" => lower_is_callable(ctx, inst),
-        "print_r" => debug::lower_print_r(ctx, inst),
-        "var_dump" => debug::lower_var_dump(ctx, inst),
         "is_int" => lower_static_type_predicate(ctx, inst, "is_int", PhpType::Int),
         "is_float" => lower_static_type_predicate(ctx, inst, "is_float", PhpType::Float),
         "is_bool" => lower_static_type_predicate(ctx, inst, "is_bool", PhpType::Bool),

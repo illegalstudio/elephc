@@ -9,9 +9,7 @@
 //! - Signatures, callable aliases, optimizer effects, and codegen builtin dispatch must remain in lockstep.
 
 mod common;
-mod debug;
 mod files;
-mod paths;
 mod stats;
 mod streams;
 
@@ -23,7 +21,8 @@ use common::BuiltinResult;
 
 /// Type-checks a builtin call by delegating to the appropriate I/O subsystem checker.
 ///
-/// Checks `debug`, `streams`, `stats`, `files`, and `paths` submodules in order.
+/// Checks `streams`, `stats`, and `files` submodules in order. The `debug` and `paths`
+/// submodules have been fully migrated to the builtin registry and are no longer dispatched here.
 /// Returns `Ok(Some(result))` if the builtin was recognized by a subsystem,
 /// `Ok(None)` if no subsystem handles the name, or an error if validation fails.
 pub(super) fn check_builtin(
@@ -33,9 +32,6 @@ pub(super) fn check_builtin(
     span: crate::span::Span,
     env: &TypeEnv,
 ) -> BuiltinResult {
-    if let Some(result) = debug::check_builtin(checker, name, args, span, env)? {
-        return Ok(Some(result));
-    }
     if let Some(result) = streams::check_builtin(checker, name, args, span, env)? {
         return Ok(Some(result));
     }
@@ -43,9 +39,6 @@ pub(super) fn check_builtin(
         return Ok(Some(result));
     }
     if let Some(result) = files::check_builtin(checker, name, args, span, env)? {
-        return Ok(Some(result));
-    }
-    if let Some(result) = paths::check_builtin(checker, name, args, span, env)? {
         return Ok(Some(result));
     }
     Ok(None)

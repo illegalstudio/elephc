@@ -17,6 +17,7 @@ pub mod spec;
 pub mod registry;
 mod convert;
 mod array;
+mod io;
 mod string;
 mod math;
 mod spl;

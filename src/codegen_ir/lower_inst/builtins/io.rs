@@ -3687,7 +3687,7 @@ pub(super) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 }
 
 /// Lowers `realpath(path)` and boxes the owned runtime string-or-false result.
-pub(super) fn lower_realpath(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_realpath(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "realpath", 1)?;
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "realpath")?;
@@ -3697,7 +3697,7 @@ pub(super) fn lower_realpath(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 }
 
 /// Lowers `realpath_cache_get()` to elephc's empty realpath-cache view.
-pub(super) fn lower_realpath_cache_get(
+pub(crate) fn lower_realpath_cache_get(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -3707,7 +3707,7 @@ pub(super) fn lower_realpath_cache_get(
 }
 
 /// Lowers `realpath_cache_size()` to zero because elephc has no realpath cache.
-pub(super) fn lower_realpath_cache_size(
+pub(crate) fn lower_realpath_cache_size(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -4533,7 +4533,7 @@ pub(super) fn lower_touch(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `basename(path, suffix?)` through the target-aware runtime helper.
-pub(super) fn lower_basename(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_basename(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "basename", 1, 2)?;
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "basename path")?;
@@ -4572,7 +4572,7 @@ pub(super) fn lower_basename(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 }
 
 /// Lowers `dirname(path, levels?)` through the target-aware runtime helper.
-pub(super) fn lower_dirname(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_dirname(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "dirname", 1, 2)?;
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "dirname path")?;
@@ -4600,7 +4600,7 @@ pub(super) fn lower_dirname(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `fnmatch(pattern, filename, flags?)` through the target-aware runtime helper.
-pub(super) fn lower_fnmatch(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fnmatch(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fnmatch", 2, 3)?;
     let pattern = expect_operand(inst, 0)?;
     let filename = expect_operand(inst, 1)?;
@@ -4641,7 +4641,7 @@ pub(super) fn lower_fnmatch(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `pathinfo(path, flags?)` through string, array, or boxed dynamic helpers.
-pub(super) fn lower_pathinfo(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_pathinfo(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "pathinfo", 1, 2)?;
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "pathinfo path")?;

@@ -660,6 +660,15 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             // a generic string-callable wrapper body.  Direct calls and EIR first-class-callable
             // use still work through the EIR path.
             | "preg_match" | "preg_match_all" | "preg_replace" | "preg_split"
+            // These 4 io builtins had no pre-migration first-class-callable wrapper:
+            // general_first_class_callable_builtin_sig returned None for them (they are not
+            // in that table), so no wrapper was emitted. Excluding them restores that
+            // pre-migration behaviour — this is provably behaviour-neutral. `var_dump` and
+            // `print_r` additionally return void, making a deferred-closure wrapper
+            // semantically unhelpful. `realpath_cache_get` and `realpath_cache_size` take
+            // zero arguments, making a parameterised wrapper redundant.
+            // Direct calls and EIR first-class-callable use still work through the EIR path.
+            | "var_dump" | "print_r" | "realpath_cache_get" | "realpath_cache_size"
     )
 }
 
