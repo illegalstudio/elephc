@@ -11,6 +11,151 @@
 
 use crate::support::{compile_and_run, compile_and_run_capture};
 
+/// Verifies AOT function callables write back by-reference args before catchable throws.
+#[test]
+fn test_eval_aot_function_callables_write_back_by_ref_args_before_throw() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function eval_aot_throw_ref_add(int &$value, int $delta): int {
+    $value = $value + $delta;
+    throw new Exception("aot-function");
+}
+
+echo eval('$string = "eval_aot_throw_ref_add";
+$a = "2";
+try {
+    $string($a, 3);
+    echo "bad";
+} catch (Throwable $e) {
+    echo get_class($e) . ":" . $e->getMessage() . ":" . gettype($a) . ":" . $a . "|";
+}
+
+$first = eval_aot_throw_ref_add(...);
+$b = "4";
+try {
+    $first($b, 5);
+    echo "bad";
+} catch (Throwable $e) {
+    echo get_class($e) . ":" . $e->getMessage() . ":" . gettype($b) . ":" . $b . "|";
+}
+
+$closure = Closure::fromCallable("eval_aot_throw_ref_add");
+$c = "6";
+try {
+    $closure($c, 7);
+    echo "bad";
+} catch (Throwable $e) {
+    echo get_class($e) . ":" . $e->getMessage() . ":" . gettype($c) . ":" . $c . "|";
+}
+
+$d = "8";
+try {
+    call_user_func_array($closure, [&$d, 9]);
+    echo "bad";
+} catch (Throwable $e) {
+    echo get_class($e) . ":" . $e->getMessage() . ":" . gettype($d) . ":" . $d;
+}');
+"#,
+    );
+
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Exception:aot-function:integer:5|Exception:aot-function:integer:9|Exception:aot-function:integer:13|Exception:aot-function:integer:17"
+    );
+}
+
+/// Verifies AOT function argument-prep fatals restore the eval bridge frame.
+#[test]
+fn test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack() {
+    let cases = [
+        (
+            "string callable",
+            r#"<?php
+class EvalAotFunctionStringPrepFatalNeed {}
+function eval_aot_function_string_prep_fatal_bridge(int &$value, EvalAotFunctionStringPrepFatalNeed $need): int {
+    $value = $value + 1;
+    return $value;
+}
+
+echo eval('$callback = "eval_aot_function_string_prep_fatal_bridge";
+$value = "2";
+$callback($value, 123);
+echo "bad";');
+"#,
+        ),
+        (
+            "first-class callable",
+            r#"<?php
+class EvalAotFunctionFirstPrepFatalNeed {}
+function eval_aot_function_first_prep_fatal_bridge(int &$value, EvalAotFunctionFirstPrepFatalNeed $need): int {
+    $value = $value + 1;
+    return $value;
+}
+
+echo eval('$callback = eval_aot_function_first_prep_fatal_bridge(...);
+$value = "2";
+$callback($value, 123);
+echo "bad";');
+"#,
+        ),
+        (
+            "Closure::fromCallable",
+            r#"<?php
+class EvalAotFunctionClosurePrepFatalNeed {}
+function eval_aot_function_closure_prep_fatal_bridge(int &$value, EvalAotFunctionClosurePrepFatalNeed $need): int {
+    $value = $value + 1;
+    return $value;
+}
+
+echo eval('$callback = Closure::fromCallable("eval_aot_function_closure_prep_fatal_bridge");
+$value = "2";
+$callback($value, 123);
+echo "bad";');
+"#,
+        ),
+        (
+            "call_user_func_array",
+            r#"<?php
+class EvalAotFunctionArrayPrepFatalNeed {}
+function eval_aot_function_array_prep_fatal_bridge(int &$value, EvalAotFunctionArrayPrepFatalNeed $need): int {
+    $value = $value + 1;
+    return $value;
+}
+
+echo eval('$callback = Closure::fromCallable("eval_aot_function_array_prep_fatal_bridge");
+$value = "2";
+call_user_func_array($callback, [&$value, 123]);
+echo "bad";');
+"#,
+        ),
+    ];
+
+    for (label, source) in cases {
+        let out = compile_and_run_capture(source);
+        assert!(
+            !out.success,
+            "{label}: expected eval runtime fatal, stdout={:?} stderr={}",
+            out.stdout, out.stderr
+        );
+        assert_eq!(out.stdout, "", "{label}: unexpected stdout");
+        assert!(
+            out.stderr.contains("Fatal error: eval() runtime failed"),
+            "{label}: stderr did not contain eval runtime fatal diagnostic: {}",
+            out.stderr
+        );
+        assert!(
+            !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
+            "{label}: stderr leaked a Rust panic: {}",
+            out.stderr
+        );
+    }
+}
+
 /// Verifies AOT method callable by-reference args write back before catchable throws.
 #[test]
 fn test_eval_aot_method_callables_write_back_by_ref_args_before_throw() {
