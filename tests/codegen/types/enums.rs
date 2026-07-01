@@ -669,3 +669,73 @@ fn test_backed_int_enum_tryfrom_non_numeric_string_throws_type_error() {
         "TypeError:Level::tryFrom(): Argument #1 ($value) must be of type int, string given"
     );
 }
+
+/// Regression for #449: an int-backed enum's `from()` accepts a `Mixed` argument — here the
+/// value of a `foreach` over a string array — coercing each element to the backing value.
+/// Before the fix this failed to compile with "backing input PHP type Mixed".
+#[test]
+fn test_backed_int_enum_from_mixed_foreach_value() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        foreach ([\"1\", \"2\", \"1\"] as $v) {
+            echo Level::from($v)->name;
+        }
+        ",
+    );
+    assert_eq!(out, "LowHighLow");
+}
+
+/// Regression for #449: an untyped (`Mixed`) parameter passed to `from()` coerces on its
+/// runtime tag — a numeric string and an integer both resolve to the matching case.
+#[test]
+fn test_backed_int_enum_from_mixed_untyped_param() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        function pick($x) { return Level::from($x)->name; }
+        echo pick(\"1\"), pick(2), pick(\"2\");
+        ",
+    );
+    assert_eq!(out, "LowHighHigh");
+}
+
+/// Regression for #449: a heterogeneous (`Mixed`) array mixing coercible and non-coercible
+/// values dispatches per element — integers and numeric strings resolve, a non-numeric
+/// string and an array each throw `TypeError` with PHP's runtime-type message.
+#[test]
+fn test_backed_int_enum_from_mixed_per_element_dispatch() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        function pick($x) {
+            try {
+                return Level::from($x)->name;
+            } catch (TypeError $e) {
+                return $e->getMessage();
+            }
+        }
+        foreach ([1, \"2\", \"x\", [9]] as $v) {
+            echo pick($v), \"|\";
+        }
+        ",
+    );
+    assert_eq!(
+        out,
+        "Low|High|Level::from(): Argument #1 ($value) must be of type int, string given|Level::from(): Argument #1 ($value) must be of type int, array given|"
+    );
+}
+
+/// Regression for #449: `tryFrom()` on a `Mixed` argument coerces and returns the matching
+/// case, or `null` when the coerced value matches no case.
+#[test]
+fn test_backed_int_enum_tryfrom_mixed() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        function pick($x) { $r = Level::tryFrom($x); return $r === null ? \"null\" : $r->name; }
+        echo pick(\"2\"), pick(\"9\"), pick(1);
+        ",
+    );
+    assert_eq!(out, "HighnullLow");
+}

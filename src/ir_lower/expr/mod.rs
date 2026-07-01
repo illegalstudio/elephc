@@ -9173,23 +9173,38 @@ fn coerce_int_backed_enum_string_argument(
         .get(enum_name)
         .and_then(|info| info.backing_type.as_ref())
         .is_some_and(|backing| matches!(backing, PhpType::Int));
-    if !is_int_backed
-        || !matches!(ctx.builder.value_php_type(operands[0]).codegen_repr(), PhpType::Str)
-    {
+    if !is_int_backed {
         return operands;
     }
     let method_display = if key == "tryfrom" { "tryFrom" } else { "from" };
-    let message = format!(
-        "{}::{}(): Argument #1 ($value) must be of type int, string given",
-        enum_name, method_display
-    );
+    // A `string` argument coerces via a strict numeric probe; a `Mixed` argument dispatches
+    // on its runtime tag (int/bool/float/null coerce, string coerces, others `TypeError`).
+    // The string op carries the full message; the Mixed op carries the message prefix and
+    // appends the runtime type word in codegen.
+    let (op, message) = match ctx.builder.value_php_type(operands[0]).codegen_repr() {
+        PhpType::Str => (
+            Op::EnumBackingStringToInt,
+            format!(
+                "{}::{}(): Argument #1 ($value) must be of type int, string given",
+                enum_name, method_display
+            ),
+        ),
+        PhpType::Mixed | PhpType::Union(_) => (
+            Op::EnumBackingMixedToInt,
+            format!(
+                "{}::{}(): Argument #1 ($value) must be of type int, ",
+                enum_name, method_display
+            ),
+        ),
+        _ => return operands,
+    };
     let message_data = ctx.intern_string(&message);
     let coerced = ctx.emit_value(
-        Op::EnumBackingStringToInt,
+        op,
         vec![operands[0]],
         Some(Immediate::Data(message_data)),
         PhpType::Int,
-        Op::EnumBackingStringToInt.default_effects(),
+        op.default_effects(),
         Some(expr.span),
     );
     operands[0] = coerced.value;
