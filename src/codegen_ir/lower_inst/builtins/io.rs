@@ -2371,7 +2371,7 @@ pub(crate) fn lower_stream_resolve_include_path(
 }
 
 /// Lowers `stream_socket_server(address)` and boxes `resource|false`.
-pub(super) fn lower_stream_socket_server(
+pub(crate) fn lower_stream_socket_server(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2394,7 +2394,7 @@ pub(super) fn lower_stream_socket_server(
 }
 
 /// Lowers `stream_socket_client(address)` and records the connected host for TLS defaults.
-pub(super) fn lower_stream_socket_client(
+pub(crate) fn lower_stream_socket_client(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2433,7 +2433,7 @@ pub(super) fn lower_stream_socket_client(
 }
 
 /// Lowers `stream_socket_accept(server, timeout?, peer_name?)`.
-pub(super) fn lower_stream_socket_accept(
+pub(crate) fn lower_stream_socket_accept(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2462,7 +2462,7 @@ pub(super) fn lower_stream_socket_accept(
 }
 
 /// Lowers `stream_socket_pair(domain, type, protocol)` and boxes `array|false`.
-pub(super) fn lower_stream_socket_pair(
+pub(crate) fn lower_stream_socket_pair(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2493,7 +2493,7 @@ pub(super) fn lower_stream_socket_pair(
 }
 
 /// Lowers `stream_socket_get_name(socket, remote)` and boxes `string|false`.
-pub(super) fn lower_stream_socket_get_name(
+pub(crate) fn lower_stream_socket_get_name(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2519,7 +2519,7 @@ pub(super) fn lower_stream_socket_get_name(
 }
 
 /// Lowers `stream_socket_shutdown(stream, mode)`.
-pub(super) fn lower_stream_socket_shutdown(
+pub(crate) fn lower_stream_socket_shutdown(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2544,7 +2544,7 @@ pub(super) fn lower_stream_socket_shutdown(
 }
 
 /// Lowers `stream_socket_enable_crypto(stream, enable, method?, session_stream?)`.
-pub(super) fn lower_stream_socket_enable_crypto(
+pub(crate) fn lower_stream_socket_enable_crypto(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2596,7 +2596,7 @@ pub(super) fn lower_stream_socket_enable_crypto(
 }
 
 /// Lowers `stream_socket_recvfrom(socket, length, flags?, address?)`.
-pub(super) fn lower_stream_socket_recvfrom(
+pub(crate) fn lower_stream_socket_recvfrom(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -2638,7 +2638,7 @@ pub(super) fn lower_stream_socket_recvfrom(
 }
 
 /// Lowers `stream_socket_sendto(socket, data, flags?, address?)` and boxes `int|false`.
-pub(super) fn lower_stream_socket_sendto(
+pub(crate) fn lower_stream_socket_sendto(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -3406,7 +3406,7 @@ fn lower_disk_space(
 }
 
 /// Lowers `gethostname()` through the shared runtime helper.
-pub(super) fn lower_gethostname(
+pub(crate) fn lower_gethostname(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -3416,7 +3416,7 @@ pub(super) fn lower_gethostname(
 }
 
 /// Lowers `gethostbyname(hostname)` through the shared runtime resolver.
-pub(super) fn lower_gethostbyname(
+pub(crate) fn lower_gethostbyname(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -3428,7 +3428,7 @@ pub(super) fn lower_gethostbyname(
 }
 
 /// Lowers `gethostbyaddr(address)` and boxes malformed addresses as PHP `false`.
-pub(super) fn lower_gethostbyaddr(
+pub(crate) fn lower_gethostbyaddr(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -3441,7 +3441,7 @@ pub(super) fn lower_gethostbyaddr(
 }
 
 /// Lowers `getprotobyname(protocol)` and boxes a missing entry as PHP `false`.
-pub(super) fn lower_getprotobyname(
+pub(crate) fn lower_getprotobyname(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -3464,7 +3464,7 @@ pub(super) fn lower_getprotobyname(
 }
 
 /// Lowers `getprotobynumber(number)` and boxes a missing entry as PHP `false`.
-pub(super) fn lower_getprotobynumber(
+pub(crate) fn lower_getprotobynumber(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -3483,7 +3483,7 @@ pub(super) fn lower_getprotobynumber(
 }
 
 /// Lowers `getservbyname(service, protocol)` and boxes a missing entry as PHP `false`.
-pub(super) fn lower_getservbyname(
+pub(crate) fn lower_getservbyname(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -3514,7 +3514,7 @@ pub(super) fn lower_getservbyname(
 }
 
 /// Lowers `getservbyport(port, protocol)` and boxes a missing entry as PHP `false`.
-pub(super) fn lower_getservbyport(
+pub(crate) fn lower_getservbyport(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -3641,7 +3641,7 @@ pub(crate) fn lower_pclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `fsockopen(host, port, errno?, errstr?, timeout?)`.
-pub(super) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fsockopen", 2, 5)?;
     let host = expect_operand(inst, 0)?;
     let port = expect_operand(inst, 1)?;

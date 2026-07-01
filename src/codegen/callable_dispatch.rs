@@ -751,6 +751,22 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             | "stream_isatty" | "stream_supports_lock" | "stream_set_blocking"
             | "stream_set_timeout" | "stream_get_line" | "stream_get_meta_data"
             | "stream_get_contents" | "stream_copy_to_stream"
+            // These 18 io batch G stream socket/network builtins had no pre-migration
+            // first-class-callable wrapper: general_first_class_callable_builtin_sig
+            // returned None for them (they are not in that table), so no wrapper was emitted.
+            // Registering them in the builtin registry makes first_class_callable_builtin_sig
+            // return Some, which would newly emit a deferred-closure wrapper; excluding them here
+            // restores the exact pre-migration (no-wrapper) behaviour and is provably
+            // behaviour-neutral. These builtins take stream resources, socket resources, or
+            // by-ref parameters unsuited to a generic string-callable wrapper. Direct calls and
+            // EIR first-class-callable use still work through the EIR path.
+            | "stream_socket_server" | "stream_socket_client" | "stream_socket_accept"
+            | "stream_socket_enable_crypto" | "stream_socket_sendto" | "stream_socket_recvfrom"
+            | "stream_socket_get_name" | "stream_socket_pair" | "stream_socket_shutdown"
+            | "fsockopen" | "pfsockopen"
+            | "gethostname" | "gethostbyname" | "gethostbyaddr"
+            | "getprotobyname" | "getprotobynumber"
+            | "getservbyname" | "getservbyport"
     )
 }
 
