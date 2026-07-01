@@ -150,10 +150,12 @@ on those closure objects supports same-class method and invokable-object
 rebinding, passes the call arguments after the receiver by value like PHP, and
 reports PHP-compatible warning/null results for function and static-method
 callables. `Closure::bind()` and `Closure::bindTo()` persistently bind eval
-closure literals plus same-class method and invokable-object closure targets to
-a new receiver. The optional scope argument is accepted, but eval's current
-binding model derives method scope from the bound receiver rather than exposing
-the full PHP scope-mutation surface.
+closure literals, function callable targets, same-class method targets, and
+invokable-object closure targets to a new receiver. Function-target closures
+accept omitted, `null`, or `"static"` scope, but reject explicit object/class
+scope rebinding like PHP. The optional scope argument is accepted for method
+closures, but eval's current binding model derives method scope from the bound
+receiver rather than exposing the full PHP scope-mutation surface.
 
 Closure literals created inside eval are PHP-visible `Closure` objects: they
 report true for `is_object()`, `get_class($fn)` returns `Closure`,

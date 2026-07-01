@@ -2215,3 +2215,48 @@ return is_object($evalBound) ? get_class($evalBound) . ":" . $evalBound("v") : "
 
     assert_eq!(out, "Closure:A:x|Closure:A:y|Closure:E:u|Closure:E:v");
 }
+
+/// Verifies function `fromCallable()` closures reject explicit scope rebinding.
+#[test]
+fn test_eval_closure_bind_from_callable_function_targets_reject_explicit_scope() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_bind_from_callable_scope_function_target(string $value): string {
+    return "A:" . $value;
+}
+
+class EvalBindFromCallableScopeBox {}
+
+echo eval('function eval_declared_bind_from_callable_scope_function_target(string $value): string {
+    return "E:" . $value;
+}
+
+$box = new EvalBindFromCallableScopeBox();
+
+$aot = Closure::fromCallable("eval_bind_from_callable_scope_function_target");
+$aotNullScope = $aot->bindTo($box, null);
+echo is_object($aotNullScope) ? $aotNullScope("x") : "bad";
+echo "|";
+$aotStaticScope = Closure::bind($aot, $box, "static");
+echo is_object($aotStaticScope) ? $aotStaticScope("y") : "bad";
+echo "|";
+echo is_null($aot->bindTo($box, "EvalBindFromCallableScopeBox")) ? "a" : "A";
+echo "|";
+echo is_null(Closure::bind($aot, null, "EvalBindFromCallableScopeBox")) ? "b" : "B";
+echo "|";
+
+$eval = Closure::fromCallable("eval_declared_bind_from_callable_scope_function_target");
+$evalNullScope = Closure::bind($eval, $box, null);
+echo is_object($evalNullScope) ? $evalNullScope("u") : "bad";
+echo "|";
+$evalStaticScope = $eval->bindTo($box, "static");
+echo is_object($evalStaticScope) ? $evalStaticScope("v") : "bad";
+echo "|";
+echo is_null($eval->bindTo($box, "EvalBindFromCallableScopeBox")) ? "e" : "E";
+echo "|";
+return is_null(Closure::bind($eval, null, "EvalBindFromCallableScopeBox")) ? "f" : "F";');
+"#,
+    );
+
+    assert_eq!(out, "A:x|A:y|a|b|E:u|E:v|e|f");
+}

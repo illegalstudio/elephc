@@ -7555,9 +7555,16 @@ fn eval_closure_bind_static(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (target, bound_this, bound_scope) =
+    let (target, bound_this, bound_scope, rebinds_function_scope) =
         eval_closure_bind_static_args(evaluated_args, context, values)?;
-    eval_closure_bind_target(target, bound_this, bound_scope, context, values)
+    eval_closure_bind_target(
+        target,
+        bound_this,
+        bound_scope,
+        rebinds_function_scope,
+        context,
+        values,
+    )
 }
 
 /// Binds static `Closure::bind()` arguments to their PHP parameter slots.
@@ -7565,7 +7572,15 @@ fn eval_closure_bind_static_args(
     evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<(EvalClosureObjectTarget, Option<RuntimeCellHandle>, Option<String>), EvalStatus> {
+) -> Result<
+    (
+        EvalClosureObjectTarget,
+        Option<RuntimeCellHandle>,
+        Option<String>,
+        bool,
+    ),
+    EvalStatus,
+> {
     let bound = eval_closure_bind_args(
         &["closure", "newThis", "newScope"],
         2,
@@ -7575,8 +7590,9 @@ fn eval_closure_bind_static_args(
     let new_this = required_closure_bind_arg(&bound, 1)?;
     let target = eval_closure_target_arg(closure.value, context, values)?;
     let bound_this = eval_closure_bind_receiver_arg(new_this.value, values)?;
-    let bound_scope = eval_closure_bind_scope_arg(bound.get(2), bound_this, context, values)?;
-    Ok((target, bound_this, bound_scope))
+    let (bound_scope, rebinds_function_scope) =
+        eval_closure_bind_scope_arg(bound.get(2), bound_this, context, values)?;
+    Ok((target, bound_this, bound_scope, rebinds_function_scope))
 }
 
 /// Binds `Closure::bindTo()` arguments to their PHP parameter slots.
@@ -7584,12 +7600,13 @@ fn eval_closure_bind_to_args(
     evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<(Option<RuntimeCellHandle>, Option<String>), EvalStatus> {
+) -> Result<(Option<RuntimeCellHandle>, Option<String>, bool), EvalStatus> {
     let bound = eval_closure_bind_args(&["newThis", "newScope"], 1, evaluated_args)?;
     let new_this = required_closure_bind_arg(&bound, 0)?;
     let bound_this = eval_closure_bind_receiver_arg(new_this.value, values)?;
-    let bound_scope = eval_closure_bind_scope_arg(bound.get(1), bound_this, context, values)?;
-    Ok((bound_this, bound_scope))
+    let (bound_scope, rebinds_function_scope) =
+        eval_closure_bind_scope_arg(bound.get(1), bound_this, context, values)?;
+    Ok((bound_this, bound_scope, rebinds_function_scope))
 }
 
 /// Binds positional and named Closure binding arguments while accepting optional scope.
@@ -7673,34 +7690,39 @@ fn eval_closure_bind_receiver_arg(
     Ok(Some(new_this))
 }
 
-/// Converts the optional `newScope` binding argument into a PHP class scope name.
+/// Converts `newScope` into class scope plus whether function scope was rebound.
 fn eval_closure_bind_scope_arg(
     new_scope: Option<&Option<EvaluatedCallArg>>,
     bound_this: Option<RuntimeCellHandle>,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<String>, EvalStatus> {
+) -> Result<(Option<String>, bool), EvalStatus> {
     let Some(new_scope) = new_scope.and_then(Option::as_ref) else {
-        return Ok(None);
+        return Ok((None, false));
     };
     if values.is_null(new_scope.value)? {
-        return Ok(None);
+        return Ok((None, false));
     }
     if values.type_tag(new_scope.value)? == EVAL_TAG_OBJECT {
-        return eval_closure_bound_object_class_name(new_scope.value, context, values).map(Some);
+        return eval_closure_bound_object_class_name(new_scope.value, context, values)
+            .map(|scope| (Some(scope), true));
     }
     let bytes = values.string_bytes(new_scope.value)?;
     let scope = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
     if scope.eq_ignore_ascii_case("static") {
         let Some(bound_this) = bound_this else {
-            return Ok(None);
+            return Ok((None, false));
         };
-        return eval_closure_bound_object_class_name(bound_this, context, values).map(Some);
+        return eval_closure_bound_object_class_name(bound_this, context, values)
+            .map(|scope| (Some(scope), false));
     }
-    Ok(Some(
-        context
-            .resolve_class_name(&scope)
-            .unwrap_or_else(|| scope.trim_start_matches('\\').to_string()),
+    Ok((
+        Some(
+            context
+                .resolve_class_name(&scope)
+                .unwrap_or_else(|| scope.trim_start_matches('\\').to_string()),
+        ),
+        true,
     ))
 }
 
@@ -7709,16 +7731,29 @@ fn eval_closure_bind_target(
     target: EvalClosureObjectTarget,
     bound_this: Option<RuntimeCellHandle>,
     bound_scope: Option<String>,
+    rebinds_function_scope: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(bound_this) = bound_this else {
-        return eval_closure_unbind_target(target, bound_scope, context, values);
+        return eval_closure_unbind_target(
+            target,
+            bound_scope,
+            rebinds_function_scope,
+            context,
+            values,
+        );
     };
     match target {
         EvalClosureObjectTarget::Named(name) | EvalClosureObjectTarget::BoundNamed { name, .. } => {
             let Some(closure) = context.closure(&name) else {
                 if eval_function_probe_exists(context, &name) {
+                    if rebinds_function_scope {
+                        return eval_closure_call_warning_null(
+                            "Cannot rebind scope of closure created from function",
+                            values,
+                        );
+                    }
                     return eval_closure_object_from_target(
                         EvalClosureObjectTarget::BoundNamed {
                             name,
@@ -7802,11 +7837,21 @@ fn eval_closure_bind_target(
 fn eval_closure_unbind_target(
     target: EvalClosureObjectTarget,
     bound_scope: Option<String>,
+    rebinds_function_scope: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match target {
         EvalClosureObjectTarget::Named(name) | EvalClosureObjectTarget::BoundNamed { name, .. } => {
+            if rebinds_function_scope
+                && context.closure(&name).is_none()
+                && eval_function_probe_exists(context, &name)
+            {
+                return eval_closure_call_warning_null(
+                    "Cannot rebind scope of closure created from function",
+                    values,
+                );
+            }
             let target = match bound_scope {
                 Some(bound_scope) => EvalClosureObjectTarget::BoundNamed {
                     name,
@@ -9283,10 +9328,17 @@ fn eval_closure_object_method_result(
             .map(Some);
     }
     if method_name.eq_ignore_ascii_case("bindTo") {
-        let (bound_this, bound_scope) =
+        let (bound_this, bound_scope, rebinds_function_scope) =
             eval_closure_bind_to_args(evaluated_args, context, values)?;
-        return eval_closure_bind_target(target, bound_this, bound_scope, context, values)
-            .map(Some);
+        return eval_closure_bind_target(
+            target,
+            bound_this,
+            bound_scope,
+            rebinds_function_scope,
+            context,
+            values,
+        )
+        .map(Some);
     }
     if !method_name.eq_ignore_ascii_case("call") {
         return Ok(None);
