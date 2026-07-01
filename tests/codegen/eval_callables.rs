@@ -2177,6 +2177,98 @@ echo is_null(Closure::bind($static, $bound)) ? "S" : "s";');
     assert_eq!(out, "25:integer:25|29:integer:29|S");
 }
 
+/// Verifies eval `Closure::bind()` can bind inherited method closures to compatible subclasses.
+#[test]
+fn test_eval_closure_bind_from_callable_accepts_inherited_eval_method_targets() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalInheritedBindBase {
+    public int $base = 10;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+}
+
+class EvalInheritedBindChild extends EvalInheritedBindBase {}
+
+class EvalInheritedBindOverrideChild extends EvalInheritedBindBase {
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta + 100;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta + 100;
+        return $value;
+    }
+}
+
+$base = new EvalInheritedBindBase();
+$child = new EvalInheritedBindChild();
+$child->base = 20;
+
+$method = Closure::fromCallable([$base, "bump"])->bindTo($child);
+$a = "2";
+echo $method($a, 3) . ":" . gettype($a) . ":" . $a . "|";
+
+$invoke = Closure::fromCallable($base)->bindTo($child);
+$b = "4";
+echo $invoke($b, 5) . ":" . gettype($b) . ":" . $b . "|";
+
+$override = new EvalInheritedBindOverrideChild();
+echo is_null(Closure::fromCallable([$override, "bump"])->bindTo($base)) ? "M" : "m";
+echo is_null(Closure::fromCallable($override)->bindTo($base)) ? "I" : "i";');
+"#,
+    );
+
+    assert_eq!(out, "25:integer:25|29:integer:29|MI");
+}
+
+/// Verifies eval `Closure::bind()` can bind inherited generated/AOT method closures to subclasses.
+#[test]
+fn test_eval_closure_bind_from_callable_accepts_inherited_aot_method_targets() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotInheritedBindBase {
+    public int $base = 10;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+}
+
+class EvalAotInheritedBindChild extends EvalAotInheritedBindBase {}
+
+echo eval('$base = new EvalAotInheritedBindBase();
+$child = new EvalAotInheritedBindChild();
+$child->base = 20;
+
+$method = Closure::fromCallable([$base, "bump"])->bindTo($child);
+$a = "2";
+echo $method($a, 3) . ":" . gettype($a) . ":" . $a . "|";
+
+$invoke = Closure::fromCallable($base)->bindTo($child);
+$b = "4";
+echo $invoke($b, 5) . ":" . gettype($b) . ":" . $b;');
+"#,
+    );
+
+    assert_eq!(out, "25:integer:25|29:integer:29");
+}
+
 /// Verifies binding function `fromCallable()` closures returns callable closures.
 #[test]
 fn test_eval_closure_bind_from_callable_function_targets_remain_callable() {
