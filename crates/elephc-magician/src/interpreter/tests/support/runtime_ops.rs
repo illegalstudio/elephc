@@ -441,7 +441,7 @@ impl RuntimeValueOps for FakeOps {
         self.runtime_retain(RuntimeCellHandle::from_raw(word as *mut RuntimeCell))?;
         Ok(word)
     }
-    /// Boxes one fake scalar raw payload word with the provided runtime tag.
+    /// Boxes one fake one-word raw payload with the provided runtime tag.
     fn raw_word_value(
         &mut self,
         source_tag: u64,
@@ -451,6 +451,10 @@ impl RuntimeValueOps for FakeOps {
             EVAL_TAG_INT => self.runtime_int(word as i64),
             EVAL_TAG_FLOAT => self.runtime_float(f64::from_bits(word)),
             EVAL_TAG_BOOL => self.runtime_bool_value(word != 0),
+            EVAL_TAG_RESOURCE => self.runtime_resource(word as i64),
+            EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
+                Ok(RuntimeCellHandle::from_raw(word as *mut RuntimeCell))
+            }
             _ => Err(EvalStatus::RuntimeFatal),
         }
     }

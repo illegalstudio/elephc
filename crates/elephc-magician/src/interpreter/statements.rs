@@ -10515,6 +10515,14 @@ fn eval_invoker_slot_ref_target_value(
             let word = unsafe { *(slot as *const u64) };
             values.raw_word_value(source_tag, word)
         }
+        EVAL_TAG_STRING => {
+            let words = unsafe { *(slot as *const [u64; 2]) };
+            values.raw_string_value(words[0], words[1])
+        }
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
+            let word = unsafe { *(slot as *const u64) };
+            values.raw_word_value(source_tag, word)
+        }
         EVAL_TAG_MIXED => {
             let value = unsafe { *(slot as *const RuntimeCellHandle) };
             values.retain(value)
@@ -10538,6 +10546,10 @@ fn write_back_invoker_slot_ref_target(
             }
             Ok(())
         }
+        EVAL_TAG_STRING => write_back_invoker_string_slot(slot, value, values),
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
+            write_back_invoker_heap_slot(slot, source_tag, value, values)
+        }
         EVAL_TAG_MIXED => {
             let retained = values.retain(value)?;
             let replaced = unsafe {
@@ -10550,6 +10562,48 @@ fn write_back_invoker_slot_ref_target(
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
+}
+
+/// Writes a boxed string value back into a native descriptor-invoker string slot.
+fn write_back_invoker_string_slot(
+    slot: usize,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_STRING {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let ptr = values.raw_value_word(value)?;
+    let len = values.raw_value_high_word(value)?;
+    let retained = values.retain_raw_string_words(ptr, len)?;
+    let replaced = unsafe {
+        let slot = slot as *mut [u64; 2];
+        let replaced = *slot;
+        *slot = [retained.0, retained.1];
+        replaced
+    };
+    values.release_raw_string_words(replaced[0], replaced[1])
+}
+
+/// Writes a boxed heap value back into a native descriptor-invoker raw heap slot.
+fn write_back_invoker_heap_slot(
+    slot: usize,
+    source_tag: u64,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if values.type_tag(value)? != source_tag {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let word = values.raw_value_word(value)?;
+    let retained = values.retain_raw_heap_word(word)?;
+    let replaced = unsafe {
+        let slot = slot as *mut u64;
+        let replaced = *slot;
+        *slot = retained;
+        replaced
+    };
+    values.release_raw_heap_word(replaced)
 }
 
 /// Stores one by-reference method result in a caller-side array element.

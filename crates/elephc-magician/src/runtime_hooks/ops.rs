@@ -814,7 +814,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Ok(unsafe { __elephc_eval_value_retain_raw_heap_word(word) })
     }
 
-    /// Boxes one raw scalar payload word as a Mixed cell with the provided runtime tag.
+    /// Boxes one one-word raw payload as a Mixed cell with the provided runtime tag.
     fn raw_word_value(
         &mut self,
         source_tag: u64,

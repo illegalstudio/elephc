@@ -394,7 +394,7 @@ pub trait RuntimeValueOps {
     /// Retains one raw heap payload word so a staged native by-ref slot owns it.
     fn retain_raw_heap_word(&mut self, word: u64) -> Result<u64, EvalStatus>;
 
-    /// Boxes one raw scalar payload word as a Mixed cell with the provided runtime tag.
+    /// Boxes one one-word raw payload as a Mixed cell with the provided runtime tag.
     fn raw_word_value(
         &mut self,
         source_tag: u64,
@@ -589,6 +589,7 @@ pub(super) const EVAL_TAG_OBJECT: u64 = 6;
 pub(super) const EVAL_TAG_MIXED: u64 = 7;
 pub(super) const EVAL_TAG_NULL: u64 = 8;
 pub(super) const EVAL_TAG_RESOURCE: u64 = 9;
+pub(super) const EVAL_TAG_CALLABLE: u64 = 10;
 pub(super) const EVAL_TAG_INVOKER_REF_CELL: u64 = 11;
 
 pub(super) const EVAL_REFLECTION_OWNER_CLASS: u64 = 0;

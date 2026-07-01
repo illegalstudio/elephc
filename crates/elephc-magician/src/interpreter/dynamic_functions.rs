@@ -376,6 +376,14 @@ fn eval_invoker_ref_slot_value(
             let word = unsafe { *(slot as *const u64) };
             values.raw_word_value(source_tag, word)
         }
+        EVAL_TAG_STRING => {
+            let words = unsafe { *(slot as *const [u64; 2]) };
+            values.raw_string_value(words[0], words[1])
+        }
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
+            let word = unsafe { *(slot as *const u64) };
+            values.raw_word_value(source_tag, word)
+        }
         EVAL_TAG_MIXED => {
             let value = unsafe { *(slot as *const RuntimeCellHandle) };
             values.retain(value)

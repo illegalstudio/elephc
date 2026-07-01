@@ -10,7 +10,7 @@
 
 use std::fmt::Write;
 
-use crate::support::compile_and_run;
+use crate::support::{compile_and_run, compile_and_run_capture};
 
 /// Verifies AOT builtin lookup stays case-insensitive without eval being present.
 #[test]
@@ -383,4 +383,76 @@ echo ":" . implode(",", $matches[0]) . ":" . implode(",", $matches[1]);');
     );
 
     assert_eq!(out, "3:1,2,3|2:a,b|b,c:a,x,y,d|W:10,21|2:ab,ac:b,c");
+}
+
+/// Verifies ref-like builtin callbacks preserve writeback through AOT callable parameters.
+#[test]
+fn test_eval_ref_like_builtin_callables_pass_to_aot_callable_params() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalRefLikeBuiltinCallableBridge {
+    public string $value = "";
+
+    public function __construct(callable $callback, string $label) {
+        $items = [3, "1", 2];
+        $ok = $callback($items);
+        $this->value = $label . ":" . ($ok ? "T" : "F") . ":" . implode(",", $items);
+    }
+
+    public function convert(callable $callback, string $label): string {
+        $value = $label === "never" ? "x" : 42;
+        $ok = $callback($value, "string");
+        return $label . ":" . ($ok ? "T" : "F") . ":" . gettype($value) . ":" . $value;
+    }
+
+    public static function match(callable $callback, string $label): string {
+        $matches = [0, ""];
+        $count = $callback("/(a)(b)/", "ab", $matches);
+        return $label . ":" . $count . ":" . implode(":", $matches);
+    }
+
+    public function push(callable $callback, string $label): string {
+        $items = $label === "never" ? [0] : ["a"];
+        $count = $callback($items, "b");
+        return $label . ":" . $count . ":" . implode(",", $items);
+    }
+}
+
+echo eval('$out = [];
+$box = new EvalRefLikeBuiltinCallableBridge("sort", "s");
+$out[] = $box->value;
+$box = new EvalRefLikeBuiltinCallableBridge(sort(...), "f");
+$out[] = $box->value;
+$box = new EvalRefLikeBuiltinCallableBridge(Closure::fromCallable("sort"), "c");
+$out[] = $box->value;
+
+$box = new EvalRefLikeBuiltinCallableBridge("sort", "seed");
+$out[] = $box->convert("settype", "s");
+$out[] = $box->convert(settype(...), "f");
+$out[] = $box->convert(Closure::fromCallable("settype"), "c");
+
+$out[] = EvalRefLikeBuiltinCallableBridge::match("preg_match", "s");
+$out[] = EvalRefLikeBuiltinCallableBridge::match(preg_match(...), "f");
+$out[] = EvalRefLikeBuiltinCallableBridge::match(Closure::fromCallable("preg_match"), "c");
+
+$out[] = $box->push("array_push", "s");
+$out[] = $box->push(array_push(...), "f");
+$out[] = $box->push(Closure::fromCallable("array_push"), "c");
+
+return implode("|", $out);');
+"#,
+    );
+
+    assert!(
+        out.success,
+        "stdout:\n{}\nstderr:\n{}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "s:T:1,2,3|f:T:1,2,3|c:T:1,2,3|\
+s:T:string:42|f:T:string:42|c:T:string:42|\
+s:1:ab:a:b|f:1:ab:a:b|c:1:ab:a:b|\
+s:2:a,b|f:2:a,b|c:2:a,b"
+    );
 }
