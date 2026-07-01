@@ -172,6 +172,79 @@ return $invokable(delta: 13, value: $f) . ":" . gettype($f) . ":" . $f;');
     );
 }
 
+/// Verifies eval `call_user_func_array()` preserves named AOT by-ref argument aliases.
+#[test]
+fn test_eval_call_user_func_array_aot_callable_named_ref_args_preserve_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_call_array_aot_named_ref_add(int &$value, int $delta): int {
+    $value = $value + $delta;
+    return $value;
+}
+
+class EvalCallArrayAotNamedRefBox {
+    public int $base = 10;
+
+    public function bump(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+
+    public static function add(int &$value, int $delta): int {
+        $value = $value + $delta;
+        return $value;
+    }
+
+    public function __invoke(int &$value, int $delta): int {
+        $value = $value + $this->base + $delta;
+        return $value;
+    }
+}
+
+echo eval('$function = "eval_call_array_aot_named_ref_add";
+$a = "2";
+echo call_user_func_array($function, ["delta" => 3, "value" => &$a]) .
+    ":" . gettype($a) . ":" . $a . "|";
+
+$first = eval_call_array_aot_named_ref_add(...);
+$b = "4";
+echo call_user_func_array($first, ["delta" => 5, "value" => &$b]) .
+    ":" . gettype($b) . ":" . $b . "|";
+
+$box = new EvalCallArrayAotNamedRefBox();
+$array = [$box, "bump"];
+$c = "6";
+echo call_user_func_array($array, ["delta" => 7, "value" => &$c]) .
+    ":" . gettype($c) . ":" . $c . "|";
+
+$closure = Closure::fromCallable([$box, "bump"]);
+$d = "8";
+echo call_user_func_array($closure, ["value" => &$d, "delta" => 9]) .
+    ":" . gettype($d) . ":" . $d . "|";
+
+$string = "EvalCallArrayAotNamedRefBox::add";
+$e = "10";
+echo call_user_func_array($string, ["delta" => 11, "value" => &$e]) .
+    ":" . gettype($e) . ":" . $e . "|";
+
+$static = EvalCallArrayAotNamedRefBox::add(...);
+$f = "12";
+echo call_user_func_array($static, ["value" => &$f, "delta" => 13]) .
+    ":" . gettype($f) . ":" . $f . "|";
+
+$invokable = new EvalCallArrayAotNamedRefBox();
+$g = "14";
+return call_user_func_array($invokable, ["delta" => 15, "value" => &$g]) .
+    ":" . gettype($g) . ":" . $g;');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "5:integer:5|9:integer:9|23:integer:23|27:integer:27|21:integer:21|25:integer:25|39:integer:39"
+    );
+}
+
 /// Verifies eval `call_user_func()` keeps AOT callable by-reference args by value.
 #[test]
 fn test_eval_call_user_func_aot_callable_forms_use_by_value_args() {
