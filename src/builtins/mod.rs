@@ -20,5 +20,6 @@ mod array;
 mod string;
 mod math;
 mod spl;
+mod pointers;
 #[cfg(test)]
 mod parity_tests;

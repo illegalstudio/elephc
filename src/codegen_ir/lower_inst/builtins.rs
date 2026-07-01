@@ -32,7 +32,7 @@ mod isset;
 mod is_numeric;
 mod json;
 pub(crate) mod math;
-mod pointers;
+pub(crate) mod pointers;
 mod regex;
 mod serialize;
 pub(crate) mod spl;
@@ -62,21 +62,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "closure_bind" => lower_closure_bind(ctx, inst),
         "buffer_len" => buffers::lower_buffer_len(ctx, inst),
         "buffer_free" => buffers::lower_buffer_free(ctx, inst),
-        "ptr" => pointers::lower_ptr(ctx, inst),
-        "ptr_null" => pointers::lower_ptr_null(ctx, inst),
-        "ptr_is_null" => pointers::lower_ptr_is_null(ctx, inst),
-        "ptr_sizeof" => pointers::lower_ptr_sizeof(ctx, inst),
-        "ptr_offset" => pointers::lower_ptr_offset(ctx, inst),
-        "ptr_get" => pointers::lower_ptr_get(ctx, inst),
-        "ptr_set" => pointers::lower_ptr_set(ctx, inst),
-        "ptr_read8" => pointers::lower_ptr_read8(ctx, inst),
-        "ptr_read16" => pointers::lower_ptr_read16(ctx, inst),
-        "ptr_read32" => pointers::lower_ptr_read32(ctx, inst),
-        "ptr_read_string" => pointers::lower_ptr_read_string(ctx, inst),
-        "ptr_write8" => pointers::lower_ptr_write8(ctx, inst),
-        "ptr_write16" => pointers::lower_ptr_write16(ctx, inst),
-        "ptr_write32" => pointers::lower_ptr_write32(ctx, inst),
-        "ptr_write_string" => pointers::lower_ptr_write_string(ctx, inst),
+
         "call_user_func" | "call_user_func_array" => {
             arrays::lower_call_user_func_builtin_escape(ctx, inst, key.as_str())
         }

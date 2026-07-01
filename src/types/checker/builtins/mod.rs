@@ -13,7 +13,6 @@ mod callables;
 mod catalog;
 mod io;
 mod numeric;
-mod pointers;
 pub(crate) mod spl;
 mod strings;
 mod system;
@@ -134,9 +133,6 @@ impl Checker {
             return Ok(Some(result));
         }
         if let Some(result) = system::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = pointers::check_builtin(self, name, args, span, env)? {
             return Ok(Some(result));
         }
         if let Some(result) = spl::check_builtin(self, name, args, span, env)? {

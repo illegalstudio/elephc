@@ -623,6 +623,18 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             // no wrapper was emitted. Excluding it restores that pre-migration behaviour:
             // direct calls and EIR first-class-callable use still work through the EIR path.
             | "array_walk_recursive"
+            // These 11 pointer builtins had no pre-migration first-class-callable wrapper:
+            // first_class_callable_builtin_sig returned None for them (they are not in
+            // general_first_class_callable_builtin_sig), so no wrapper was emitted.
+            // Excluding them restores that pre-migration behaviour — this is provably
+            // behaviour-neutral. Pointer builtins are FFI compiler extensions where
+            // string-name callable dispatch is not a supported surface; ptr() requires a
+            // Variable argument and ptr_sizeof() requires a StringLiteral argument, making
+            // generic wrapper dispatch semantically incorrect. Direct calls and EIR
+            // first-class-callable use still work through the EIR path.
+            | "ptr" | "ptr_null" | "ptr_is_null" | "ptr_sizeof" | "ptr_offset"
+            | "ptr_get" | "ptr_set"
+            | "ptr_read8" | "ptr_read32" | "ptr_write8" | "ptr_write32"
     )
 }
 
