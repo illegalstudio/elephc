@@ -1,6 +1,6 @@
 ---
 title: "nl2br()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Inserts HTML line breaks before newlines in a string."
 sidebar:
   order: 367
 ---
@@ -8,14 +8,13 @@ sidebar:
 ## nl2br()
 
 ```php
-function nl2br(string $string, bool $use_xhtml): string
+function nl2br(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Inserts HTML line breaks before newlines in a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$use_xhtml` (`bool`)
 
 **Returns**: `string`
 

@@ -2,14 +2,14 @@
 title: "ctype_space() — internals"
 description: "Compiler internals for ctype_space(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 412
+  order: 409
 ---
 
 ## `ctype_space()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/ctype_space.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ctype_space.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/ctype.rs`:35](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/ctype.rs#L35) (`lower_ctype_space`)
 - **Function symbol**: `lower_ctype_space()`
 

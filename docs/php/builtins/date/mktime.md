@@ -1,8 +1,8 @@
 ---
 title: "mktime()"
-description: "Lowers `mktime(hour, minute, second, month, day, year)` through the runtime helper."
+description: "Returns the Unix timestamp for a date."
 sidebar:
-  order: 93
+  order: 95
 ---
 
 ## mktime()
@@ -11,7 +11,7 @@ sidebar:
 function mktime(int $hour, int $minute, int $second, int $month, int $day, int $year): int
 ```
 
-Lowers `mktime(hour, minute, second, month, day, year)` through the runtime helper.
+Returns the Unix timestamp for a date.
 
 **Parameters**:
 - `$hour` (`int`)

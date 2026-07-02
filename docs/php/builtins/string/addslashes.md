@@ -1,6 +1,6 @@
 ---
 title: "addslashes()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Adds backslashes before characters that need to be escaped."
 sidebar:
   order: 334
 ---
@@ -11,7 +11,7 @@ sidebar:
 function addslashes(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Adds backslashes before characters that need to be escaped.
 
 **Parameters**:
 - `$string` (`string`)

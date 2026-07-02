@@ -2,14 +2,14 @@
 title: "spl_autoload_functions() — internals"
 description: "Compiler internals for spl_autoload_functions(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 325
+  order: 322
 ---
 
 ## `spl_autoload_functions()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/spl/spl_autoload_functions.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_autoload_functions.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:166](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L166) (`lower_spl_autoload_functions`)
 - **Function symbol**: `lower_spl_autoload_functions()`
 

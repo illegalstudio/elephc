@@ -1,22 +1,20 @@
 ---
 title: "stream_socket_server()"
-description: "Lowers `stream_socket_server(address)` and boxes `resource|false`."
+description: "Create an Internet or Unix domain server socket."
 sidebar:
-  order: 221
+  order: 223
 ---
 
 ## stream_socket_server()
 
 ```php
-function stream_socket_server(string $address, int $error_code, int $error_message): mixed
+function stream_socket_server(string $address): mixed
 ```
 
-Lowers `stream_socket_server(address)` and boxes `resource|false`.
+Create an Internet or Unix domain server socket.
 
 **Parameters**:
 - `$address` (`string`)
-- `$error_code` (`int`), passed by reference
-- `$error_message` (`int`), passed by reference
 
 **Returns**: `mixed`
 

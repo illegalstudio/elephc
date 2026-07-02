@@ -15,7 +15,7 @@ sidebar:
 | [`atan()`](./math/atan.md) | `(float $num): float` | `float` |
 | [`atan2()`](./math/atan2.md) | `(float $y, float $x): float` | `float` |
 | [`ceil()`](./math/ceil.md) | `(float $num): float` | `float` |
-| [`clamp()`](./math/clamp.md) | `(int $value, int $min, int $max): string` | `string` |
+| [`clamp()`](./math/clamp.md) | `(int $value, int $min, int $max): mixed` | `mixed` |
 | [`cos()`](./math/cos.md) | `(float $num): float` | `float` |
 | [`cosh()`](./math/cosh.md) | `(float $num): float` | `float` |
 | [`deg2rad()`](./math/deg2rad.md) | `(float $num): float` | `float` |
@@ -28,18 +28,18 @@ sidebar:
 | [`is_finite()`](./math/is_finite.md) | `(float $num): bool` | `bool` |
 | [`is_infinite()`](./math/is_infinite.md) | `(float $num): bool` | `bool` |
 | [`is_nan()`](./math/is_nan.md) | `(float $num): bool` | `bool` |
-| [`log()`](./math/log.md) | `(float $num, float $base): float` | `float` |
+| [`log()`](./math/log.md) | `(float $num, float $base = 2.718281828459045): float` | `float` |
 | [`log10()`](./math/log10.md) | `(float $num): float` | `float` |
 | [`log2()`](./math/log2.md) | `(float $num): float` | `float` |
-| [`max()`](./math/max.md) | `(mixed $value, ...$values): float` | `float` |
-| [`min()`](./math/min.md) | `(mixed $value, ...$values): float` | `float` |
+| [`max()`](./math/max.md) | `(mixed $value, ...$values): mixed` | `mixed` |
+| [`min()`](./math/min.md) | `(mixed $value, ...$values): mixed` | `mixed` |
 | [`mt_rand()`](./math/mt_rand.md) | `(int $min, int $max): int` | `int` |
 | [`pi()`](./math/pi.md) | `(): float` | `float` |
 | [`pow()`](./math/pow.md) | `(float $num, float $exponent): float` | `float` |
 | [`rad2deg()`](./math/rad2deg.md) | `(float $num): float` | `float` |
 | [`rand()`](./math/rand.md) | `(int $min, int $max): int` | `int` |
 | [`random_int()`](./math/random_int.md) | `(int $min, int $max): int` | `int` |
-| [`round()`](./math/round.md) | `(float $num, int $precision): float` | `float` |
+| [`round()`](./math/round.md) | `(float $num, int $precision = 0): float` | `float` |
 | [`sin()`](./math/sin.md) | `(float $num): float` | `float` |
 | [`sinh()`](./math/sinh.md) | `(float $num): float` | `float` |
 | [`sqrt()`](./math/sqrt.md) | `(float $num): float` | `float` |

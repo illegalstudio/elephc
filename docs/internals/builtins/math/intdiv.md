@@ -2,14 +2,14 @@
 title: "intdiv() — internals"
 description: "Compiler internals for intdiv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 248
+  order: 250
 ---
 
 ## `intdiv()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/math/intdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/intdiv.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/binary.rs`:21](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/binary.rs#L21) (`lower_intdiv`)
 - **Function symbol**: `lower_intdiv()`
 

@@ -1,6 +1,6 @@
 ---
 title: "popen()"
-description: "Lowers `popen(command, mode)` and boxes the process pipe as `resource|false`."
+description: "Opens process file pointer."
 sidebar:
   order: 305
 ---
@@ -11,7 +11,7 @@ sidebar:
 function popen(string $command, string $mode): mixed
 ```
 
-Lowers `popen(command, mode)` and boxes the process pipe as `resource|false`.
+Opens process file pointer.
 
 **Parameters**:
 - `$command` (`string`)

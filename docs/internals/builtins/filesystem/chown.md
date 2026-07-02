@@ -2,14 +2,14 @@
 title: "chown() — internals"
 description: "Compiler internals for chown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 100
+  order: 102
 ---
 
 ## `chown()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/chown.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/chown.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4473](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4473) (`lower_chown`)
 - **Function symbol**: `lower_chown()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function chown(string $filename, int $user): bool
+function chown(string $filename, string $user): bool
 ```
 
 ## What the type checker enforces

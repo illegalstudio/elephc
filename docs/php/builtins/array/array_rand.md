@@ -1,6 +1,6 @@
 ---
 title: "array_rand()"
-description: "Lowers `array_rand()` for indexed arrays."
+description: "Pick one or more random keys out of an array."
 sidebar:
   order: 30
 ---
@@ -8,14 +8,13 @@ sidebar:
 ## array_rand()
 
 ```php
-function array_rand(array $array, int $num): int
+function array_rand(array $array): int
 ```
 
-Lowers `array_rand()` for indexed arrays.
+Pick one or more random keys out of an array.
 
 **Parameters**:
 - `$array` (`array`)
-- `$num` (`int`)
 
 **Returns**: `int`
 

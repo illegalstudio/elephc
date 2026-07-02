@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_sum.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_sum.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:51](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L51) (`lower_array_sum`)
 - **Function symbol**: `lower_array_sum()`
 
@@ -27,7 +27,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_sum(array $array): float
+function array_sum(array $array): int
 ```
 
 ## What the type checker enforces

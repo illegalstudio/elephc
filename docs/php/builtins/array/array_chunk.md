@@ -1,6 +1,6 @@
 ---
 title: "array_chunk()"
-description: "Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays."
+description: "Splits an array into chunks of the given size."
 sidebar:
   order: 3
 ---
@@ -8,15 +8,14 @@ sidebar:
 ## array_chunk()
 
 ```php
-function array_chunk(array $array, int $length, bool $preserve_keys): array
+function array_chunk(array $array, int $length): array
 ```
 
-Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays.
+Splits an array into chunks of the given size.
 
 **Parameters**:
 - `$array` (`array`)
 - `$length` (`int`)
-- `$preserve_keys` (`bool`)
 
 **Returns**: `array`
 

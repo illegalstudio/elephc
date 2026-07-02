@@ -2,14 +2,14 @@
 title: "file_exists() — internals"
 description: "Compiler internals for file_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 106
+  order: 108
 ---
 
 ## `file_exists()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/file_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/file_exists.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4399](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4399) (`lower_file_exists`)
 - **Function symbol**: `lower_file_exists()`
 

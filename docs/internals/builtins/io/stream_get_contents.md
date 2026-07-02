@@ -2,14 +2,14 @@
 title: "stream_get_contents() — internals"
 description: "Compiler internals for stream_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 199
+  order: 201
 ---
 
 ## `stream_get_contents()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_contents.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1301](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1301) (`lower_stream_get_contents`)
 - **Function symbol**: `lower_stream_get_contents()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function stream_get_contents(resource $stream, int $length, int $offset): mixed
+function stream_get_contents(resource $stream, int $length = null, int $offset = -1): mixed
 ```
 
 ## What the type checker enforces

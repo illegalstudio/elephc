@@ -1,8 +1,8 @@
 ---
 title: "stream_wrapper_restore()"
-description: "Lowers `stream_wrapper_restore(protocol)` as a successful no-op."
+description: "Restores a previously unregistered built-in wrapper."
 sidebar:
-  order: 225
+  order: 227
 ---
 
 ## stream_wrapper_restore()
@@ -11,7 +11,7 @@ sidebar:
 function stream_wrapper_restore(string $protocol): bool
 ```
 
-Lowers `stream_wrapper_restore(protocol)` as a successful no-op.
+Restores a previously unregistered built-in wrapper.
 
 **Parameters**:
 - `$protocol` (`string`)

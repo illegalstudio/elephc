@@ -1,8 +1,8 @@
 ---
 title: "stream_get_meta_data()"
-description: "Lowers `stream_get_meta_data(stream)` through the metadata runtime helper."
+description: "Retrieves metadata from streams/file pointers."
 sidebar:
-  order: 202
+  order: 204
 ---
 
 ## stream_get_meta_data()
@@ -11,7 +11,7 @@ sidebar:
 function stream_get_meta_data(resource $stream): array
 ```
 
-Lowers `stream_get_meta_data(stream)` through the metadata runtime helper.
+Retrieves metadata from streams/file pointers.
 
 **Parameters**:
 - `$stream` (`resource`)

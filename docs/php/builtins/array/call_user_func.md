@@ -1,8 +1,8 @@
 ---
 title: "call_user_func()"
-description: "call_user_func() — misc builtin supported by Elephc."
+description: "Calls a callback with the given arguments."
 sidebar:
-  order: 270
+  order: 49
 ---
 
 ## call_user_func()
@@ -11,7 +11,7 @@ sidebar:
 function call_user_func(callable $callback, ...$args): mixed
 ```
 
-`call_user_func()` is a misc builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Calls a callback with the given arguments.
 
 **Parameters**:
 - `$callback` (`callable`)
@@ -26,4 +26,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `call_user_func` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/call_user_func.md).
 

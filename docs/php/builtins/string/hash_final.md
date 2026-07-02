@@ -1,6 +1,6 @@
 ---
 title: "hash_final()"
-description: "Lowers `hash_final(context, binary?)` through the incremental hash finalizer."
+description: "Finalizes an incremental hash and returns the digest string."
 sidebar:
   order: 351
 ---
@@ -8,14 +8,14 @@ sidebar:
 ## hash_final()
 
 ```php
-function hash_final(resource $context, bool $binary): string
+function hash_final(resource $context, bool $binary = false): string
 ```
 
-Lowers `hash_final(context, binary?)` through the incremental hash finalizer.
+Finalizes an incremental hash and returns the digest string.
 
 **Parameters**:
 - `$context` (`resource`)
-- `$binary` (`bool`), optional
+- `$binary` (`bool`), default `false`, optional
 
 **Returns**: `string`
 

@@ -1,6 +1,6 @@
 ---
 title: "array_replace()"
-description: "Lowers `array_replace()` (right-wins hash merge of two hashes)."
+description: "Replaces elements from passed arrays into the first array."
 sidebar:
   order: 32
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_replace(array $array, array $replacements): mixed
 ```
 
-Lowers `array_replace()` (right-wins hash merge of two hashes).
+Replaces elements from passed arrays into the first array.
 
 **Parameters**:
 - `$array` (`array`)

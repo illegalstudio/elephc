@@ -2,14 +2,14 @@
 title: "get_resource_id() — internals"
 description: "Compiler internals for get_resource_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 414
+  order: 411
 ---
 
 ## `get_resource_id()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/types/get_resource_id.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/get_resource_id.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/types.rs`:424](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/types.rs#L424) (`lower_get_resource_id`)
 - **Function symbol**: `lower_get_resource_id()`
 

@@ -1,6 +1,6 @@
 ---
 title: "pfsockopen()"
-description: "pfsockopen() — streams builtin supported by Elephc."
+description: "Open persistent Internet or Unix domain socket connection."
 sidebar:
   order: 329
 ---
@@ -8,17 +8,17 @@ sidebar:
 ## pfsockopen()
 
 ```php
-function pfsockopen(string $hostname, int $port, int $error_code, string $error_message, float $timeout): mixed
+function pfsockopen(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed
 ```
 
-`pfsockopen()` is a streams builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Open persistent Internet or Unix domain socket connection.
 
 **Parameters**:
 - `$hostname` (`string`)
 - `$port` (`int`)
-- `$error_code` (`int`), passed by reference, optional
-- `$error_message` (`string`), passed by reference, optional
-- `$timeout` (`float`), optional
+- `$error_code` (`int`), passed by reference, default `null`, optional
+- `$error_message` (`string`), passed by reference, default `null`, optional
+- `$timeout` (`float`), default `null`, optional
 
 **Returns**: `mixed`
 
@@ -29,4 +29,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `pfsockopen` is implemented in the compiler, see [the internals page](../../../internals/builtins/streams/pfsockopen.md).
 

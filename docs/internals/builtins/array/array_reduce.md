@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_reduce.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_reduce.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L701) (`lower_array_reduce`)
 - **Function symbol**: `lower_array_reduce()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_reduce(array $array, callable $callback, mixed $initial): int
+function array_reduce(array $array, callable $callback, mixed $initial = null): int
 ```
 
 ## What the type checker enforces

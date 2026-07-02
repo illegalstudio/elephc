@@ -72,15 +72,32 @@ fn default_spec_json(default: &DefaultSpec) -> Value {
 /// Builds the documentation JSON array for every PHP-visible registered builtin.
 ///
 /// Iterates the registry in sorted name order, skips `internal` builtins, and emits one object per
-/// builtin with its area, parameters (name/type/by_ref/optional/default), variadic name, arity overrides,
-/// return type, summary, examples, PHP-manual fragment, and deprecation. Consumed by the
-/// `gen_builtins` binary for documentation generation.
+/// builtin (see [`build_json`] for the object shape). Consumed by the `gen_builtins` binary for
+/// documentation generation.
 pub fn export_builtins_json() -> Value {
+    build_json(false)
+}
+
+/// Builds the documentation JSON array for every registered builtin, INCLUDING `internal` ones.
+///
+/// Same object shape as [`export_builtins_json`]; used by the docs pipeline, which renders
+/// compiler-internals pages for internal `__elephc_*` helpers as well as the PHP-visible surface.
+pub fn export_builtins_json_all() -> Value {
+    build_json(true)
+}
+
+/// Builds the builtin documentation JSON array, optionally including `internal` builtins.
+///
+/// Iterates the registry in sorted name order and emits one object per builtin with its area,
+/// `internal` flag, parameters (name/type/by_ref/optional/default), variadic name, arity overrides,
+/// return type, summary, examples, PHP-manual fragment, and deprecation. When `include_internal` is
+/// false, builtins flagged `internal` are skipped.
+fn build_json(include_internal: bool) -> Value {
     let mut out: Vec<Value> = Vec::new();
     for name in names() {
         let Some(def) = lookup(name) else { continue };
         let spec = def.spec;
-        if spec.internal {
+        if spec.internal && !include_internal {
             continue;
         }
         let params: Vec<Value> = spec
@@ -102,6 +119,7 @@ pub fn export_builtins_json() -> Value {
         out.push(json!({
             "name": spec.name,
             "area": area_str(spec.area),
+            "internal": spec.internal,
             "params": params,
             "variadic": spec.variadic,
             "returns": type_spec_str(&spec.returns),
@@ -138,5 +156,25 @@ mod tests {
         assert_eq!(strlen["params"][0]["optional"], false);
         // No internal builtins leak into the docs export.
         assert!(arr.iter().all(|e| e["name"].as_str().map_or(false, |n| !n.starts_with("__elephc_"))));
+        // The default export carries the `internal` flag, always false here.
+        assert_eq!(strlen["internal"], false);
+    }
+
+    /// Verifies the include-internal export is a strict superset of the PHP-visible one and
+    /// surfaces at least one `internal` builtin flagged `internal: true`.
+    #[test]
+    fn export_all_includes_internal_builtins() {
+        let visible = super::export_builtins_json();
+        let all = super::export_builtins_json_all();
+        let visible_len = visible.as_array().expect("array").len();
+        let all_arr = all.as_array().expect("array");
+        assert!(all_arr.len() >= visible_len);
+        // Every builtin flagged internal is present only in the include-internal export.
+        assert!(all_arr.iter().any(|e| e["internal"] == true));
+        assert!(visible
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["internal"] == false));
     }
 }

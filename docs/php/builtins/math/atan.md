@@ -1,8 +1,8 @@
 ---
 title: "atan()"
-description: "atan() — math builtin supported by Elephc."
+description: "Returns the arctangent of a number in radians."
 sidebar:
-  order: 236
+  order: 238
 ---
 
 ## atan()
@@ -11,7 +11,7 @@ sidebar:
 function atan(float $num): float
 ```
 
-`atan()` is a math builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Returns the arctangent of a number in radians.
 
 **Parameters**:
 - `$num` (`float`)
@@ -25,4 +25,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `atan` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/atan.md).
 

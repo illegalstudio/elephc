@@ -2,14 +2,14 @@
 title: "sqrt() — internals"
 description: "Compiler internals for sqrt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 266
+  order: 268
 ---
 
 ## `sqrt()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/math/sqrt.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/sqrt.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/math.rs`:97](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math.rs#L97) (`lower_sqrt`)
 - **Function symbol**: `lower_sqrt()`
 

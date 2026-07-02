@@ -1,6 +1,6 @@
 ---
 title: "array_push()"
-description: "Lowers `array_push()` by appending one value and publishing the mutated array."
+description: "Pushes one or more elements onto the end of array."
 sidebar:
   order: 29
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_push(array $array, ...$values): void
 ```
 
-Lowers `array_push()` by appending one value and publishing the mutated array.
+Pushes one or more elements onto the end of array.
 
 **Parameters**:
 - `$array` (`array`), passed by reference

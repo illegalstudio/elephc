@@ -2,14 +2,14 @@
 title: "is_resource() — internals"
 description: "Compiler internals for is_resource(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 427
+  order: 424
 ---
 
 ## `is_resource()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/types/is_resource.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_resource.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/types.rs`:400](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/types.rs#L400) (`lower_is_resource`)
 - **Function symbol**: `lower_is_resource()`
 

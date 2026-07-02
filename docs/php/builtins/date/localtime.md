@@ -1,21 +1,21 @@
 ---
 title: "localtime()"
-description: "Lowers `localtime([$timestamp[, $associative]])` through the shared decomposition runtime helper."
+description: "Returns the local time."
 sidebar:
-  order: 91
+  order: 93
 ---
 
 ## localtime()
 
 ```php
-function localtime(int $timestamp, bool $associative): array
+function localtime(int $timestamp = -1, bool $associative = false): array
 ```
 
-Lowers `localtime([$timestamp[, $associative]])` through the shared decomposition runtime helper.
+Returns the local time.
 
 **Parameters**:
-- `$timestamp` (`int`), optional
-- `$associative` (`bool`), optional
+- `$timestamp` (`int`), default `-1`, optional
+- `$associative` (`bool`), default `false`, optional
 
 **Returns**: `array`
 

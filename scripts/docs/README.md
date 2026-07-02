@@ -10,16 +10,24 @@ tree into one Markdown page per supported PHP builtin, in two flavours:
   source file lowers the call, which runtime helper it dispatches to,
   what the type checker enforces.
 
-The script is data-driven: it parses three layers of the Rust source to
-build a single JSON registry (`scripts/docs/builtin_registry.json`) which
-the Markdown renderer consumes. The registry is the canonical source of
-truth; everything else is generated.
+The script is data-driven. Its source of truth is the single-source
+`builtin!` registry (`src/builtins/`), read via the `gen_builtins` binary
+(`cargo run --bin gen_builtins --include-internal`). It enriches that data
+with each builtin's lowering location (parsed from the home file's `lower`
+hook) and documentation area, then writes a single JSON registry
+(`scripts/docs/builtin_registry.json`) which the Markdown renderer consumes.
+Everything else is generated.
 
 ## Usage
 
-From the repo root:
+From the repo root. The generator invokes the `gen_builtins` binary, so build
+it first (the extractor prefers the prebuilt binary at `target/debug/gen_builtins`
+and otherwise falls back to `cargo run`):
 
 ```bash
+# 0. Build the registry exporter the generator reads from
+cargo build --bin gen_builtins
+
 # 1. Parse the source and write the JSON registry
 python3 scripts/docs/extract_builtins.py
 
@@ -36,18 +44,22 @@ everything.
 
 ## What the script reads
 
-| Layer | File | What we extract |
+| Layer | Source | What we extract |
 |---|---|---|
-| Catalog | `src/types/checker/builtins/catalog.rs` | The authoritative list of PHP-visible builtins. |
-| Signatures | `src/types/signatures.rs` | Per-builtin parameter names, defaults, variadics, by-ref flags, and first-class return types. |
-| Lowering | `src/codegen_ir/lower_inst/builtins.rs` + per-area submodules | For each builtin: the lowering function, its location, runtime helpers it calls, and the leading `///` doc comment. |
+| Registry | `gen_builtins` binary (reads `src/builtins/`) | The authoritative set of builtins (incl. `internal` helpers) with exact signatures: parameter names, types, defaults, by-ref flags, variadics, and return types. |
+| Lowering | Home files `src/builtins/<area>/<name>.rs` + `src/codegen_ir/lower_inst/builtins/` | Each home's `lower` hook names the emitter it dispatches to; we resolve that emitter's file, line, `__rt_*` runtime helpers, and leading `///` doc comment. |
+| Precision | `elephc_builtins/registry.py` | Presentation refinements the registry represents coarsely as `Mixed`: `PARAM_TYPES` (param display types) and `RETURN_TYPE_OVERRIDES`. Return types are also recovered from a home's `check` hook when possible. |
 
-The renderer currently reads the dispatch table in `builtins.rs` (root)
-plus the `lower_*` function definitions in the submodule files. When a
-builtin has no dedicated dispatch arm (e.g. it is handled by a multi-name
-catch-all), the renderer falls back to a `lower_<name>` heuristic on the
-root file. Builtins that cannot be mapped to a lowering are still emitted,
-but the internals page will note that no dedicated lowering was found.
+The registry represents non-scalar params/returns as `Mixed`; the generator
+recovers array/typed returns from the home file's `check` hook and applies
+`PARAM_TYPES` for param display types. Builtins whose emitter cannot be
+resolved are still emitted, but the internals page notes that no dedicated
+lowering was found.
+
+The 8 PHP language constructs that stay checker-resident
+(`isset`/`unset`/`empty`/`exit`/`die`/`buffer_len`/`buffer_free`/`buffer_new`)
+are not in the registry; they are added from a hand-curated table
+(`LANGUAGE_CONSTRUCTS`) in `extract.py`.
 
 ## Layout
 
@@ -57,9 +69,9 @@ scripts/docs/
 ├── extract_builtins.py        # CLI entry point
 ├── builtin_registry.json      # generated — do not edit by hand
 └── elephc_builtins/           # Python package
-    ├── extract.py             # parses .rs files
+    ├── extract.py             # reads gen_builtins + resolves lowering
     ├── render.py              # emits Markdown
-    └── registry.py            # data model
+    └── registry.py            # data model + area maps + precision tables
 ```
 
 ## Output tree
@@ -82,24 +94,22 @@ docs/
     └── …
 ```
 
-Every builtin lives in a subfolder that matches its area. The 3 internal
+Every builtin lives in a subfolder that matches its area. The internal
 `__elephc_*` helpers live under `_internal/`.
 
 ## Known limitations
 
-- **Signature precision depends on `src/types/signatures.rs` and several
-  hand-curated tables in `registry.py`.** Parameter names, types, return
-  types, by-ref flags, optional defaults, and variadic shape are refined
-  through `PARAM_TYPES`, `PARAM_NAME_OVERRIDES`, `PARAM_TYPE_OVERRIDES`,
-  `REF_PARAM_OVERRIDES`, `OPTIONAL_PARAM_OVERRIDES`, `RETURN_TYPE_OVERRIDES`,
-  and `VARIADIC_OVERRIDES`. The generator also reads
-  `first_class_callable_builtin_sig()` and `check_builtin()` arms for
-  additional precision. A few builtins still differ from PHP because Elephc
-  intentionally supports a smaller surface (e.g. fewer optional parameters).
-- **About 48 catalog builtins have no captured lowering.** These are
-  usually handled by multi-name catch-all dispatchers (e.g. libm unary
-  functions) or by special compiler paths that the heuristic does not
-  yet recognize. Their internals page will show `(not lowered)`.
+- **Parameter names, defaults, by-ref flags, variadic shape, and arity are
+  exact** — they come straight from the `builtin!` registry, so they match
+  Elephc's actual supported surface (which is sometimes smaller than PHP's,
+  e.g. fewer optional parameters). **Non-scalar types are coarse**: the
+  registry declares arrays/callables/unions as `Mixed`. The generator
+  recovers array/typed *return* types from each home's `check` hook, and
+  refines *param* display types via `PARAM_TYPES` in `registry.py`; where
+  neither applies, a non-scalar shows as `mixed`.
+- **A few builtins have no captured lowering.** When a home's `lower` hook
+  cannot be resolved to an emitter definition, the internals page notes that
+  no dedicated lowering was found.
 - **Areas are inferred from the dispatch module** in `builtins.rs` and the
   file path of the lowering function. Hand-curated overrides live in
   `elephc_builtins/registry.py` (`AREA_BY_NAME`, `AREA_BY_LOWERING_FN`,

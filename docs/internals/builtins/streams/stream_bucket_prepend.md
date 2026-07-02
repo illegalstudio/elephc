@@ -2,17 +2,21 @@
 title: "stream_bucket_prepend() — internals"
 description: "Compiler internals for stream_bucket_prepend(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 334
+  order: 331
 ---
 
 ## `stream_bucket_prepend()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/io/stream_bucket_prepend.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_bucket_prepend.rs)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2064](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2064) (`lower_stream_bucket_append_or_prepend`)
+- **Function symbol**: `lower_stream_bucket_append_or_prepend()`
 
+
+### Lowering notes
+
+- Lowers `stream_bucket_append` and `stream_bucket_prepend` over the `_buckets` array.
 
 ## Runtime helpers
 

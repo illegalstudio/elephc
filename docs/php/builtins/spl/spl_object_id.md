@@ -1,6 +1,6 @@
 ---
 title: "spl_object_id()"
-description: "Lowers `spl_object_id(object)` by returning the loaded object pointer as an integer."
+description: "Return the integer object handle for given object."
 sidebar:
   order: 327
 ---
@@ -11,7 +11,7 @@ sidebar:
 function spl_object_id(object $object): int
 ```
 
-Lowers `spl_object_id(object)` by returning the loaded object pointer as an integer.
+Return the integer object handle for given object.
 
 **Parameters**:
 - `$object` (`object`)

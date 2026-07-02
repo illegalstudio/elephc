@@ -1,8 +1,8 @@
 ---
 title: "is_link()"
-description: "Lowers `is_link(path)` through the target-aware runtime lstat helper."
+description: "Tells whether the filename is a symbolic link."
 sidebar:
-  order: 123
+  order: 125
 ---
 
 ## is_link()
@@ -11,7 +11,7 @@ sidebar:
 function is_link(string $filename): bool
 ```
 
-Lowers `is_link(path)` through the target-aware runtime lstat helper.
+Tells whether the filename is a symbolic link.
 
 **Parameters**:
 - `$filename` (`string`)

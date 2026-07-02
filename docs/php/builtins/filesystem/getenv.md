@@ -1,21 +1,20 @@
 ---
 title: "getenv()"
-description: "Lowers `getenv(name)` through the target-aware environment lookup helper."
+description: "Gets the value of an environment variable."
 sidebar:
-  order: 118
+  order: 120
 ---
 
 ## getenv()
 
 ```php
-function getenv(string $name, bool $local_only): mixed
+function getenv(string $name): mixed
 ```
 
-Lowers `getenv(name)` through the target-aware environment lookup helper.
+Gets the value of an environment variable.
 
 **Parameters**:
 - `$name` (`string`)
-- `$local_only` (`bool`)
 
 **Returns**: `mixed`
 

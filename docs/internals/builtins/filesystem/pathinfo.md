@@ -2,14 +2,14 @@
 title: "pathinfo() — internals"
 description: "Compiler internals for pathinfo(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 133
+  order: 135
 ---
 
 ## `pathinfo()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/pathinfo.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/pathinfo.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4644](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4644) (`lower_pathinfo`)
 - **Function symbol**: `lower_pathinfo()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function pathinfo(string $path, int $flags): mixed
+function pathinfo(string $path, int $flags = 15): array
 ```
 
 ## What the type checker enforces

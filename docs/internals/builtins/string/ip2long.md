@@ -2,14 +2,14 @@
 title: "ip2long() — internals"
 description: "Compiler internals for ip2long(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 365
+  order: 362
 ---
 
 ## `ip2long()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/ip2long.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ip2long.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:488](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L488) (`lower_ip2long`)
 - **Function symbol**: `lower_ip2long()`
 

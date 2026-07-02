@@ -1,8 +1,8 @@
 ---
 title: "realpath_cache_size()"
-description: "Lowers `realpath_cache_size()` to zero because elephc has no realpath cache."
+description: "Returns the amount of memory used by the realpath cache."
 sidebar:
-  order: 139
+  order: 141
 ---
 
 ## realpath_cache_size()
@@ -11,7 +11,7 @@ sidebar:
 function realpath_cache_size(): int
 ```
 
-Lowers `realpath_cache_size()` to zero because elephc has no realpath cache.
+Returns the amount of memory used by the realpath cache.
 
 **Parameters**: none.
 

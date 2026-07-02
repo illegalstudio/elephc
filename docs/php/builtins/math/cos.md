@@ -1,8 +1,8 @@
 ---
 title: "cos()"
-description: "cos() — math builtin supported by Elephc."
+description: "Returns the cosine of a number (radians)."
 sidebar:
-  order: 240
+  order: 242
 ---
 
 ## cos()
@@ -11,7 +11,7 @@ sidebar:
 function cos(float $num): float
 ```
 
-`cos()` is a math builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Returns the cosine of a number (radians).
 
 **Parameters**:
 - `$num` (`float`)
@@ -25,4 +25,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `cos` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/cos.md).
 

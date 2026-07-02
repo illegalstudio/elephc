@@ -1,23 +1,23 @@
 ---
 title: "max()"
-description: "Lowers numeric `min()` and `max()` over concrete integer-like or float operands."
+description: "Find highest value."
 sidebar:
-  order: 255
+  order: 257
 ---
 
 ## max()
 
 ```php
-function max(mixed $value, ...$values): float
+function max(mixed $value, ...$values): mixed
 ```
 
-Lowers numeric `min()` and `max()` over concrete integer-like or float operands.
+Find highest value.
 
 **Parameters**:
 - `$value` (`mixed`)
 - `...$values` — variadic: collects excess arguments into `$values`.
 
-**Returns**: `float`
+**Returns**: `mixed`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "call_user_func_array()"
-description: "call_user_func_array() — misc builtin supported by Elephc."
+description: "Calls a callback with an array of parameters."
 sidebar:
-  order: 271
+  order: 50
 ---
 
 ## call_user_func_array()
@@ -11,7 +11,7 @@ sidebar:
 function call_user_func_array(callable $callback, array $args): mixed
 ```
 
-`call_user_func_array()` is a misc builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Calls a callback with an array of parameters.
 
 **Parameters**:
 - `$callback` (`callable`)
@@ -26,4 +26,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `call_user_func_array` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/call_user_func_array.md).
 

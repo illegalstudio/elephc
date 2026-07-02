@@ -1,24 +1,22 @@
 ---
 title: "fgetcsv()"
-description: "Lowers `fgetcsv(stream, separator?, enclosure?)` through the CSV row runtime helper."
+description: "Gets line from file pointer and parse for CSV fields."
 sidebar:
-  order: 157
+  order: 159
 ---
 
 ## fgetcsv()
 
 ```php
-function fgetcsv(resource $stream, int $length, string $separator, string $enclosure, string $escape): array
+function fgetcsv(resource $stream, int $length = null, string $separator = ','): array
 ```
 
-Lowers `fgetcsv(stream, separator?, enclosure?)` through the CSV row runtime helper.
+Gets line from file pointer and parse for CSV fields.
 
 **Parameters**:
 - `$stream` (`resource`)
-- `$length` (`int`), optional
-- `$separator` (`string`), optional
-- `$enclosure` (`string`)
-- `$escape` (`string`)
+- `$length` (`int`), default `null`, optional
+- `$separator` (`string`), default `','`, optional
 
 **Returns**: `array`
 

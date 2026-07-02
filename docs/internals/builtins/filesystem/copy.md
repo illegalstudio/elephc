@@ -2,14 +2,14 @@
 title: "copy() — internals"
 description: "Compiler internals for copy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 102
+  order: 104
 ---
 
 ## `copy()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/copy.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/copy.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4443](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4443) (`lower_copy`)
 - **Function symbol**: `lower_copy()`
 
@@ -29,12 +29,12 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function copy(string $from, string $to, mixed $context): bool
+function copy(string $from, string $to): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
+- **Arity**: takes exactly 2 arguments.
 
 ## Cross-references
 
