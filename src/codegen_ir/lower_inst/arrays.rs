@@ -323,6 +323,60 @@ fn lower_array_set_mixed_key_x86_64(
     Ok(())
 }
 
+/// Lowers a boxed-Mixed-key read from a statically `Array(Mixed)` indexed local.
+///
+/// The key tag is only known at runtime (PHP `foreach` keys are always `Mixed`
+/// in EIR), so the read goes through `__rt_array_get_mixed_key`, which dispatches
+/// on the destination runtime kind: an already-promoted hash reads through
+/// `__rt_hash_get`, while an indexed array bounds-checks integer keys and returns
+/// `Mixed(null)` for string keys. The result is an owned boxed `Mixed` cell.
+pub(super) fn lower_array_get_mixed_key(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    require_indexed_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
+    let key_ty = ctx.value_php_type(key)?.codegen_repr();
+    if !matches!(key_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_get_mixed_key key PHP type {:?}",
+            key_ty
+        )));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_array_get_mixed_key_aarch64(ctx, array, key)?,
+        Arch::X86_64 => lower_array_get_mixed_key_x86_64(ctx, array, key)?,
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Loads the array and boxed Mixed key into argument registers on AArch64 and
+/// calls `__rt_array_get_mixed_key`, leaving the owned Mixed result in x0.
+fn lower_array_get_mixed_key_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    key: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_reg(array, "x0")?;
+    ctx.load_value_to_reg(key, "x1")?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_get_mixed_key");
+    Ok(())
+}
+
+/// Loads the array and boxed Mixed key into argument registers on x86_64 and
+/// calls `__rt_array_get_mixed_key`, leaving the owned Mixed result in rax.
+fn lower_array_get_mixed_key_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    key: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_reg(array, "rdi")?;
+    ctx.load_value_to_reg(key, "rsi")?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_get_mixed_key");
+    Ok(())
+}
+
 /// Lowers an indexed-array append through the runtime helper for the value type.
 pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;

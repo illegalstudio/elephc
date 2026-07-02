@@ -6693,8 +6693,21 @@ fn lower_array_access_from_value(
     let mut index_value = lower_expr(ctx, index);
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
-            index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
-            Op::ArrayGet
+            // Array(Mixed) may have been promoted to a hash at runtime (e.g.
+            // foreach-rebuilt arrays), so the key tag is only known at runtime.
+            // Route through ArrayGetMixedKey instead of coercing the index to
+            // int, which would collapse a string key onto int 0.
+            let is_mixed_array = matches!(
+                ctx.builder.value_php_type(array_value.value).codegen_repr(),
+                PhpType::Array(boxed) if *boxed == PhpType::Mixed
+            );
+            if is_mixed_array {
+                index_value = box_index_for_mixed_key(ctx, index_value, index);
+                Op::ArrayGetMixedKey
+            } else {
+                index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+                Op::ArrayGet
+            }
         }
         IrType::Heap(IrHeapKind::Hash) => Op::HashGet,
         IrType::Heap(IrHeapKind::Buffer) => Op::BufferGet,
@@ -6712,6 +6725,33 @@ fn lower_array_access_from_value(
         result_type,
         op.default_effects(),
         Some(expr.span),
+    )
+}
+
+/// Boxes a lowered index into a Mixed cell for `Op::ArrayGetMixedKey`.
+///
+/// A foreach loop key already arrives as a boxed Mixed/Union cell, so it is
+/// passed through unchanged. Literal int/string keys (and any other typed
+/// index) are boxed via `Op::MixedBox` so the runtime helper can dispatch on
+/// the key tag exactly like `Op::ArraySetMixedKey`.
+fn box_index_for_mixed_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    index_value: LoweredValue,
+    index: &Expr,
+) -> LoweredValue {
+    if matches!(
+        index_value.ir_type,
+        IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union)
+    ) {
+        return index_value;
+    }
+    ctx.emit_value(
+        Op::MixedBox,
+        vec![index_value.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(index.span),
     )
 }
 
@@ -6766,6 +6806,7 @@ fn array_access_result_type(
 ) -> PhpType {
     match op {
         Op::StrCharAt => PhpType::Str,
+        Op::ArrayGetMixedKey => PhpType::Mixed,
         Op::ArrayGet => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::Array(elem_ty) => {
                 array_access_element_result_type(normalize_value_php_type(*elem_ty))
