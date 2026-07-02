@@ -257,5 +257,5 @@ pub(crate) use var_dump_walk::{
     emit_var_dump_array_mixed, emit_var_dump_array_str, emit_var_dump_emit_bool_line,
     emit_var_dump_emit_float_line, emit_var_dump_emit_indexed_key, emit_var_dump_emit_int_line,
     emit_var_dump_emit_null_line, emit_var_dump_emit_string_key, emit_var_dump_emit_string_line,
-    emit_var_dump_hash,
+    emit_var_dump_hash, emit_var_dump_indexed, emit_var_dump_spaces, emit_var_dump_value,
 };

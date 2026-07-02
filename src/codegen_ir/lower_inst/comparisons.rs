@@ -88,6 +88,14 @@ pub(super) fn lower_strict_eq(
         emit_bool_literal(ctx, !is_equal);
         return store_if_result(ctx, inst);
     }
+    if matches!(lhs_ty, PhpType::Array(_)) {
+        emit_array_strict_eq_call(ctx, lhs, rhs, is_equal)?;
+        return store_if_result(ctx, inst);
+    }
+    if matches!(lhs_ty, PhpType::AssocArray { .. }) {
+        emit_hash_strict_eq_call(ctx, lhs, rhs, is_equal)?;
+        return store_if_result(ctx, inst);
+    }
     match lhs_ty {
         PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
             emit_intish_compare(ctx, lhs, rhs, is_equal, false)?;
@@ -871,4 +879,71 @@ fn equality_cond(is_equal: bool, arch: Arch) -> &'static str {
         (true, Arch::X86_64) => "e",
         (false, Arch::X86_64) => "ne",
     }
+}
+
+/// Loads both indexed-array operands and calls `__rt_array_strict_eq`, then inverts the
+/// result for `!==`. Array operands materialize as single heap pointers in the integer
+/// result register, so loading into the call argument registers is straightforward.
+fn emit_array_strict_eq_call(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    rhs: ValueId,
+    is_equal: bool,
+) -> Result<()> {
+    let lhs_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let rhs_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(lhs, lhs_reg)?;
+    ctx.load_value_to_reg(rhs, rhs_reg)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov x0, {}", lhs_reg));           // move the left indexed-array pointer into the first helper argument
+            ctx.emitter.instruction(&format!("mov x1, {}", rhs_reg));           // move the right indexed-array pointer into the second helper argument
+            abi::emit_call_label(ctx.emitter, "__rt_array_strict_eq");
+            if !is_equal {
+                ctx.emitter.instruction("eor x0, x0, #1");                      // invert the array strict-equality result for !==
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov rdi, {}", lhs_reg));          // move the left indexed-array pointer into the first helper argument
+            ctx.emitter.instruction(&format!("mov rsi, {}", rhs_reg));          // move the right indexed-array pointer into the second helper argument
+            abi::emit_call_label(ctx.emitter, "__rt_array_strict_eq");
+            if !is_equal {
+                ctx.emitter.instruction("xor rax, 1");                          // invert the array strict-equality result for !==
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Loads both associative-array (hash) operands and calls `__rt_hash_strict_eq`, then
+/// inverts the result for `!==`. Hash operands materialize as single heap pointers.
+fn emit_hash_strict_eq_call(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    rhs: ValueId,
+    is_equal: bool,
+) -> Result<()> {
+    let lhs_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let rhs_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(lhs, lhs_reg)?;
+    ctx.load_value_to_reg(rhs, rhs_reg)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov x0, {}", lhs_reg));           // move the left hash pointer into the first helper argument
+            ctx.emitter.instruction(&format!("mov x1, {}", rhs_reg));           // move the right hash pointer into the second helper argument
+            abi::emit_call_label(ctx.emitter, "__rt_hash_strict_eq");
+            if !is_equal {
+                ctx.emitter.instruction("eor x0, x0, #1");                      // invert the hash strict-equality result for !==
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov rdi, {}", lhs_reg));          // move the left hash pointer into the first helper argument
+            ctx.emitter.instruction(&format!("mov rsi, {}", rhs_reg));          // move the right hash pointer into the second helper argument
+            abi::emit_call_label(ctx.emitter, "__rt_hash_strict_eq");
+            if !is_equal {
+                ctx.emitter.instruction("xor rax, 1");                          // invert the hash strict-equality result for !==
+            }
+        }
+    }
+    Ok(())
 }

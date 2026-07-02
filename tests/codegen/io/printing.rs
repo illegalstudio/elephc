@@ -126,7 +126,7 @@ var_dump($map["o"]);
     );
     assert_eq!(
         out,
-        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n}\nobject(Box)\n"
+        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\nobject(Box)\n"
     );
 }
 
@@ -279,6 +279,39 @@ var_dump([1, "x", 2.5]);
     assert_eq!(
         out,
         "array(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  string(1) \"x\"\n  [2]=>\n  float(2.5)\n}\n"
+    );
+}
+
+/// Regression for issue #388: `var_dump` recurses into nested indexed arrays
+/// instead of printing `NULL`. Output matches PHP's 2-space-per-level layout.
+#[test]
+fn test_var_dump_nested_indexed_array() {
+    let out = compile_and_run(r#"<?php var_dump([1, [2, 3]]);"#);
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  array(2) {\n    [0]=>\n    int(2)\n    [1]=>\n    int(3)\n  }\n}\n"
+    );
+}
+
+/// Regression for issue #388: `var_dump` recurses into nested hashes (assoc
+/// arrays) inside a hash, with correct indentation and key formatting.
+#[test]
+fn test_var_dump_nested_hash_value() {
+    let out = compile_and_run(r#"<?php var_dump(["a" => [1, 2]]);"#);
+    assert_eq!(
+        out,
+        "array(1) {\n  [\"a\"]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(2)\n  }\n}\n"
+    );
+}
+
+/// Regression for issue #388: `var_dump` recurses into deeply nested arrays
+/// (three levels), verifying the indent accumulates by 2 spaces per level.
+#[test]
+fn test_var_dump_deeply_nested_array() {
+    let out = compile_and_run(r#"<?php var_dump([[[1]]]);"#);
+    assert_eq!(
+        out,
+        "array(1) {\n  [0]=>\n  array(1) {\n    [0]=>\n    array(1) {\n      [0]=>\n      int(1)\n    }\n  }\n}\n"
     );
 }
 

@@ -694,25 +694,34 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // __rt_hash_get. v1 limitation: only one active context at a time —
     // a fresh stream_context_create overwrites the slot.
     out.push_str(".comm _stream_context_options, 8, 3\n");
-    // var_dump body literals (rodata): per-element prefix/suffix bytes
-    // used by the array walkers __rt_var_dump_array_int / _str.
-    out.push_str(".globl _vd_indent_open\n_vd_indent_open:\n    .ascii \"  [\"\n");
+    // var_dump body literals (rodata): per-element prefix/suffix bytes used by
+    // the array walkers and the recursive `__rt_var_dump_value` renderer. The
+    // prefixes carry no leading indent; indentation is written separately by
+    // `__rt_var_dump_spaces` so nested arrays indent correctly.
+    out.push_str(".globl _vd_indent_open\n_vd_indent_open:\n    .ascii \"[\"\n");
     out.push_str(".globl _vd_close_arrow\n_vd_close_arrow:\n    .ascii \"]=>\\n\"\n");
-    out.push_str(".globl _vd_int_prefix\n_vd_int_prefix:\n    .ascii \"  int(\"\n");
+    out.push_str(".globl _vd_int_prefix\n_vd_int_prefix:\n    .ascii \"int(\"\n");
     out.push_str(".globl _vd_close_paren\n_vd_close_paren:\n    .ascii \")\\n\"\n");
-    out.push_str(".globl _vd_str_prefix\n_vd_str_prefix:\n    .ascii \"  string(\"\n");
+    out.push_str(".globl _vd_str_prefix\n_vd_str_prefix:\n    .ascii \"string(\"\n");
     out.push_str(".globl _vd_close_paren_space\n_vd_close_paren_space:\n    .ascii \") \\\"\"\n");
     out.push_str(".globl _vd_close_quote\n_vd_close_quote:\n    .ascii \"\\\"\\n\"\n");
-    // var_dump bool-array literals — preformatted lines (12 / 13 bytes) so
-    // the bool walker is a single dispatch + write.
-    out.push_str(".globl _vd_bool_true_line\n_vd_bool_true_line:\n    .ascii \"  bool(true)\\n\"\n");
-    out.push_str(".globl _vd_bool_false_line\n_vd_bool_false_line:\n    .ascii \"  bool(false)\\n\"\n");
-    out.push_str(".globl _vd_float_prefix\n_vd_float_prefix:\n    .ascii \"  float(\"\n");
-    out.push_str(".globl _vd_null_line\n_vd_null_line:\n    .ascii \"  NULL\\n\"\n");
-    // var_dump hash (associative array) string-key delimiters: `  ["` before the
-    // key bytes and `"]=>\n` after, matching PHP's `  ["key"]=>` line format.
-    out.push_str(".globl _vd_str_key_open\n_vd_str_key_open:\n    .ascii \"  [\\\"\"\n");
+    // var_dump bool-array literals — preformatted lines so the bool walker is a
+    // single dispatch + write (no leading indent; spaces are written separately).
+    out.push_str(".globl _vd_bool_true_line\n_vd_bool_true_line:\n    .ascii \"bool(true)\\n\"\n");
+    out.push_str(".globl _vd_bool_false_line\n_vd_bool_false_line:\n    .ascii \"bool(false)\\n\"\n");
+    out.push_str(".globl _vd_float_prefix\n_vd_float_prefix:\n    .ascii \"float(\"\n");
+    out.push_str(".globl _vd_null_line\n_vd_null_line:\n    .ascii \"NULL\\n\"\n");
+    // var_dump hash (associative array) string-key delimiters: `["` before the
+    // key bytes and `"]=>\n` after, matching PHP's `["key"]=>` line format.
+    out.push_str(".globl _vd_str_key_open\n_vd_str_key_open:\n    .ascii \"[\\\"\"\n");
     out.push_str(".globl _vd_str_key_close\n_vd_str_key_close:\n    .ascii \"\\\"]=>\\n\"\n");
+    // 64-space pad used by `__rt_var_dump_spaces` (written in <=64-byte chunks).
+    out.push_str(".globl _vd_spaces\n_vd_spaces:\n    .ascii \"                                                                \"\n");
+    // var_dump recursive array-header/footer literals: `array(` before the
+    // count, `) {\n` after it, and `}\n` for the closing brace.
+    out.push_str(".globl _vd_array_open\n_vd_array_open:\n    .ascii \"array(\"\n");
+    out.push_str(".globl _vd_array_close_brace\n_vd_array_close_brace:\n    .ascii \") {\\n\"\n");
+    out.push_str(".globl _vd_close_brace_nl\n_vd_close_brace_nl:\n    .ascii \"}\\n\"\n");
     // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
     // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone
     // newline, the `1` rendered for boolean true, and a 64-space pad used by

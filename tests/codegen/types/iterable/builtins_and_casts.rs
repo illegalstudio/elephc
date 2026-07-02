@@ -215,7 +215,9 @@ fn test_iterable_boxes_to_mixed_with_concrete_array_tag() {
         var_dump(box([10, 20]));
         ",
     );
-    assert_eq!(out, "y|array|array(2) {\n}\n");
+    // The boxed Mixed value is the indexed array [10, 20]; var_dump now recurses
+    // after unboxing instead of printing the empty `array(2) {}` shell.
+    assert_eq!(out, "y|array|array(2) {\n  [0]=>\n  int(10)\n  [1]=>\n  int(20)\n}\n");
 }
 
 /// Verifies `empty()` on an `iterable` uses the underlying array length: empty array is "empty",

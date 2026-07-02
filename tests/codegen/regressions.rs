@@ -33,3 +33,5 @@ mod mixed_method_dispatch;
 mod switch_and_float_params;
 #[path = "regressions/return_this_ownership.rs"]
 mod return_this_ownership;
+#[path = "regressions/array_equality.rs"]
+mod array_equality;
