@@ -994,6 +994,15 @@ statics, and static class properties all reset between requests). Run it with
   graceful `SIGINT`/`SIGTERM` shutdown (forward to workers, reap, exit 0), worker
   respawn on unexpected death, and a 30s header-read timeout bounding slow/idle
   keep-alive connections. Out of v1 scope: cookies, sessions, TLS, HTTP/2–3, multipart.
+- [x] **Phase 5** — session support: `session_start()`, `$_SESSION` superglobal,
+  `session_id()`, `session_name()`, `session_status()`, `session_save_path()`,
+  `session_write_close()` (auto-called at handler end via a finally block),
+  `session_regenerate_id()`, `session_unset()`, `session_destroy()`,
+  `session_set_cookie_params()` / `session_get_cookie_params()`, file-based
+  storage (matching PHP's `session.save_handler = files`) in
+  `sys_get_temp_dir()` by default, `flock`-based concurrency safety,
+  `PHP_SESSION_DISABLED` / `PHP_SESSION_NONE` / `PHP_SESSION_ACTIVE` constants.
+  `session_set_save_handler()` is not supported (file handler only).
 
 ## v0.27.x — Shared and static libraries (C ABI)
 

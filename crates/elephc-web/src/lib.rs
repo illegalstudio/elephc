@@ -16,6 +16,7 @@
 mod multipart;
 mod request_state;
 mod server;
+mod session;
 mod worker;
 
 // Re-exported so the compiled `--web` runtime's `__rt_stdout_write` capture
@@ -38,6 +39,22 @@ pub use request_state::{
 // Re-exported so the compiled `--web` runtime routines (`__rt_header`,
 // `__rt_http_response_code`) can link against the response-control setters.
 pub use request_state::{elephc_web_header, elephc_web_set_status};
+
+// Re-exported so the compiled `--web` web prelude can link against all session
+// C-ABI bridge symbols defined in `session.rs`.
+pub use session::{
+    elephc_web_session_abort, elephc_web_session_count_entries, elephc_web_session_create_id,
+    elephc_web_session_destroy, elephc_web_session_entry_key, elephc_web_session_entry_value,
+    elephc_web_session_gc, elephc_web_session_get_cache_expire, elephc_web_session_get_cache_limiter,
+    elephc_web_session_get_cookie_domain, elephc_web_session_get_cookie_httponly,
+    elephc_web_session_get_cookie_lifetime, elephc_web_session_get_cookie_path,
+    elephc_web_session_get_cookie_samesite, elephc_web_session_get_cookie_secure,
+    elephc_web_session_get_id, elephc_web_session_get_name, elephc_web_session_get_save_path,
+    elephc_web_session_get_status, elephc_web_session_read, elephc_web_session_reset,
+    elephc_web_session_set_cache_expire, elephc_web_session_set_cache_limiter,
+    elephc_web_session_set_cookie_params, elephc_web_session_set_id, elephc_web_session_set_name,
+    elephc_web_session_set_save_path, elephc_web_session_set_status, elephc_web_session_write,
+};
 
 /// Returns the elephc-web C ABI version. Bumped when the exported symbol set or
 /// any symbol's signature changes shape.
