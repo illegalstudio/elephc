@@ -535,3 +535,114 @@ fn test_enum_name_in_interpolation() {
     );
     assert_eq!(out, "name=High value=9");
 }
+
+/// Regression for #349: an int-backed enum's `from()` accepts a PHP numeric string
+/// (e.g. `"1"`), coercing it to the integer backing value and returning the matching
+/// case — instead of rejecting the string argument at compile time.
+#[test]
+fn test_backed_int_enum_from_numeric_string() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        echo Level::from(\"1\")->name;
+        echo Level::from(\"2\")->name;
+        ",
+    );
+    assert_eq!(out, "LowHigh");
+}
+
+/// Regression for #349: `tryFrom()` on an int-backed enum coerces a numeric string and
+/// returns the matching case, or `null` when the coerced value matches no case.
+#[test]
+fn test_backed_int_enum_tryfrom_numeric_string() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        echo Level::tryFrom(\"1\")->name;
+        $miss = Level::tryFrom(\"3\");
+        echo $miss === null ? \"null\" : $miss->name;
+        ",
+    );
+    assert_eq!(out, "Lownull");
+}
+
+/// Regression for #349: a numeric string that coerces to an int with no matching case
+/// throws a `ValueError` with PHP's backing-value message (like an integer argument would).
+#[test]
+fn test_backed_int_enum_from_unmatched_numeric_string_throws_value_error() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        try {
+            Level::from(\"3\");
+        } catch (ValueError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(out, "ValueError:3 is not a valid backing value for enum Level");
+}
+
+/// Regression for #349: a non-numeric string passed to an int-backed enum's `from()`
+/// throws a `TypeError` at runtime with PHP's exact argument-type message, matching
+/// PHP's coercive-typing behavior instead of being accepted or rejected at compile time.
+#[test]
+fn test_backed_int_enum_from_non_numeric_string_throws_type_error() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        try {
+            Level::from(\"x\");
+        } catch (TypeError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(
+        out,
+        "TypeError:Level::from(): Argument #1 ($value) must be of type int, string given"
+    );
+}
+
+/// Regression for #349: repeatedly coercing a heap-owned numeric string through an
+/// int-backed enum `from()` in a loop and storing the reassigned result must keep the
+/// case singleton's refcount balanced (it is a persistent, program-lifetime object).
+/// Before the fix the returned singleton was under-retained and freed after a few
+/// iterations, corrupting the heap free-list and crashing. Exercises the ownership path,
+/// not just single-shot coercion.
+#[test]
+fn test_backed_int_enum_from_numeric_string_in_loop_keeps_singleton_alive() {
+    let out = compile_and_run(
+        "<?php
+        enum L: int { case A = 1; case B = 2; }
+        $acc = 0;
+        for ($n = 0; $n < 50; $n++) {
+            $t = str_repeat(\"2\", 1);
+            $c = L::from($t);
+            $acc += $c->value;
+        }
+        echo $acc;
+        ",
+    );
+    assert_eq!(out, "100");
+}
+
+/// Regression for #349: `tryFrom()` also throws a `TypeError` (not `null`) for a
+/// non-numeric string argument, matching PHP.
+#[test]
+fn test_backed_int_enum_tryfrom_non_numeric_string_throws_type_error() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        try {
+            Level::tryFrom(\"x\");
+        } catch (TypeError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(
+        out,
+        "TypeError:Level::tryFrom(): Argument #1 ($value) must be of type int, string given"
+    );
+}

@@ -695,6 +695,8 @@ echo Color::from(2) === Color::Green; // 1
 ```
 Pure and backed enums. Every case exposes the read-only `->name` property (the case identifier); backed cases also expose `->value`. Plus `::from()`, `::tryFrom()`, `::cases()`. Only `int` and `string` backing types.
 
+Like PHP, an `int`-backed enum's `::from()` / `::tryFrom()` accept a numeric string and coerce it to the integer backing value (`Color::from("2")` returns `Color::Green`). A numeric string with no matching case throws `ValueError`; a non-numeric string (e.g. `"x"` or `"1abc"`) throws `TypeError`, matching PHP's coercive typing. (Edge case: the exotic strings `"0x1"`, `"INF"`, and `"NAN"` are currently accepted as numeric rather than raising `TypeError`.)
+
 ### Enum methods, constants, and interfaces
 
 Enums may declare instance methods, static methods, constants, and an `implements` clause. Instance methods dispatch on the case singleton, so `$this` is the case:

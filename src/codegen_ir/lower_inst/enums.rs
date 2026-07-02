@@ -316,6 +316,12 @@ fn emit_string_case_compare(
 fn emit_load_enum_case_singleton(ctx: &mut FunctionContext<'_>, enum_name: &str, case_name: &str) {
     let case_label = enum_case_symbol(enum_name, case_name);
     abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &case_label, 0);
+    // `from()`/`tryFrom()` return an owned reference to the case singleton: the caller's
+    // lowering acquires the result for its destination and releases the temporary, so the
+    // matched singleton must be retained here. Without this incref the singleton's refcount
+    // drifts down by one per call (a reassigned result plus the temporary release), which
+    // eventually frees the persistent case object and corrupts the heap (issue #349).
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Object(enum_name.to_string()));
 }
 
 /// Emits the boxed `null` return for an unmatched `tryFrom`.
@@ -443,6 +449,104 @@ fn emit_throw_value_error_from_string_result_x86_64(ctx: &mut FunctionContext<'_
     ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                     // exception code defaults to zero
     abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_jump(ctx.emitter, "__rt_throw_current");
+}
+
+/// Lowers `Op::EnumBackingStringToInt`: coerces a PHP numeric string operand into the
+/// integer backing value for an int-backed enum `from()`/`tryFrom()`. A valid PHP numeric
+/// string (whitespace-tolerant, float-form truncated toward zero) is converted via
+/// `__rt_str_to_int`; a non-numeric string throws a catchable `TypeError` whose message is
+/// carried by the instruction's data immediate, matching PHP's coercive-typing behavior.
+/// The integer result flows to the enum `from()` call as an ordinary scalar operand, so
+/// the backing scan and its refcount handling run on a plain int (not a heap string).
+pub(super) fn lower_enum_backing_string_to_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let input = *inst.operands.first().ok_or_else(|| {
+        CodegenIrError::unsupported("enum_backing_string_to_int without operand".to_string())
+    })?;
+    let Some(crate::ir::Immediate::Data(data_id)) = inst.immediate else {
+        return Err(CodegenIrError::unsupported(
+            "enum_backing_string_to_int without a TypeError message immediate".to_string(),
+        ));
+    };
+    let (message_label, message_len) = ctx.intern_string_data(data_id)?;
+    ctx.load_value_to_result(input)?;
+    let (string_ptr_reg, string_len_reg) = abi::string_result_regs(ctx.emitter);
+    let int_reg = abi::int_result_reg(ctx.emitter);
+    let type_error_label = ctx.next_label("enum_from_type_error");
+    let done_label = ctx.next_label("enum_from_coerce_done");
+    // Preserve the input string across the numeric-validity probe, which clobbers the
+    // string-result registers.
+    abi::emit_push_reg_pair(ctx.emitter, string_ptr_reg, string_len_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
+    // `__rt_str_to_number` returns 1 in the int-result register for a valid PHP numeric
+    // string, 0 otherwise; a non-numeric string is a PHP `TypeError`.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", int_reg, type_error_label)); // non-numeric string throws TypeError
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", int_reg, int_reg)); // set flags from the numeric-validity result
+            ctx.emitter.instruction(&format!("jz {}", type_error_label));       // non-numeric string throws TypeError
+        }
+    }
+    // Valid numeric string: restore it and convert to the integer backing value.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, string_ptr_reg, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, string_len_reg, 8);
+    abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&type_error_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => emit_throw_enum_from_type_error_aarch64(ctx, &message_label, message_len),
+        Arch::X86_64 => emit_throw_enum_from_type_error_x86_64(ctx, &message_label, message_len),
+    }
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
+/// Emits the AArch64 `TypeError` allocation, static-message stamping, and unwinder handoff.
+fn emit_throw_enum_from_type_error_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    message_label: &str,
+    message_len: usize,
+) {
+    abi::emit_load_int_immediate(ctx.emitter, "x0", 32);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter.instruction("mov x9, #6");                                      // heap kind 6 = throwable object instance
+    ctx.emitter.instruction("str x9, [x0, #-8]");                               // stamp allocation as a runtime object
+    abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_type_error_class_id", 0);
+    ctx.emitter.instruction("str x9, [x0]");                                    // store TypeError class id at object header
+    abi::emit_symbol_address(ctx.emitter, "x9", message_label);
+    ctx.emitter.instruction("str x9, [x0, #8]");                                // store static exception message pointer
+    abi::emit_load_int_immediate(ctx.emitter, "x9", message_len as i64);
+    ctx.emitter.instruction("str x9, [x0, #16]");                               // store static exception message length
+    ctx.emitter.instruction("str xzr, [x0, #24]");                              // exception code defaults to zero
+    abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
+    abi::emit_jump(ctx.emitter, "__rt_throw_current");
+}
+
+/// Emits the x86_64 `TypeError` allocation, static-message stamping, and unwinder handoff.
+fn emit_throw_enum_from_type_error_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    message_label: &str,
+    message_len: usize,
+) {
+    abi::emit_load_int_immediate(ctx.emitter, "rax", 32);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter.instruction("mov r10, 0x4548504c00000006");                     // x86_64 heap-kind word: HELP magic + kind 6 object
+    ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp allocation as a runtime object
+    abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0);
+    ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store TypeError class id at object header
+    abi::emit_symbol_address(ctx.emitter, "r10", message_label);
+    ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");                    // store static exception message pointer
+    abi::emit_load_int_immediate(ctx.emitter, "r10", message_len as i64);
+    ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");                   // store static exception message length
+    ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                     // exception code defaults to zero
+    abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
 }
 
