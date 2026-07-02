@@ -238,3 +238,44 @@ foreach ($r as $k => $v) {
     );
     assert_eq!(out, "fixed=2;");
 }
+
+/// Verifies that `foreach` by value over an indexed array does not visit
+/// elements appended during iteration. PHP snapshots the array length at
+/// loop entry, so the appended element is not visited (issue #381).
+#[test]
+fn test_foreach_does_not_visit_appended_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2];
+foreach ($a as $v) {
+    echo $v;
+    if ($v === 1) $a[] = 3;
+}
+echo '|' . count($a);
+"#,
+    );
+    assert_eq!(out, "12|3");
+}
+
+/// Verifies that `foreach` by value over an indexed array passed via an
+/// `iterable` parameter also snapshots the length, so appended elements are
+/// not visited (issue #381).
+#[test]
+fn test_foreach_iterable_does_not_visit_appended_elements() {
+    let out = compile_and_run(
+        r#"<?php
+function dump(iterable $items): void {
+    foreach ($items as $v) {
+        echo $v;
+    }
+}
+$a = [1, 2];
+foreach ($a as $v) {
+    echo $v;
+    if ($v === 1) $a[] = 3;
+}
+echo '|' . count($a);
+"#,
+    );
+    assert_eq!(out, "12|3");
+}

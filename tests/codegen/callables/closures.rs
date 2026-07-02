@@ -1339,3 +1339,96 @@ echo $f->call(new Greeter(), "?");
     );
     assert_eq!(out, "Hi Ada!|Hi Ada?");
 }
+
+/// Verifies that `isset($this)` inside a `static` closure evaluates to `false`
+/// because static closures have no `$this` binding (issue #359).
+#[test]
+fn test_static_closure_isset_this_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+$f = static function(): bool { return isset($this); };
+echo $f() ? "true" : "false";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies that `isset($this)` inside a static closure defined in an instance
+/// method still evaluates to `false` (issue #359).
+#[test]
+fn test_static_closure_isset_this_false_even_in_method() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public function m(): void {
+        $f = static function(): bool { return isset($this); };
+        echo $f() ? "true" : "false";
+    }
+}
+(new C())->m();
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies that `isset($this, $x)` in a static closure returns `false` because
+/// `$this` is unset, making the AND of all isset arguments false (issue #359).
+#[test]
+fn test_static_closure_isset_this_with_other_set_var() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$f = static function(): bool { return isset($this, $x); };
+echo $f() ? "true" : "false";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies that `isset($this)` in a non-static closure inside an instance
+/// method evaluates to `true` because non-static closures auto-bind `$this`
+/// (issue #359).
+#[test]
+fn test_non_static_closure_isset_this_true_in_method() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public function m(): bool {
+        $f = function(): bool { return isset($this); };
+        return $f();
+    }
+}
+echo (new C())->m() ? "true" : "false";
+"#,
+    );
+    assert_eq!(out, "true");
+}
+
+/// Verifies that a recursive closure capturing itself by reference with
+/// `use(&$f)` compiles and runs correctly (issue #382).
+#[test]
+fn test_recursive_closure_factorial() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function (int $n) use (&$f): int {
+    return $n <= 1 ? 1 : $n * $f($n - 1);
+};
+echo $f(5);
+"#,
+    );
+    assert_eq!(out, "120");
+}
+
+/// Verifies a recursive closure computing Fibonacci numbers (issue #382).
+#[test]
+fn test_recursive_closure_fibonacci() {
+    let out = compile_and_run(
+        r#"<?php
+$fib = function (int $n) use (&$fib): int {
+    return $n < 2 ? $n : $fib($n - 1) + $fib($n - 2);
+};
+echo $fib(10);
+"#,
+    );
+    assert_eq!(out, "55");
+}

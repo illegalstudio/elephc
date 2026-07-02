@@ -28,6 +28,7 @@ const ITER_VALUE_LO_OFFSET_DELTA: usize = 32;
 const ITER_VALUE_HI_OFFSET_DELTA: usize = 40;
 const ITER_VALUE_TAG_OFFSET_DELTA: usize = 48;
 const ITER_VALUE_ADDR_OFFSET_DELTA: usize = 56;
+const ITER_SNAPSHOT_LEN_OFFSET_DELTA: usize = 64;
 
 enum IteratorSourceKind {
     Indexed { elem: PhpType },
@@ -105,6 +106,9 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     abi::emit_load_int_immediate(ctx.emitter, result_reg, initial_cursor);
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+    if matches!(source_kind, IteratorSourceKind::Indexed { .. }) {
+        snapshot_indexed_array_length(ctx, offset);
+    }
     match source_kind {
         IteratorSourceKind::Object { class_name, .. } => {
             emit_object_iterator_method_call(ctx, offset, &class_name, "rewind")?;
@@ -285,6 +289,7 @@ fn initialize_dynamic_iterable_iterator(
         store_iter_source_to_origin_if_local(ctx, offset, source)?;
     }
     store_iterator_cursor(ctx, offset, -1);
+    snapshot_indexed_array_length(ctx, offset);
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&hash_case);
@@ -327,6 +332,7 @@ fn initialize_dynamic_mixed_iterator(
         store_mixed_payload_low_as_iterator_source(ctx, offset);
     }
     store_iterator_cursor(ctx, offset, -1);
+    snapshot_indexed_array_length(ctx, offset);
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&hash_case);
@@ -815,6 +821,17 @@ fn store_iterator_cursor(ctx: &mut FunctionContext<'_>, offset: usize, cursor: i
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
 }
 
+/// Snapshots the indexed-array length into the iterator state so `IterNext` compares
+/// against the original length rather than re-reading it each iteration. PHP snapshots
+/// the array length at loop entry, so elements appended during iteration are not visited.
+fn snapshot_indexed_array_length(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let array_reg = abi::int_result_reg(ctx.emitter);
+    let len_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+    abi::store_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
+}
+
 /// Boxes a concrete iterator method result when the EIR result slot expects `Mixed`.
 fn box_iterator_method_result_if_needed(
     ctx: &mut FunctionContext<'_>,
@@ -1181,17 +1198,15 @@ pub(super) fn lower_iter_end(_ctx: &mut FunctionContext<'_>, inst: &Instruction)
 
 /// Emits AArch64 cursor advancement for a stack-resident indexed-array iterator.
 fn lower_indexed_iter_next_aarch64(ctx: &mut FunctionContext<'_>, offset: usize) {
-    let array_reg = "x12";
     let index_reg = abi::secondary_scratch_reg(ctx.emitter);
     let len_reg = abi::tertiary_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     let done_label = ctx.next_label("iter_next_done");
 
-    abi::load_at_offset_scratch(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA, "x9");
     abi::load_at_offset(ctx.emitter, index_reg, offset - ITER_CURSOR_OFFSET_DELTA);
     ctx.emitter.instruction(&format!("add {}, {}, #1", index_reg, index_reg));  // advance to the candidate indexed-array offset
-    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
-    ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));        // compare the candidate offset against the array length
+    abi::load_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
+    ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));        // compare the candidate offset against the snapshotted array length
     ctx.emitter.instruction(&format!("cset {}, lt", result_reg));               // materialize whether another element is available
     ctx.emitter.instruction(&format!("b.ge {}", done_label));                   // leave the cursor unchanged once iteration reaches the end
     abi::store_at_offset(ctx.emitter, index_reg, offset - ITER_CURSOR_OFFSET_DELTA);
@@ -1200,17 +1215,15 @@ fn lower_indexed_iter_next_aarch64(ctx: &mut FunctionContext<'_>, offset: usize)
 
 /// Emits x86_64 cursor advancement for a stack-resident indexed-array iterator.
 fn lower_indexed_iter_next_x86_64(ctx: &mut FunctionContext<'_>, offset: usize) {
-    let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let index_reg = abi::secondary_scratch_reg(ctx.emitter);
     let len_reg = abi::tertiary_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     let done_label = ctx.next_label("iter_next_done");
 
-    abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, index_reg, offset - ITER_CURSOR_OFFSET_DELTA);
     ctx.emitter.instruction(&format!("add {}, 1", index_reg));                  // advance to the candidate indexed-array offset
-    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
-    ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));        // compare the candidate offset against the array length
+    abi::load_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
+    ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));        // compare the candidate offset against the snapshotted array length
     ctx.emitter.instruction("setl al");                                         // materialize whether another element is available in the low result byte
     ctx.emitter.instruction(&format!("movzx {}, al", result_reg));              // widen the availability flag into the integer result register
     ctx.emitter.instruction(&format!("jge {}", done_label));                    // leave the cursor unchanged once iteration reaches the end
