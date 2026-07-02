@@ -183,6 +183,7 @@ pub(super) fn lower_iter_current_value(
     let iterator = expect_operand(inst, 0)?;
     let offset = ctx.value_frame_offset(iterator)?;
     let result_ty = iter_current_result_type(ctx, inst)?;
+    let mut produced_mixed_box = false;
     match iterator_source_kind(ctx, iterator, inst)? {
         IteratorSourceKind::Indexed { elem } => {
             match ctx.emitter.target.arch {
@@ -190,13 +191,24 @@ pub(super) fn lower_iter_current_value(
                 Arch::X86_64 => load_current_array_value_x86_64(ctx, offset, &elem)?,
             }
             box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
+            // The indexed iterator loads a borrowed string slot directly from the
+            // source array. When the EIR result type is Str (not boxed Mixed), the
+            // value is treated as an owning temporary by the lowering, so persist
+            // it into an owned heap copy before the caller releases it.
+            if elem.codegen_repr() == PhpType::Str && result_ty.codegen_repr() == PhpType::Str {
+                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            }
         }
-        IteratorSourceKind::Hash => match ctx.emitter.target.arch {
-            Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
-            Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
-        },
+        IteratorSourceKind::Hash => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
+                Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
+            }
+            produced_mixed_box = true;
+        }
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
             lower_dynamic_iter_current_value(ctx, inst, offset)?;
+            produced_mixed_box = true;
         }
         IteratorSourceKind::Object { class_name, .. } => {
             let return_ty = emit_object_iterator_method_call(ctx, offset, &class_name, "current")?;
@@ -207,6 +219,9 @@ pub(super) fn lower_iter_current_value(
             box_iterator_method_result_if_needed(ctx, inst, &return_ty)?;
         }
     }
+    if produced_mixed_box {
+        unbox_dynamic_iter_current_value_if_needed(ctx, &result_ty)?;
+    }
     store_if_result(ctx, inst)
 }
 
@@ -216,6 +231,71 @@ fn iter_current_result_type(ctx: &FunctionContext<'_>, inst: &Instruction) -> Re
         return Ok(PhpType::Void);
     };
     Ok(ctx.value_php_type(result)?.codegen_repr())
+}
+
+/// Unboxes a runtime-produced Mixed cell into the concrete EIR result type when the
+/// iterator value has a known concrete type (e.g. `string` from `array<string>`)
+/// but the runtime lowering path always produces a boxed Mixed pointer.
+fn unbox_dynamic_iter_current_value_if_needed(
+    ctx: &mut FunctionContext<'_>,
+    result_ty: &PhpType,
+) -> Result<()> {
+    if matches!(result_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::Void | PhpType::Never) {
+        return Ok(());
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x9, x0");                                // save the Mixed box pointer across the unbox call
+            ctx.emitter.instruction("mov x0, x9");                                // pass the Mixed box pointer to the unbox helper
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            // x0 = tag, x1 = lo, x2 = hi
+            // AArch64 string result: x1 = ptr, x2 = len — already in place
+            match result_ty.codegen_repr() {
+                PhpType::Str => {
+                    // x1 and x2 already hold the string pointer and length
+                }
+                PhpType::Int | PhpType::Bool | PhpType::Callable => {
+                    if result_reg != "x1" {
+                        ctx.emitter.instruction(&format!("mov {}, x1", result_reg)); // move the unboxed scalar payload into the integer result register
+                    }
+                }
+                PhpType::Float => {
+                    ctx.emitter.instruction("fmov d0, x1");                        // move the unboxed float bits into the float result register
+                }
+                other if other.is_refcounted() => {
+                    if result_reg != "x1" {
+                        ctx.emitter.instruction(&format!("mov {}, x1", result_reg)); // move the unboxed refcounted pointer into the integer result register
+                    }
+                }
+                _ => {}
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, rax");                               // save the Mixed box pointer across the unbox call
+            ctx.emitter.instruction("mov rax, r10");                               // pass the Mixed box pointer to the unbox helper
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            // rax = tag, rdi = lo, rdx = hi (x86_64 __rt_mixed_unbox output convention)
+            match result_ty.codegen_repr() {
+                PhpType::Str => {
+                    // x86_64 string result: rax = ptr, rdx = len
+                    ctx.emitter.instruction("mov rax, rdi");                        // move the unboxed string pointer into the string result register
+                    // rdx already holds the length from __rt_mixed_unbox
+                }
+                PhpType::Int | PhpType::Bool | PhpType::Callable => {
+                    ctx.emitter.instruction("mov rax, rdi");                        // move the unboxed scalar payload into the integer result register
+                }
+                PhpType::Float => {
+                    ctx.emitter.instruction("movq xmm0, rdi");                     // move the unboxed float bits into the float result register
+                }
+                other if other.is_refcounted() => {
+                    ctx.emitter.instruction("mov rax, rdi");                        // move the unboxed refcounted pointer into the integer result register
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Boxes an indexed iterator element only when the EIR result expects `Mixed`.

@@ -609,3 +609,105 @@ fn test_iterable_variadic_arg_stays_boxed_in_runtime_array() {
     );
     assert_eq!(out, "[[1,2]]");
 }
+
+/// Regression test for issue #405: appending a foreach value into a new array and
+/// returning it from a function must not corrupt the array.  The foreach value is a
+/// borrowed string slot from the source array; without an owned copy the appended
+/// elements dangle after the source temporary is freed.
+#[test]
+fn test_foreach_value_append_returned_from_function() {
+    let out = compile_and_run(
+        "<?php
+        function collect(string $csv): array {
+            $out = [];
+            foreach (explode(',', $csv) as $item) {
+                $out[] = $item;
+            }
+            return $out;
+        }
+        $r = collect('a,b,c');
+        echo $r[0];
+        echo $r[1];
+        echo $r[2];
+        ",
+    );
+    assert_eq!(out, "abc");
+}
+
+/// Regression test for issue #405 variant: foreach over a literal array, appending
+/// the value, and returning the result.
+#[test]
+fn test_foreach_literal_value_append_returned() {
+    let out = compile_and_run(
+        "<?php
+        function collect(): array {
+            $out = [];
+            foreach (['a', 'b', 'c'] as $item) {
+                $out[] = $item;
+            }
+            return $out;
+        }
+        $r = collect();
+        echo $r[0];
+        echo $r[1];
+        echo $r[2];
+        ",
+    );
+    assert_eq!(out, "abc");
+}
+
+/// Regression test for issue #405: foreach value append without function return
+/// must also produce correct output.
+#[test]
+fn test_foreach_value_append_inline() {
+    let out = compile_and_run(
+        "<?php
+        $out = [];
+        foreach (['x', 'y', 'z'] as $item) {
+            $out[] = $item;
+        }
+        echo $out[0];
+        echo $out[1];
+        echo $out[2];
+        ",
+    );
+    assert_eq!(out, "xyz");
+}
+
+/// Regression test for issue #405: iterating the returned array with a second
+/// foreach must not exhaust the heap or produce empty elements.
+#[test]
+fn test_foreach_value_append_iterate_result() {
+    let out = compile_and_run(
+        "<?php
+        function collect(): array {
+            $out = [];
+            foreach (['a', 'b', 'c'] as $item) {
+                $out[] = $item;
+            }
+            return $out;
+        }
+        $r = collect();
+        foreach ($r as $elem) {
+            echo $elem;
+        }
+        ",
+    );
+    assert_eq!(out, "abc");
+}
+
+/// Regression test for issue #405: appending foreach values from an integer array
+/// must preserve the integer element type through the loop.
+#[test]
+fn test_foreach_int_value_append() {
+    let out = compile_and_run(
+        "<?php
+        $out = [];
+        foreach ([1, 2, 3] as $n) {
+            $out[] = $n;
+        }
+        echo array_sum($out);
+        ",
+    );
+    assert_eq!(out, "6");
+}
