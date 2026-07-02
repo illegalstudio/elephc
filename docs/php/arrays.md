@@ -160,6 +160,26 @@ $matrix = [[1, 2], [3, 4]];
 echo $matrix[0][1];    // 2
 ```
 
+## Spread in array literals
+
+The `...` spread operator flattens an array's elements into a new array literal, matching PHP semantics.
+
+```php
+<?php
+$a = [1, 2, 3];
+$b = [0, ...$a, 4];   // [0, 1, 2, 3, 4]
+```
+
+Spreading an associative array preserves string keys and reindexes integer-keyed entries to fresh sequential keys (continuing from the current largest integer key). Later spread operands overwrite earlier ones on string-key collision.
+
+```php
+<?php
+$defaults = ['host' => '0.0.0.0', 'timeout' => 30];
+$config = ['host' => 'localhost', 'port' => 8080];
+$merged = [...$defaults, ...$config];
+// ['host' => 'localhost', 'timeout' => 30, 'port' => 8080]
+```
+
 ## Array destructuring
 
 Array destructuring assigns array elements to writable targets. Both short syntax and `list(...)` are supported.

@@ -34,6 +34,7 @@ mod array_find_any_all;
 mod array_flip;
 mod array_flip_string;
 mod array_free_deep;
+mod array_get_mixed_key;
 mod array_grow;
 mod array_hash_union;
 mod array_intersect;
@@ -114,6 +115,7 @@ mod hash_insert_owned;
 mod hash_iter;
 mod hash_new;
 mod hash_set;
+mod hash_spread;
 mod hash_to_mixed;
 mod hash_union;
 mod hash_unset;
@@ -254,6 +256,7 @@ pub use array_set_int::emit_array_set_int;
 pub use array_set_mixed::emit_array_set_mixed;
 /// Emit boxed-Mixed-key indexed/hash array set helper.
 pub use array_set_mixed_key::emit_array_set_mixed_key;
+pub use array_get_mixed_key::emit_array_get_mixed_key;
 /// Emit refcounted indexed-array set helper.
 pub use array_set_refcounted::emit_array_set_refcounted;
 /// Emit refcounted indexed-array set helper.
@@ -355,6 +358,8 @@ pub use hash_new::emit_hash_new;
 /// Emit new hash helper.
 pub use hash_set::emit_hash_set;
 /// Emit hash set helper.
+pub use hash_spread::emit_hash_spread;
+/// Emit hash spread (array-literal flatten) helper.
 pub use hash_to_mixed::emit_hash_to_mixed;
 /// Emit hash-to-Mixed conversion helper.
 pub use hash_union::emit_hash_union;

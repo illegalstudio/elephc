@@ -2013,15 +2013,53 @@ fn lower_native_isset_offset_probe_from_value(
     match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             let mut index_value = lower_expr(ctx, index);
-            index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
-            ctx.emit_value(
-                Op::ArrayIsset,
-                vec![array_value.value, index_value.value],
-                None,
-                PhpType::Bool,
-                Op::ArrayIsset.default_effects(),
-                Some(expr.span),
-            )
+            let index_ty = index_expr_key_type(ctx, index);
+            if index_ty == PhpType::Int {
+                index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+                ctx.emit_value(
+                    Op::ArrayIsset,
+                    vec![array_value.value, index_value.value],
+                    None,
+                    PhpType::Bool,
+                    Op::ArrayIsset.default_effects(),
+                    Some(expr.span),
+                )
+            } else {
+                // String or mixed key on indexed storage: read through the
+                // mixed-key runtime path and check if the result is null.
+                let read_value = ctx.emit_value(
+                    Op::ArrayGetMixedKey,
+                    vec![array_value.value, index_value.value],
+                    None,
+                    PhpType::Mixed,
+                    Op::ArrayGetMixedKey.default_effects(),
+                    Some(expr.span),
+                );
+                let is_null = ctx.emit_value(
+                    Op::IsNull,
+                    vec![read_value.value],
+                    None,
+                    PhpType::Bool,
+                    Op::IsNull.default_effects(),
+                    Some(expr.span),
+                );
+                let zero = ctx.emit_value(
+                    Op::ConstI64,
+                    Vec::new(),
+                    Some(Immediate::I64(0)),
+                    PhpType::Int,
+                    Op::ConstI64.default_effects(),
+                    Some(expr.span),
+                );
+                ctx.emit_value(
+                    Op::ICmp,
+                    vec![is_null.value, zero.value],
+                    Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Eq)),
+                    PhpType::Bool,
+                    Op::ICmp.default_effects(),
+                    Some(expr.span),
+                )
+            }
         }
         IrType::Heap(IrHeapKind::Hash) => {
             let index_value = lower_expr(ctx, index);
@@ -3704,7 +3742,12 @@ fn lower_unset_array_access(
                     return;
                 }
                 PhpType::Array(elem_ty) => {
-                    lower_unset_indexed_element(ctx, name, *elem_ty, array.span, index, expr);
+                    let elem_ty = if *elem_ty == PhpType::Never {
+                        PhpType::Mixed
+                    } else {
+                        *elem_ty
+                    };
+                    lower_unset_indexed_element(ctx, name, elem_ty, array.span, index, expr);
                     return;
                 }
                 _ => {}
@@ -6200,8 +6243,72 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
     }
 }
 
+/// Distinguishes pre-lowered array-literal items between plain elements and spread operands.
+enum SpreadItem {
+    Element(LoweredValue),
+    Spread(LoweredValue),
+}
+
 /// Lowers an indexed array literal.
 fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Expr], expr: &Expr) -> LoweredValue {
+    // Fast path: literals without any spread keep the original dest-first lowering so the
+    // common `[1, 2, 3]` form does not reorder allocation relative to element evaluation.
+    if !items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) {
+        let array_ty = array_literal_type_for_ir(ctx, items, expr);
+        let elem_ty = indexed_array_literal_element_type(&array_ty);
+        let array = ctx.emit_value(
+            Op::ArrayNew,
+            Vec::new(),
+            Some(Immediate::Capacity(items.len() as u32)),
+            array_ty,
+            Op::ArrayNew.default_effects(),
+            Some(expr.span),
+        );
+        for item in items {
+            let value = lower_expr(ctx, item);
+            ctx.emit_void(Op::ArrayPush, vec![array.value, value.value], None, Op::ArrayPush.default_effects(), Some(item.span));
+            super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
+        }
+        return array;
+    }
+    // Spread-containing literals: lower every item value in source order first so PHP-visible side
+    // effects happen in order, then inspect each spread source's actual IR type to decide whether
+    // the destination must be associative (hash) storage. Dest allocation is pure, so emitting it
+    // after source evaluation preserves observable behavior.
+    let mut lowered: Vec<SpreadItem> = Vec::with_capacity(items.len());
+    let mut any_assoc_spread = false;
+    for item in items {
+        match &item.kind {
+            ExprKind::Spread(inner) => {
+                let source = lower_expr(ctx, inner);
+                if matches!(
+                    ctx.builder.value_php_type(source.value).codegen_repr(),
+                    PhpType::AssocArray { .. }
+                ) {
+                    any_assoc_spread = true;
+                }
+                lowered.push(SpreadItem::Spread(source));
+            }
+            _ => {
+                let value = lower_expr(ctx, item);
+                lowered.push(SpreadItem::Element(value));
+            }
+        }
+    }
+    if any_assoc_spread {
+        lower_array_literal_as_hash_from_lowered(ctx, items, &lowered, expr)
+    } else {
+        lower_array_literal_as_indexed_from_lowered(ctx, items, &lowered, expr)
+    }
+}
+
+/// Lowers a spread-containing indexed-array literal whose spread sources are all indexed arrays.
+fn lower_array_literal_as_indexed_from_lowered(
+    ctx: &mut LoweringContext<'_, '_>,
+    items: &[Expr],
+    lowered: &[SpreadItem],
+    expr: &Expr,
+) -> LoweredValue {
     let array_ty = array_literal_type_for_ir(ctx, items, expr);
     let elem_ty = indexed_array_literal_element_type(&array_ty);
     let array = ctx.emit_value(
@@ -6212,17 +6319,103 @@ fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Expr], expr: 
         Op::ArrayNew.default_effects(),
         Some(expr.span),
     );
-    for item in items {
-        if let ExprKind::Spread(inner) = &item.kind {
-            let source = lower_expr(ctx, inner);
-            lower_indexed_array_spread_into_array(ctx, array, source, elem_ty.as_ref(), item.span);
-            continue;
+    for (item, value) in items.iter().zip(lowered.iter()) {
+        match value {
+            SpreadItem::Spread(source) => {
+                lower_indexed_array_spread_into_array(ctx, array, *source, elem_ty.as_ref(), item.span);
+            }
+            SpreadItem::Element(value) => {
+                ctx.emit_void(Op::ArrayPush, vec![array.value, value.value], None, Op::ArrayPush.default_effects(), Some(item.span));
+                super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), *value, item.span);
+            }
         }
-        let value = lower_expr(ctx, item);
-        ctx.emit_void(Op::ArrayPush, vec![array.value, value.value], None, Op::ArrayPush.default_effects(), Some(item.span));
-        super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
     }
     array
+}
+
+/// Lowers a spread-containing array literal with at least one associative spread as a hash.
+fn lower_array_literal_as_hash_from_lowered(
+    ctx: &mut LoweringContext<'_, '_>,
+    items: &[Expr],
+    lowered: &[SpreadItem],
+    expr: &Expr,
+) -> LoweredValue {
+    let hash_ty = assoc_array_literal_type_from_spreads(ctx, items, expr);
+    let value_ty = match hash_ty.codegen_repr() {
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        _ => PhpType::Mixed,
+    };
+    let hash = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity(items.len() as u32)),
+        hash_ty,
+        Op::HashNew.default_effects(),
+        Some(expr.span),
+    );
+    for (item, value) in items.iter().zip(lowered.iter()) {
+        match value {
+            SpreadItem::Spread(source) => {
+                lower_hash_spread_into_hash_from_value(ctx, hash, *source, item.span);
+            }
+            SpreadItem::Element(value) => {
+                ctx.emit_void(
+                    Op::RuntimeCall,
+                    vec![hash.value, value.value],
+                    None,
+                    effects_lookup::runtime_effects(),
+                    Some(item.span),
+                );
+                release_value_after_retaining_insert(ctx, Some(&value_ty), *value, item.span);
+            }
+        }
+    }
+    hash
+}
+
+/// Lowers a single already-lowered spread operand into a hash destination, handling both
+/// associative and indexed source storage. Associative sources flatten directly through
+/// `__rt_hash_spread`; indexed sources are first promoted to hash storage so the same
+/// reindexing path applies.
+fn lower_hash_spread_into_hash_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    hash: LoweredValue,
+    source: LoweredValue,
+    span: crate::span::Span,
+) {
+    let source_is_hash = matches!(
+        ctx.builder.value_php_type(source.value).codegen_repr(),
+        PhpType::AssocArray { .. }
+    );
+    let spread_source = if source_is_hash {
+        source
+    } else {
+        let promoted = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![source.value],
+            None,
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Int),
+                value: Box::new(PhpType::Mixed),
+            },
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+        LoweredValue {
+            value: promoted.value,
+            ir_type: IrType::Heap(IrHeapKind::Hash),
+        }
+    };
+    ctx.emit_void(
+        Op::HashSpread,
+        vec![hash.value, spread_source.value],
+        None,
+        Op::HashSpread.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(spread_source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, spread_source, Some(span));
+    }
 }
 
 /// Lowers an indexed-array spread by appending each source element to the destination.
@@ -6450,6 +6643,35 @@ fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, 
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
     }
     hash
+}
+
+/// Returns the associative-array type for a literal that contains at least one associative
+/// spread. Mirrors the type checker's `assoc_spread_literal_value_type` so EIR storage matches
+/// the value types actually lowered into the hash.
+fn assoc_array_literal_type_from_spreads(
+    ctx: &LoweringContext<'_, '_>,
+    items: &[Expr],
+    expr: &Expr,
+) -> PhpType {
+    let mut value_ty = PhpType::Never;
+    for item in items {
+        let next = match &item.kind {
+            ExprKind::Spread(inner) => match infer_expr_type_syntactic(inner).codegen_repr() {
+                PhpType::Array(elem) => elem.codegen_repr(),
+                PhpType::AssocArray { value, .. } => value.codegen_repr(),
+                _ => PhpType::Mixed,
+            },
+            _ => array_literal_element_type_for_ir(ctx, item).codegen_repr(),
+        };
+        value_ty = merge_ir_assoc_value_type(value_ty, next);
+    }
+    if matches!(value_ty, PhpType::Never) {
+        return fallback_expr_type(expr);
+    }
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(value_ty),
+    }
 }
 
 /// Returns the associative-array type that the EIR backend can faithfully materialize.
@@ -6693,8 +6915,15 @@ fn lower_array_access_from_value(
     let mut index_value = lower_expr(ctx, index);
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
-            index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
-            Op::ArrayGet
+            let index_ty = index_expr_key_type(ctx, index);
+            if index_ty == PhpType::Int {
+                index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+                Op::ArrayGet
+            } else {
+                // String or Mixed key on indexed storage: use the mixed-key
+                // runtime read path (mirrors Op::ArraySetMixedKey for writes).
+                Op::ArrayGetMixedKey
+            }
         }
         IrType::Heap(IrHeapKind::Hash) => Op::HashGet,
         IrType::Heap(IrHeapKind::Buffer) => Op::BufferGet,
@@ -6757,6 +6986,13 @@ fn lower_nullable_array_access(
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 
+/// Returns the statically-known key type for an array index expression.
+/// Used to decide between Op::ArrayGet (int key) and Op::ArrayGetMixedKey.
+fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
+    let ty = infer_expr_type_syntactic(index);
+    normalized_array_key_type(index, ty)
+}
+
 /// Returns the best PHP result type for a lowered array/string/hash access.
 fn array_access_result_type(
     ctx: &LoweringContext<'_, '_>,
@@ -6783,6 +7019,7 @@ fn array_access_result_type(
             _ => fallback_expr_type(expr),
         },
         Op::RuntimeCall => array_access_runtime_call_result_type(ctx, array, expr),
+        Op::ArrayGetMixedKey => PhpType::Mixed,
         _ => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
             _ => fallback_expr_type(expr),
@@ -6791,7 +7028,7 @@ fn array_access_result_type(
 }
 
 /// Returns the materialized result type for a PHP array read, including miss-capable int reads.
-fn array_access_element_result_type(element_ty: PhpType) -> PhpType {
+pub(crate) fn array_access_element_result_type(element_ty: PhpType) -> PhpType {
     if crate::codegen::sentinels::null_repr_is_tagged() && matches!(element_ty, PhpType::Int) {
         PhpType::TaggedScalar
     } else {

@@ -86,3 +86,53 @@ echo "after";
     );
     assert_eq!(out, "beforeafter");
 }
+
+/// Regression for #350: null coalescing on an empty array with a string key.
+#[test]
+fn test_empty_array_string_key_null_coalesce() {
+    let out = compile_and_run("<?php $a = []; echo ($a['k'] ?? 'x');");
+    assert_eq!(out, "x");
+}
+
+/// Regression for #350: isset() on an empty array with a string key.
+#[test]
+fn test_empty_array_string_key_isset() {
+    let out = compile_and_run("<?php $a = []; echo isset($a['k']) ? 'yes' : 'no';");
+    assert_eq!(out, "no");
+}
+
+/// Regression for #350: unset() on an empty array with a string key.
+#[test]
+fn test_empty_array_string_key_unset() {
+    let out = compile_and_run("<?php $a = []; unset($a['k']); echo 'ok';");
+    assert_eq!(out, "ok");
+}
+
+/// Regression for #350: numeric-string key under ?? on an empty array.
+#[test]
+fn test_empty_array_numeric_string_key_coalesce() {
+    let out = compile_and_run("<?php $a = []; echo ($a['1'] ?? 'x');");
+    assert_eq!(out, "x");
+}
+
+/// Regression for #361: missing string-key ?? lookup on an associative array.
+#[test]
+fn test_missing_string_key_null_coalesce() {
+    let out = compile_and_run("<?php $a = []; echo $a['missing'] ?? 'ok';");
+    assert_eq!(out, "ok");
+}
+
+/// Regression for #350/#361: string-key access followed by unset on an empty array.
+#[test]
+fn test_coalesce_then_unset_empty_array() {
+    let out = compile_and_run(r#"<?php
+$a = [];
+echo ($a['k'] ?? 'x');
+echo "\n";
+echo isset($a['k']) ? 'yes' : 'no';
+echo "\n";
+unset($a['k']);
+echo 'ok';
+"#);
+    assert_eq!(out, "x\nno\nok");
+}

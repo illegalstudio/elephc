@@ -261,8 +261,10 @@ pub enum Op {
     HashUnion,
     ArrayHashUnion,
     HashArrayUnion,
+    HashSpread,
     ArrayToHash,
     ArraySetMixedKey,
+    ArrayGetMixedKey,
     ArrayKeyExists,
     OffsetExists,
     OffsetUnset,
@@ -415,7 +417,8 @@ impl Op {
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             ArraySetMixedKey => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArrayUnion | HashUnion | ArrayHashUnion | HashArrayUnion | ArrayToHash => {
+            ArrayGetMixedKey => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
+            ArrayUnion | HashUnion | ArrayHashUnion | HashArrayUnion | ArrayToHash | HashSpread => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
@@ -577,8 +580,10 @@ impl Op {
             HashUnion => "hash_union",
             ArrayHashUnion => "array_hash_union",
             HashArrayUnion => "hash_array_union",
+            HashSpread => "hash_spread",
             ArrayToHash => "array_to_hash",
-        ArraySetMixedKey => "array_set_mixed_key",
+            ArraySetMixedKey => "array_set_mixed_key",
+            ArrayGetMixedKey => "array_get_mixed_key",
             ArrayKeyExists => "array_key_exists",
             OffsetExists => "offset_exists",
             OffsetUnset => "offset_unset",

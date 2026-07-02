@@ -279,6 +279,37 @@ pub(super) fn lower_array_set_mixed_key(
     store_if_result(ctx, inst)
 }
 
+/// Reads a mixed-key (string or int) element from an indexed array local via the
+/// `__rt_array_get_mixed_key` runtime helper. Returns a boxed `Mixed` cell;
+/// missing keys yield `Mixed(null)`.
+pub(super) fn lower_array_get_mixed_key(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    require_indexed_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
+    let key_ty = ctx.value_php_type(key)?.codegen_repr();
+    if !matches!(key_ty, PhpType::Mixed | PhpType::Union(_) | PhpType::Str) {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_get_mixed_key key PHP type {:?}",
+            key_ty
+        )));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+            ctx.load_value_to_reg(array, "x0")?;
+        }
+        Arch::X86_64 => {
+            super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+            ctx.load_value_to_reg(array, "rdi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_get_mixed_key");
+    store_if_result(ctx, inst)
+}
+
 /// Boxes or retains a value, then stores it into a `Mixed`-keyed indexed array on AArch64.
 fn lower_array_set_mixed_key_aarch64(
     ctx: &mut FunctionContext<'_>,
