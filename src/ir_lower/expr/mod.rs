@@ -29,6 +29,7 @@ use crate::types::checker::builtins::canonical_builtin_function_name;
 use crate::types::{
     array_key_type_from_value_type, checker::infer_expr_type_syntactic,
     merge_array_key_types, normalized_array_key_type, ExternFunctionSig, FunctionSig, PhpType,
+    ThrowAccessKind,
 };
 use std::collections::HashSet;
 
@@ -8220,6 +8221,24 @@ fn lower_method_call(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    // A statically-decided private/protected method access from an inaccessible
+    // scope raises a catchable `Error` in PHP rather than a compile-time error.
+    if op == Op::MethodCall {
+        if let Some(info) = ctx.throw_access_sites.get(&expr.span) {
+            if let ThrowAccessKind::PrivateMethod {
+                visibility,
+                class_name,
+                method: m,
+            } = &info.kind
+            {
+                let message = format!(
+                    "Call to {} method {}::{}() from global scope",
+                    visibility, class_name, m
+                );
+                return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
+            }
+        }
+    }
     let object_expr = object;
     let object = lower_expr(ctx, object_expr);
     if op == Op::MethodCall && value_is_definitely_null(ctx, object.value) {

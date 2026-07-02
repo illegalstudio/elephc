@@ -38,9 +38,10 @@ use crate::errors::CompileError;
 use crate::parser::ast::{
     CallableTarget, Expr, Program, TypeExpr,
 };
+use crate::span::Span;
 use crate::types::{
     CheckResult, ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig,
-    InterfaceInfo, PackedClassInfo, PhpType, TypeEnv,
+    InterfaceInfo, PackedClassInfo, PhpType, ThrowAccessInfo, TypeEnv,
 };
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
@@ -158,6 +159,9 @@ pub(crate) struct Checker {
     /// checking bodies and applied to `classes` after checking so every access lowers
     /// through the property's ref-cell. See `apply_reference_property_promotions`.
     pub reference_property_promotions: HashSet<(String, String)>,
+    /// Statically-decided access violations that must lower to a catchable
+    /// `Error` throw instead of a compile-time error, keyed by source span.
+    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
 }
 
 #[derive(Clone)]
@@ -211,6 +215,7 @@ pub fn check_types(program: &Program, target_platform: Platform) -> Result<Check
         extern_globals: checker.extern_globals,
         required_libraries: checker.required_libraries,
         warnings,
+        throw_access_sites: checker.throw_access_sites,
     })
 }
 

@@ -472,3 +472,116 @@ fn test_sequential_try_catch_does_not_blow_up_codegen() {
     let out = compile_and_run(&php);
     assert_eq!(out, expected);
 }
+
+/// Verifies that a private method call from an inaccessible scope raises a
+/// catchable `Error` at runtime (issue #383). PHP prints `err`, not `no`.
+#[test]
+fn test_private_method_access_is_catchable_error() {
+    let out = compile_and_run(
+        "<?php class C { private function secret() {} } $c = new C(); try { $c->secret(); echo 'no'; } catch (Error $e) { echo 'err'; }",
+    );
+    assert_eq!(out, "err");
+}
+
+/// Verifies that a protected method call from an inaccessible scope raises a
+/// catchable `Error` at runtime (issue #383).
+#[test]
+fn test_protected_method_access_is_catchable_error() {
+    let out = compile_and_run(
+        "<?php class C { protected function secret() {} } $c = new C(); try { $c->secret(); echo 'no'; } catch (Error $e) { echo 'err'; }",
+    );
+    assert_eq!(out, "err");
+}
+
+/// Verifies that a readonly property write outside the declaring constructor
+/// raises a catchable `Error` at runtime (issue #383). PHP prints `err`.
+#[test]
+fn test_readonly_property_write_is_catchable_error() {
+    let out = compile_and_run(
+        "<?php class Box { public readonly int $x; public function __construct() { $this->x = 1; } } try { $b = new Box(); $b->x = 2; echo 'no'; } catch (Error $e) { echo 'err'; }",
+    );
+    assert_eq!(out, "err");
+}
+
+/// Verifies that a readonly class's implicitly-readonly property write outside
+/// the constructor raises a catchable `Error` at runtime (issue #383).
+#[test]
+fn test_readonly_class_property_write_is_catchable_error() {
+    let out = compile_and_run(
+        "<?php readonly class User { public int $id; public function __construct($id) { $this->id = $id; } } try { $u = new User(1); $u->id = 2; echo 'no'; } catch (Error $e) { echo 'err'; }",
+    );
+    assert_eq!(out, "err");
+}
+
+/// Verifies that an uncaught private method call produces a fatal exit (issue #383).
+#[test]
+fn test_private_method_access_uncaught_is_fatal() {
+    let output = compile_and_run_capture(
+        "<?php class C { private function secret() {} } $c = new C(); $c->secret();",
+    );
+    assert!(!output.success, "expected a fatal exit");
+    assert!(
+        output.stderr.contains("Fatal error: uncaught exception"),
+        "expected a fatal diagnostic on stderr, got: {}",
+        output.stderr
+    );
+}
+
+/// Verifies that an uncaught readonly property write produces a fatal exit (issue #383).
+#[test]
+fn test_readonly_property_write_uncaught_is_fatal() {
+    let output = compile_and_run_capture(
+        "<?php class Box { public readonly int $x; public function __construct() { $this->x = 1; } } $b = new Box(); $b->x = 2;",
+    );
+    assert!(!output.success, "expected a fatal exit");
+    assert!(
+        output.stderr.contains("Fatal error: uncaught exception"),
+        "expected a fatal diagnostic on stderr, got: {}",
+        output.stderr
+    );
+}
+
+/// Verifies that `getMessage()` on a caught private-method `Error` returns the
+/// PHP error message (issue #383).
+#[test]
+fn test_private_method_access_error_message() {
+    let out = compile_and_run(
+        "<?php class C { private function secret() {} } $c = new C(); try { $c->secret(); } catch (Error $e) { echo $e->getMessage(); }",
+    );
+    assert_eq!(out, "Call to private method C::secret() from global scope");
+}
+
+/// Verifies that `getMessage()` on a caught readonly-write `Error` returns the
+/// PHP error message (issue #383).
+#[test]
+fn test_readonly_property_write_error_message() {
+    let out = compile_and_run(
+        "<?php class Box { public readonly int $x; public function __construct() { $this->x = 1; } } try { $b = new Box(); $b->x = 2; } catch (Error $e) { echo $e->getMessage(); }",
+    );
+    assert_eq!(out, "Cannot modify readonly property Box::$x");
+}
+
+/// Verifies that calling a protected method from outside the class hierarchy
+/// raises a catchable `Error` at runtime (issue #383).
+#[test]
+fn test_protected_method_access_outside_class_is_catchable_error() {
+    let out = compile_and_run(
+        "<?php class Secret { protected function hidden() { return 7; } } $s = new Secret(); try { echo $s->hidden(); echo 'no'; } catch (Error $e) { echo 'err'; }",
+    );
+    assert_eq!(out, "err");
+}
+
+/// Verifies that calling a protected trait method from outside the class
+/// hierarchy raises a catchable `Error` at runtime (issue #383).
+#[test]
+fn test_protected_trait_method_access_is_catchable_error() {
+    let out = compile_and_run(
+        r#"<?php
+trait A { public function foo() { return 1; } }
+class C { use A { A::foo as protected; } }
+$c = new C();
+try { echo $c->foo(); echo 'no'; } catch (Error $e) { echo 'err'; }
+"#,
+    );
+    assert_eq!(out, "err");
+}

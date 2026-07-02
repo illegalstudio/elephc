@@ -8,7 +8,7 @@
 //! Key details:
 //! - Spans describe the original PHP source location and should be preserved through AST rewrites.
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Source position span for AST nodes.
 pub struct Span {
     pub line: usize,

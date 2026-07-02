@@ -109,6 +109,7 @@ impl Checker {
             finally_break_continue_bases: Vec::new(),
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
+            throw_access_sites: HashMap::new(),
         }
     }
 }

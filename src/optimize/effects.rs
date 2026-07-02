@@ -77,6 +77,7 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             expr_effect(object)
                 .combine(expr_effect(value))
                 .with_side_effects()
+                .with_may_throw()
         }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_effect(object)
