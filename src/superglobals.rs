@@ -15,7 +15,7 @@ use crate::types::PhpType;
 
 /// PHP request superglobals visible in every scope under `--web`.
 pub const SUPERGLOBALS: &[&str] =
-    &["_SERVER", "_GET", "_POST", "_COOKIE", "_REQUEST", "_ENV", "_FILES"];
+    &["_SERVER", "_GET", "_POST", "_COOKIE", "_REQUEST", "_ENV", "_FILES", "_SESSION"];
 
 /// Returns true when `name` (without leading `$`) is a request superglobal.
 pub fn is_superglobal(name: &str) -> bool {
