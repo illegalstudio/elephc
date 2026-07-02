@@ -1,8 +1,8 @@
 ---
 title: "time()"
-description: "Lowers `time()` through the shared wall-clock runtime helper."
+description: "Returns the current Unix timestamp."
 sidebar:
-  order: 95
+  order: 97
 ---
 
 ## time()
@@ -11,7 +11,7 @@ sidebar:
 function time(): int
 ```
 
-Lowers `time()` through the shared wall-clock runtime helper.
+Returns the current Unix timestamp.
 
 **Parameters**: none.
 

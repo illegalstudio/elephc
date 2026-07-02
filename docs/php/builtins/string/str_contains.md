@@ -1,6 +1,6 @@
 ---
 title: "str_contains()"
-description: "Lowers `str_contains()` through `strpos()` and converts found positions to bool."
+description: "Determines if a string contains a given substring."
 sidebar:
   order: 377
 ---
@@ -11,7 +11,7 @@ sidebar:
 function str_contains(string $haystack, string $needle): bool
 ```
 
-Lowers `str_contains()` through `strpos()` and converts found positions to bool.
+Determines if a string contains a given substring.
 
 **Parameters**:
 - `$haystack` (`string`)

@@ -2,14 +2,14 @@
 title: "rewinddir() — internals"
 description: "Compiler internals for rewinddir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 186
+  order: 188
 ---
 
 ## `rewinddir()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/rewinddir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/rewinddir.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3588](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3588) (`lower_rewinddir`)
 - **Function symbol**: `lower_rewinddir()`
 

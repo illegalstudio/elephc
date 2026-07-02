@@ -2,14 +2,14 @@
 title: "sscanf() — internals"
 description: "Compiler internals for sscanf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 379
+  order: 376
 ---
 
 ## `sscanf()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/sscanf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/sscanf.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:163](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L163) (`lower_sscanf`)
 - **Function symbol**: `lower_sscanf()`
 

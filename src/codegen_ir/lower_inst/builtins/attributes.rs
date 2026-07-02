@@ -33,7 +33,7 @@ struct ReflectionAttributeLayout {
 }
 
 /// Lowers `class_attribute_names(class)` into an indexed string array.
-pub(super) fn lower_class_attribute_names(
+pub(crate) fn lower_class_attribute_names(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -49,7 +49,7 @@ pub(super) fn lower_class_attribute_names(
 }
 
 /// Lowers `class_attribute_args(class, attr)` into an indexed Mixed array.
-pub(super) fn lower_class_attribute_args(
+pub(crate) fn lower_class_attribute_args(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -65,7 +65,7 @@ pub(super) fn lower_class_attribute_args(
 }
 
 /// Lowers `class_get_attributes(class)` into an array of `ReflectionAttribute` objects.
-pub(super) fn lower_class_get_attributes(
+pub(crate) fn lower_class_get_attributes(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

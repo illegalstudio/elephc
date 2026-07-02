@@ -2,14 +2,14 @@
 title: "chgrp() — internals"
 description: "Compiler internals for chgrp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 98
+  order: 100
 ---
 
 ## `chgrp()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/chgrp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/chgrp.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4478](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4478) (`lower_chgrp`)
 - **Function symbol**: `lower_chgrp()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function chgrp(string $filename, int $group): bool
+function chgrp(string $filename, string $group): bool
 ```
 
 ## What the type checker enforces

@@ -1,6 +1,6 @@
 ---
 title: "spl_autoload()"
-description: "Lowers no-op autoload calls by preserving arg effects and returning PHP null if used."
+description: "Default implementation for __autoload()."
 sidebar:
   order: 319
 ---
@@ -8,14 +8,14 @@ sidebar:
 ## spl_autoload()
 
 ```php
-function spl_autoload(string $class, string $file_extensions): void
+function spl_autoload(string $class, string $file_extensions = null): void
 ```
 
-Lowers no-op autoload calls by preserving arg effects and returning PHP null if used.
+Default implementation for __autoload().
 
 **Parameters**:
 - `$class` (`string`)
-- `$file_extensions` (`string`), optional
+- `$file_extensions` (`string`), default `null`, optional
 
 **Returns**: `void`
 

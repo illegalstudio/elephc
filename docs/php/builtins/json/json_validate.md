@@ -1,22 +1,22 @@
 ---
 title: "json_validate()"
-description: "Lowers `json_validate(json, depth?, flags?)` into the shared validator runtime."
+description: "Checks if a string contains valid JSON."
 sidebar:
-  order: 232
+  order: 234
 ---
 
 ## json_validate()
 
 ```php
-function json_validate(string $json, int $depth, int $flags): bool
+function json_validate(string $json, int $depth = 512, int $flags = 0): bool
 ```
 
-Lowers `json_validate(json, depth?, flags?)` into the shared validator runtime.
+Checks if a string contains valid JSON.
 
 **Parameters**:
 - `$json` (`string`)
-- `$depth` (`int`), optional
-- `$flags` (`int`), optional
+- `$depth` (`int`), default `512`, optional
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 

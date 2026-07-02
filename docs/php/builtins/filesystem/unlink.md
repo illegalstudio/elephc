@@ -1,8 +1,8 @@
 ---
 title: "unlink()"
-description: "Lowers `unlink(path)` through the target-aware runtime helper."
+description: "Deletes a file."
 sidebar:
-  order: 150
+  order: 152
 ---
 
 ## unlink()
@@ -11,7 +11,7 @@ sidebar:
 function unlink(string $filename): bool
 ```
 
-Lowers `unlink(path)` through the target-aware runtime helper.
+Deletes a file.
 
 **Parameters**:
 - `$filename` (`string`)

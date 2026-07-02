@@ -9,6 +9,7 @@
 //! - Keep startup thin so CLI validation and pipeline behavior stay in dedicated modules.
 
 mod autoload;
+mod builtins;
 mod cli;
 mod codegen;
 mod codegen_ir;

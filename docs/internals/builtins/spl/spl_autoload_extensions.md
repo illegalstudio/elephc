@@ -2,14 +2,14 @@
 title: "spl_autoload_extensions() — internals"
 description: "Compiler internals for spl_autoload_extensions(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 324
+  order: 321
 ---
 
 ## `spl_autoload_extensions()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/spl/spl_autoload_extensions.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_autoload_extensions.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:177](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L177) (`lower_spl_autoload_extensions`)
 - **Function symbol**: `lower_spl_autoload_extensions()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function spl_autoload_extensions(string $file_extensions): string
+function spl_autoload_extensions(string $file_extensions = null): string
 ```
 
 ## What the type checker enforces

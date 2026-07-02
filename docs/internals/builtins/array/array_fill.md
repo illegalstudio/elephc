@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_fill.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_fill.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:115](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L115) (`lower_array_fill`)
 - **Function symbol**: `lower_array_fill()`
 

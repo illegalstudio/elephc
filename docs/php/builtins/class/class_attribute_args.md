@@ -1,8 +1,8 @@
 ---
 title: "class_attribute_args()"
-description: "Lowers `class_attribute_args(class, attr)` into an indexed Mixed array."
+description: "Returns the constructor arguments of a named attribute applied to a class."
 sidebar:
-  order: 65
+  order: 67
 ---
 
 ## class_attribute_args()
@@ -11,7 +11,7 @@ sidebar:
 function class_attribute_args(string $class_name, string $attribute_name): array
 ```
 
-Lowers `class_attribute_args(class, attr)` into an indexed Mixed array.
+Returns the constructor arguments of a named attribute applied to a class.
 
 **Parameters**:
 - `$class_name` (`string`)

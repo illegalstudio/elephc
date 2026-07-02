@@ -2,14 +2,14 @@
 title: "ceil() — internals"
 description: "Compiler internals for ceil(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 238
+  order: 240
 ---
 
 ## `ceil()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/math/ceil.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/ceil.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/math.rs`:75](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math.rs#L75) (`lower_ceil`)
 - **Function symbol**: `lower_ceil()`
 

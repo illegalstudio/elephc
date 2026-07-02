@@ -1,22 +1,22 @@
 ---
 title: "json_encode()"
-description: "Lowers `json_encode(value, flags?, depth?)` through the shared JSON encoder runtime."
+description: "Returns the JSON representation of a value."
 sidebar:
-  order: 229
+  order: 231
 ---
 
 ## json_encode()
 
 ```php
-function json_encode(mixed $value, int $flags, int $depth): string
+function json_encode(mixed $value, int $flags = 0, int $depth = 512): string
 ```
 
-Lowers `json_encode(value, flags?, depth?)` through the shared JSON encoder runtime.
+Returns the JSON representation of a value.
 
 **Parameters**:
 - `$value` (`mixed`)
-- `$flags` (`int`), optional
-- `$depth` (`int`), optional
+- `$flags` (`int`), default `0`, optional
+- `$depth` (`int`), default `512`, optional
 
 **Returns**: `string`
 

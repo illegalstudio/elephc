@@ -1,8 +1,8 @@
 ---
 title: "stream_get_filters()"
-description: "Lowers `stream_get_filters()` to the static built-in filter list."
+description: "Retrieves list of registered filters."
 sidebar:
-  order: 200
+  order: 202
 ---
 
 ## stream_get_filters()
@@ -11,7 +11,7 @@ sidebar:
 function stream_get_filters(): array
 ```
 
-Lowers `stream_get_filters()` to the static built-in filter list.
+Retrieves list of registered filters.
 
 **Parameters**: none.
 

@@ -2,14 +2,14 @@
 title: "substr() — internals"
 description: "Compiler internals for substr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 398
+  order: 395
 ---
 
 ## `substr()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/substr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/substr.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:713](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L713) (`lower_substr`)
 - **Function symbol**: `lower_substr()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function substr(string $string, int $offset, int $length): string
+function substr(string $string, int $offset, int $length = null): string
 ```
 
 ## What the type checker enforces

@@ -2,14 +2,14 @@
 title: "is_writable() — internals"
 description: "Compiler internals for is_writable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 125
+  order: 127
 ---
 
 ## `is_writable()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/is_writable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_writable.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5616](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5616) (`lower_is_writable`)
 - **Function symbol**: `lower_is_writable()`
 

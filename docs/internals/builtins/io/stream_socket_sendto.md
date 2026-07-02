@@ -2,14 +2,14 @@
 title: "stream_socket_sendto() — internals"
 description: "Compiler internals for stream_socket_sendto(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 220
+  order: 222
 ---
 
 ## `stream_socket_sendto()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_socket_sendto.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_sendto.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2641](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2641) (`lower_stream_socket_sendto`)
 - **Function symbol**: `lower_stream_socket_sendto()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function stream_socket_sendto(resource $socket, string $data, int $flags, string $address): mixed
+function stream_socket_sendto(resource $socket, string $data, int $flags = 0, string $address = ''): mixed
 ```
 
 ## What the type checker enforces

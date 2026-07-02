@@ -25,7 +25,7 @@ use super::value_placement::ValuePlacement;
 use super::{CodegenIrError, Result};
 
 /// Mutable backend state for one EIR function.
-pub(super) struct FunctionContext<'a> {
+pub(crate) struct FunctionContext<'a> {
     pub(super) module: &'a Module,
     pub(super) function: &'a Function,
     pub(super) emitter: &'a mut Emitter,

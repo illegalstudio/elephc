@@ -306,6 +306,6 @@ use the default; `sentinel` exists as a legacy opt-out. See
 
 `--ast-backend` selects the legacy direct AST→assembly backend. It is
 **deprecated**, frozen (no new language or runtime features), emits a warning,
-and is scheduled for removal in v0.26.0. Use it only to compare behavior with the
-old backend during the transition. The EIR backend is the default and the only
-active implementation target.
+and is scheduled for removal in a future release. Use it only to compare behavior
+with the old backend during the transition. The EIR backend is the default and
+the only active implementation target.

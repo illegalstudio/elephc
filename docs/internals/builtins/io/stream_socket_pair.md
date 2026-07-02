@@ -2,14 +2,14 @@
 title: "stream_socket_pair() — internals"
 description: "Compiler internals for stream_socket_pair(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 218
+  order: 220
 ---
 
 ## `stream_socket_pair()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_socket_pair.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_pair.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2465](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2465) (`lower_stream_socket_pair`)
 - **Function symbol**: `lower_stream_socket_pair()`
 

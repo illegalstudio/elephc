@@ -18,7 +18,7 @@ use super::super::super::super::context::FunctionContext;
 use super::super::{expect_operand, store_if_result};
 
 /// Lowers `intdiv()` for concrete integer-like numeric operands.
-pub(in crate::codegen_ir::lower_inst::builtins) fn lower_intdiv(
+pub(crate) fn lower_intdiv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -57,7 +57,7 @@ pub(in crate::codegen_ir::lower_inst::builtins) fn lower_intdiv(
 }
 
 /// Lowers `fdiv()` for concrete integer-like and floating operands.
-pub(in crate::codegen_ir::lower_inst::builtins) fn lower_fdiv(
+pub(crate) fn lower_fdiv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -82,7 +82,7 @@ pub(in crate::codegen_ir::lower_inst::builtins) fn lower_fdiv(
 }
 
 /// Lowers `fmod()` for concrete integer-like and floating operands.
-pub(in crate::codegen_ir::lower_inst::builtins) fn lower_fmod(
+pub(crate) fn lower_fmod(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -111,7 +111,7 @@ pub(in crate::codegen_ir::lower_inst::builtins) fn lower_fmod(
 }
 
 /// Lowers `pow()` for concrete integer-like and floating operands.
-pub(in crate::codegen_ir::lower_inst::builtins) fn lower_pow(
+pub(crate) fn lower_pow(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

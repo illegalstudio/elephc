@@ -56,6 +56,7 @@ pub(crate) fn compile(config: CliConfig) {
         extra_frameworks,
         defines,
         web,
+        with_crates,
     } = config;
     let filename = filename.as_str();
     codegen::set_null_repr(null_repr);
@@ -124,7 +125,7 @@ pub(crate) fn compile(config: CliConfig) {
     // binaries never declare the elephc_pdo externs or link the bridge.
     // Runs after include resolution so PDO usage inside includes is detected.
     let phase_started = Instant::now();
-    let ast = pdo_prelude::inject_if_used(ast);
+    let ast = pdo_prelude::inject_if_used(ast, with_crates.contains("pdo"));
     timings.record_since("pdo-prelude", phase_started);
 
     // Inject the timezone-introspection prelude (extern block + array marshalling,
@@ -133,7 +134,7 @@ pub(crate) fn compile(config: CliConfig) {
     // binaries never declare the elephc_tz externs or link the bridge. Runs after
     // include resolution so usage inside includes is detected.
     let phase_started = Instant::now();
-    let ast = tz_prelude::inject_if_used(ast);
+    let ast = tz_prelude::inject_if_used(ast, with_crates.contains("tz"));
     timings.record_since("tz-prelude", phase_started);
 
     // Inject the listIdentifiers-filtering prelude (a pure elephc-PHP function over
@@ -159,7 +160,7 @@ pub(crate) fn compile(config: CliConfig) {
     // elephc_image externs or link the bridge. Runs after include resolution so
     // image usage inside includes is detected.
     let phase_started = Instant::now();
-    let ast = crate::image_prelude::inject_if_used(ast);
+    let ast = crate::image_prelude::inject_if_used(ast, with_crates.contains("image"));
     timings.record_since("image-prelude", phase_started);
 
     let phase_started = Instant::now();
@@ -317,6 +318,20 @@ pub(crate) fn compile(config: CliConfig) {
         extra_link_libs.push("elephc_web".to_string());
     }
 
+    // `--with-<crate>` force-links each named bridge staticlib (whole-archived,
+    // via `forced_bridge_libs`, so it is not dead-stripped) regardless of feature
+    // auto-detection. Crates with a PHP-surface prelude (pdo/tz/image) also had
+    // that prelude force-injected above, so their classes/functions are available.
+    let mut forced_bridge_libs: Vec<String> = Vec::new();
+    for flag in &with_crates {
+        if let Some(lib) = linker::bridge_lib_for_flag(flag) {
+            if !extra_link_libs.iter().any(|l| l == lib) {
+                extra_link_libs.push(lib.to_string());
+            }
+            forced_bridge_libs.push(lib.to_string());
+        }
+    }
+
     let requires_elephc_tls = extra_link_libs.iter().any(|lib| lib == "elephc_tls")
         || check_result
             .required_libraries
@@ -438,6 +453,7 @@ pub(crate) fn compile(config: CliConfig) {
         &extra_link_libs,
         &extra_link_paths,
         &extra_frameworks,
+        &forced_bridge_libs,
     );
     timings.record_since("link", phase_started);
 

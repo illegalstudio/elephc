@@ -2,14 +2,14 @@
 title: "stream_filter_remove() — internals"
 description: "Compiler internals for stream_filter_remove(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 198
+  order: 200
 ---
 
 ## `stream_filter_remove()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_filter_remove.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_filter_remove.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1939](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1939) (`lower_stream_filter_remove`)
 - **Function symbol**: `lower_stream_filter_remove()`
 

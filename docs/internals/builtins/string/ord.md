@@ -2,14 +2,14 @@
 title: "ord() — internals"
 description: "Compiler internals for ord(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 372
+  order: 369
 ---
 
 ## `ord()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/ord.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ord.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:834](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L834) (`lower_ord`)
 - **Function symbol**: `lower_ord()`
 

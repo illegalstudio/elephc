@@ -2,14 +2,14 @@
 title: "usort() — internals"
 description: "Compiler internals for usort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 61
+  order: 63
 ---
 
 ## `usort()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/usort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/usort.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1121](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1121) (`lower_usort`)
 - **Function symbol**: `lower_usort()`
 

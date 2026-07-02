@@ -85,6 +85,9 @@ fn make_simple_caller_callee_module() -> (Module, String /*caller name*/) {
     (module, caller_name)
 }
 
+/// Verifies a small const-returning callee is inlined: the caller's `Call` is
+/// removed, the module stays validator-clean, and the inlined `const 42` result
+/// flows through to the caller's return.
 #[test]
 fn inliner_inlines_small_returning_function_and_removes_call() {
     let (mut module, caller_name) = make_simple_caller_callee_module();
@@ -114,6 +117,8 @@ fn inliner_inlines_small_returning_function_and_removes_call() {
     assert!(has_const42, "inlined body should contribute the const 42 result");
 }
 
+/// Verifies the inliner resolves and inlines `FunctionVariantCall` sites,
+/// mapping the variant index back to the concrete callee name.
 #[test]
 fn inliner_supports_function_variant_call_sites() {
     // FVC immediate + label in strings so extract_target_name resolves a name.
@@ -184,6 +189,8 @@ fn resolver_collect_and_resolve_fvc_uses_canonical_logic() {
     assert_eq!(callee.unwrap().name, "fortytwo");
 }
 
+/// Verifies a small void callee is inlined and the module stays validator-clean
+/// when there is no result value to thread through a continuation block.
 #[test]
 fn inliner_inlines_void_small_function() {
     let mut module = Module::new(Target::new(Platform::MacOS, Arch::AArch64));
@@ -221,6 +228,8 @@ fn inliner_inlines_void_small_function() {
     assert!(validate_module(&module).is_ok());
 }
 
+/// Verifies a callee exceeding the instruction-count threshold is left
+/// un-inlined, so its `Call` site is preserved unchanged.
 #[test]
 fn inliner_respects_size_threshold_and_non_recursive() {
     let mut module = Module::new(Target::new(Platform::MacOS, Arch::AArch64));
@@ -280,6 +289,8 @@ fn inliner_respects_size_threshold_and_non_recursive() {
     assert!(c.instructions.iter().any(|i| i.op == Op::Call));
 }
 
+/// Verifies the inliner refuses recursive, generator, and `try`/`catch`
+/// (exception-handler) callees, leaving each call site intact.
 #[test]
 fn inliner_skips_recursive_and_generator_and_try() {
     // Recursive: callee that calls self
@@ -417,6 +428,8 @@ fn inliner_skips_recursive_and_generator_and_try() {
     assert!(c3f.instructions.iter().any(|i| i.op == Op::Call), "Call to has_try site must remain");
 }
 
+/// Verifies a multi-block callee is inlined correctly, splicing its internal
+/// control flow into the caller (entry carries 0 params per the EIR rule).
 #[test]
 fn inliner_handles_multi_block_callee() {
     let mut module = Module::new(Target::new(Platform::MacOS, Arch::AArch64));

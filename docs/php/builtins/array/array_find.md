@@ -1,6 +1,6 @@
 ---
 title: "array_find()"
-description: "Lowers `array_find()`: returns the first element satisfying the predicate, boxed as Mixed (or null)."
+description: "Returns the first element satisfying a predicate callback, or null."
 sidebar:
   order: 12
 ---
@@ -8,13 +8,13 @@ sidebar:
 ## array_find()
 
 ```php
-function array_find(array $array, mixed $callback): mixed
+function array_find(mixed $array, mixed $callback): mixed
 ```
 
-Lowers `array_find()`: returns the first element satisfying the predicate, boxed as Mixed (or null).
+Returns the first element satisfying a predicate callback, or null.
 
 **Parameters**:
-- `$array` (`array`)
+- `$array` (`mixed`)
 - `$callback` (`mixed`)
 
 **Returns**: `mixed`

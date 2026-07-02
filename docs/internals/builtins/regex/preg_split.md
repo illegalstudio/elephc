@@ -2,14 +2,14 @@
 title: "preg_split() — internals"
 description: "Compiler internals for preg_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 318
+  order: 315
 ---
 
 ## `preg_split()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/system/preg_split.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_split.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/regex.rs`:374](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/regex.rs#L374) (`lower_preg_split`)
 - **Function symbol**: `lower_preg_split()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function preg_split(string $pattern, string $subject, int $limit, int $flags): array
+function preg_split(string $pattern, string $subject, int $limit = -1, int $flags = 0): array
 ```
 
 ## What the type checker enforces

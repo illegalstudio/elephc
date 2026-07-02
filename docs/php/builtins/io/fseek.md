@@ -1,22 +1,22 @@
 ---
 title: "fseek()"
-description: "Lowers `fseek(stream, offset, whence?)` and clears EOF state on success."
+description: "Seeks on a file pointer."
 sidebar:
-  order: 169
+  order: 171
 ---
 
 ## fseek()
 
 ```php
-function fseek(resource $stream, int $offset, int $whence): int
+function fseek(resource $stream, int $offset, int $whence = 0): int
 ```
 
-Lowers `fseek(stream, offset, whence?)` and clears EOF state on success.
+Seeks on a file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$offset` (`int`)
-- `$whence` (`int`), optional
+- `$whence` (`int`), default `0`, optional
 
 **Returns**: `int`
 

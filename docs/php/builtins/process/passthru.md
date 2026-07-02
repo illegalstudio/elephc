@@ -1,6 +1,6 @@
 ---
 title: "passthru()"
-description: "Lowers `passthru(command)` through libc `system()` for direct stdout passthrough."
+description: "Executes an external program and passes its output directly."
 sidebar:
   order: 303
 ---
@@ -8,14 +8,13 @@ sidebar:
 ## passthru()
 
 ```php
-function passthru(string $command, int $result_code): void
+function passthru(string $command): void
 ```
 
-Lowers `passthru(command)` through libc `system()` for direct stdout passthrough.
+Executes an external program and passes its output directly.
 
 **Parameters**:
 - `$command` (`string`)
-- `$result_code` (`int`), passed by reference
 
 **Returns**: `void`
 

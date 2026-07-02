@@ -1,8 +1,8 @@
 ---
 title: "asin()"
-description: "asin() — math builtin supported by Elephc."
+description: "Returns the arcsine of a number in radians."
 sidebar:
-  order: 235
+  order: 237
 ---
 
 ## asin()
@@ -11,7 +11,7 @@ sidebar:
 function asin(float $num): float
 ```
 
-`asin()` is a math builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Returns the arcsine of a number in radians.
 
 **Parameters**:
 - `$num` (`float`)
@@ -25,4 +25,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `asin` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/asin.md).
 

@@ -2,14 +2,14 @@
 title: "vprintf() — internals"
 description: "Compiler internals for vprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 405
+  order: 402
 ---
 
 ## `vprintf()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/vprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/vprintf.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:530](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L530) (`lower_vprintf`)
 - **Function symbol**: `lower_vprintf()`
 

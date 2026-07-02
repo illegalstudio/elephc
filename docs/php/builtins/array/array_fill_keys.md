@@ -1,6 +1,6 @@
 ---
 title: "array_fill_keys()"
-description: "Lowers `array_fill_keys()` through the legacy hash-building runtime helpers."
+description: "Fill an array with values, specifying keys."
 sidebar:
   order: 10
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_fill_keys(array $keys, mixed $value): array
 ```
 
-Lowers `array_fill_keys()` through the legacy hash-building runtime helpers.
+Fill an array with values, specifying keys.
 
 **Parameters**:
 - `$keys` (`array`)

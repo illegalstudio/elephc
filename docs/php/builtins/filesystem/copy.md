@@ -1,22 +1,21 @@
 ---
 title: "copy()"
-description: "Lowers `copy(source, dest)` through the target-aware runtime helper."
+description: "Copies a file."
 sidebar:
-  order: 102
+  order: 104
 ---
 
 ## copy()
 
 ```php
-function copy(string $from, string $to, mixed $context): bool
+function copy(string $from, string $to): bool
 ```
 
-Lowers `copy(source, dest)` through the target-aware runtime helper.
+Copies a file.
 
 **Parameters**:
 - `$from` (`string`)
 - `$to` (`string`)
-- `$context` (`mixed`)
 
 **Returns**: `bool`
 

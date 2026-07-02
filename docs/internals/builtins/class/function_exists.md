@@ -2,15 +2,15 @@
 title: "function_exists() — internals"
 description: "Compiler internals for function_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 73
+  order: 75
 ---
 
 ## `function_exists()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:801](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L801) (`lower_function_exists`)
+- **Signature**: [`src/builtins/callables/function_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/function_exists.rs)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:277](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L277) (`lower_function_exists`)
 - **Function symbol**: `lower_function_exists()`
 
 

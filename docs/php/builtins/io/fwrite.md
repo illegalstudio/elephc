@@ -1,22 +1,21 @@
 ---
 title: "fwrite()"
-description: "Lowers `fwrite(stream, data)` and returns the number of bytes written."
+description: "Binary-safe file write."
 sidebar:
-  order: 174
+  order: 176
 ---
 
 ## fwrite()
 
 ```php
-function fwrite(resource $stream, string $data, int $length): int
+function fwrite(resource $stream, string $data): int
 ```
 
-Lowers `fwrite(stream, data)` and returns the number of bytes written.
+Binary-safe file write.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$data` (`string`)
-- `$length` (`int`)
 
 **Returns**: `int`
 

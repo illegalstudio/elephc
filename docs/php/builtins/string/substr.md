@@ -1,6 +1,6 @@
 ---
 title: "substr()"
-description: "Lowers `substr(string, offset, length?)` with target-local pointer arithmetic."
+description: "Returns a portion of a string specified by the offset and length."
 sidebar:
   order: 395
 ---
@@ -8,15 +8,15 @@ sidebar:
 ## substr()
 
 ```php
-function substr(string $string, int $offset, int $length): string
+function substr(string $string, int $offset, int $length = null): string
 ```
 
-Lowers `substr(string, offset, length?)` with target-local pointer arithmetic.
+Returns a portion of a string specified by the offset and length.
 
 **Parameters**:
 - `$string` (`string`)
 - `$offset` (`int`)
-- `$length` (`int`), optional
+- `$length` (`int`), default `null`, optional
 
 **Returns**: `string`
 

@@ -2,14 +2,14 @@
 title: "stream_socket_recvfrom() — internals"
 description: "Compiler internals for stream_socket_recvfrom(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 219
+  order: 221
 ---
 
 ## `stream_socket_recvfrom()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_socket_recvfrom.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_recvfrom.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2599](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2599) (`lower_stream_socket_recvfrom`)
 - **Function symbol**: `lower_stream_socket_recvfrom()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function stream_socket_recvfrom(resource $socket, int $length, int $flags, string $address): mixed
+function stream_socket_recvfrom(resource $socket, int $length, int $flags = 0, string $address = ''): mixed
 ```
 
 ## What the type checker enforces

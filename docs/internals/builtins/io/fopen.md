@@ -2,14 +2,14 @@
 title: "fopen() — internals"
 description: "Compiler internals for fopen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 163
+  order: 165
 ---
 
 ## `fopen()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/fopen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fopen.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:340](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L340) (`lower_fopen`)
 - **Function symbol**: `lower_fopen()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function fopen(string $filename, string $mode, bool $use_include_path, mixed $context): mixed
+function fopen(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): mixed
 ```
 
 ## What the type checker enforces

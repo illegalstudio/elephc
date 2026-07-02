@@ -2,14 +2,14 @@
 title: "clearstatcache() — internals"
 description: "Compiler internals for clearstatcache(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 101
+  order: 103
 ---
 
 ## `clearstatcache()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/clearstatcache.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/clearstatcache.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5578](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5578) (`lower_clearstatcache`)
 - **Function symbol**: `lower_clearstatcache()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function clearstatcache(bool $clear_realpath_cache, string $filename): void
+function clearstatcache(bool $clear_realpath_cache = false, string $filename = ''): void
 ```
 
 ## What the type checker enforces

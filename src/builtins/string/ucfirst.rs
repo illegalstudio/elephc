@@ -1,0 +1,35 @@
+//! Purpose:
+//! Home of the PHP `ucfirst` builtin: its declaration and lowering.
+//!
+//! Called from:
+//! - The builtin registry (declaration) and the EIR backend (lower hook),
+//!   both via `crate::builtins::registry`.
+//!
+//! Key details:
+//! - No `check` hook is needed: `ucfirst` is a pure-data builtin whose return
+//!   type (`Str`) is fully determined by its declaration. The registry derives the
+//!   return type from the `returns:` field without calling a check hook.
+//! - `lower` is a thin wrapper over the dedicated `lower_ucfirst` emitter in the
+//!   strings lowering module.
+
+use crate::codegen_ir::context::FunctionContext;
+use crate::codegen_ir::CodegenIrError;
+use crate::ir::Instruction;
+
+builtin! {
+    name: "ucfirst",
+    area: String,
+    params: [string: Str],
+    returns: Str,
+    lower: lower,
+    summary: "Uppercases the first character of a string.",
+    php_manual: "https://www.php.net/manual/en/function.ucfirst.php",
+}
+
+/// Lowers a `ucfirst` call by dispatching to the dedicated per-arch emitter.
+fn lower(
+    ctx: &mut FunctionContext,
+    inst: &Instruction,
+) -> Result<(), CodegenIrError> {
+    crate::codegen_ir::lower_inst::builtins::strings::lower_ucfirst(ctx, inst)
+}

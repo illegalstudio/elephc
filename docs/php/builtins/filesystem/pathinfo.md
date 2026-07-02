@@ -1,23 +1,23 @@
 ---
 title: "pathinfo()"
-description: "Lowers `pathinfo(path, flags?)` through string, array, or boxed dynamic helpers."
+description: "Returns information about a file path."
 sidebar:
-  order: 133
+  order: 135
 ---
 
 ## pathinfo()
 
 ```php
-function pathinfo(string $path, int $flags): mixed
+function pathinfo(string $path, int $flags = 15): array
 ```
 
-Lowers `pathinfo(path, flags?)` through string, array, or boxed dynamic helpers.
+Returns information about a file path.
 
 **Parameters**:
 - `$path` (`string`)
-- `$flags` (`int`), optional
+- `$flags` (`int`), default `15`, optional
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

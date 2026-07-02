@@ -1,8 +1,8 @@
 ---
 title: "stream_context_set_default()"
-description: "Lowers `stream_context_set_default(options)`."
+description: "Sets the default stream context."
 sidebar:
-  order: 193
+  order: 195
 ---
 
 ## stream_context_set_default()
@@ -11,7 +11,7 @@ sidebar:
 function stream_context_set_default(array $options): mixed
 ```
 
-Lowers `stream_context_set_default(options)`.
+Sets the default stream context.
 
 **Parameters**:
 - `$options` (`array`)

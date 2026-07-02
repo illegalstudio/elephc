@@ -2,14 +2,14 @@
 title: "print_r() — internals"
 description: "Compiler internals for print_r(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 283
+  order: 280
 ---
 
 ## `print_r()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/print_r.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/print_r.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/debug.rs`:24](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/debug.rs#L24) (`lower_print_r`)
 - **Function symbol**: `lower_print_r()`
 
@@ -25,13 +25,12 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function print_r(...$values): void
+function print_r(mixed $value): void
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes no arguments.
-- **Variadic**: collects excess arguments into `$values`.
+- **Arity**: takes exactly 1 argument.
 
 ## Cross-references
 
