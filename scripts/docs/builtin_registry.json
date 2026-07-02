@@ -4873,7 +4873,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/math/binary.rs",
       "codegen_function": "lower_fdiv",
-      "codegen_line": 60,
+      "codegen_line": 65,
       "notes": [
         "Lowers `fdiv()` for concrete integer-like and floating operands."
       ],
@@ -5976,7 +5976,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/math/binary.rs",
       "codegen_function": "lower_fmod",
-      "codegen_line": 85,
+      "codegen_line": 90,
       "notes": [
         "Lowers `fmod()` for concrete integer-like and floating operands."
       ],
@@ -8749,7 +8749,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/spl.rs",
       "codegen_function": "lower_iterator_apply",
-      "codegen_line": 289,
+      "codegen_line": 290,
       "notes": [
         "Lowers `iterator_apply()` over supported Traversable sources and callback forms."
       ],
@@ -8800,7 +8800,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/spl.rs",
       "codegen_function": "lower_iterator_count",
-      "codegen_line": 236,
+      "codegen_line": 237,
       "notes": [
         "Lowers `iterator_count()` over arrays, `iterable`, and Traversable objects."
       ],
@@ -8837,7 +8837,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/spl.rs",
       "codegen_function": "lower_iterator_to_array",
-      "codegen_line": 265,
+      "codegen_line": 266,
       "notes": [
         "Lowers `iterator_to_array()` over arrays, `iterable`, and Traversable objects."
       ],
@@ -11443,7 +11443,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/math/binary.rs",
       "codegen_function": "lower_pow",
-      "codegen_line": 114,
+      "codegen_line": 119,
       "notes": [
         "Lowers `pow()` for concrete integer-like and floating operands."
       ],
@@ -13525,7 +13525,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/spl.rs",
       "codegen_function": "lower_spl_autoload_void",
-      "codegen_line": 150,
+      "codegen_line": 151,
       "notes": [
         "Lowers no-op autoload calls by preserving arg effects and returning PHP null if used."
       ],
@@ -13569,7 +13569,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/spl.rs",
       "codegen_function": "lower_spl_autoload_void",
-      "codegen_line": 150,
+      "codegen_line": 151,
       "notes": [
         "Lowers no-op autoload calls by preserving arg effects and returning PHP null if used."
       ],
@@ -13606,7 +13606,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/spl.rs",
       "codegen_function": "lower_spl_autoload_extensions",
-      "codegen_line": 177,
+      "codegen_line": 178,
       "notes": [
         "Lowers `spl_autoload_extensions()` against the legacy mutable extension globals."
       ],
@@ -13643,7 +13643,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/spl.rs",
       "codegen_function": "lower_spl_autoload_functions",
-      "codegen_line": 166,
+      "codegen_line": 167,
       "notes": [
         "Lowers `spl_autoload_functions()` to an indexed array of AOT rule placeholders."
       ],
@@ -13672,7 +13672,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/spl.rs",
       "codegen_function": "lower_spl_autoload_bool",
-      "codegen_line": 134,
+      "codegen_line": 135,
       "notes": [
         "Lowers autoload registration stubs by preserving arg effects and returning true."
       ],
@@ -13723,7 +13723,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/spl.rs",
       "codegen_function": "lower_spl_autoload_bool",
-      "codegen_line": 134,
+      "codegen_line": 135,
       "notes": [
         "Lowers autoload registration stubs by preserving arg effects and returning true."
       ],
@@ -13760,7 +13760,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/spl.rs",
       "codegen_function": "lower_spl_classes",
-      "codegen_line": 205,
+      "codegen_line": 206,
       "notes": [
         "Lowers `spl_classes()` to the static compiler-shipped SPL/core type snapshot."
       ],
@@ -13791,7 +13791,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/spl.rs",
       "codegen_function": "lower_spl_object_hash",
-      "codegen_line": 225,
+      "codegen_line": 226,
       "notes": [
         "Lowers `spl_object_hash(object)` by formatting the loaded object pointer as a string."
       ],
@@ -13830,7 +13830,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/spl.rs",
       "codegen_function": "lower_spl_object_id",
-      "codegen_line": 215,
+      "codegen_line": 216,
       "notes": [
         "Lowers `spl_object_id(object)` by returning the loaded object pointer as an integer."
       ],

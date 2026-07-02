@@ -216,6 +216,39 @@ fn assignment_target_store_stmt(
     }
 }
 
+/// Parses discarded post-increment/decrement on a scoped (static class member) l-value target.
+/// Handles `A::$x++`, `static::$x--`, `parent::$y++`, etc. Returns `Ok(None)` when no
+/// postfix `++`/`--` is found at the top level of the statement.
+pub(in crate::parser::stmt) fn try_parse_scoped_postfix_incdec(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Option<Stmt>, CompileError> {
+    let start = *pos;
+    let Some((incdec_pos, is_increment)) = find_top_level_postfix_incdec(tokens, start) else {
+        return Ok(None);
+    };
+    if incdec_pos < start + 3 {
+        return Ok(None);
+    }
+
+    let lhs = &tokens[start..incdec_pos];
+    let mut lhs_pos = 0;
+    let lhs_expr = parse_expr(lhs, &mut lhs_pos)?;
+    if lhs_pos != lhs.len() {
+        return Err(CompileError::new(span, "Invalid increment target"));
+    }
+
+    if !matches!(lhs_expr.kind, ExprKind::StaticPropertyAccess { .. }) {
+        return Ok(None);
+    }
+
+    *pos = incdec_pos + 1;
+    expect_semicolon(tokens, pos)?;
+
+    lower_postfix_incdec_assignment(lhs_expr, is_increment, span).map(Some)
+}
+
 /// Parses discarded post-increment/decrement on a complex l-value target.
 ///
 /// For statement contexts the original expression result is unused, so `$a[0]++`
@@ -587,6 +620,13 @@ fn lower_postfix_incdec_assignment(
             property,
             value,
         },
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            StmtKind::StaticPropertyAssign {
+                receiver,
+                property,
+                value,
+            }
+        }
         _ => return Err(CompileError::new(span, "Invalid increment target")),
     };
 

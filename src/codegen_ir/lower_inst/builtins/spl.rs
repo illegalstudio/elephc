@@ -94,6 +94,7 @@ const SPL_CLASS_NAMES: &[&str] = &[
     "UnderflowException",
     "UnexpectedValueException",
     "ValueError",
+    "ArithmeticError",
 ];
 
 /// Callback strategy supported by the current EIR `iterator_apply()` lowering.

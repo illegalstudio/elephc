@@ -485,6 +485,7 @@ fn seed_runtime_throwable_class_names(module: &Module, names: &mut HashSet<Strin
         "Error",
         "TypeError",
         "ValueError",
+        "ArithmeticError",
         "Exception",
         "LogicException",
         "RuntimeException",
