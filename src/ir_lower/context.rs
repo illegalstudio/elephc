@@ -620,7 +620,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let slot = self.declare_local(name, php_type.clone());
         // Backend frame layout uses the final widened slot type for every load
         // and store, so cleanup loads must be typed after this store's widening.
-        self.builder.widen_local_storage_type(slot, php_type.clone());
+        // For ref-bound locals, keep the existing slot type to avoid widening
+        // Int→Mixed mid-function (which would break earlier loads that expect I64).
+        // The codegen narrows Mixed→Int at the store point instead.
+        let is_ref_bound = self.is_ref_bound_local(name);
+        let widen_type = if is_ref_bound {
+            previous_type.clone()
+        } else {
+            php_type.clone()
+        };
+        self.builder.widen_local_storage_type(slot, widen_type);
         let source = value;
         let source_is_owning_temporary = self.value_is_owning_temporary(value);
         let release_source_after_store = self.value_needs_release_after_retaining_store(value);
@@ -657,8 +666,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         let value = if (uses_global || previous_kind == LocalKind::PhpLocal)
             && !transfer_callable_source_to_store
+            && !self.is_ref_bound_local(name)
         {
             crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
+        } else if (uses_global || previous_kind == LocalKind::PhpLocal)
+            && !transfer_callable_source_to_store
+        {
+            // For ref-bound locals, acquire only when NOT narrowing Mixed→Int.
+            // When the source is Mixed and the ref cell's previous type is Int,
+            // the ref cell store narrows via __rt_mixed_cast_int, consuming the
+            // Mixed box. The release_if_owned at the end frees the original
+            // without a paired incref, which is correct for narrowing.
+            let source_is_mixed = matches!(
+                self.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed
+            );
+            let target_is_int = matches!(previous_type.codegen_repr(), PhpType::Int);
+            if !(source_is_mixed && target_is_int) {
+                crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
+            } else {
+                value
+            }
         } else {
             value
         };
@@ -676,6 +704,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             (false, LocalKind::StaticLocal) => Op::StoreStaticLocal,
             _ => Op::StoreLocal,
         };
+        // Track whether the ref cell store narrows Mixed→Int and releases the
+        // source Mixed box in the codegen, so we skip the release_if_owned below.
+        let ref_cell_narrowed_mixed_to_int = is_ref_bound
+            && matches!(
+                self.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed
+            )
+            && matches!(previous_type.codegen_repr(), PhpType::Int);
         if is_ref_bound {
             let value = self.box_typed_array_for_mixed_ref_cell(value, &previous_type, span);
             self.store_ref_cell_slot(slot, value, previous_type.clone(), span);
@@ -685,7 +721,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !is_ref_bound {
             self.set_local_type(name, php_type);
         }
-        if release_source_after_store && !transfer_callable_source_to_store {
+        if release_source_after_store && !transfer_callable_source_to_store && !ref_cell_narrowed_mixed_to_int {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
         }
         value
@@ -1005,6 +1041,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashToMixed
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop
+                    | Op::ICheckedAdd
+                    | Op::ICheckedSub
+                    | Op::ICheckedMul
                     | Op::MixedCastString
                     | Op::StrConcat
                     | Op::StrPersist
@@ -1361,6 +1400,11 @@ fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
             | "ptr_read_string"
             | "strpos"
             | "strrpos"
+            // zval bridge: `zval_unpack` rebuilds a fresh owned value (scalars box a
+            // new Mixed cell; strings persist an owned copy; arrays own-transfer the
+            // freshly rebuilt array into the cell with refcount 1), so its Mixed result
+            // is an owning temporary that must be released after a retaining insert.
+            | "zval_unpack"
     )
 }
 

@@ -180,6 +180,9 @@ pub enum Op {
     IAdd,
     ISub,
     IMul,
+    ICheckedAdd,
+    ICheckedSub,
+    ICheckedMul,
     IDiv,
     ISDiv,
     ISMod,
@@ -376,6 +379,7 @@ impl Op {
             | MixedTagOf | IsNull | IsTruthy | IsEmpty | FunctionVariantDispatch | PtrCast
             | PtrOffset | Move | Borrow | Nop => E::PURE,
             IDiv | ISDiv | ISMod | PtrCheckNonnull => E::MAY_FATAL,
+            ICheckedAdd | ICheckedSub | ICheckedMul => E::ALLOC_HEAP | E::READS_HEAP,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | CatchBind | FinallyEnter
@@ -496,6 +500,9 @@ impl Op {
             IAdd => "iadd",
             ISub => "isub",
             IMul => "imul",
+            ICheckedAdd => "ichecked_add",
+            ICheckedSub => "ichecked_sub",
+            ICheckedMul => "ichecked_mul",
             IDiv => "idiv",
             ISDiv => "isdiv",
             ISMod => "ismod",

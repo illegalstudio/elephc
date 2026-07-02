@@ -221,6 +221,7 @@ fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::ArrayLiteral(elems) if elems.is_empty())
 }
 
+/// Returns `true` when `expr` is a compile-time integer literal.
 /// Infers the `PhpType` of an expression from its syntactic form.
 ///
 /// A best-effort syntactic heuristic — not full type inference. Handles literals,

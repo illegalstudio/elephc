@@ -48,8 +48,15 @@ impl Checker {
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
                 match ty {
-                    PhpType::Int => Ok(PhpType::Int),
+                    PhpType::Int => {
+                        if matches!(&inner.kind, ExprKind::IntLiteral(_)) {
+                            Ok(PhpType::Int)
+                        } else {
+                            Ok(PhpType::Mixed)
+                        }
+                    }
                     PhpType::Float => Ok(PhpType::Float),
+                    PhpType::Mixed | PhpType::Bool | PhpType::Void => Ok(PhpType::Mixed),
                     _ => Err(CompileError::new(
                         expr.span,
                         "Cannot negate a non-numeric value",
@@ -69,7 +76,9 @@ impl Checker {
             | ExprKind::PostIncrement(name)
             | ExprKind::PreDecrement(name)
             | ExprKind::PostDecrement(name) => match env.get(name) {
-                Some(PhpType::Int) | Some(PhpType::Bool) | Some(PhpType::Void) => Ok(PhpType::Int),
+                Some(PhpType::Int) | Some(PhpType::Bool) | Some(PhpType::Void) => {
+                    Ok(PhpType::Int)
+                }
                 Some(other) => Err(CompileError::new(
                     expr.span,
                     &format!("Cannot increment/decrement ${} of type {:?}", name, other),
@@ -178,7 +187,7 @@ impl Checker {
                         Ok(PhpType::Str)
                     }
                     PhpType::Array(elem_ty) => {
-                        if normalized_idx_ty != PhpType::Int {
+                        if normalized_idx_ty != PhpType::Int && normalized_idx_ty != PhpType::Mixed {
                             return Err(CompileError::new(
                                 expr.span,
                                 "Array index must be integer",

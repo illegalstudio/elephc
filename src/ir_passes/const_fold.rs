@@ -31,7 +31,8 @@
 use std::collections::HashMap;
 
 use crate::ir::{
-    CmpPredicate, DataPool, Function, Immediate, InstId, Instruction, Op, ValueId,
+    CmpPredicate, DataPool, Function, Immediate, InstId, Instruction, IrType, Op, Ownership,
+    ValueId,
 };
 
 use super::driver::IrPass;
@@ -46,6 +47,18 @@ enum Const {
     Float(f64),
     Bool(bool),
     Null,
+}
+
+/// The type narrowing applied when a fold changes the result type. `None`
+/// means the folded constant has the same type as the original instruction
+/// (the common case for `IAdd` → `ConstI64`). `ToInt`/`ToFloat` are used when
+/// a checked op (`ICheckedAdd`, result type `Heap(Mixed)`) folds to a scalar
+/// constant, narrowing the result from `Mixed` to `Int` or `Float`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeNarrowing {
+    None,
+    ToInt,
+    ToFloat,
 }
 
 impl Const {
@@ -96,7 +109,7 @@ impl IrPass for ConstFold {
         // constant carried by each value and recording instructions to fold. The
         // accumulating map lets chained folds collapse in a single sweep.
         let mut consts: HashMap<ValueId, Const> = HashMap::new();
-        let mut folds: Vec<(InstId, Const)> = Vec::new();
+        let mut folds: Vec<(InstId, Const, TypeNarrowing)> = Vec::new();
         for (index, inst) in function.instructions.iter().enumerate() {
             let Some(result) = inst.result else {
                 continue;
@@ -105,9 +118,9 @@ impl IrPass for ConstFold {
                 consts.insert(result, value);
                 continue;
             }
-            if let Some(folded) = try_fold(inst, &consts) {
+            if let Some((folded, narrowing)) = try_fold(inst, &consts) {
                 consts.insert(result, folded);
-                folds.push((InstId::from_raw(index as u32), folded));
+                folds.push((InstId::from_raw(index as u32), folded, narrowing));
             }
         }
         if folds.is_empty() {
@@ -115,9 +128,23 @@ impl IrPass for ConstFold {
         }
 
         // Phase 2 (mutate): rewrite each folded instruction in place to a constant.
-        for (inst_id, value) in folds {
+        // When the fold narrows the result type (e.g. ICheckedAdd → ConstI64),
+        // also update the instruction's result_type/result_php_type/ownership and
+        // the corresponding Value metadata so the validator and codegen see the
+        // narrowed type.
+        for (inst_id, value, narrowing) in folds {
             if let Some(inst) = function.instruction_mut(inst_id) {
                 convert_to_const(inst, value);
+                if narrowing != TypeNarrowing::None {
+                    apply_type_narrowing(inst, narrowing);
+                }
+            }
+            if narrowing != TypeNarrowing::None {
+                if let Some(result) = function.instruction(inst_id).and_then(|i| i.result) {
+                    if let Some(val) = function.value_mut(result) {
+                        apply_value_type_narrowing(val, narrowing);
+                    }
+                }
             }
         }
         true
@@ -140,7 +167,10 @@ fn const_of_const_op(inst: &Instruction) -> Option<Const> {
 /// runtime. Returns `None` when an operand is non-constant or the op/edge case is
 /// intentionally not folded (division, modulo, float division, out-of-range
 /// shifts, non-signed compare predicates).
-fn try_fold(inst: &Instruction, consts: &HashMap<ValueId, Const>) -> Option<Const> {
+fn try_fold(
+    inst: &Instruction,
+    consts: &HashMap<ValueId, Const>,
+) -> Option<(Const, TypeNarrowing)> {
     let operand = |index: usize| -> Option<Const> {
         inst.operands.get(index).and_then(|value| consts.get(value).copied())
     };
@@ -150,7 +180,7 @@ fn try_fold(inst: &Instruction, consts: &HashMap<ValueId, Const>) -> Option<Cons
         Op::IAdd | Op::ISub | Op::IMul | Op::IBitAnd | Op::IBitOr | Op::IBitXor => {
             let lhs = operand(0)?.as_i64()?;
             let rhs = operand(1)?.as_i64()?;
-            Some(Const::Int(fold_int_binop(inst.op, lhs, rhs)))
+            Some((Const::Int(fold_int_binop(inst.op, lhs, rhs)), TypeNarrowing::None))
         }
         // -- integer shifts: only well-defined PHP shift counts (0..=63) --
         Op::IShl | Op::IShrA => {
@@ -163,18 +193,25 @@ fn try_fold(inst: &Instruction, consts: &HashMap<ValueId, Const>) -> Option<Cons
                 Op::IShl => lhs.wrapping_shl(rhs as u32),
                 _ => lhs >> rhs,
             };
-            Some(Const::Int(result))
+            Some((Const::Int(result), TypeNarrowing::None))
         }
         // -- integer unary --
-        Op::INeg => Some(Const::Int(operand(0)?.as_i64()?.wrapping_neg())),
-        Op::IBitNot => Some(Const::Int(!operand(0)?.as_i64()?)),
+        Op::INeg => Some((Const::Int(operand(0)?.as_i64()?.wrapping_neg()), TypeNarrowing::None)),
+        Op::IBitNot => Some((Const::Int(!operand(0)?.as_i64()?), TypeNarrowing::None)),
+        // -- checked integer arithmetic: PHP promotes to float on overflow --
+        Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => {
+            let lhs = operand(0)?.as_i64()?;
+            let rhs = operand(1)?.as_i64()?;
+            let (result, narrowing) = fold_checked_int_binop(inst.op, lhs, rhs);
+            Some((result, narrowing))
+        }
         // -- float arithmetic (IEEE-754, exact) --
         Op::FAdd | Op::FSub | Op::FMul => {
             let lhs = operand(0)?.as_f64()?;
             let rhs = operand(1)?.as_f64()?;
-            Some(Const::Float(fold_float_binop(inst.op, lhs, rhs)))
+            Some((Const::Float(fold_float_binop(inst.op, lhs, rhs)), TypeNarrowing::None))
         }
-        Op::FNeg => Some(Const::Float(-operand(0)?.as_f64()?)),
+        Op::FNeg => Some((Const::Float(-operand(0)?.as_f64()?), TypeNarrowing::None)),
         // -- signed integer comparison --
         Op::ICmp => {
             let lhs = operand(0)?.as_i64()?;
@@ -183,11 +220,11 @@ fn try_fold(inst: &Instruction, consts: &HashMap<ValueId, Const>) -> Option<Cons
                 Some(Immediate::CmpPredicate(predicate)) => *predicate,
                 _ => return None,
             };
-            Some(Const::Bool(fold_icmp(predicate, lhs, rhs)?))
+            Some((Const::Bool(fold_icmp(predicate, lhs, rhs)?), TypeNarrowing::None))
         }
         // -- scalar predicates over a constant --
-        Op::IsNull => Some(Const::Bool(matches!(operand(0)?, Const::Null))),
-        Op::IsTruthy => Some(Const::Bool(operand(0)?.truthiness())),
+        Op::IsNull => Some((Const::Bool(matches!(operand(0)?, Const::Null)), TypeNarrowing::None)),
+        Op::IsTruthy => Some((Const::Bool(operand(0)?.truthiness()), TypeNarrowing::None)),
         _ => None,
     }
 }
@@ -203,6 +240,33 @@ fn fold_int_binop(op: Op, lhs: i64, rhs: i64) -> i64 {
         Op::IBitOr => lhs | rhs,
         Op::IBitXor => lhs ^ rhs,
         _ => unreachable!("fold_int_binop called with non-integer-binop {:?}", op),
+    }
+}
+
+/// Computes a checked 64-bit integer binary op, matching the runtime helper
+/// `__rt_int_{add,sub,mul}_checked` lowering. Returns `(Const::Int(result),
+/// ToInt)` when the result fits in `i64`, or `(Const::Float(result), ToFloat)`
+/// when it overflows — exactly reproducing PHP's integer-to-float promotion.
+fn fold_checked_int_binop(op: Op, lhs: i64, rhs: i64) -> (Const, TypeNarrowing) {
+    let checked = match op {
+        Op::ICheckedAdd => lhs.checked_add(rhs),
+        Op::ICheckedSub => lhs.checked_sub(rhs),
+        Op::ICheckedMul => lhs.checked_mul(rhs),
+        _ => unreachable!("fold_checked_int_binop called with non-checked {:?}", op),
+    };
+    match checked {
+        Some(result) => (Const::Int(result), TypeNarrowing::ToInt),
+        None => {
+            // Overflow: PHP promotes to float. Use the wrapping result cast to
+            // f64, matching the runtime helper's `__rt_mixed_from_value` path.
+            let wrapped = match op {
+                Op::ICheckedAdd => lhs.wrapping_add(rhs),
+                Op::ICheckedSub => lhs.wrapping_sub(rhs),
+                Op::ICheckedMul => lhs.wrapping_mul(rhs),
+                _ => unreachable!(),
+            };
+            (Const::Float(wrapped as f64), TypeNarrowing::ToFloat)
+        }
     }
 }
 
@@ -258,4 +322,43 @@ fn convert_to_const(inst: &mut Instruction, value: Const) {
         }
     }
     inst.effects = inst.op.default_effects();
+}
+
+/// Narrows the instruction's `result_type`, `result_php_type`, and
+/// `result_ownership` to match the folded constant's scalar type. Used when a
+/// checked op (result type `Heap(Mixed)`) folds to an `Int` or `Float`
+/// constant, so the validator and codegen see the narrowed scalar type.
+fn apply_type_narrowing(inst: &mut Instruction, narrowing: TypeNarrowing) {
+    match narrowing {
+        TypeNarrowing::ToInt => {
+            inst.result_type = IrType::I64;
+            inst.result_php_type = crate::types::PhpType::Int;
+            inst.result_ownership = Ownership::NonHeap;
+        }
+        TypeNarrowing::ToFloat => {
+            inst.result_type = IrType::F64;
+            inst.result_php_type = crate::types::PhpType::Float;
+            inst.result_ownership = Ownership::NonHeap;
+        }
+        TypeNarrowing::None => {}
+    }
+}
+
+/// Narrows the SSA value's `ir_type`, `php_type`, and `ownership` to match the
+/// folded constant's scalar type. Mirrors `apply_type_narrowing` but updates
+/// the `Value` metadata that the validator checks against the instruction.
+fn apply_value_type_narrowing(val: &mut crate::ir::Value, narrowing: TypeNarrowing) {
+    match narrowing {
+        TypeNarrowing::ToInt => {
+            val.ir_type = IrType::I64;
+            val.php_type = crate::types::PhpType::Int;
+            val.ownership = Ownership::NonHeap;
+        }
+        TypeNarrowing::ToFloat => {
+            val.ir_type = IrType::F64;
+            val.php_type = crate::types::PhpType::Float;
+            val.ownership = Ownership::NonHeap;
+        }
+        TypeNarrowing::None => {}
+    }
 }

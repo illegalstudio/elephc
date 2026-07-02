@@ -360,7 +360,12 @@ fn lower_numeric_binary(
     }
     if let Some(mixed_op) = mixed_numeric_op(op) {
         if should_use_mixed_numeric_binop(lhs.ir_type, rhs.ir_type) {
-            return lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
+            let result = lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
+            release_binary_operand_temporary(ctx, lhs, expr.span);
+            if rhs.value != lhs.value {
+                release_binary_operand_temporary(ctx, rhs, expr.span);
+            }
+            return result;
         }
     }
     if lhs.ir_type == IrType::F64 || rhs.ir_type == IrType::F64 {
@@ -376,6 +381,40 @@ fn lower_numeric_binary(
         return ctx.emit_value(fop, vec![lhs.value, rhs.value], None, PhpType::Float, fop.default_effects(), Some(expr.span));
     }
     if lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 {
+        // Check if the type checker promoted this to Mixed (non-constant int arithmetic
+        // that can overflow to float). If so, emit a checked helper that returns a Mixed box.
+        let result_php_type = fallback_expr_type(expr);
+        if result_php_type == PhpType::Mixed && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) {
+            // Identity shortcuts: x+0, x-0, 0+x, 0-x cannot overflow → keep plain Int.
+            // x*1, 1*x cannot overflow → keep plain Int.
+            // x*0, 0*x always yields 0 → keep plain Int.
+            let lhs_is_zero = matches!(&left.kind, ExprKind::IntLiteral(0));
+            let rhs_is_zero = matches!(&right.kind, ExprKind::IntLiteral(0));
+            let lhs_is_one = matches!(&left.kind, ExprKind::IntLiteral(1));
+            let rhs_is_one = matches!(&right.kind, ExprKind::IntLiteral(1));
+            let is_identity = match op {
+                BinOp::Add => lhs_is_zero || rhs_is_zero,
+                BinOp::Sub => rhs_is_zero,
+                BinOp::Mul => lhs_is_zero || rhs_is_zero || lhs_is_one || rhs_is_one,
+                _ => false,
+            };
+            if !is_identity {
+                let checked_op = match op {
+                    BinOp::Add => Op::ICheckedAdd,
+                    BinOp::Sub => Op::ICheckedSub,
+                    BinOp::Mul => Op::ICheckedMul,
+                    _ => unreachable!(),
+                };
+                return ctx.emit_value(
+                    checked_op,
+                    vec![lhs.value, rhs.value],
+                    None,
+                    PhpType::Mixed,
+                    checked_op.default_effects(),
+                    Some(expr.span),
+                );
+            }
+        }
         let iop = match op {
             BinOp::Add => Op::IAdd,
             BinOp::Sub => Op::ISub,
@@ -400,7 +439,12 @@ fn lower_numeric_binary(
         return LoweredValue { value, ir_type: result_type };
     }
     if let Some(mixed_op) = mixed_numeric_op(op) {
-        return lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
+        let result = lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value {
+            release_binary_operand_temporary(ctx, rhs, expr.span);
+        }
+        return result;
     }
     ctx.emit_value(
         Op::RuntimeCall,
@@ -911,7 +955,17 @@ fn lower_numeric_unary(
     let value = lower_expr(ctx, inner);
     match value.ir_type {
         IrType::F64 => ctx.emit_value(float_op, vec![value.value], None, PhpType::Float, float_op.default_effects(), Some(expr.span)),
-        IrType::I64 => ctx.emit_value(int_op, vec![value.value], None, PhpType::Int, int_op.default_effects(), Some(expr.span)),
+        IrType::I64 => {
+            // Check if the type checker promoted this to Mixed (non-constant int negate
+            // can overflow PHP_INT_MIN to float).
+            let result_php_type = fallback_expr_type(expr);
+            if result_php_type == PhpType::Mixed && int_op == Op::INeg {
+                // Emit a checked negate via the mixed numeric sub helper: 0 - value
+                let zero = lower_int_literal(ctx, 0, expr);
+                return lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
+            }
+            ctx.emit_value(int_op, vec![value.value], None, PhpType::Int, int_op.default_effects(), Some(expr.span))
+        }
         IrType::TaggedScalar => {
             let narrowed = lower_tagged_scalar_to_int(ctx, value, Some(expr.span));
             ctx.emit_value(int_op, vec![narrowed.value], None, PhpType::Int, int_op.default_effects(), Some(expr.span))
@@ -1432,7 +1486,22 @@ fn lower_assignment_expr(
         .unwrap_or_else(|| lower_expr(ctx, value));
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
-        let php_type = ctx.builder.value_php_type(lowered.value);
+        // For static locals and ref-bound locals, keep the declared type to
+        // avoid widening Int→Mixed. The codegen narrows Mixed→Int when the slot
+        // is Int-typed. Without this, ref cells would hold Mixed boxes instead
+        // of raw ints, breaking the ref cell ownership model.
+        let value_php_type = ctx.builder.value_php_type(lowered.value);
+        let is_static = matches!(
+            ctx.local_kinds.get(name).copied(),
+            Some(crate::ir::LocalKind::StaticLocal)
+        );
+        let is_ref_bound = ctx.is_ref_bound_local(name);
+        let existing_type = ctx.local_types.get(name).cloned();
+        let php_type = if is_static || is_ref_bound {
+            existing_type.unwrap_or(value_php_type)
+        } else {
+            value_php_type
+        };
         result = ctx.store_local(name, lowered, php_type, Some(expr.span));
         let static_callable = callable_array
             .map(|assignment| assignment.target)
@@ -1587,6 +1656,10 @@ fn lower_dynamic_property_assign(
 }
 
 /// Lowers pre/post increment and decrement expressions.
+///
+/// PHP integer overflow promotion applies: `PHP_INT_MAX + 1` becomes float.
+/// The result is typed Mixed and emitted through a checked helper that
+/// returns a boxed Mixed value (int or float) at runtime.
 fn lower_inc_dec(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -1597,9 +1670,14 @@ fn lower_inc_dec(
     let old = ctx.load_local(name, Some(expr.span));
     let one = lower_int_literal(ctx, 1, expr);
     let operand = coerce_to_int(ctx, old, expr);
-    let op = if increment { Op::IAdd } else { Op::ISub };
-    let new = ctx.emit_value(op, vec![operand.value, one.value], None, PhpType::Int, op.default_effects(), Some(expr.span));
-    ctx.store_local(name, new, PhpType::Int, Some(expr.span));
+    let iop = if increment { Op::IAdd } else { Op::ISub };
+    let new = ctx
+        .builder
+        .emit_with_effects(iop, vec![operand.value, one.value], None, IrType::I64, PhpType::Int, Ownership::for_php_type(&PhpType::Int), iop.default_effects(), Some(expr.span))
+        .expect("integer inc/dec produces a value");
+    let new = LoweredValue { value: new, ir_type: IrType::I64 };
+    let existing_type = ctx.local_type(name);
+    ctx.store_local(name, new, existing_type, Some(expr.span));
     if post { old } else { new }
 }
 

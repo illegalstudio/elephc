@@ -126,6 +126,12 @@ impl Function {
         self.values.get(id.as_raw() as usize)
     }
 
+    /// Returns a mutable value by identifier, used by IR passes that narrow a
+    /// value's type (e.g. constant folding a checked op into a scalar constant).
+    pub fn value_mut(&mut self, id: ValueId) -> Option<&mut Value> {
+        self.values.get_mut(id.as_raw() as usize)
+    }
+
     /// Assigns the module-local function identifier.
     pub fn set_id(&mut self, id: FunctionId) {
         self.id = id;

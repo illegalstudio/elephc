@@ -168,6 +168,11 @@ impl Checker {
         match (expected, actual) {
             (PhpType::Mixed, _) => true,
             (_, PhpType::Never) => true, // never is the bottom type — compatible with any expected type
+            // PHP coercive mode: int/float parameters accept Mixed values with
+            // a runtime narrowing cast (`__rt_mixed_to_int`/`__rt_mixed_to_float`).
+            // This is needed because non-constant `int + int` overflows to float,
+            // making the result Mixed even when both operands are statically Int.
+            (PhpType::Int | PhpType::Float, PhpType::Mixed) => true,
             (PhpType::Iterable, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) => true,
             (PhpType::Union(members), _) => {
                 members.iter().any(|m| Self::types_compatible(m, actual))

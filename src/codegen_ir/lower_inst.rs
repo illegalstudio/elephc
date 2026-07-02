@@ -88,6 +88,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::IAdd => arithmetic::lower_int_binop(ctx, &inst, "add", "add"),
         Op::ISub => arithmetic::lower_int_binop(ctx, &inst, "sub", "sub"),
         Op::IMul => arithmetic::lower_int_binop(ctx, &inst, "mul", "imul"),
+        Op::ICheckedAdd => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_add_checked"),
+        Op::ICheckedSub => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_sub_checked"),
+        Op::ICheckedMul => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_mul_checked"),
         Op::IDiv => arithmetic::lower_int_div_to_float(ctx, &inst),
         Op::ISMod => arithmetic::lower_int_mod(ctx, &inst),
         Op::INeg => arithmetic::lower_int_unary(ctx, &inst, "neg", "neg"),
@@ -5994,18 +5997,77 @@ fn coerce_ref_cell_store_value(
     if source_ty == PhpType::Mixed {
         match target_ty {
             PhpType::Int => {
+                // Save the Mixed pointer on the stack, narrow to int, then
+                // release the Mixed box to avoid leaking the checked-arithmetic temporary.
                 move_int_result_to_first_arg(ctx);
+                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                let result_reg = abi::int_result_reg(ctx.emitter);
+                // Stack layout after pushes: [result_placeholder | saved_mixed_ptr]
+                abi::emit_push_reg(ctx.emitter, result_reg); // placeholder for int result
+                abi::emit_push_reg(ctx.emitter, arg_reg);     // save the Mixed pointer
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+                // Save int result to placeholder (at sp+16).
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("str x0, [sp, #16]");              // save the int result to the placeholder slot above the saved Mixed pointer
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");    // save the int result to the placeholder slot above the saved Mixed pointer
+                    }
+                }
+                // Pop the saved Mixed pointer into result_reg for decref_mixed.
+                abi::emit_pop_reg(ctx.emitter, result_reg);
+                abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+                // Restore the int result from the placeholder.
+                abi::emit_pop_reg(ctx.emitter, result_reg);
                 return Ok(());
             }
             PhpType::Bool => {
                 move_int_result_to_first_arg(ctx);
+                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                let result_reg = abi::int_result_reg(ctx.emitter);
+                abi::emit_push_reg(ctx.emitter, result_reg);
+                abi::emit_push_reg(ctx.emitter, arg_reg);
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("str x0, [sp, #16]");              // save the bool result to the placeholder slot
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");    // save the bool result to the placeholder slot
+                    }
+                }
+                abi::emit_pop_reg(ctx.emitter, result_reg);
+                abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+                abi::emit_pop_reg(ctx.emitter, result_reg);
                 return Ok(());
             }
             PhpType::Float => {
                 move_int_result_to_first_arg(ctx);
+                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                let int_reg = abi::int_result_reg(ctx.emitter);
+                abi::emit_push_reg(ctx.emitter, int_reg); // placeholder for float result
+                abi::emit_push_reg(ctx.emitter, arg_reg); // save Mixed pointer
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("str d0, [sp, #16]");               // save the float result to the placeholder slot
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("movsd QWORD PTR [rsp + 16], xmm0"); // save the float result to the placeholder slot
+                    }
+                }
+                abi::emit_pop_reg(ctx.emitter, int_reg); // pop Mixed pointer into int_reg
+                abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("ldr d0, [sp], #16");              // restore the float result and release the placeholder slot
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("movsd xmm0, QWORD PTR [rsp]");     // restore the float result from the placeholder
+                        ctx.emitter.instruction("add rsp, 16");                    // release the float result placeholder slot
+                    }
+                }
                 return Ok(());
             }
             PhpType::Str => {
