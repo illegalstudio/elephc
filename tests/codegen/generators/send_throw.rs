@@ -258,3 +258,137 @@ echo $g->getReturn();
     );
     assert_eq!(out, "10|10|null|12");
 }
+
+/// Regression for issue #355: `Generator::throw()` resumes the generator and
+/// re-raises via `__rt_throw_current`, a longjmp to the nearest `try_push_handler`
+/// site. A `try`/`finally` with no catch never pushes a handler, so the longjmp
+/// used to skip the finally body and unwind straight to the caller's catch.
+/// PHP 8.4 prints `F:x`.
+#[test]
+fn test_generator_throw_runs_finally_without_catch() {
+    let out = compile_and_run(
+        r#"<?php
+function g() {
+    try {
+        yield 1;
+    } finally {
+        echo 'F';
+    }
+}
+$g = g();
+$g->rewind();
+try {
+    $g->throw(new Exception('x'));
+} catch (Exception $e) {
+    echo ':' . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "F:x");
+}
+
+/// Issue #355: nested `try`/`finally` (no catch) in a generator must run both
+/// finally bodies on `Generator::throw()`, inner before outer, then re-raise.
+/// PHP 8.4 prints `IO:x`.
+#[test]
+fn test_generator_throw_runs_nested_finally_without_catch() {
+    let out = compile_and_run(
+        r#"<?php
+function g() {
+    try {
+        try {
+            yield 1;
+        } finally {
+            echo 'I';
+        }
+    } finally {
+        echo 'O';
+    }
+}
+$g = g();
+$g->rewind();
+try {
+    $g->throw(new Exception('x'));
+} catch (Exception $e) {
+    echo ':' . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "IO:x");
+}
+
+/// Issue #355: a `return` inside a `finally` suppresses the in-flight exception
+/// and becomes the generator's `getReturn()` value, mirroring PHP semantics.
+/// PHP 8.4 prints `F` then `int(99)`.
+#[test]
+fn test_generator_throw_finally_return_suppresses_exception() {
+    let out = compile_and_run(
+        r#"<?php
+function g() {
+    try {
+        yield 1;
+    } finally {
+        echo 'F';
+        return 99;
+    }
+}
+$g = g();
+$g->rewind();
+try {
+    $g->throw(new Exception('x'));
+} catch (Exception $e) {
+    echo ':caught';
+}
+echo '|';
+var_dump($g->getReturn());
+"#,
+    );
+    assert_eq!(out, "F|int(99)\n");
+}
+
+/// Issue #355: a `throw` inside a `finally` replaces the original exception and
+/// propagates to the caller's catch, mirroring PHP semantics.
+/// PHP 8.4 prints `F:replaced`.
+#[test]
+fn test_generator_throw_finally_throw_replaces_exception() {
+    let out = compile_and_run(
+        r#"<?php
+function g() {
+    try {
+        yield 1;
+    } finally {
+        echo 'F';
+        throw new Exception('replaced');
+    }
+}
+$g = g();
+$g->rewind();
+try {
+    $g->throw(new Exception('x'));
+} catch (Exception $e) {
+    echo ':' . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "F:replaced");
+}
+
+/// Issue #355 regression guard: a non-generator `try`/`finally` without catch
+/// must keep its existing behavior (finally runs once on normal fall-through; no
+/// handler is installed because `__rt_throw_current` is never injected here).
+#[test]
+fn test_nongenerator_try_finally_without_catch_unchanged() {
+    let out = compile_and_run(
+        r#"<?php
+function f() {
+    try {
+        echo 'T';
+    } finally {
+        echo 'F';
+    }
+}
+f();
+"#,
+    );
+    assert_eq!(out, "TF");
+}
