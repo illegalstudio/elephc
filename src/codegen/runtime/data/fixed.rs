@@ -86,6 +86,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _exc_handler_top, 8, 3\n");
     out.push_str(".comm _exc_call_frame_top, 8, 3\n");
     out.push_str(".comm _exc_value, 8, 3\n");
+    // Exception cleanup stack: array of owning-temporary pointers that must be
+    // released if a call throws. __rt_eh_push stores a pointer before a
+    // potentially-throwing call; __rt_eh_pop removes it after the call returns
+    // normally; __rt_throw_current drains the stack before longjmp.
+    out.push_str(".comm _eh_cleanup_stack, 2048, 3\n");
+    out.push_str(".comm _eh_cleanup_top, 8, 3\n");
     out.push_str(".comm _fiber_current, 8, 3\n");
     out.push_str(".comm _fiber_main_saved_sp, 8, 3\n");
     out.push_str(".comm _fiber_main_saved_exc, 8, 3\n");

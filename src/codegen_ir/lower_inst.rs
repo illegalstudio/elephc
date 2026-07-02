@@ -194,6 +194,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
         Op::Release => ownership::lower_release(ctx, &inst),
         Op::GcCollect => lower_gc_collect(ctx),
+        Op::EhPush => lower_eh_push(ctx, &inst),
+        Op::EhPop => lower_eh_pop(ctx),
         Op::Move | Op::Borrow => ownership::lower_forward(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
@@ -1050,6 +1052,24 @@ fn descriptor_entry_stack_offsets(assignments: &[abi::OutgoingArgAssignment]) ->
 /// Lowers an explicit cycle-collection safe point.
 fn lower_gc_collect(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
+    Ok(())
+}
+
+/// Lowers `eh_push`: loads the owning-temporary value into the first integer
+/// argument register and calls `__rt_eh_push` to record it on the exception
+/// cleanup stack before a potentially-throwing call.
+fn lower_eh_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(value, arg_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_eh_push");
+    Ok(())
+}
+
+/// Lowers `eh_pop`: calls `__rt_eh_pop` to remove the top entry from the
+/// exception cleanup stack after a call returned normally.
+fn lower_eh_pop(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    abi::emit_call_label(ctx.emitter, "__rt_eh_pop");
     Ok(())
 }
 

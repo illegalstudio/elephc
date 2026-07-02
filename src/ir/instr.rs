@@ -360,6 +360,8 @@ pub enum Op {
     Move,
     Borrow,
     EnsureOwned,
+    EhPush,
+    EhPop,
     Nop,
 }
 
@@ -440,6 +442,7 @@ impl Op {
             ErrorSuppressBegin | ErrorSuppressEnd => E::READS_GLOBAL | E::WRITES_GLOBAL,
             ThrowException => E::MAY_THROW | E::WRITES_GLOBAL,
             Acquire | Release | EnsureOwned => E::REFCOUNT_OP | E::WRITES_HEAP,
+            EhPush | EhPop => E::WRITES_GLOBAL,
             GcCollect => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             ClassConstant => E::MAY_DEOPT,
         }
@@ -670,6 +673,8 @@ impl Op {
             Move => "move",
             Borrow => "borrow",
             EnsureOwned => "ensure_owned",
+            EhPush => "eh_push",
+            EhPop => "eh_pop",
             Nop => "nop",
         }
     }

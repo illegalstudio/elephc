@@ -1696,6 +1696,7 @@ fn emit_builtin_call_value(
     span: Span,
 ) -> LoweredValue {
     let data = ctx.intern_function_name(name);
+    let eh_count = eh_push_owning_call_temps(ctx, &operands, None, None, span);
     let call = ctx.emit_value(
         Op::BuiltinCall,
         operands.clone(),
@@ -1704,6 +1705,7 @@ fn emit_builtin_call_value(
         effects_lookup::builtin_effects(name),
         Some(span),
     );
+    eh_pop_owning_call_temps(ctx, eh_count, span);
     release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), span);
     call
 }
@@ -8253,6 +8255,7 @@ fn lower_method_call(
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
+    let eh_count = eh_push_owning_call_temps(ctx, &arg_values, None, Some(object), expr.span);
     let call = ctx.emit_value(
         op,
         operands,
@@ -8261,6 +8264,7 @@ fn lower_method_call(
         op.default_effects(),
         Some(expr.span),
     );
+    eh_pop_owning_call_temps(ctx, eh_count, expr.span);
     release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
@@ -8535,6 +8539,7 @@ fn lower_method_call_with_receiver(
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
+    let eh_count = eh_push_owning_call_temps(ctx, &arg_values, None, Some(object), expr.span);
     let call = ctx.emit_value(
         op,
         operands,
@@ -8543,6 +8548,7 @@ fn lower_method_call_with_receiver(
         op.default_effects(),
         Some(expr.span),
     );
+    eh_pop_owning_call_temps(ctx, eh_count, expr.span);
     release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
@@ -8620,6 +8626,74 @@ fn release_owning_receiver_temporary(
 ) {
     if ctx.value_is_owning_temporary(receiver) {
         crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
+    }
+}
+
+/// Pushes owning call-argument and receiver temporaries onto the exception
+/// cleanup stack before a potentially-throwing call. If the call throws,
+/// `__rt_throw_current` drains the stack and releases each entry.
+///
+/// Returns the number of entries pushed so the caller can emit matching
+/// `eh_pop` instructions after the call returns normally.
+fn eh_push_owning_call_temps(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[crate::ir::ValueId],
+    result: Option<crate::ir::ValueId>,
+    receiver: Option<LoweredValue>,
+    span: Span,
+) -> usize {
+    let mut count = 0usize;
+    for value in args {
+        let php_type = ctx.builder.value_php_type(*value);
+        let lowered = LoweredValue {
+            value: *value,
+            ir_type: value_ir_type(&php_type),
+        };
+        if ctx.value_is_owning_temporary(lowered) {
+            if call_result_may_alias_arg(ctx, *value, result) {
+                continue;
+            }
+            ctx.emit_void(
+                Op::EhPush,
+                vec![*value],
+                None,
+                Op::EhPush.default_effects(),
+                Some(span),
+            );
+            count += 1;
+        }
+    }
+    if let Some(receiver) = receiver {
+        if ctx.value_is_owning_temporary(receiver) {
+            ctx.emit_void(
+                Op::EhPush,
+                vec![receiver.value],
+                None,
+                Op::EhPush.default_effects(),
+                Some(span),
+            );
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Pops `count` entries from the exception cleanup stack after a call returned
+/// normally. The normal-path release code that follows will handle the actual
+/// refcount decrement.
+fn eh_pop_owning_call_temps(
+    ctx: &mut LoweringContext<'_, '_>,
+    count: usize,
+    span: Span,
+) {
+    for _ in 0..count {
+        ctx.emit_void(
+            Op::EhPop,
+            Vec::new(),
+            None,
+            Op::EhPop.default_effects(),
+            Some(span),
+        );
     }
 }
 
