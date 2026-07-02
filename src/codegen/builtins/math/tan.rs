@@ -11,8 +11,8 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
-use crate::codegen::{abi, platform::Arch};
+use crate::codegen::expr::{coerce_to_float, emit_expr};
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -27,9 +27,9 @@ use crate::types::PhpType;
 ///
 /// # Behavior
 /// - Emits the operand expression and captures its type.
-/// - If the operand is not `PhpType::Float`, emits an integer-to-float normalization
-///   via `emit_int_result_to_float_result` so the floating-point register holds the value
-///   before the libc call.
+/// - Normalizes the operand to a float via `coerce_to_float` (integers convert with
+///   `scvtf`/`cvtsi2sd`; boxed `Mixed`/`Union` values unbox through `__rt_mixed_cast_float`)
+///   so the floating-point register holds the value before the libc call.
 /// - Emits a `bl tan` (AArch64) or `call tan` (x86_64) instruction to invoke the
 ///   platform's libm tangent function.
 ///
@@ -44,9 +44,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("tan()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
-    if ty != PhpType::Float {
-        abi::emit_int_result_to_float_result(emitter);                          // normalize integer tan() inputs into the active floating-point result register before the libc call
-    }
+    coerce_to_float(emitter, &ty); // normalize int/Mixed inputs to a float in d0/xmm0
     match emitter.target.arch {
         Arch::AArch64 => emitter.bl_c("tan"),                                   // call libc tan() with the scalar argument in the native AArch64 floating-point argument register
         Arch::X86_64 => emitter.instruction("call tan"),                        // call libc tan() with the scalar argument in the native SysV floating-point argument register

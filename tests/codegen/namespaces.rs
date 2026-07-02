@@ -445,3 +445,23 @@ echo paint("x");
     );
     assert_eq!(out, "ok7<x>");
 }
+
+/// Regression (audit T4/H12): names inside an expression-level assignment must be
+/// FQN-resolved. The name_resolver catch-all skipped `ExprKind::Assignment` (and
+/// `Yield`/`NewDynamic`), so the `new Greeter()` and the `FOO` constant inside
+/// `($x = new Greeter())` / `($y += FOO)` failed to resolve in a namespaced file.
+#[test]
+fn test_namespace_resolves_names_in_expression_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+class Greeter {
+    public function hi() { return "hi2"; }
+}
+const FOO = 6;
+$y = 0;
+echo ($x = new Greeter())->hi(), "|", ($y += FOO);
+"#,
+    );
+    assert_eq!(out, "hi2|6");
+}

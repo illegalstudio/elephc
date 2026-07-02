@@ -35,7 +35,7 @@ use super::array_map_expr_is_str::expr_is_str;
 ///
 /// Returns `false` for any unrecognized or dynamic callback form, preserving
 /// conservative runtime array layout behavior.
-pub(super) fn callback_returns_str(args: &[Expr], ctx: &Context) -> bool {
+pub(crate) fn callback_returns_str(args: &[Expr], ctx: &Context) -> bool {
     callback_expr_returns_str(&args[0], ctx)
 }
 

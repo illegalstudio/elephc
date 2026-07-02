@@ -42,6 +42,8 @@ mod array_intersect_key;
 mod array_is_list;
 mod array_key_exists;
 mod array_map;
+mod array_map2;
+mod array_map2_str;
 mod array_map_mixed;
 mod array_map_str;
 mod array_merge;
@@ -49,11 +51,13 @@ mod array_merge_into;
 mod array_merge_into_refcounted;
 mod array_merge_recursive;
 mod array_merge_refcounted;
+mod array_merge_str;
 mod array_multisort;
 mod array_new;
 mod array_pad;
 mod array_pad_refcounted;
 mod array_product;
+mod array_product_float;
 mod array_push_int;
 mod array_push_refcounted;
 mod array_push_str;
@@ -73,10 +77,12 @@ mod array_reverse_refcounted;
 mod array_search;
 mod array_shift;
 mod array_slice;
+mod array_slice_preserve;
 mod array_slice_refcounted;
 mod array_splice;
 mod array_splice_refcounted;
 mod array_sum;
+mod array_sum_float;
 mod array_to_hash;
 mod array_to_mixed;
 mod array_udiff_uintersect;
@@ -147,6 +153,7 @@ mod mixed_unbox;
 mod mixed_write_stdout;
 mod refcount;
 mod shuffle;
+mod sort_float;
 mod sort_int;
 mod sort_str;
 mod undefined_array_key_warning;
@@ -219,6 +226,10 @@ pub use array_is_list::emit_array_is_list;
 pub use array_key_exists::emit_array_key_exists;
 /// Emit array map helper.
 pub use array_map::emit_array_map;
+/// Emit the two-input-array array map helper.
+pub use array_map2::emit_array_map2;
+/// Emit the two-input-array string array map helper.
+pub use array_map2_str::emit_array_map2_str;
 /// Emit mixed-result array map helper.
 pub use array_map_mixed::emit_array_map_mixed;
 /// Emit string-returning array map helpers.
@@ -230,6 +241,8 @@ pub use array_merge_into::emit_array_merge_into;
 pub use array_merge_into_refcounted::emit_array_merge_into_refcounted;
 /// Emit refcounted merge-into helper.
 pub use array_merge_refcounted::emit_array_merge_refcounted;
+/// Emit string array merge helper (16-byte ptr+len element slots).
+pub use array_merge_str::emit_array_merge_str;
 /// Emit refcounted array merge helper.
 pub use array_merge_recursive::{emit_amr_box_value, emit_array_merge_recursive};
 /// Emit recursive array merge helpers (array_merge_recursive + scalar-to-list box helper).
@@ -242,6 +255,8 @@ pub use array_pad::emit_array_pad;
 pub use array_pad_refcounted::emit_array_pad_refcounted;
 /// Emit refcounted array pad helper.
 pub use array_product::emit_array_product;
+/// Emit float array product helper.
+pub use array_product_float::emit_array_product_float;
 /// Emit array product helper.
 pub use array_push_int::emit_array_push_int;
 /// Emit integer-optimized array push helper.
@@ -280,6 +295,8 @@ pub use array_search::emit_array_search;
 pub use array_shift::emit_array_shift;
 /// Emit array shift (remove first) helper.
 pub use array_slice::emit_array_slice;
+/// Emit key-preserving array slice helper (`array_slice($a, $off, $len, true)`).
+pub use array_slice_preserve::emit_array_slice_preserve;
 /// Emit array slice extraction helper.
 pub use array_slice_refcounted::emit_array_slice_refcounted;
 /// Emit refcounted array slice helper.
@@ -288,6 +305,8 @@ pub use array_splice::emit_array_splice;
 pub use array_splice_refcounted::emit_array_splice_refcounted;
 /// Emit refcounted array splice helper.
 pub use array_sum::emit_array_sum;
+/// Emit float array sum helper.
+pub use array_sum_float::emit_array_sum_float;
 /// Emit array sum helper.
 pub use array_to_hash::emit_array_to_hash;
 /// Emit indexed-array-to-hash converter helper (shared by hash-based set ops).
@@ -418,6 +437,8 @@ pub use refcount::emit_refcount;
 /// Emit reference count helper.
 pub use shuffle::emit_shuffle;
 /// Emit array shuffle helper.
+/// Emit float sort helper.
+pub use sort_float::emit_sort_float;
 pub use sort_int::emit_sort_int;
 /// Emit string sort helper.
 pub use sort_str::emit_sort_str;

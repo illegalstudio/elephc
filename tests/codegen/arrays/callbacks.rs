@@ -41,6 +41,186 @@ echo $b[0];
     assert_eq!(out, "11");
 }
 
+/// Regression: a non-capturing UNTYPED inline closure over a string array must receive each
+/// element as a string (pointer/length), not as an integer. Previously the untyped param defaulted
+/// to the integer register class, so `array_map(fn($s) => $s."!", ...)` read the string pointer as
+/// an int and printed garbage. The closure param is now specialized to the source element type.
+#[test]
+fn test_array_map_untyped_closure_over_string_array() {
+    let out = compile_and_run(
+        r#"<?php echo implode(",", array_map(fn($s) => $s . "!", ["a", "b", "c"]));"#,
+    );
+    assert_eq!(out, "a!,b!,c!");
+}
+
+/// Regression: the same fix lets an untyped closure call a string builtin on each element of a
+/// string array (`array_map(fn($s) => strtoupper($s), ...)`).
+#[test]
+fn test_array_map_untyped_closure_string_builtin() {
+    let out = compile_and_run(
+        r#"<?php echo implode("-", array_map(fn($s) => strtoupper($s), ["x", "y", "z"]));"#,
+    );
+    assert_eq!(out, "X-Y-Z");
+}
+
+/// Verifies the multi-array form `array_map($cb, $a, $b)` zips two integer arrays element-wise
+/// through a named user function, producing a new integer list (H11).
+#[test]
+fn test_array_map_two_arrays_named_callback() {
+    let out = compile_and_run(
+        r#"<?php
+function add($a, $b) { return $a + $b; }
+$r = array_map("add", [1, 2, 3], [10, 20, 30]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "11,22,33");
+}
+
+/// Verifies the multi-array form works with a capture-less arrow-function callback (H11).
+#[test]
+fn test_array_map_two_arrays_arrow_callback() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_map(fn($a, $b) => $a * $b, [1, 2, 3, 4], [10, 20, 30, 40]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "10,40,90,160");
+}
+
+/// Verifies that when the two arrays differ in length, the result length is the maximum and the
+/// shorter array is padded with 0 (PHP passes null, which coerces to 0 in integer context). The
+/// second array is shorter here (H11).
+#[test]
+fn test_array_map_two_arrays_unequal_second_shorter() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_map(fn($a, $b) => $a + $b, [1, 2, 3], [10, 20]);
+echo implode(",", $r) . "|" . count($r);
+"#,
+    );
+    assert_eq!(out, "11,22,3|3");
+}
+
+/// Verifies the padding direction also holds when the first array is shorter than the second (H11).
+#[test]
+fn test_array_map_two_arrays_unequal_first_shorter() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_map(fn($a, $b) => $a - $b, [5, 6], [1, 2, 3, 4]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "4,4,-3,-4");
+}
+
+/// Verifies the multi-array form supports a capturing arrow function (auto-captures `$base`),
+/// lowered through the two-visible-argument wrapper environment (H11 increment 2).
+#[test]
+fn test_array_map_two_arrays_capturing_arrow() {
+    let out = compile_and_run(
+        r#"<?php
+$base = 100;
+$r = array_map(fn($a, $b) => $a + $b + $base, [1, 2, 3], [10, 20, 30]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "111,122,133");
+}
+
+/// Verifies the multi-array form supports a `function(...) use (...)` closure capturing by value
+/// with two input arrays (H11 increment 2).
+#[test]
+fn test_array_map_two_arrays_capturing_closure_use() {
+    let out = compile_and_run(
+        r#"<?php
+$mult = 2;
+$r = array_map(function($x, $y) use ($mult) { return ($x + $y) * $mult; }, [1, 2], [3, 4]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "8,12");
+}
+
+/// Verifies the multi-array form supports a variable holding a closure as the callback (H11
+/// increment 3). The closure is assigned to `$cb` and then passed indirectly.
+#[test]
+fn test_array_map_two_arrays_closure_variable_callback() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = fn($a, $b) => $a + $b;
+$r = array_map($cb, [1, 2, 3], [10, 20, 30]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "11,22,33");
+}
+
+/// Verifies a variable holding a *capturing* closure carries its captured value through the
+/// two-array map even after the captured variable is reassigned (capture-by-value at closure
+/// creation time), exercising the descriptor-backed capture path (H11 increment 3).
+#[test]
+fn test_array_map_two_arrays_capturing_closure_variable_callback() {
+    let out = compile_and_run(
+        r#"<?php
+$base = 100;
+$cb = fn($a, $b) => $a + $b + $base;
+$base = 999;
+$r = array_map($cb, [1, 2], [10, 20]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "111,122");
+}
+
+/// Verifies the multi-array form zips two STRING arrays element-wise through a capture-less
+/// closure that concatenates them, producing a new string list (H11 string elements).
+#[test]
+fn test_array_map_two_string_arrays_concat() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_map(fn($a, $b) => $a . $b, ["x", "y", "z"], ["1", "2", "3"]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "x1,y2,z3");
+}
+
+/// Verifies a string-callback that also calls a string builtin on each element works over two
+/// string arrays (H11 string elements).
+#[test]
+fn test_array_map_two_string_arrays_builtin() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_map(fn($a, $b) => strtoupper($a) . $b, ["a", "b"], ["!", "?"]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "A!,B?");
+}
+
+/// Verifies that when the two string arrays differ in length, the result length is the maximum and
+/// the shorter array is padded with the empty string (PHP passes null, which is "" in string
+/// context) (H11 string elements).
+#[test]
+fn test_array_map_two_string_arrays_unequal_pads_empty() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_map(fn($a, $b) => $a . $b, ["p", "q", "r"], ["1", "2"]);
+echo implode(",", $r) . "|" . count($r);
+"#,
+    );
+    assert_eq!(out, "p1,q2,r|3");
+}
+
+// Note: a heap-clean test for the two-string-array form is intentionally omitted. Both the
+// single-array and two-array string forms of array_map leave the result array's persisted strings
+// live at program exit (and array *literal* sources leak as well) — a pre-existing array_map
+// string-result cleanup gap (array_merge, by contrast, frees its string results), not specific to
+// the two-array form. The output-correctness tests above cover this increment; the leak is tracked
+// as a separate follow-up.
+
 // Tests `array_map` with a typed builtin callback (`strlen`) applied to string values,
 // verifying mixed-type result handling in array_map codegen.
 /// Verifies that array map string values to ints.
@@ -57,6 +237,26 @@ echo $b[1];
 "#,
     );
     assert_eq!(out, "2,4");
+}
+
+/// Regression (M8): the codegen local-type table inferred array_map() as Array(Int) by reading
+/// args[0] (the callback) instead of the callback's return type. With a string-returning callback
+/// the result is a string-element array, so a foreach value var must be sized for a full string
+/// (ptr+len); the old Array(Int) inference sized it for an int and truncated the length word. The
+/// foreach iterates the array_map() result directly so the call's inferred element type (now
+/// Array(Str), matching the __rt_array_map_str emitter) drives the value-var slot.
+#[test]
+fn test_array_map_string_callback_result_foreach_value_slot() {
+    let out = compile_and_run(
+        r#"<?php
+$out = "";
+foreach (array_map(fn($n) => "item" . $n, [1, 2, 3]) as $s) {
+    $out = $out . $s . "|";
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "item1|item2|item3|");
 }
 
 /// Verifies runtime string builtin callback variables dispatch through descriptor-backed array_map.

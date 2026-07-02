@@ -55,26 +55,25 @@ pub(super) fn lower_int_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let quotient_reg = abi::tertiary_scratch_reg(ctx.emitter);
-            ctx.emitter.instruction(&format!("cbz {}, {}", rhs_reg, zero_label)); // branch to zero-divisor guard when modulo divisor is zero
+            ctx.emitter.instruction(&format!("cbz {}, {}", rhs_reg, zero_label)); // fatal when the modulo divisor is zero (PHP DivisionByZeroError)
             ctx.emitter.instruction(&format!("sdiv {}, {}, {}", quotient_reg, result_reg, rhs_reg)); // compute signed quotient for the modulo operation
             ctx.emitter.instruction(&format!("msub {}, {}, {}, {}", result_reg, quotient_reg, rhs_reg, result_reg)); // compute left - quotient * right as the remainder
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the modulo zero fallback after a normal remainder
-            ctx.emitter.label(&zero_label);
-            ctx.emitter.instruction(&format!("mov {}, #0", result_reg));        // return zero for modulo by zero to match the legacy backend
-            ctx.emitter.label(&done_label);
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the zero-divisor fatal after a normal remainder
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {}, {}", rhs_reg, rhs_reg)); // test whether the modulo divisor is zero
-            ctx.emitter.instruction(&format!("je {}", zero_label));             // branch to zero-divisor guard when modulo divisor is zero
+            ctx.emitter.instruction(&format!("je {}", zero_label));             // fatal when the modulo divisor is zero (PHP DivisionByZeroError)
             ctx.emitter.instruction("cqo");                                     // sign-extend the dividend before signed division
             ctx.emitter.instruction(&format!("idiv {}", rhs_reg));              // divide signed integers with quotient in rax and remainder in rdx
             ctx.emitter.instruction(&format!("mov {}, rdx", result_reg));       // move the signed remainder into the integer result register
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the modulo zero fallback after a normal remainder
-            ctx.emitter.label(&zero_label);
-            ctx.emitter.instruction(&format!("mov {}, 0", result_reg));         // return zero for modulo by zero to match the legacy backend
-            ctx.emitter.label(&done_label);
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the zero-divisor fatal after a normal remainder
         }
     }
+    ctx.emitter.label(&zero_label);
+    // PHP raises a catchable DivisionByZeroError on `% 0`; elephc has no exception
+    // unwinding, so it emits an uncatchable fatal that mirrors the legacy backend.
+    abi::emit_fatal_to_stderr(ctx.emitter, ctx.data, b"Fatal error: modulo by zero\n");
+    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
 
@@ -89,18 +88,29 @@ pub(super) fn lower_int_div_to_float(
     let rhs_reg = abi::tertiary_scratch_reg(ctx.emitter);
     load_integer_operand(ctx, lhs, lhs_reg, inst)?;
     load_integer_operand(ctx, rhs, rhs_reg, inst)?;
+    let zero_label = ctx.next_label("div_zero");
+    let done_label = ctx.next_label("div_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", rhs_reg, zero_label)); // fatal when the divisor is zero (PHP DivisionByZeroError)
             ctx.emitter.instruction(&format!("scvtf d0, {}", lhs_reg));         // promote the integer dividend into the float result register
             ctx.emitter.instruction(&format!("scvtf d1, {}", rhs_reg));         // promote the integer divisor into a float scratch register
             ctx.emitter.instruction("fdiv d0, d0, d1");                         // divide promoted operands as PHP floating-point division
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the zero-divisor fatal after a normal quotient
         }
         Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", rhs_reg, rhs_reg)); // test whether the divisor is zero
+            ctx.emitter.instruction(&format!("je {}", zero_label));             // fatal when the divisor is zero (PHP DivisionByZeroError)
             ctx.emitter.instruction(&format!("cvtsi2sd xmm0, {}", lhs_reg));    // promote the integer dividend into the float result register
             ctx.emitter.instruction(&format!("cvtsi2sd xmm1, {}", rhs_reg));    // promote the integer divisor into a float scratch register
             ctx.emitter.instruction("divsd xmm0, xmm1");                        // divide promoted operands as PHP floating-point division
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the zero-divisor fatal after a normal quotient
         }
     }
+    ctx.emitter.label(&zero_label);
+    // PHP raises a catchable DivisionByZeroError on `/ 0`; elephc fatals instead.
+    abi::emit_fatal_to_stderr(ctx.emitter, ctx.data, b"Fatal error: division by zero\n");
+    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
 

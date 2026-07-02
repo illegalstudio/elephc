@@ -159,6 +159,8 @@ fn emit_mixed_cast_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xorpd xmm1, xmm1");                                    // materialize a zero floating-point register for the truthiness comparison
     emitter.instruction("ucomisd xmm0, xmm1");                                  // compare the float payload against zero
     emitter.instruction("setne al");                                            // floats are truthy when they compare non-equal to zero
+    emitter.instruction("setp cl");                                             // NaN is unordered; PHP treats it as truthy
+    emitter.instruction("or al, cl");                                           // (bool)NAN is true: non-zero OR unordered
     emitter.instruction("movzx rax, al");                                       // normalize the boolean result back to a full integer register
     emitter.instruction("jmp __rt_mixed_cast_bool_done_linux_x86_64");          // return the float truthiness result
 

@@ -169,6 +169,16 @@ echo (1.0 <=> 2.0);
     assert_eq!(out, "1,1,1,-1");
 }
 
+/// Regression (audit T3/C4): folding `i64::MIN % -1` must not panic the compiler.
+/// `try_fold_int_mod` computed `left % right` with `i64::%`, which overflows — and
+/// panics this debug build — for `PHP_INT_MIN % -1`; PHP yields 0. The expression must
+/// fold to 0 and the program compile and run. `(-9223372036854775807 - 1)` is i64::MIN.
+#[test]
+fn test_constant_folding_int_min_mod_minus_one_does_not_panic() {
+    let out = compile_and_run("<?php echo (-9223372036854775807 - 1) % -1;");
+    assert_eq!(out, "0");
+}
+
 /// Verifies that a literal int-cast from a string is folded, eliminating the
 /// `__rt_str_to_int` call from user assembly.
 #[test]

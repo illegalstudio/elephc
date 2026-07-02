@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1101](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1101) (`lower_krsort`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1277](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1277) (`lower_krsort`)
 - **Function symbol**: `lower_krsort()`
 
 
@@ -28,13 +28,12 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function krsort(array $array, int $flags): bool
+function krsort(array $value, int $flags): bool
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
-- **By-reference parameters**: `$array`.
 
 ## Cross-references
 

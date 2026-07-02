@@ -16,6 +16,8 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+use super::hash_value_type_tag::hash_value_type_tag;
+
 /// Emits the `array_slice($array, $offset, $length)` builtin call.
 ///
 /// Evaluates arguments in source order, materializes them into ABI register order,
@@ -43,6 +45,15 @@ pub fn emit(
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
     let uses_refcounted_runtime =
         matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
+    // preserve_keys=true (literal) on an indexed array builds an integer-keyed associative result
+    // via __rt_array_slice_preserve. The checker guarantees only scalar (int/float/bool) elements
+    // reach here; this predicate MUST match the checker and infer-table counterparts so all three
+    // agree on the Array-vs-AssocArray result shape.
+    let preserve = crate::types::array_slice_literal_preserve_keys(args);
+    let value_tag = match &arr_ty {
+        PhpType::Array(inner) => hash_value_type_tag(inner),
+        _ => 0,
+    };
     if emitter.target.arch == Arch::X86_64 {
         abi::emit_push_reg(emitter, "rax");                                     // preserve the source indexed-array pointer while evaluating the slice offset
         let offset_ty = emit_expr(&args[1], emitter, ctx, data);
@@ -59,7 +70,11 @@ pub fn emit(
             abi::emit_pop_reg(emitter, "rdi");                                  // restore the source indexed-array pointer into the first x86_64 runtime argument register
             emitter.instruction("mov rdx, -1");                                 // use -1 as the x86_64 runtime sentinel for slicing until the end of the source array
         }
-        if uses_refcounted_runtime {
+        if preserve {
+            abi::emit_load_int_immediate(emitter, "rcx", value_tag as i64);     // pass the source element value_type tag as the key-preserving slice's hash value tag
+            abi::emit_call_label(emitter, "__rt_array_slice_preserve");         // build the integer-keyed associative slice through the x86_64 key-preserving runtime helper
+            return slice_preserve_result_type(&arr_ty);
+        } else if uses_refcounted_runtime {
             abi::emit_call_label(emitter, "__rt_array_slice_refcounted");       // extract the refcounted indexed-array slice through the x86_64 runtime helper
         } else {
             abi::emit_call_label(emitter, "__rt_array_slice");                  // extract the scalar indexed-array slice through the x86_64 runtime helper
@@ -91,6 +106,11 @@ pub fn emit(
         emitter.instruction("mov x2, #-1");                                     // length = -1 signals "until end of array"
     }
     // -- call runtime to extract slice --
+    if preserve {
+        abi::emit_load_int_immediate(emitter, "x3", value_tag as i64);          // pass the source element value_type tag as the key-preserving slice's hash value tag
+        abi::emit_call_label(emitter, "__rt_array_slice_preserve");             // build the integer-keyed associative slice through the AArch64 key-preserving runtime helper
+        return slice_preserve_result_type(&arr_ty);
+    }
     let runtime_call = if uses_refcounted_runtime {
         "bl __rt_array_slice_refcounted"
     } else {
@@ -101,5 +121,18 @@ pub fn emit(
     match arr_ty {
         PhpType::Array(inner) => Some(PhpType::Array(inner)),
         _ => Some(PhpType::Array(Box::new(PhpType::Int))),
+    }
+}
+
+/// Returns the result type of a key-preserving `array_slice()` call: an integer-keyed associative
+/// array over the source element type. The checker guarantees a scalar-element indexed source
+/// reaches this path, so the element type is carried through unchanged.
+fn slice_preserve_result_type(arr_ty: &PhpType) -> Option<PhpType> {
+    match arr_ty {
+        PhpType::Array(inner) => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: inner.clone(),
+        }),
+        _ => Some(arr_ty.clone()),
     }
 }

@@ -148,4 +148,39 @@ fn test_number_format_space_thousands() {
     assert_eq!(out, "1 234 567");
 }
 
+/// Regression (M4): a multi-byte (multi-character) thousands separator must be inserted in full
+/// at every group boundary, not truncated to its first byte. Previously the runtime read a single
+/// separator byte; `number_format(1234567, 0, ".", "::")` produced `1:234:567` instead of
+/// `1::234::567`.
+#[test]
+fn test_number_format_multibyte_thousands_separator() {
+    let out = compile_and_run(r#"<?php echo number_format(1234567, 0, ".", "::");"#);
+    assert_eq!(out, "1::234::567");
+}
+
+/// Regression (M4): multi-byte decimal AND thousands separators are both inserted in full.
+/// `number_format(1234.5, 2, ">>", "::")` yields `1::234>>50`.
+#[test]
+fn test_number_format_multibyte_decimal_and_thousands_separators() {
+    let out = compile_and_run(r#"<?php echo number_format(1234.5, 2, ">>", "::");"#);
+    assert_eq!(out, "1::234>>50");
+}
+
+/// Regression (M4): a real-world locale case — a UTF-8 non-breaking space (U+00A0, two bytes
+/// `0xC2 0xA0`) as the thousands separator, as used in French/European number formatting. The
+/// full two-byte sequence must appear at each group boundary.
+#[test]
+fn test_number_format_utf8_nbsp_thousands_separator() {
+    let out = compile_and_run(r#"<?php echo number_format(1234567.891, 2, ",", "\u{a0}");"#);
+    assert_eq!(out, "1\u{a0}234\u{a0}567,89");
+}
+
+/// Regression (M4): an empty decimal separator string emits the fractional digits with no
+/// separator. `number_format(1234.5, 2, "", ",")` yields `1,23450`.
+#[test]
+fn test_number_format_empty_decimal_separator() {
+    let out = compile_and_run(r#"<?php echo number_format(1234.5, 2, "", ",");"#);
+    assert_eq!(out, "1,23450");
+}
+
 // --- Constants ---

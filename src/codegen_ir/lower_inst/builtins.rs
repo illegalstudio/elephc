@@ -1092,6 +1092,10 @@ fn lower_floatval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<(
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "floatval for PHP type {:?}",
@@ -1218,7 +1222,9 @@ fn emit_float_result_zero_bool(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => {
             ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize a zero float register for empty() comparison
             ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the empty() float operand against zero
-            ctx.emitter.instruction("sete al");                                 // materialize true when the float operand is zero
+            ctx.emitter.instruction("sete al");                                 // float is empty when the value equals 0.0
+            ctx.emitter.instruction("setnp cl");                                // NaN is truthy, so require an ordered compare
+            ctx.emitter.instruction("and al, cl");                              // empty(NAN) is false: equal-to-zero AND ordered
             ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }
     }

@@ -11,8 +11,8 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
-use crate::codegen::{abi, platform::Arch};
+use crate::codegen::expr::{coerce_to_float, emit_expr};
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -29,8 +29,8 @@ use crate::types::PhpType;
 /// - Always returns `Some(PhpType::Float)` since `log10` produces a float result.
 ///
 /// Side effects:
-/// - Emits an `emit_int_result_to_float_result` call when the operand is an integer,
-///   converting the integer in the integer result register to the float argument register.
+/// - Normalizes the operand to the float argument register via `coerce_to_float`: integers
+///   convert from the integer result register, and boxed `Mixed`/`Union` values are unboxed.
 /// - Calls the platform's libc `log10` function via `bl_c` (AArch64) or `call` (x86_64).
 /// - On AArch64 the scalar argument is in `d0`; on x86_64 it follows the SysV float ABI.
 pub fn emit(
@@ -42,9 +42,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("log10()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
-    if ty != PhpType::Float {
-        abi::emit_int_result_to_float_result(emitter);                          // normalize integer log10() inputs into the active floating-point result register before the libc call
-    }
+    coerce_to_float(emitter, &ty); // normalize int/Mixed inputs to a float in d0/xmm0
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.bl_c("log10");                                              // call libc log10() with the scalar argument in the native AArch64 floating-point argument register

@@ -21,6 +21,7 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
+- `__rt_mixed_cast_float`
 - `__rt_str_to_number`
 
 ## Signature summary

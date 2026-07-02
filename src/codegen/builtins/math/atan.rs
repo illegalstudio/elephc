@@ -11,8 +11,8 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
-use crate::codegen::{abi, platform::Arch};
+use crate::codegen::expr::{coerce_to_float, emit_expr};
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -20,7 +20,8 @@ use crate::types::PhpType;
 ///
 /// # Arguments
 /// - `args[0]` is evaluated and its value is passed to `atan()`.
-/// - Integer arguments are normalized to float before the call via `emit_int_result_to_float_result`.
+/// - The argument is normalized to float before the call via `coerce_to_float` (integers convert
+///   directly; boxed `Mixed`/`Union` values unbox through `__rt_mixed_cast_float`).
 /// - The return type is always `PhpType::Float`.
 ///
 /// # Behavior
@@ -36,9 +37,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("atan()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
-    if ty != PhpType::Float {
-        abi::emit_int_result_to_float_result(emitter);                          // normalize integer atan() inputs into the active floating-point result register before the libc call
-    }
+    coerce_to_float(emitter, &ty); // normalize int/Mixed inputs to a float in d0/xmm0
     match emitter.target.arch {
         Arch::AArch64 => emitter.bl_c("atan"),                                  // call libc atan() with the scalar argument in the native AArch64 floating-point argument register
         Arch::X86_64 => emitter.instruction("call atan"),                       // call libc atan() with the scalar argument in the native SysV floating-point argument register

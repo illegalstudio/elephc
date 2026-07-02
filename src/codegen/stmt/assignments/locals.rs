@@ -236,7 +236,12 @@ pub(crate) fn emit_assign_stmt(
             if !dest_needs_mixed_box {
                 super::super::helpers::retain_borrowed_heap_result(emitter, value, &ty);
             }
-            super::super::helpers::release_owned_slot(emitter, &old_ty, offset, &ty);
+            // Only release the prior slot value when this variable owns it. A by-value
+            // `foreach` value var is a Borrowed alias into the array's storage; releasing
+            // it on reassignment would corrupt the heap free-list (double-free).
+            if ctx.var_owns_heap_slot(name) {
+                super::super::helpers::release_owned_slot(emitter, &old_ty, offset, &ty);
+            }
         }
 
         if matches!(ty, PhpType::Str) && string_result_is_owned_call_temp(value, ctx) {

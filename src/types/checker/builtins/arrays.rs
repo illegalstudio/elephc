@@ -76,11 +76,14 @@ pub(super) fn check_builtin(
             }
         }
         "in_array" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "in_array() takes exactly 2 arguments"));
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(span, "in_array() takes 2 or 3 arguments"));
             }
             checker.infer_type(&args[0], env)?;
             let arr_ty = checker.infer_type(&args[1], env)?;
+            if args.len() == 3 {
+                checker.infer_type(&args[2], env)?;
+            }
             if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                 return Err(CompileError::new(
                     span,
@@ -120,24 +123,38 @@ pub(super) fn check_builtin(
         }
         "sort" | "rsort" | "shuffle" | "natsort" | "natcasesort" | "asort" | "arsort"
         | "ksort" | "krsort" => {
-            if args.len() != 1 {
+            // sort/rsort/asort/arsort/ksort/krsort accept an optional $flags argument (a SORT_*
+            // constant); shuffle/natsort/natcasesort take only the array.
+            let accepts_flags = matches!(
+                name,
+                "sort" | "rsort" | "asort" | "arsort" | "ksort" | "krsort"
+            );
+            let max_args = if accepts_flags { 2 } else { 1 };
+            if args.is_empty() || args.len() > max_args {
                 return Err(CompileError::new(
                     span,
-                    &format!("{}() takes exactly 1 argument", name),
+                    &format!(
+                        "{}() takes {}",
+                        name,
+                        if accepts_flags {
+                            "1 or 2 arguments"
+                        } else {
+                            "exactly 1 argument"
+                        }
+                    ),
                 ));
             }
             let ty = checker.infer_type(&args[0], env)?;
+            for arg in &args[1..] {
+                checker.infer_type(arg, env)?;
+            }
             if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                 return Err(CompileError::new(
                     span,
                     &format!("{}() argument must be array", name),
                 ));
             }
-            Ok(Some(if name == "sort" || name == "rsort" {
-                PhpType::Void
-            } else {
-                PhpType::Void
-            }))
+            Ok(Some(PhpType::Void))
         }
         "isset" => {
             if args.is_empty() {
@@ -300,14 +317,17 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Mixed))
         }
         "array_search" => {
-            if args.len() != 2 {
+            if args.len() < 2 || args.len() > 3 {
                 return Err(CompileError::new(
                     span,
-                    "array_search() takes exactly 2 arguments",
+                    "array_search() takes 2 or 3 arguments",
                 ));
             }
             checker.infer_type(&args[0], env)?;
             let arr_ty = checker.infer_type(&args[1], env)?;
+            if args.len() == 3 {
+                checker.infer_type(&args[2], env)?;
+            }
             if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                 return Err(CompileError::new(
                     span,
@@ -538,11 +558,11 @@ pub(super) fn check_builtin(
                 Ok(Some(PhpType::Array(Box::new(val_ty))))
             }
         }
-        "array_slice" | "array_splice" => {
-            if args.len() < 2 || args.len() > 3 {
+        "array_slice" => {
+            if args.len() < 2 || args.len() > 4 {
                 return Err(CompileError::new(
                     span,
-                    &format!("{}() takes 2 or 3 arguments", name),
+                    "array_slice() takes 2 to 4 arguments",
                 ));
             }
             let ty = checker.infer_type(&args[0], env)?;
@@ -555,7 +575,49 @@ pub(super) fn check_builtin(
             if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                 return Err(CompileError::new(
                     span,
-                    &format!("{}() first argument must be array", name),
+                    "array_slice() first argument must be array",
+                ));
+            }
+            // preserve_keys=true keeps the original integer offsets, turning an indexed array into an
+            // integer-keyed associative result. The literal-true + scalar-element predicate MUST stay
+            // identical to the codegen and infer-table checks — disagreeing on Array-vs-AssocArray is
+            // a heap-shape mismatch (corruption). Only scalar (int/float/bool) elements are supported.
+            if crate::types::array_slice_literal_preserve_keys(args) {
+                if let PhpType::Array(inner) = &ty {
+                    if matches!(**inner, PhpType::Int | PhpType::Float | PhpType::Bool) {
+                        return Ok(Some(PhpType::AssocArray {
+                            key: Box::new(PhpType::Int),
+                            value: inner.clone(),
+                        }));
+                    }
+                    return Err(CompileError::new(
+                        span,
+                        "array_slice() with preserve_keys=true is only supported for arrays of int, float, or bool",
+                    ));
+                }
+            }
+            Ok(Some(ty))
+        }
+        "array_splice" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(
+                    span,
+                    "array_splice() takes 2 or 3 arguments",
+                ));
+            }
+            let ty = checker.infer_type(&args[0], env)?;
+            for arg in &args[1..] {
+                checker.infer_type(arg, env)?;
+            }
+            // A boxed Mixed/Union source (e.g. an array read from a heterogeneous array) is sliced
+            // through the runtime-unboxing path, like array_slice(); the removed elements are Mixed.
+            if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+                return Ok(Some(PhpType::Mixed));
+            }
+            if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                return Err(CompileError::new(
+                    span,
+                    "array_splice() first argument must be array",
                 ));
             }
             Ok(Some(ty))

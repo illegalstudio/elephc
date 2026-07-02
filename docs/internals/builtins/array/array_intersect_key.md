@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:901](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L901) (`lower_array_intersect_key`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1024](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1024) (`lower_array_intersect_key`)
 - **Function symbol**: `lower_array_intersect_key()`
 
 
@@ -22,6 +22,7 @@ sidebar:
 
 The following runtime helpers are referenced:
 - `__rt_array_intersect_key`
+- `__rt_array_slice_preserve`
 
 ## Signature summary
 

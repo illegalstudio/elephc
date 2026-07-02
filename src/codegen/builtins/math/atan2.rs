@@ -11,7 +11,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{coerce_to_float, emit_expr};
 use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -43,15 +43,11 @@ pub fn emit(
     emitter.comment("atan2()");
     // -- evaluate y (first arg) --
     let t0 = emit_expr(&args[0], emitter, ctx, data);
-    if t0 != PhpType::Float {
-        abi::emit_int_result_to_float_result(emitter);                          // normalize the atan2() y operand into the active floating-point result register before it is preserved
-    }
+    coerce_to_float(emitter, &t0);                                              // normalize the atan2() y operand (handles int and boxed Mixed/Union)
     abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));          // preserve the floating atan2() y operand while the x operand expression is evaluated
     // -- evaluate x (second arg) --
     let t1 = emit_expr(&args[1], emitter, ctx, data);
-    if t1 != PhpType::Float {
-        abi::emit_int_result_to_float_result(emitter);                          // normalize the atan2() x operand into the active floating-point result register before the libc call
-    }
+    coerce_to_float(emitter, &t1);                                              // normalize the atan2() x operand (handles int and boxed Mixed/Union)
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("fmov d1, d0");                                 // move the floating atan2() x operand into the second AArch64 floating-point argument register

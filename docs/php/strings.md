@@ -157,7 +157,7 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `chr()` | `chr($code): string` | Character from ASCII code |
 | `explode()` | `explode($delim, $str): array` | Split string into array |
 | `implode()` | `implode($glue, $arr): string` | Join array into string |
-| `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format number |
+| `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format number. The decimal point and thousands separators may be multi-byte strings (e.g. a UTF-8 non-breaking space, `"\u{a0}"`, for French/European grouping); an empty separator inserts nothing. |
 | `sprintf()` | `sprintf($fmt, ...): string` | Format string (%s, %d, %f, %x, %e, %g, %o, %c, %%) |
 | `printf()` | `printf($fmt, ...): int` | Format and print |
 | `vsprintf()` | `vsprintf($fmt, array $values): string` | Like `sprintf()`, with the arguments supplied as an array. Each element becomes one format argument — int/float/bool/string, including the elements of a mixed array. |

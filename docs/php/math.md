@@ -12,7 +12,7 @@ sidebar:
 | `abs()` | `abs($val): int\|float` | Absolute value (preserves type) |
 | `floor()` | `floor($val): float` | Round down |
 | `ceil()` | `ceil($val): float` | Round up |
-| `round()` | `round($val [, $precision]): float` | Round to nearest |
+| `round()` | `round($val [, $precision [, $mode]]): float` | Round to nearest; `$mode` selects tie-breaking |
 | `sqrt()` | `sqrt($val): float` | Square root |
 | `pow()` | `pow($base, $exp): float` | Exponentiation |
 | `min()` | `min($a, $b, ...): int\|float` | Minimum (variadic) |
@@ -42,6 +42,8 @@ sidebar:
 | `deg2rad()` | `deg2rad($degrees): float` | Degrees to radians |
 | `rad2deg()` | `rad2deg($radians): float` | Radians to degrees |
 | `pi()` | `pi(): float` | Returns M_PI |
+
+`round()` accepts an optional `$mode` selecting how halves are rounded: `PHP_ROUND_HALF_UP` (the default, round halves away from zero) and `PHP_ROUND_HALF_EVEN` (banker's rounding, round halves to even) are supported. `PHP_ROUND_HALF_DOWN` and `PHP_ROUND_HALF_ODD` are recognized constants but currently rejected with a compile-time diagnostic.
 
 `clamp()` validates the bounds before selecting a result. It throws `ValueError` if `$min > $max` or if either bound is `NAN`. Selection checks the upper bound first, then the lower bound.
 

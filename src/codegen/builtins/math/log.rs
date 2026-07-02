@@ -11,7 +11,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{coerce_to_float, emit_expr};
 use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -21,8 +21,8 @@ use crate::types::PhpType;
 /// For a single argument, computes the natural logarithm directly. For two
 /// arguments, computes `log($num) / log($base)` (change of base formula).
 ///
-/// Integer operands are normalized to floating-point before the libc call via
-/// `emit_int_result_to_float_result`. The result is always `PhpType::Float`.
+/// Integer and boxed `Mixed`/`Union` operands are normalized to floating-point before the
+/// libc call via `coerce_to_float`. The result is always `PhpType::Float`.
 /// Both the numerator and denominator are preserved across the second `log()`
 /// call using a stack push/pop on both architectures.
 ///
@@ -39,9 +39,7 @@ pub fn emit(
     if args.len() == 1 {
         // -- log($num) — natural logarithm --
         let ty = emit_expr(&args[0], emitter, ctx, data);
-        if ty != PhpType::Float {
-            abi::emit_int_result_to_float_result(emitter);                      // normalize integer log() inputs into the active floating-point result register before the libc call
-        }
+        coerce_to_float(emitter, &ty);                                          // normalize int/Mixed log() input to a float in d0/xmm0
         match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.bl_c("log");                                            // call libc log() with the scalar argument in the native AArch64 floating-point argument register
@@ -53,9 +51,7 @@ pub fn emit(
     } else {
         // -- log($num, $base) — change of base: log($num) / log($base) --
         let ty = emit_expr(&args[0], emitter, ctx, data);
-        if ty != PhpType::Float {
-            abi::emit_int_result_to_float_result(emitter);                      // normalize the logarithm value operand into the active floating-point result register before the first libc call
-        }
+        coerce_to_float(emitter, &ty);                                          // normalize int/Mixed log() value to a float in d0/xmm0
         match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.bl_c("log");                                            // compute log($num) through libc with the AArch64 floating-point calling convention
@@ -66,9 +62,7 @@ pub fn emit(
         }
         abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));      // preserve log($num) while the logarithm base expression is evaluated and converted
         let ty2 = emit_expr(&args[1], emitter, ctx, data);
-        if ty2 != PhpType::Float {
-            abi::emit_int_result_to_float_result(emitter);                      // normalize the logarithm base operand into the active floating-point result register before the second libc call
-        }
+        coerce_to_float(emitter, &ty2);                                         // normalize int/Mixed log() base to a float in d0/xmm0
         match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.bl_c("log");                                            // compute log($base) through libc with the AArch64 floating-point calling convention

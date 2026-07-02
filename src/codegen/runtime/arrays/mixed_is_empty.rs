@@ -169,7 +169,9 @@ fn emit_mixed_is_empty_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movq xmm0, rdi");                                      // move the unboxed float payload bits into the native x86_64 scalar-double result register
     emitter.instruction("xorpd xmm1, xmm1");                                    // materialize a canonical 0.0 comparison operand in a scratch SIMD register
     emitter.instruction("ucomisd xmm0, xmm1");                                  // compare the unboxed float payload against 0.0 using the native x86_64 scalar-double compare
-    emitter.instruction("sete al");                                             // materialize the x86_64 floating-point empty() result in the low byte when the payload equals 0.0
+    emitter.instruction("sete al");                                             // float is empty when the payload equals 0.0
+    emitter.instruction("setnp cl");                                            // NaN is truthy, so require an ordered compare
+    emitter.instruction("and al, cl");                                          // empty(NAN) is false: equal-to-zero AND ordered
     emitter.instruction("movzx eax, al");                                       // widen the x86_64 boolean byte back into the canonical integer result register
     emitter.instruction("ret");                                                 // finish float empty() evaluation on x86_64
 

@@ -147,6 +147,44 @@ fn test_floor() {
     assert_eq!(out, "3");
 }
 
+/// Verifies single-arg math builtins coerce a boxed Mixed argument to a real float
+/// (H1): a heterogeneous array makes its elements Mixed, and the math builtin must
+/// unbox the cell rather than treat the cell pointer as an integer/float.
+#[test]
+fn test_math_builtins_coerce_mixed_arg() {
+    // $a[0] is a Mixed cell holding 2.7 (the array is heterogeneous → element type Mixed).
+    assert_eq!(compile_and_run(r#"<?php $a = [2.7, "s"]; echo floor($a[0]);"#), "2");
+    assert_eq!(compile_and_run(r#"<?php $a = [2.7, "s"]; echo ceil($a[0]);"#), "3");
+    assert_eq!(
+        compile_and_run(r#"<?php $a = [6.25, "s"]; echo (int) sqrt($a[0]);"#),
+        "2"
+    );
+    // sin(0.0) == 0.0; a Mixed 0.0 must unbox to the float, not the pointer.
+    assert_eq!(
+        compile_and_run(r#"<?php $a = [0.0, "s"]; echo (sin($a[0]) == 0.0) ? "ok" : "bad";"#),
+        "ok"
+    );
+}
+
+/// Verifies multi-argument math builtins coerce boxed Mixed arguments on BOTH operands (H1
+/// part 2): heterogeneous-array elements are Mixed, and fmod/pow/hypot/fdiv/log must unbox
+/// each operand rather than treat the cell pointer as a number.
+#[test]
+fn test_multiarg_math_builtins_coerce_mixed_args() {
+    let out = compile_and_run(
+        r#"<?php
+$m = [7.5, 2.0, 3.0, 4.0, 8.0, "s"];
+$ok = fmod($m[0], $m[1]) == 1.5
+   && pow($m[1], $m[2]) == 8.0
+   && hypot($m[2], $m[3]) == 5.0
+   && fdiv($m[3], $m[1]) == 2.0
+   && log($m[4], $m[1]) == 3.0;
+echo $ok ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies ceil() rounds a positive float (3.2) up to 4.
 #[test]
 fn test_ceil() {
@@ -245,6 +283,26 @@ fn test_intdiv() {
 fn test_floatval() {
     let out = compile_and_run("<?php echo floatval(42);");
     assert_eq!(out, "42");
+}
+
+/// Verifies floatval() parses a numeric string (H2): previously a string argument was
+/// treated as an integer register (garbage). Uses value comparisons to avoid float-format
+/// dependence, and covers PHP's lenient leading-numeric and non-numeric (0.0) semantics.
+#[test]
+fn test_floatval_string_and_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$ok = floatval("3.14") == 3.14
+   && floatval("3.14abc") == 3.14   // leading numeric prefix
+   && floatval("abc") == 0.0        // non-numeric -> 0.0
+   && floatval(true) == 1.0;        // bool -> float
+echo $ok ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+    // A Mixed cell holding a numeric string must unbox+parse, not treat the pointer as a number.
+    let m = compile_and_run(r#"<?php $a = ["2.5", 1]; echo (floatval($a[0]) == 2.5) ? "ok" : "bad";"#);
+    assert_eq!(m, "ok");
 }
 
 /// Verifies is_float() returns 1 for a float value (3.14).
@@ -439,4 +497,46 @@ fn test_float_separator_echo() {
 fn test_float_separator_exponent_echo() {
     let out = compile_and_run("<?php echo 1e1_0;");
     assert_eq!(out, "10000000000");
+}
+
+/// Regression (M5): round() accepts an optional $mode argument. The default and PHP_ROUND_HALF_UP
+/// round ties away from zero, while PHP_ROUND_HALF_EVEN rounds ties to even (banker's rounding),
+/// both with and without a precision. The PHP_ROUND_* constants also resolve to their PHP values.
+#[test]
+fn test_round_modes_half_up_and_half_even() {
+    let out = compile_and_run(
+        r#"<?php
+echo round(2.5);
+echo "|" . round(2.5, 0, PHP_ROUND_HALF_EVEN);
+echo "|" . round(3.5, 0, PHP_ROUND_HALF_EVEN);
+echo "|" . round(1.45, 1, PHP_ROUND_HALF_EVEN);
+echo "|" . round(1.55, 1);
+echo "|" . round(2.5, 0, PHP_ROUND_HALF_UP);
+echo "|" . PHP_ROUND_HALF_EVEN;
+"#,
+    );
+    assert_eq!(out, "3|2|4|1.4|1.6|3|3");
+}
+
+/// Regression (H1-part-3): min()/max() coerce a boxed Mixed/Union operand to its numeric value
+/// instead of comparing the cell pointer (which produced garbage). The heterogeneous array makes
+/// its elements Mixed; the comparison must use the unboxed value. Covers Mixed in either position,
+/// an int and a float Mixed, and the assignment form (the local is float-typed from the emitter).
+#[test]
+fn test_min_max_coerce_mixed_operand() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [5, "x", 9];
+$m = $a[0];
+$b = [2.5, "y"];
+$f = $b[0];
+echo max($m, 3);
+echo "|" . min($m, 8);
+echo "|" . max(3, $m);
+echo "|" . max($f, 1);
+$r = max($m, 7);
+echo "|" . $r;
+"#,
+    );
+    assert_eq!(out, "5|5|5|2.5|7");
 }

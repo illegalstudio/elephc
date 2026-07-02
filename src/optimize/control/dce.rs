@@ -559,7 +559,11 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
         }
         StmtKind::ExprStmt(expr) => {
             let expr = prune_expr(expr);
-            if expr_has_side_effects(&expr) {
+            // Retain a bare-statement expression when it has side effects OR may throw a
+            // PHP fatal. A pure-but-throwing builtin (e.g. `str_repeat($s, -1);`) has no
+            // side effects, but PHP raises the error at this statement, so dropping it
+            // would silently skip the fatal.
+            if expr_has_side_effects(&expr) || expr_effect(&expr).may_throw {
                 vec![Stmt {
                     kind: StmtKind::ExprStmt(expr),
                     span,

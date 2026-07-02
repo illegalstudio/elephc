@@ -55,18 +55,18 @@ sidebar:
 | [`array_values()`](./array/array_values.md) | `(array $array): array` | `array` |
 | [`array_walk()`](./array/array_walk.md) | `(array $array, callable $callback, mixed $arg): void` | `void` |
 | [`array_walk_recursive()`](./array/array_walk_recursive.md) | `(array $array, callable $callback, mixed $value): void` | `void` |
-| [`arsort()`](./array/arsort.md) | `(array $array, int $flags): bool` | `bool` |
-| [`asort()`](./array/asort.md) | `(array $array, int $flags): bool` | `bool` |
+| [`arsort()`](./array/arsort.md) | `(array $value, int $flags): bool` | `bool` |
+| [`asort()`](./array/asort.md) | `(array $value, int $flags): bool` | `bool` |
 | [`count()`](./array/count.md) | `(array $value, int $mode): int` | `int` |
 | [`in_array()`](./array/in_array.md) | `(mixed $needle, array $haystack, bool $strict): mixed` | `mixed` |
-| [`krsort()`](./array/krsort.md) | `(array $array, int $flags): bool` | `bool` |
-| [`ksort()`](./array/ksort.md) | `(array $array, int $flags): bool` | `bool` |
+| [`krsort()`](./array/krsort.md) | `(array $value, int $flags): bool` | `bool` |
+| [`ksort()`](./array/ksort.md) | `(array $value, int $flags): bool` | `bool` |
 | [`natcasesort()`](./array/natcasesort.md) | `(array $array): bool` | `bool` |
 | [`natsort()`](./array/natsort.md) | `(array $array): bool` | `bool` |
 | [`range()`](./array/range.md) | `(mixed $start, mixed $end, int $step): array` | `array` |
-| [`rsort()`](./array/rsort.md) | `(array $array, int $flags): bool` | `bool` |
+| [`rsort()`](./array/rsort.md) | `(array $value, int $flags): bool` | `bool` |
 | [`shuffle()`](./array/shuffle.md) | `(array $array): bool` | `bool` |
-| [`sort()`](./array/sort.md) | `(array $array, int $flags): bool` | `bool` |
+| [`sort()`](./array/sort.md) | `(array $value, int $flags): bool` | `bool` |
 | [`uasort()`](./array/uasort.md) | `(array $array, callable $callback): bool` | `bool` |
 | [`uksort()`](./array/uksort.md) | `(array $array, callable $callback): bool` | `bool` |
 | [`usort()`](./array/usort.md) | `(array $array, callable $callback): bool` | `bool` |

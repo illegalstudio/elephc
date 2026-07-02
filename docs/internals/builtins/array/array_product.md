@@ -22,6 +22,7 @@ sidebar:
 
 The following runtime helpers are referenced:
 - `__rt_array_product`
+- `__rt_array_product_float`
 
 ## Signature summary
 

@@ -10,8 +10,8 @@
 
 use super::{
     DIRNAME_LEVELS_MSG, HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
-    HASH_UNKNOWN_ALGO_MSG,
-    PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
+    HASH_UNKNOWN_ALGO_MSG, PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
+    STR_SPLIT_LENGTH_MSG,
 };
 use super::super::system;
 use crate::codegen::platform::Target;
@@ -171,6 +171,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
             ".globl _hash_algo_{i}\n_hash_algo_{i}:\n    .asciz \"{name}\"\n"
         ));
     }
+    out.push_str(&format!(
+        ".globl _str_split_length_msg\n_str_split_length_msg:\n    .ascii {:?}\n",
+        STR_SPLIT_LENGTH_MSG
+    ));
     for (label, message) in [
         ("_spl_dll_pop_empty_msg", "Can't pop from an empty datastructure"),
         ("_spl_dll_shift_empty_msg", "Can't shift from an empty datastructure"),

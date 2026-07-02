@@ -11,8 +11,8 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
-use crate::codegen::{abi, platform::Arch};
+use crate::codegen::expr::{coerce_to_float, emit_expr};
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -23,8 +23,8 @@ use crate::types::PhpType;
 /// - `args`: Exactly one expression producing a float or integer value.
 ///
 /// # Behavior
-/// - Normalizes integer operands to the floating-point result register via
-///   `emit_int_result_to_float_result` before the libc call.
+/// - Normalizes the operand to the floating-point result register via `coerce_to_float`
+///   (integers convert directly; boxed `Mixed`/`Union` values unbox) before the libc call.
 /// - Calls `acos` through the target's native calling convention (AArch64 `bl_c`
 ///   or x86_64 `call acos`).
 ///
@@ -42,9 +42,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("acos()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
-    if ty != PhpType::Float {
-        abi::emit_int_result_to_float_result(emitter);                          // normalize integer acos() inputs into the active floating-point result register before the libc call
-    }
+    coerce_to_float(emitter, &ty); // normalize int/Mixed inputs to a float in d0/xmm0
     match emitter.target.arch {
         Arch::AArch64 => emitter.bl_c("acos"),                                  // call libc acos() with the scalar argument in the native AArch64 floating-point argument register
         Arch::X86_64 => emitter.instruction("call acos"),                       // call libc acos() with the scalar argument in the native SysV floating-point argument register

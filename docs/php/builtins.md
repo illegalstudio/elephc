@@ -55,18 +55,18 @@ sidebar:
 | [`array_values()`](./builtins/array/array_values.md) | `(array $array): array` | `array` |
 | [`array_walk()`](./builtins/array/array_walk.md) | `(array $array, callable $callback, mixed $arg): void` | `void` |
 | [`array_walk_recursive()`](./builtins/array/array_walk_recursive.md) | `(array $array, callable $callback, mixed $value): void` | `void` |
-| [`arsort()`](./builtins/array/arsort.md) | `(array $array, int $flags): bool` | `bool` |
-| [`asort()`](./builtins/array/asort.md) | `(array $array, int $flags): bool` | `bool` |
+| [`arsort()`](./builtins/array/arsort.md) | `(array $value, int $flags): bool` | `bool` |
+| [`asort()`](./builtins/array/asort.md) | `(array $value, int $flags): bool` | `bool` |
 | [`count()`](./builtins/array/count.md) | `(array $value, int $mode): int` | `int` |
 | [`in_array()`](./builtins/array/in_array.md) | `(mixed $needle, array $haystack, bool $strict): mixed` | `mixed` |
-| [`krsort()`](./builtins/array/krsort.md) | `(array $array, int $flags): bool` | `bool` |
-| [`ksort()`](./builtins/array/ksort.md) | `(array $array, int $flags): bool` | `bool` |
+| [`krsort()`](./builtins/array/krsort.md) | `(array $value, int $flags): bool` | `bool` |
+| [`ksort()`](./builtins/array/ksort.md) | `(array $value, int $flags): bool` | `bool` |
 | [`natcasesort()`](./builtins/array/natcasesort.md) | `(array $array): bool` | `bool` |
 | [`natsort()`](./builtins/array/natsort.md) | `(array $array): bool` | `bool` |
 | [`range()`](./builtins/array/range.md) | `(mixed $start, mixed $end, int $step): array` | `array` |
-| [`rsort()`](./builtins/array/rsort.md) | `(array $array, int $flags): bool` | `bool` |
+| [`rsort()`](./builtins/array/rsort.md) | `(array $value, int $flags): bool` | `bool` |
 | [`shuffle()`](./builtins/array/shuffle.md) | `(array $array): bool` | `bool` |
-| [`sort()`](./builtins/array/sort.md) | `(array $array, int $flags): bool` | `bool` |
+| [`sort()`](./builtins/array/sort.md) | `(array $value, int $flags): bool` | `bool` |
 | [`uasort()`](./builtins/array/uasort.md) | `(array $array, callable $callback): bool` | `bool` |
 | [`uksort()`](./builtins/array/uksort.md) | `(array $array, callable $callback): bool` | `bool` |
 | [`usort()`](./builtins/array/usort.md) | `(array $array, callable $callback): bool` | `bool` |
@@ -271,7 +271,7 @@ sidebar:
 | [`rad2deg()`](./builtins/math/rad2deg.md) | `(float $num): float` | `float` |
 | [`rand()`](./builtins/math/rand.md) | `(int $min, int $max): int` | `int` |
 | [`random_int()`](./builtins/math/random_int.md) | `(int $min, int $max): int` | `int` |
-| [`round()`](./builtins/math/round.md) | `(float $num, int $precision): float` | `float` |
+| [`round()`](./builtins/math/round.md) | `(float $num, int $precision, mixed $mode): float` | `float` |
 | [`sin()`](./builtins/math/sin.md) | `(float $num): float` | `float` |
 | [`sinh()`](./builtins/math/sinh.md) | `(float $num): float` | `float` |
 | [`sqrt()`](./builtins/math/sqrt.md) | `(float $num): float` | `float` |

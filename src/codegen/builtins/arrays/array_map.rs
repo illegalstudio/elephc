@@ -14,7 +14,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 use super::array_map_callback_returns_str::callback_returns_str;
 use super::callback_env;
@@ -56,6 +56,9 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("array_map()");
+    if args.len() > 2 {
+        return emit_two_array_map(&args[0], &args[1], &args[2], emitter, ctx, data);
+    }
     let call_reg = abi::nested_call_reg(emitter);
     let result_reg = abi::int_result_reg(emitter);
     let callback_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
@@ -217,6 +220,13 @@ pub fn emit(
     abi::emit_push_reg(emitter, result_reg);                                    // push the array pointer onto the temporary stack
 
     if captures.is_empty() {
+        // A non-capturing inline closure is invoked directly by the runtime, which passes the
+        // element in its element-typed register(s). An untyped closure param would otherwise be
+        // compiled for the integer register class and misread a string/non-int element, so
+        // specialize it to the source element type before the deferred closure is emitted (mirrors
+        // preg_replace_callback). The captured-closure path goes through a wrapper and is left
+        // unchanged here.
+        specialize_inline_closure_params(&args[0], std::slice::from_ref(&source_elem_ty), ctx);
         abi::emit_pop_reg(emitter, array_arg_reg);                               // pop the mapped array pointer into the second runtime argument register
         abi::emit_pop_reg(emitter, callback_arg_reg);                            // pop the callback address into the first runtime argument register
         abi::emit_load_int_immediate(emitter, env_arg_reg, 0);
@@ -250,6 +260,115 @@ pub fn emit(
     } else {
         abi::emit_call_label(emitter, "__rt_array_map");                        // call the scalar array_map runtime helper
         Some(PhpType::Array(Box::new(PhpType::Int)))
+    }
+}
+
+/// Emits the two-input-array form `array_map($callback, $a, $b)`.
+///
+/// Bounded multi-array support (checker-gated): both arrays carry the same scalar element type
+/// (integer or string) and the callback is a named function or a closure.
+///
+/// For integer arrays the callback is invoked directly with two integer arguments (non-capturing)
+/// or through a two-visible-argument wrapper environment (capturing closure), and `__rt_array_map2`
+/// collects integer results. For string arrays — restricted by the checker to a non-capturing
+/// callback — the closure's untyped params are specialized to `Str` and `__rt_array_map2_str` zips
+/// the two string arrays through the callback (padding the shorter with the empty string),
+/// collecting string results. Returns `Some(PhpType::Array(elem))` for the input element type.
+fn emit_two_array_map(
+    callback: &Expr,
+    arr0: &Expr,
+    arr1: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    emitter.comment("array_map() with two input arrays");
+    // The checker guarantees both arrays share one scalar element type (integer or string).
+    let elem_is_str = matches!(
+        crate::codegen::functions::infer_contextual_type(arr0, ctx),
+        PhpType::Array(inner) if matches!(inner.codegen_repr(), PhpType::Str)
+    );
+    let call_reg = abi::nested_call_reg(emitter);
+    let result_reg = abi::int_result_reg(emitter);
+    let cb_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
+    let arr0_arg_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let arr1_arg_reg = abi::int_arg_reg_name(emitter.target, 2);
+    let env_arg_reg = abi::int_arg_reg_name(emitter.target, 3);
+
+    // -- evaluate the callback first, then both arrays, in PHP source order --
+    let captures =
+        callback_env::materialize_callback_address(callback, call_reg, emitter, ctx, data);
+    abi::emit_push_reg(emitter, call_reg);                                      // save the callback entry point across array evaluation
+    emit_expr(arr0, emitter, ctx, data);
+    abi::emit_push_reg(emitter, result_reg);                                    // save the first array pointer
+    emit_expr(arr1, emitter, ctx, data);
+    abi::emit_push_reg(emitter, result_reg);                                    // save the second array pointer
+
+    // -- restore the arrays into the runtime argument registers and the callback entry --
+    abi::emit_pop_reg(emitter, arr1_arg_reg);                                   // restore the second array pointer into the third runtime argument register
+    abi::emit_pop_reg(emitter, arr0_arg_reg);                                   // restore the first array pointer into the second runtime argument register
+    abi::emit_pop_reg(emitter, call_reg);                                       // restore the callback entry point
+
+    if captures.is_empty() {
+        // -- non-capturing callback: invoke it directly with no environment --
+        emitter.instruction(&format!("mov {}, {}", cb_arg_reg, call_reg));      // move the callback entry point into the first runtime argument register
+        abi::emit_load_int_immediate(emitter, env_arg_reg, 0);                  // non-capturing callbacks need no capture environment
+        if elem_is_str {
+            // Specialize an untyped closure's params to Str so the closure reads each element as a
+            // string (ptr/len) rather than the default integer register, matching what the runtime
+            // passes; then collect string results.
+            specialize_inline_closure_params(
+                callback,
+                &[PhpType::Str, PhpType::Str],
+                ctx,
+            );
+            abi::emit_call_label(emitter, "__rt_array_map2_str");              // zip the two string arrays through the callback into a new string list
+            return Some(PhpType::Array(Box::new(PhpType::Str)));
+        }
+        abi::emit_call_label(emitter, "__rt_array_map2");                       // zip the two arrays through the callback into a new integer list
+        return Some(PhpType::Array(Box::new(PhpType::Int)));
+    }
+
+    // -- capturing closure: build a two-visible-argument wrapper environment and pass it --
+    let wrapper = callback_env::emit_captured_callback_env(
+        call_reg,
+        arr0_arg_reg,
+        &captures,
+        vec![PhpType::Int, PhpType::Int],
+        emitter,
+        ctx,
+    );
+    abi::emit_symbol_address(emitter, cb_arg_reg, &wrapper.wrapper_label);      // move the wrapper entry point into the first runtime argument register
+    callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);               // pass the capture environment pointer as the fourth runtime argument
+    abi::emit_call_label(emitter, "__rt_array_map2");                           // zip the two arrays through the wrapper into a new integer list
+    abi::emit_release_temporary_stack(emitter, wrapper.env_bytes);              // release the temporary capture environment after the runtime call
+    Some(PhpType::Array(Box::new(PhpType::Int)))
+}
+
+/// Specializes an inline closure callback's untyped parameter types to the element types
+/// `array_map` passes at runtime.
+///
+/// An untyped closure parameter defaults to the integer register class; for a string (or other
+/// non-int) source array the runtime passes the element in a different register class (`x0`/`x1`
+/// pointer/length for strings), so the closure body must be compiled expecting the element type.
+/// Updates the most recently deferred inline closure's signature for each visible parameter,
+/// leaving user-declared parameter types untouched. No-op for non-closure callbacks or when no
+/// deferred closure is pending. Mirrors `preg_replace_callback`'s closure-parameter specialization.
+fn specialize_inline_closure_params(callback: &Expr, elem_tys: &[PhpType], ctx: &mut Context) {
+    if !matches!(callback.kind, ExprKind::Closure { .. }) {
+        return;
+    }
+    let Some(deferred) = ctx.deferred_closures.last_mut() else {
+        return;
+    };
+    for (i, elem_ty) in elem_tys.iter().enumerate() {
+        // Respect parameters the user annotated with an explicit type.
+        if deferred.sig.declared_params.get(i).copied().unwrap_or(true) {
+            continue;
+        }
+        if let Some((_, ty)) = deferred.sig.params.get_mut(i) {
+            *ty = elem_ty.clone();
+        }
     }
 }
 

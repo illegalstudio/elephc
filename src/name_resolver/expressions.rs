@@ -10,6 +10,7 @@
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver};
+use crate::span::Span;
 
 use super::names::{
     resolve_constant_name, resolve_function_name, resolve_special_or_class_name,
@@ -85,7 +86,8 @@ pub(super) fn resolve_expr(
             // Procedural date/time aliases desugar to the equivalent OOP construction or method
             // call (e.g. date_create($s) -> new DateTime($s), date_diff($a, $b) -> $a->diff($b)).
             // Skip the rewrite when the resolved name is a user-declared function, so a
-            // user-defined (e.g. namespaced `App\date_diff`) call is never hijacked.
+            // user-defined (e.g. namespaced `App\date_diff`) call is never hijacked. Variadic
+            // array_merge/diff/intersect (3+ args) then desugar to a left fold of set calls.
             if symbols.declares_function(&function_name) {
                 ExprKind::FunctionCall {
                     name: resolved_name(function_name),
@@ -95,6 +97,10 @@ pub(super) fn resolve_expr(
                 rewrite_date_procedural_alias(&function_name, &resolved_args)
             {
                 rewritten
+            } else if let Some(folded) =
+                fold_variadic_array_set_call(&function_name, &resolved_args, expr.span)
+            {
+                folded
             } else {
                 ExprKind::FunctionCall {
                     name: resolved_name(function_name),
@@ -368,9 +374,103 @@ pub(super) fn resolve_expr(
             element_type: resolve_type_expr(element_type, current_namespace, imports, symbols),
             len: Box::new(resolve_expr(len, current_namespace, imports, symbols)),
         },
+        ExprKind::Assignment {
+            target,
+            value,
+            result_target,
+            prelude,
+            conditional_value_temp,
+        } => ExprKind::Assignment {
+            target: Box::new(resolve_expr(target, current_namespace, imports, symbols)),
+            value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
+            result_target: result_target
+                .as_ref()
+                .map(|t| Box::new(resolve_expr(t, current_namespace, imports, symbols))),
+            // `prelude` is empty at name-resolution time (assignment preludes are
+            // synthesized later during codegen), so there is nothing to resolve here.
+            prelude: prelude.clone(),
+            conditional_value_temp: conditional_value_temp.clone(),
+        },
+        ExprKind::Yield { key, value } => ExprKind::Yield {
+            key: key
+                .as_ref()
+                .map(|k| Box::new(resolve_expr(k, current_namespace, imports, symbols))),
+            value: value
+                .as_ref()
+                .map(|v| Box::new(resolve_expr(v, current_namespace, imports, symbols))),
+        },
+        ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(resolve_expr(
+            inner,
+            current_namespace,
+            imports,
+            symbols,
+        ))),
+        ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
+            name_expr: Box::new(resolve_expr(name_expr, current_namespace, imports, symbols)),
+            args: args
+                .iter()
+                .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
+                .collect(),
+        },
+        ExprKind::NewDynamicObject {
+            class_name,
+            fallback_class,
+            required_parent,
+            args,
+        } => ExprKind::NewDynamicObject {
+            class_name: Box::new(resolve_expr(class_name, current_namespace, imports, symbols)),
+            fallback_class: fallback_class.clone(),
+            required_parent: required_parent.clone(),
+            args: args
+                .iter()
+                .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
+                .collect(),
+        },
         _ => expr.kind.clone(),
     };
     Expr::new(kind, expr.span)
+}
+
+/// Left-folds a variadic call to one of PHP's left-associative array set/merge builtins
+/// (`array_merge`, `array_diff`, `array_intersect`, `array_diff_key`, `array_intersect_key`) with
+/// more than two arguments into nested two-argument calls — e.g. `array_merge(a, b, c)` becomes
+/// `array_merge(array_merge(a, b), c)`. Each of these builtins is left-associative
+/// (`a ∪ b ∪ c`, `a \ (b ∪ c)`, `a ∩ b ∩ c`), so the rewrite is semantics-preserving and lets the
+/// existing two-argument codegen handle the variadic forms without a dedicated N-ary runtime.
+///
+/// Returns `None` (leaving the call unchanged) when the function is not one of these builtins, when
+/// there are two or fewer arguments, or when any argument is a spread (whose count is not known
+/// statically). `args` must already be name-resolved; `span` is reused for the synthesized calls.
+fn fold_variadic_array_set_call(
+    function_name: &str,
+    args: &[Expr],
+    span: Span,
+) -> Option<ExprKind> {
+    const FOLDABLE: &[&str] = &[
+        "array_merge",
+        "array_diff",
+        "array_intersect",
+        "array_diff_key",
+        "array_intersect_key",
+    ];
+    let key = php_symbol_key(function_name.trim_start_matches('\\'));
+    if !FOLDABLE.iter().any(|candidate| php_symbol_key(candidate) == key) {
+        return None;
+    }
+    if args.len() <= 2 || args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+        return None;
+    }
+    let mut folded = ExprKind::FunctionCall {
+        name: resolved_name(function_name.to_string()),
+        args: vec![args[0].clone(), args[1].clone()],
+    };
+    for arg in &args[2..] {
+        folded = ExprKind::FunctionCall {
+            name: resolved_name(function_name.to_string()),
+            args: vec![Expr::new(folded, span), arg.clone()],
+        };
+    }
+    Some(folded)
 }
 
 /// Resolves the target of an instanceof expression.

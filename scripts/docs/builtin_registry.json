@@ -325,7 +325,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_all",
-      "codegen_line": 1536,
+      "codegen_line": 1712,
       "notes": [
         "Lowers `array_all()`: returns true when every element satisfies the predicate."
       ],
@@ -372,7 +372,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_any",
-      "codegen_line": 1531,
+      "codegen_line": 1707,
       "notes": [
         "Lowers `array_any()`: returns true when some element satisfies the predicate."
       ],
@@ -418,7 +418,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_chunk",
-      "codegen_line": 81,
+      "codegen_line": 87,
       "notes": [
         "Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays."
       ],
@@ -520,7 +520,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_combine",
-      "codegen_line": 152,
+      "codegen_line": 158,
       "notes": [
         "Lowers `array_combine()` through the legacy hash-building runtime helpers."
       ],
@@ -564,7 +564,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_diff",
-      "codegen_line": 874,
+      "codegen_line": 997,
       "notes": [
         "Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots."
       ],
@@ -608,7 +608,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_diff_assoc",
-      "codegen_line": 1347,
+      "codegen_line": 1523,
       "notes": [
         "Lowers `array_diff_assoc()` via the shared associative diff/intersect helper (mode 0 = diff)."
       ],
@@ -648,13 +648,14 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_diff_key",
-      "codegen_line": 896,
+      "codegen_line": 1019,
       "notes": [
         "Lowers `array_diff_key()` for two associative arrays by filtering first-operand keys."
       ],
       "runtime_helpers": [
         "__rt_array_diff_key",
-        "__rt_array_intersect_key"
+        "__rt_array_intersect_key",
+        "__rt_array_slice_preserve"
       ],
       "sig_arm": null,
       "sig_file": null,
@@ -688,7 +689,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_fill",
-      "codegen_line": 115,
+      "codegen_line": 121,
       "notes": [
         "Lowers `array_fill()` for pointer-sized scalar and refcounted payloads."
       ],
@@ -739,7 +740,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_fill_keys",
-      "codegen_line": 138,
+      "codegen_line": 144,
       "notes": [
         "Lowers `array_fill_keys()` through the legacy hash-building runtime helpers."
       ],
@@ -783,7 +784,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_filter",
-      "codegen_line": 211,
+      "codegen_line": 217,
       "notes": [
         "Lowers `array_filter()` for static and first-class callbacks through the runtime helper."
       ],
@@ -837,7 +838,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_find",
-      "codegen_line": 1526,
+      "codegen_line": 1702,
       "notes": [
         "Lowers `array_find()`: returns the first element satisfying the predicate, boxed as Mixed (or null)."
       ],
@@ -883,7 +884,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_flip",
-      "codegen_line": 171,
+      "codegen_line": 177,
       "notes": [
         "Lowers `array_flip()` through the legacy hash-building runtime helpers."
       ],
@@ -920,7 +921,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_intersect",
-      "codegen_line": 885,
+      "codegen_line": 1008,
       "notes": [
         "Lowers `array_intersect()` for two compatible indexed arrays with pointer-sized payload slots."
       ],
@@ -928,7 +929,8 @@
         "__rt_array_diff_key",
         "__rt_array_intersect",
         "__rt_array_intersect_key",
-        "__rt_array_intersect_refcounted"
+        "__rt_array_intersect_refcounted",
+        "__rt_array_slice_preserve"
       ],
       "sig_arm": null,
       "sig_file": null,
@@ -962,7 +964,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_intersect_assoc",
-      "codegen_line": 1352,
+      "codegen_line": 1528,
       "notes": [
         "Lowers `array_intersect_assoc()` via the shared associative diff/intersect helper (mode 1 = intersect)."
       ],
@@ -1004,12 +1006,13 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_intersect_key",
-      "codegen_line": 901,
+      "codegen_line": 1024,
       "notes": [
         "Lowers `array_intersect_key()` for two associative arrays by keeping shared first-operand keys."
       ],
       "runtime_helpers": [
-        "__rt_array_intersect_key"
+        "__rt_array_intersect_key",
+        "__rt_array_slice_preserve"
       ],
       "sig_arm": null,
       "sig_file": null,
@@ -1043,7 +1046,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_is_list",
-      "codegen_line": 1144,
+      "codegen_line": 1320,
       "notes": [
         "Lowers `array_is_list()` to the `__rt_array_is_list` runtime predicate, returning a bool.",
         "The runtime helper accepts any array kind (indexed, associative hash, or boxed mixed cell) and",
@@ -1130,7 +1133,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_key_first",
-      "codegen_line": 1155,
+      "codegen_line": 1331,
       "notes": [
         "Lowers `array_key_first()` through the shared edge-key helper with selector `0`."
       ],
@@ -1170,7 +1173,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_key_last",
-      "codegen_line": 1160,
+      "codegen_line": 1336,
       "notes": [
         "Lowers `array_key_last()` through the shared edge-key helper with selector `1`."
       ],
@@ -1261,7 +1264,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_map",
-      "codegen_line": 312,
+      "codegen_line": 318,
       "notes": [
         "Lowers `array_map()` through the callback runtime helper matching the callback result type."
       ],
@@ -1305,13 +1308,12 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_merge",
-      "codegen_line": 850,
+      "codegen_line": 957,
       "notes": [
         "Lowers `array_merge()` for two compatible indexed arrays with 8-byte payload slots."
       ],
       "runtime_helpers": [
-        "__rt_array_diff",
-        "__rt_array_diff_refcounted"
+        "__rt_array_merge_str"
       ],
       "sig_arm": null,
       "sig_file": null,
@@ -1337,7 +1339,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_merge_recursive",
-      "codegen_line": 1366,
+      "codegen_line": 1542,
       "notes": [
         "Lowers `array_merge_recursive()` (recursive merge with scalar collisions combined into lists)."
       ],
@@ -1370,7 +1372,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_multisort",
-      "codegen_line": 1671,
+      "codegen_line": 1847,
       "notes": [
         "Lowers `array_multisort()`: stable-sorts the first indexed array ascending and reorders the second",
         "in tandem, both in place. Both arguments are by-reference, so each is copy-on-write split with",
@@ -1419,7 +1421,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_pad",
-      "codegen_line": 99,
+      "codegen_line": 105,
       "notes": [
         "Lowers `array_pad()` by copying an indexed array and filling missing slots."
       ],
@@ -1470,14 +1472,11 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_pop",
-      "codegen_line": 1048,
+      "codegen_line": 1210,
       "notes": [
         "Lowers `array_pop()` for indexed arrays by mutating length and boxing `T|null` as Mixed."
       ],
-      "runtime_helpers": [
-        "__rt_sort_int",
-        "__rt_sort_str"
-      ],
+      "runtime_helpers": [],
       "sig_arm": null,
       "sig_file": null,
       "sig_line": null
@@ -1515,7 +1514,8 @@
         "Lowers `array_product()` over supported indexed-array payloads."
       ],
       "runtime_helpers": [
-        "__rt_array_product"
+        "__rt_array_product",
+        "__rt_array_product_float"
       ],
       "sig_arm": null,
       "sig_file": null,
@@ -1549,7 +1549,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_push",
-      "codegen_line": 61,
+      "codegen_line": 67,
       "notes": [
         "Lowers `array_push()` by appending one value and publishing the mutated array."
       ],
@@ -1586,7 +1586,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_rand",
-      "codegen_line": 1007,
+      "codegen_line": 1169,
       "notes": [
         "Lowers `array_rand()` for indexed arrays."
       ],
@@ -1633,7 +1633,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_reduce",
-      "codegen_line": 701,
+      "codegen_line": 808,
       "notes": [
         "Lowers `array_reduce()` through the callback-driven runtime helper."
       ],
@@ -1686,7 +1686,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_replace",
-      "codegen_line": 1328,
+      "codegen_line": 1504,
       "notes": [
         "Lowers `array_replace()` (right-wins hash merge of two hashes)."
       ],
@@ -1734,7 +1734,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_replace_recursive",
-      "codegen_line": 1333,
+      "codegen_line": 1509,
       "notes": [
         "Lowers `array_replace_recursive()` (recursive right-wins hash merge)."
       ],
@@ -1781,7 +1781,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_reverse",
-      "codegen_line": 185,
+      "codegen_line": 191,
       "notes": [
         "Lowers `array_reverse()` for indexed arrays with 8-byte payload slots."
       ],
@@ -1825,7 +1825,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_search",
-      "codegen_line": 1710,
+      "codegen_line": 1886,
       "notes": [
         "Lowers `array_search()` for indexed arrays with integer-like payloads."
       ],
@@ -1913,11 +1913,16 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_slice",
-      "codegen_line": 906,
+      "codegen_line": 1033,
       "notes": [
-        "Lowers `array_slice()` for indexed arrays with pointer-sized payload slots."
+        "Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.",
+        "With a literal `preserve_keys=true` 4th argument the checker types the result as an",
+        "integer-keyed associative array; that result shape is the signal to build a key-preserving",
+        "hash through `__rt_array_slice_preserve` instead of a reindexed indexed array."
       ],
-      "runtime_helpers": [],
+      "runtime_helpers": [
+        "__rt_array_slice_preserve"
+      ],
       "sig_arm": null,
       "sig_file": null,
       "sig_line": null
@@ -1950,7 +1955,7 @@
           "by_ref": false,
           "default": null,
           "name": "preserve_keys",
-          "optional": false,
+          "optional": true,
           "type": "bool"
         }
       ],
@@ -1971,7 +1976,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_splice",
-      "codegen_line": 949,
+      "codegen_line": 1111,
       "notes": [
         "Lowers `array_splice()` by mutating an indexed source array and returning removed elements."
       ],
@@ -2035,7 +2040,9 @@
       ],
       "runtime_helpers": [
         "__rt_array_product",
-        "__rt_array_sum"
+        "__rt_array_product_float",
+        "__rt_array_sum",
+        "__rt_array_sum_float"
       ],
       "sig_arm": null,
       "sig_file": null,
@@ -2069,7 +2076,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_udiff",
-      "codegen_line": 1658,
+      "codegen_line": 1834,
       "notes": [
         "Lowers `array_udiff()`: keeps first-array elements not equal (per comparator) to any second-array element."
       ],
@@ -2120,7 +2127,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_uintersect",
-      "codegen_line": 1663,
+      "codegen_line": 1839,
       "notes": [
         "Lowers `array_uintersect()`: keeps first-array elements equal (per comparator) to some second-array element."
       ],
@@ -2171,7 +2178,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_unique",
-      "codegen_line": 198,
+      "codegen_line": 204,
       "notes": [
         "Lowers `array_unique()` for indexed arrays with 8-byte payload slots."
       ],
@@ -2292,7 +2299,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_walk",
-      "codegen_line": 783,
+      "codegen_line": 890,
       "notes": [
         "Lowers `array_walk()` through the callback-driven runtime helper."
       ],
@@ -2345,7 +2352,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_array_walk_recursive",
-      "codegen_line": 1542,
+      "codegen_line": 1718,
       "notes": [
         "Lowers `array_walk_recursive()`: invokes the callback on each scalar leaf of a (possibly nested)",
         "array, descending into array-valued elements. Returns void; leaves are passed as 8-byte scalars."
@@ -2400,7 +2407,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_arsort",
-      "codegen_line": 1091,
+      "codegen_line": 1267,
       "notes": [
         "Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper."
       ],
@@ -2419,9 +2426,9 @@
     "sig": {
       "params": [
         {
-          "by_ref": true,
+          "by_ref": false,
           "default": null,
-          "name": "array",
+          "name": "value",
           "optional": false,
           "type": "array"
         },
@@ -2485,7 +2492,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_asort",
-      "codegen_line": 1086,
+      "codegen_line": 1262,
       "notes": [
         "Lowers `asort()` for indexed integer arrays through the value-sort runtime wrapper."
       ],
@@ -2505,9 +2512,9 @@
     "sig": {
       "params": [
         {
-          "by_ref": true,
+          "by_ref": false,
           "default": null,
-          "name": "array",
+          "name": "value",
           "optional": false,
           "type": "array"
         },
@@ -3214,7 +3221,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_boolval",
-      "codegen_line": 1106,
+      "codegen_line": 1110,
       "notes": [
         "Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`."
       ],
@@ -3752,7 +3759,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_chr",
-      "codegen_line": 858,
+      "codegen_line": 857,
       "notes": [
         "Lowers `chr()` by converting an integer code point into a one-byte string."
       ],
@@ -4583,7 +4590,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 1138,
+      "codegen_line": 1142,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -5854,6 +5861,7 @@
         "Lowers `floatval()` for concrete scalar operands."
       ],
       "runtime_helpers": [
+        "__rt_mixed_cast_float",
         "__rt_str_to_number"
       ],
       "sig_arm": null,
@@ -7041,7 +7049,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/types.rs",
       "codegen_function": "lower_get_resource_id",
-      "codegen_line": 424,
+      "codegen_line": 520,
       "notes": [
         "Lowers `get_resource_id(resource)` by unboxing the native handle and making it one-based."
       ],
@@ -7078,7 +7086,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/types.rs",
       "codegen_function": "lower_get_resource_type",
-      "codegen_line": 412,
+      "codegen_line": 508,
       "notes": [
         "Lowers `get_resource_type(resource)` to elephc's current resource type label."
       ],
@@ -8607,7 +8615,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_in_array",
-      "codegen_line": 1729,
+      "codegen_line": 1907,
       "notes": [
         "Lowers `in_array()` for indexed arrays with scalar or string payloads."
       ],
@@ -9144,7 +9152,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_array",
-      "codegen_line": 1522,
+      "codegen_line": 1528,
       "notes": [
         "Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value",
         "whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is",
@@ -9183,7 +9191,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_object",
-      "codegen_line": 1537,
+      "codegen_line": 1543,
       "notes": [
         "Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose",
         "runtime tag is an object (6)."
@@ -9221,7 +9229,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_scalar",
-      "codegen_line": 1553,
+      "codegen_line": 1559,
       "notes": [
         "Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed",
         "Mixed/Union value whose runtime tag is int (0), string (1), float (2), or bool (3). Null,",
@@ -9453,7 +9461,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_iterable",
-      "codegen_line": 1314,
+      "codegen_line": 1320,
       "notes": [
         "Lowers `is_iterable()` for concrete values and boxed Mixed payloads."
       ],
@@ -9599,7 +9607,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/types.rs",
       "codegen_function": "lower_is_resource",
-      "codegen_line": 400,
+      "codegen_line": 496,
       "notes": [
         "Lowers `is_resource(value)` for static resources and boxed Mixed resource cells."
       ],
@@ -10100,7 +10108,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_krsort",
-      "codegen_line": 1101,
+      "codegen_line": 1277,
       "notes": [
         "Lowers `krsort()` through the legacy reverse key-sort helper surface."
       ],
@@ -10117,9 +10125,9 @@
     "sig": {
       "params": [
         {
-          "by_ref": true,
+          "by_ref": false,
           "default": null,
-          "name": "array",
+          "name": "value",
           "optional": false,
           "type": "array"
         },
@@ -10148,7 +10156,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_ksort",
-      "codegen_line": 1096,
+      "codegen_line": 1272,
       "notes": [
         "Lowers `ksort()` through the legacy key-sort helper surface."
       ],
@@ -10166,9 +10174,9 @@
     "sig": {
       "params": [
         {
-          "by_ref": true,
+          "by_ref": false,
           "default": null,
-          "name": "array",
+          "name": "value",
           "optional": false,
           "type": "array"
         },
@@ -10669,11 +10677,13 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/math.rs",
       "codegen_function": "lower_min_max",
-      "codegen_line": 204,
+      "codegen_line": 228,
       "notes": [
         "Lowers numeric `min()` and `max()` over concrete integer-like or float operands."
       ],
-      "runtime_helpers": [],
+      "runtime_helpers": [
+        "__rt_mixed_cast_float"
+      ],
       "sig_arm": null,
       "sig_file": null,
       "sig_line": null
@@ -10802,11 +10812,13 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/math.rs",
       "codegen_function": "lower_min_max",
-      "codegen_line": 204,
+      "codegen_line": 228,
       "notes": [
         "Lowers numeric `min()` and `max()` over concrete integer-like or float operands."
       ],
-      "runtime_helpers": [],
+      "runtime_helpers": [
+        "__rt_mixed_cast_float"
+      ],
       "sig_arm": null,
       "sig_file": null,
       "sig_line": null
@@ -11021,7 +11033,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_natcasesort",
-      "codegen_line": 1111,
+      "codegen_line": 1287,
       "notes": [
         "Lowers `natcasesort()` for indexed integer arrays through the case-insensitive wrapper."
       ],
@@ -11061,7 +11073,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_natsort",
-      "codegen_line": 1106,
+      "codegen_line": 1282,
       "notes": [
         "Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper."
       ],
@@ -11148,7 +11160,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_number_format",
-      "codegen_line": 875,
+      "codegen_line": 874,
       "notes": [
         "Lowers `number_format()` by arranging its runtime helper arguments."
       ],
@@ -11208,7 +11220,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_ord",
-      "codegen_line": 834,
+      "codegen_line": 833,
       "notes": [
         "Lowers `ord()` by returning the first byte of a string or zero for empty input."
       ],
@@ -12633,7 +12645,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_range",
-      "codegen_line": 1020,
+      "codegen_line": 1182,
       "notes": [
         "Lowers `range()` for integer endpoints through the shared runtime constructor."
       ],
@@ -13112,6 +13124,13 @@
           "name": "precision",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mode",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "float",
@@ -13131,7 +13150,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_rsort",
-      "codegen_line": 1081,
+      "codegen_line": 1250,
       "notes": [
         "Lowers `rsort()` for indexed integer arrays by mutating the source array in place."
       ],
@@ -13140,7 +13159,7 @@
         "__rt_asort",
         "__rt_krsort",
         "__rt_ksort",
-        "__rt_natsort",
+        "__rt_rsort_float",
         "__rt_rsort_int",
         "__rt_rsort_str"
       ],
@@ -13152,9 +13171,9 @@
     "sig": {
       "params": [
         {
-          "by_ref": true,
+          "by_ref": false,
           "default": null,
-          "name": "array",
+          "name": "value",
           "optional": false,
           "type": "array"
         },
@@ -13451,7 +13470,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_shuffle",
-      "codegen_line": 1116,
+      "codegen_line": 1292,
       "notes": [
         "Lowers `shuffle()` for indexed arrays with 8-byte slots by mutating the source array in place."
       ],
@@ -13943,17 +13962,17 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_sort",
-      "codegen_line": 1076,
+      "codegen_line": 1238,
       "notes": [
         "Lowers `sort()` for indexed integer arrays by mutating the source array in place."
       ],
       "runtime_helpers": [
         "__rt_arsort",
         "__rt_asort",
-        "__rt_krsort",
-        "__rt_ksort",
+        "__rt_rsort_float",
         "__rt_rsort_int",
         "__rt_rsort_str",
+        "__rt_sort_float",
         "__rt_sort_int",
         "__rt_sort_str"
       ],
@@ -13965,9 +13984,9 @@
     "sig": {
       "params": [
         {
-          "by_ref": true,
+          "by_ref": false,
           "default": null,
-          "name": "array",
+          "name": "value",
           "optional": false,
           "type": "array"
         },
@@ -14308,7 +14327,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_str_pad",
-      "codegen_line": 818,
+      "codegen_line": 817,
       "notes": [
         "Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper."
       ],
@@ -14368,7 +14387,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_str_repeat",
-      "codegen_line": 746,
+      "codegen_line": 745,
       "notes": [
         "Lowers `str_repeat(string, times)` through the shared runtime helper."
       ],
@@ -14414,7 +14433,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_string_replace",
-      "codegen_line": 780,
+      "codegen_line": 779,
       "notes": [
         "Lowers `str_replace()`/`str_ireplace()` with three string operands."
       ],
@@ -14873,7 +14892,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_strstr",
-      "codegen_line": 762,
+      "codegen_line": 761,
       "notes": [
         "Lowers `strstr(haystack, needle)` by searching and returning the matching suffix."
       ],
@@ -15109,7 +15128,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_substr_replace",
-      "codegen_line": 730,
+      "codegen_line": 729,
       "notes": [
         "Lowers `substr_replace(string, replacement, start, length?)`."
       ],
@@ -18251,7 +18270,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_uasort",
-      "codegen_line": 1131,
+      "codegen_line": 1307,
       "notes": [
         "Lowers `uasort()` through the legacy user-sort helper for static comparators."
       ],
@@ -18383,7 +18402,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_uksort",
-      "codegen_line": 1126,
+      "codegen_line": 1302,
       "notes": [
         "Lowers `uksort()` through the legacy user-sort helper for static comparators."
       ],
@@ -18716,7 +18735,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/arrays.rs",
       "codegen_function": "lower_usort",
-      "codegen_line": 1121,
+      "codegen_line": 1297,
       "notes": [
         "Lowers `usort()` for indexed integer arrays with a static user comparator."
       ],
@@ -18937,7 +18956,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_wordwrap",
-      "codegen_line": 802,
+      "codegen_line": 801,
       "notes": [
         "Lowers `wordwrap(string, width?, break?, cut?)` through the shared runtime helper."
       ],

@@ -68,7 +68,9 @@ pub fn emit(
                 Arch::X86_64 => {
                     emitter.instruction("xorpd xmm1, xmm1");                    // materialize a canonical 0.0 comparison operand in a scratch SIMD register for the x86_64 compare
                     emitter.instruction("ucomisd xmm0, xmm1");                  // compare the float result against 0.0 using the native x86_64 scalar-double compare
-                    emitter.instruction("sete al");                             // materialize the x86_64 floating-point comparison result in the low byte when the value is 0.0
+                    emitter.instruction("sete al");                             // float is empty when the value equals 0.0
+                    emitter.instruction("setnp cl");                            // NaN is truthy, so require an ordered compare
+                    emitter.instruction("and al, cl");                          // empty(NAN) is false: equal-to-zero AND ordered
                     emitter.instruction("movzx eax, al");                       // widen the x86_64 boolean byte back into the canonical integer result register
                 }
             }

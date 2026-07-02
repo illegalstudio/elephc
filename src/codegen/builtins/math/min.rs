@@ -48,7 +48,14 @@ pub fn emit(
     emitter.comment("min()");
 
     // -- evaluate first arg --
-    let t0 = emit_expr(&args[0], emitter, ctx, data);
+    let mut t0 = emit_expr(&args[0], emitter, ctx, data);
+    // A boxed Mixed/Union operand holds a cell pointer, not a comparable number; coerce it to a
+    // float (unboxing via __rt_mixed_cast_float) and treat it as a float operand so the comparison
+    // uses the numeric value rather than the pointer. The result widens to float for such operands.
+    if matches!(t0, PhpType::Mixed | PhpType::Union(_)) {
+        crate::codegen::expr::coerce_to_float(emitter, &t0);
+        t0 = PhpType::Float;
+    }
     let mut any_float = t0 == PhpType::Float;
 
     // -- check all arg types for float promotion --
@@ -66,7 +73,11 @@ pub fn emit(
             abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // preserve the current integer minimum while the next candidate expression is evaluated
         }
 
-        let ti = emit_expr(arg, emitter, ctx, data);
+        let mut ti = emit_expr(arg, emitter, ctx, data);
+        if matches!(ti, PhpType::Mixed | PhpType::Union(_)) {
+            crate::codegen::expr::coerce_to_float(emitter, &ti);
+            ti = PhpType::Float;
+        }
 
         if any_float || ti == PhpType::Float {
             // -- float comparison path --
