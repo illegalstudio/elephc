@@ -2,7 +2,7 @@
 title: "spl_object_hash()"
 description: "Lowers `spl_object_hash(object)` by formatting the loaded object pointer as a string."
 sidebar:
-  order: 326
+  order: 330
 ---
 
 ## spl_object_hash()

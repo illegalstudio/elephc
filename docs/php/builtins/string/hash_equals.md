@@ -2,7 +2,7 @@
 title: "hash_equals()"
 description: "Lowers `hash_equals(known, user)` through the timing-safe runtime compare helper."
 sidebar:
-  order: 350
+  order: 354
 ---
 
 ## hash_equals()

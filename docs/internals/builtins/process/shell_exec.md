@@ -2,7 +2,7 @@
 title: "shell_exec() — internals"
 description: "Compiler internals for shell_exec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 310
+  order: 314
 ---
 
 ## `shell_exec()` — internals

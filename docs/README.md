@@ -67,6 +67,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [Conditional Compilation](beyond-php/ifdef.md) — ifdef blocks, compile-time feature flags, CLI flags
 - [Shared Libraries (cdylib)](beyond-php/cdylib.md) — --emit cdylib, #[Export] C-ABI functions, dlopen lifecycle
 - [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone prefork HTTP server binary
+- [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
 
 ## Compiler Internals
 

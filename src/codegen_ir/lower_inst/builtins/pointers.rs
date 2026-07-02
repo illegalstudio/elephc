@@ -534,6 +534,107 @@ fn require_integer_offset(ty: PhpType, name: &str) -> Result<()> {
     }
 }
 
+/// Lowers `zval_pack(value)` by boxing the operand as a Mixed cell and invoking
+/// `__rt_zval_pack`, which returns a pointer to a freshly allocated 16-byte zval.
+///
+/// `__rt_zval_pack` only reads the `(tag, lo, hi)` triple out of the boxed Mixed
+/// cell; it never retains or frees that cell. When the operand was not already
+/// Mixed/Union, `emit_box_current_value_as_mixed` allocated a fresh owned box
+/// (persisting strings, increfing array/object/mixed children), so that box is a
+/// throwaway temporary that must be deep-released after the pack call or it leaks
+/// one Mixed cell per call. When the operand is already Mixed/Union no box was
+/// created — the operand's own live cell is passed through — so it must not be
+/// freed here.
+pub(super) fn lower_zval_pack(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "zval_pack", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let value_ty = ctx.value_php_type(value)?;
+    // Mirror exactly the no-box arm of `emit_box_current_value_as_mixed`, which
+    // matches the raw type: only Mixed/Union pass the operand's own live cell
+    // through unboxed. Any divergence here would free a cell that was never
+    // allocated as a temporary (a use-after-free of the operand's storage).
+    let boxed_a_temporary = !matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
+    ctx.load_value_to_result(value)?;
+    // Box the operand's natural representation into a Mixed cell pointer in the
+    // result register; a no-op when the operand is already Mixed/Union.
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
+    if boxed_a_temporary {
+        // Preserve the throwaway box pointer so it can be deep-released after the
+        // pack call reads it; then free it without disturbing the returned zval.
+        let box_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, box_reg);
+        abi::emit_call_label(ctx.emitter, "__rt_zval_pack");
+        abi::emit_push_reg(ctx.emitter, box_reg);                                // stash the returned zval pointer across the box release
+        // Restore the box pointer (two slots deep) into the call register, free it.
+        emit_load_temp_box_for_release(ctx);
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_free_deep");
+        abi::emit_pop_reg(ctx.emitter, box_reg);                                 // recover the zval pointer as the builtin result
+        emit_drop_temp_box_slot(ctx);                                           // discard the now-freed box slot without clobbering the zval
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_zval_pack");
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Loads the throwaway Mixed box pointer (pushed before the pack call, now the
+/// deeper of the two temporary stack slots) into the integer call register so it
+/// can be handed to `__rt_mixed_free_deep`. The shallower slot still holds the
+/// returned zval pointer and is left untouched.
+fn emit_load_temp_box_for_release(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload the throwaway box pointer from the deeper temporary slot
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the throwaway box pointer from the deeper temporary slot
+        }
+    }
+}
+
+/// Releases the deeper temporary stack slot that held the throwaway box pointer
+/// after the zval result has already been popped, mirroring the stack movement of
+/// `emit_pop_reg` without overwriting the recovered zval in the call register.
+fn emit_drop_temp_box_slot(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("add sp, sp, #16");                         // discard the freed box slot without clobbering the zval result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("add rsp, 16");                             // discard the freed box slot without clobbering the zval result
+        }
+    }
+}
+
+/// Lowers `zval_unpack(zval_ptr)` by invoking `__rt_zval_unpack`, which returns a
+/// boxed Mixed cell pointer for the recovered value.
+pub(super) fn lower_zval_unpack(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "zval_unpack", 1)?;
+    let pointer = expect_operand(inst, 0)?;
+    load_pointer_payload(ctx, pointer, "zval_unpack")?;
+    abi::emit_call_label(ctx.emitter, "__rt_zval_unpack");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `zval_type(zval_ptr)` by invoking `__rt_zval_type`, which returns the
+/// PHP `IS_*` type byte as an integer.
+pub(super) fn lower_zval_type(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "zval_type", 1)?;
+    let pointer = expect_operand(inst, 0)?;
+    load_pointer_payload(ctx, pointer, "zval_type")?;
+    abi::emit_call_label(ctx.emitter, "__rt_zval_type");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `zval_free(zval_ptr)` by invoking `__rt_zval_free` to release the zval
+/// block and any PHP-shaped children it owns. The call has no result value.
+pub(super) fn lower_zval_free(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "zval_free", 1)?;
+    let pointer = expect_operand(inst, 0)?;
+    load_pointer_payload(ctx, pointer, "zval_free")?;
+    abi::emit_call_label(ctx.emitter, "__rt_zval_free");
+    store_if_result(ctx, inst)
+}
+
 /// Verifies a pointer string-copy length operand is a concrete PHP integer.
 fn require_int_value(ty: PhpType, name: &str) -> Result<()> {
     match ty.codegen_repr() {

@@ -2,7 +2,7 @@
 title: "base64_decode()"
 description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 335
+  order: 339
 ---
 
 ## base64_decode()

@@ -2,7 +2,7 @@
 title: "is_string()"
 description: "is_string() — type builtin supported by Elephc."
 sidebar:
-  order: 426
+  order: 430
 ---
 
 ## is_string()

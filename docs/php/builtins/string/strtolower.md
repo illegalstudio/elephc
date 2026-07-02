@@ -2,7 +2,7 @@
 title: "strtolower()"
 description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 393
+  order: 397
 ---
 
 ## strtolower()

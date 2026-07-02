@@ -2,7 +2,7 @@
 title: "rawurldecode()"
 description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 371
+  order: 375
 ---
 
 ## rawurldecode()

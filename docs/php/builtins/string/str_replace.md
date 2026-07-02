@@ -2,7 +2,7 @@
 title: "str_replace()"
 description: "Lowers `str_replace()`/`str_ireplace()` with three string operands."
 sidebar:
-  order: 382
+  order: 386
 ---
 
 ## str_replace()

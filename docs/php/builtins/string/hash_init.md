@@ -2,7 +2,7 @@
 title: "hash_init()"
 description: "Lowers `hash_init(algo)` and returns a boxed HashContext resource."
 sidebar:
-  order: 353
+  order: 357
 ---
 
 ## hash_init()

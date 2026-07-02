@@ -24,3 +24,7 @@ sidebar:
 | [`ptr_write32()`](./pointer/ptr_write32.md) | `(pointer $pointer, int $value): void` | `void` |
 | [`ptr_write8()`](./pointer/ptr_write8.md) | `(pointer $pointer, int $value): void` | `void` |
 | [`ptr_write_string()`](./pointer/ptr_write_string.md) | `(pointer $pointer, string $string): int` | `int` |
+| [`zval_free()`](./pointer/zval_free.md) | `(mixed $zval): void` | `void` |
+| [`zval_pack()`](./pointer/zval_pack.md) | `(mixed $value): mixed` | `mixed` |
+| [`zval_type()`](./pointer/zval_type.md) | `(mixed $zval): int` | `int` |
+| [`zval_unpack()`](./pointer/zval_unpack.md) | `(mixed $zval): mixed` | `mixed` |

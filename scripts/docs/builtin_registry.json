@@ -3214,7 +3214,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_boolval",
-      "codegen_line": 1106,
+      "codegen_line": 1110,
       "notes": [
         "Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`."
       ],
@@ -4014,7 +4014,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_count",
-      "codegen_line": 959,
+      "codegen_line": 963,
       "notes": [
         "Lowers `count(array)` for concrete array values by reading the runtime length header."
       ],
@@ -4376,7 +4376,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_define",
-      "codegen_line": 591,
+      "codegen_line": 595,
       "notes": [
         "Lowers `define(\"NAME\", value)` with the legacy duplicate-name runtime guard."
       ],
@@ -4427,7 +4427,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_defined",
-      "codegen_line": 786,
+      "codegen_line": 790,
       "notes": [
         "Lowers `defined(\"NAME\")` for compile-time string constant names."
       ],
@@ -4583,7 +4583,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 1138,
+      "codegen_line": 1142,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -5849,7 +5849,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_floatval",
-      "codegen_line": 1076,
+      "codegen_line": 1080,
       "notes": [
         "Lowers `floatval()` for concrete scalar operands."
       ],
@@ -6929,7 +6929,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_function_exists",
-      "codegen_line": 801,
+      "codegen_line": 805,
       "notes": [
         "Lowers `function_exists(\"name\")` for compile-time string names.",
         "Recognizes user functions, externs, catalog builtins, and the date/time procedural aliases",
@@ -7455,7 +7455,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_gettype",
-      "codegen_line": 654,
+      "codegen_line": 658,
       "notes": [
         "Lowers `gettype(value)` for statically concrete PHP types."
       ],
@@ -8702,7 +8702,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_intval",
-      "codegen_line": 1043,
+      "codegen_line": 1047,
       "notes": [
         "Lowers `intval()` for concrete scalar operands."
       ],
@@ -8916,7 +8916,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_callable",
-      "codegen_line": 844,
+      "codegen_line": 848,
       "notes": [
         "Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers."
       ],
@@ -9144,7 +9144,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_array",
-      "codegen_line": 1522,
+      "codegen_line": 1526,
       "notes": [
         "Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value",
         "whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is",
@@ -9183,7 +9183,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_object",
-      "codegen_line": 1537,
+      "codegen_line": 1541,
       "notes": [
         "Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose",
         "runtime tag is an object (6)."
@@ -9221,7 +9221,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_scalar",
-      "codegen_line": 1553,
+      "codegen_line": 1557,
       "notes": [
         "Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed",
         "Mixed/Union value whose runtime tag is int (0), string (1), float (2), or bool (3). Null,",
@@ -9453,7 +9453,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_iterable",
-      "codegen_line": 1314,
+      "codegen_line": 1318,
       "notes": [
         "Lowers `is_iterable()` for concrete values and boxed Mixed payloads."
       ],
@@ -11377,7 +11377,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_phpversion",
-      "codegen_line": 776,
+      "codegen_line": 780,
       "notes": [
         "Lowers `phpversion()` as the compiler package version string."
       ],
@@ -11414,7 +11414,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_pi",
-      "codegen_line": 638,
+      "codegen_line": 642,
       "notes": [
         "Lowers `pi()` as the same data-section float constant used by the legacy backend."
       ],
@@ -14692,7 +14692,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_strlen",
-      "codegen_line": 1013,
+      "codegen_line": 1017,
       "notes": [
         "Lowers `strlen()` by coercing string-like values and returning the byte length."
       ],
@@ -18986,6 +18986,178 @@
     },
     "slug": "wordwrap",
     "sub_area": "String"
+  },
+  {
+    "area": "Pointer",
+    "canonical_name": "zval_free",
+    "description": "Lowers `zval_free(zval_ptr)` by invoking `__rt_zval_free` to release the zval",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/pointers.rs",
+      "codegen_function": "lower_zval_free",
+      "codegen_line": 630,
+      "notes": [
+        "Lowers `zval_free(zval_ptr)` by invoking `__rt_zval_free` to release the zval",
+        "block and any PHP-shaped children it owns. The call has no result value."
+      ],
+      "runtime_helpers": [
+        "__rt_zval_free"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "zval_free",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zval",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "slug": "zval_free",
+    "sub_area": "Pointer"
+  },
+  {
+    "area": "Pointer",
+    "canonical_name": "zval_pack",
+    "description": "Lowers `zval_pack(value)` by boxing the operand as a Mixed cell and invoking",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/pointers.rs",
+      "codegen_function": "lower_zval_pack",
+      "codegen_line": 548,
+      "notes": [
+        "Lowers `zval_pack(value)` by boxing the operand as a Mixed cell and invoking",
+        "`__rt_zval_pack`, which returns a pointer to a freshly allocated 16-byte zval.",
+        "`__rt_zval_pack` only reads the `(tag, lo, hi)` triple out of the boxed Mixed",
+        "cell; it never retains or frees that cell. When the operand was not already",
+        "Mixed/Union, `emit_box_current_value_as_mixed` allocated a fresh owned box",
+        "(persisting strings, increfing array/object/mixed children), so that box is a",
+        "throwaway temporary that must be deep-released after the pack call or it leaks",
+        "one Mixed cell per call. When the operand is already Mixed/Union no box was",
+        "created \u2014 the operand's own live cell is passed through \u2014 so it must not be",
+        "freed here."
+      ],
+      "runtime_helpers": [
+        "__rt_mixed_free_deep",
+        "__rt_zval_pack"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "zval_pack",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "zval_pack",
+    "sub_area": "Pointer"
+  },
+  {
+    "area": "Pointer",
+    "canonical_name": "zval_type",
+    "description": "Lowers `zval_type(zval_ptr)` by invoking `__rt_zval_type`, which returns the",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/pointers.rs",
+      "codegen_function": "lower_zval_type",
+      "codegen_line": 620,
+      "notes": [
+        "Lowers `zval_type(zval_ptr)` by invoking `__rt_zval_type`, which returns the",
+        "PHP `IS_*` type byte as an integer."
+      ],
+      "runtime_helpers": [
+        "__rt_zval_free",
+        "__rt_zval_type"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "zval_type",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zval",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "zval_type",
+    "sub_area": "Pointer"
+  },
+  {
+    "area": "Pointer",
+    "canonical_name": "zval_unpack",
+    "description": "Lowers `zval_unpack(zval_ptr)` by invoking `__rt_zval_unpack`, which returns a",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/pointers.rs",
+      "codegen_function": "lower_zval_unpack",
+      "codegen_line": 610,
+      "notes": [
+        "Lowers `zval_unpack(zval_ptr)` by invoking `__rt_zval_unpack`, which returns a",
+        "boxed Mixed cell pointer for the recovered value."
+      ],
+      "runtime_helpers": [
+        "__rt_zval_free",
+        "__rt_zval_type",
+        "__rt_zval_unpack"
+      ],
+      "sig_arm": null,
+      "sig_file": null,
+      "sig_line": null
+    },
+    "name": "zval_unpack",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zval",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "zval_unpack",
+    "sub_area": "Pointer"
   },
   {
     "area": "IO",

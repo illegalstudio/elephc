@@ -2,7 +2,7 @@
 title: "stream_filter_append() — internals"
 description: "Compiler internals for stream_filter_append(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 335
+  order: 339
 ---
 
 ## `stream_filter_append()` — internals

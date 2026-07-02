@@ -2,7 +2,7 @@
 title: "hash_final()"
 description: "Lowers `hash_final(context, binary?)` through the incremental hash finalizer."
 sidebar:
-  order: 351
+  order: 355
 ---
 
 ## hash_final()

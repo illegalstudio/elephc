@@ -1012,9 +1012,9 @@ statics, and static class properties all reset between requests). Run it with
 
 ## v0.28.x — PHP extension bridge (experimental)
 
-- [ ] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
+- [x] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
 - [ ] Link against PHP extension `.so` / `.dylib` shared libraries
-- [ ] Bridge for string, int, float, bool, array types
+- [x] Bridge for string, int, float, bool, array types
 - [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
 - [ ] `--ext` flag to specify extension libraries at compile time
 - [ ] Documentation: how to bridge a PHP extension

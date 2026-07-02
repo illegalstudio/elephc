@@ -568,6 +568,7 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             // from runtime string-callable dispatch; direct and first-class-callable
             // use still work through the EIR path.
             | "serialize" | "unserialize"
+            | "zval_pack" | "zval_unpack" | "zval_type" | "zval_free"
     )
 }
 

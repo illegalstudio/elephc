@@ -2,7 +2,7 @@
 title: "spl_autoload_unregister()"
 description: "Lowers autoload registration stubs by preserving arg effects and returning true."
 sidebar:
-  order: 324
+  order: 328
 ---
 
 ## spl_autoload_unregister()

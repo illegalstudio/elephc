@@ -441,6 +441,10 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "vprintf",
     "vsprintf",
     "wordwrap",
+    "zval_free",
+    "zval_pack",
+    "zval_type",
+    "zval_unpack",
 ];
 
 const INTERNAL_BUILTIN_FUNCTIONS: &[&str] = &[

@@ -196,6 +196,39 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Int))
         }
+        "zval_pack" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "zval_pack() takes exactly 1 argument"));
+            }
+            // Accept any value: the pack routine boxes scalars/strings/arrays
+            // into Mixed cells before conversion, so no type constraint applies.
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Pointer(None)))
+        }
+        "zval_unpack" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "zval_unpack() takes exactly 1 argument"));
+            }
+            let ptr_ty = checker.infer_type(&args[0], env)?;
+            checker.ensure_pointer_type(&ptr_ty, span, "zval_unpack()")?;
+            Ok(Some(PhpType::Mixed))
+        }
+        "zval_type" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "zval_type() takes exactly 1 argument"));
+            }
+            let ptr_ty = checker.infer_type(&args[0], env)?;
+            checker.ensure_pointer_type(&ptr_ty, span, "zval_type()")?;
+            Ok(Some(PhpType::Int))
+        }
+        "zval_free" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "zval_free() takes exactly 1 argument"));
+            }
+            let ptr_ty = checker.infer_type(&args[0], env)?;
+            checker.ensure_pointer_type(&ptr_ty, span, "zval_free()")?;
+            Ok(Some(PhpType::Void))
+        }
         _ => Ok(None),
     }
 }
