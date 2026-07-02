@@ -15,14 +15,7 @@ pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 
 /// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--ir-backend] [--ast-backend] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] <source.php>";
-
-/// Backend selected for assembly generation after frontend and optimization passes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CodegenBackend {
-    Eir,
-    Ast,
-}
+pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--ir-backend] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] <source.php>";
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
@@ -32,7 +25,6 @@ pub(crate) struct CliConfig {
     pub(crate) gc_stats: bool,
     pub(crate) heap_debug: bool,
     pub(crate) emit_ir: bool,
-    pub(crate) backend: CodegenBackend,
     pub(crate) null_repr: crate::codegen::NullRepr,
     pub(crate) emit_asm: bool,
     pub(crate) emit: Emit,
@@ -60,9 +52,6 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut gc_stats = false;
     let mut heap_debug = false;
     let mut emit_ir = false;
-    let mut backend = CodegenBackend::Eir;
-    let mut explicit_ir_backend = false;
-    let mut explicit_ast_backend = false;
     let mut emit_asm = false;
     let mut emit = Emit::Executable;
     let mut check_only = false;
@@ -112,11 +101,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         } else if arg == "--emit-ir" {
             emit_ir = true;
         } else if arg == "--ir-backend" {
-            explicit_ir_backend = true;
-            backend = CodegenBackend::Eir;
-        } else if arg == "--ast-backend" {
-            explicit_ast_backend = true;
-            backend = CodegenBackend::Ast;
+            // EIR is the only backend; the flag is accepted as a no-op for compatibility.
         } else if arg == "--emit-asm" {
             emit_asm = true;
         } else if arg == "--emit" {
@@ -192,14 +177,6 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     if output_modes > 1 {
         fail("--emit-ir, --emit-asm, and --check are mutually exclusive");
     }
-    if explicit_ir_backend && explicit_ast_backend {
-        fail("cannot use --ir-backend and --ast-backend together");
-    }
-    if explicit_ast_backend {
-        eprintln!(
-            "warning: --ast-backend is deprecated and will be removed in v0.26.0. The EIR backend is now the default. See docs/internals/the-ir.md for details."
-        );
-    }
     if web && check_only {
         fail("--web cannot be combined with --check");
     }
@@ -219,7 +196,6 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         gc_stats,
         heap_debug,
         emit_ir,
-        backend,
         null_repr,
         emit_asm,
         emit,

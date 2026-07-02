@@ -21,6 +21,7 @@ use super::{
 };
 
 #[derive(Debug)]
+#[allow(dead_code)]
 /// Aggregate result of type checking, carrying type environments, declarations,
 /// class metadata, warnings, FFI data, and required libraries forward to optimizer,
 /// codegen, and linker setup.

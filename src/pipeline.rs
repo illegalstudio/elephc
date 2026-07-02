@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Instant;
 
-use crate::cli::{CliConfig, CodegenBackend};
+use crate::cli::CliConfig;
 use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
 use crate::timings::CompileTimings;
@@ -41,7 +41,6 @@ pub(crate) fn compile(config: CliConfig) {
         gc_stats,
         heap_debug,
         emit_ir,
-        backend,
         null_repr,
         emit_asm,
         emit,
@@ -280,33 +279,25 @@ pub(crate) fn compile(config: CliConfig) {
         return;
     }
 
-    let ir_module = if matches!(backend, CodegenBackend::Eir) {
-        let phase_started = Instant::now();
-        let mut module = match ir_lower::lower_program(&ast, &check_result, target) {
-            Ok(module) => module,
-            Err(err) => {
-                eprintln!("EIR lowering error: {}", err);
-                process::exit(1);
-            }
-        };
-        timings.record_since("ir-lower", phase_started);
-
-        let phase_started = Instant::now();
-        if ir_opt {
-            ir_passes::optimize_module(&mut module);
+    let phase_started = Instant::now();
+    let mut module = match ir_lower::lower_program(&ast, &check_result, target) {
+        Ok(module) => module,
+        Err(err) => {
+            eprintln!("EIR lowering error: {}", err);
+            process::exit(1);
         }
-        timings.record_since("ir-opt", phase_started);
-        Some(module)
-    } else {
-        None
     };
+    timings.record_since("ir-lower", phase_started);
 
-    let mut runtime_features = ir_module
-        .as_ref()
-        .map(|module| module.required_runtime_features)
-        .unwrap_or_else(|| {
-            codegen::runtime_features_for_program_and_classes(&ast, &check_result.classes)
-        });
+    let phase_started = Instant::now();
+    if ir_opt {
+        ir_passes::optimize_module(&mut module);
+    }
+    timings.record_since("ir-opt", phase_started);
+
+    let ir_module = Some(module);
+
+    let mut runtime_features = ir_module.as_ref().unwrap().required_runtime_features;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
     // sole driver of the web runtime feature: it is CLI-driven, not derived from the
     // program, so the runtime cache (keyed on the generated assembly hash) keeps the
@@ -336,54 +327,23 @@ pub(crate) fn compile(config: CliConfig) {
     timings.note(format!("runtime-cache {}", runtime_object.status.as_str()));
 
     let phase_started = Instant::now();
-    let codegen_timing = if ir_module.is_some() {
-        "codegen-ir"
-    } else {
-        "codegen"
-    };
-    let user_asm = if let Some(module) = &ir_module {
-        match codegen_ir::generate_user_asm_from_ir_with_options(
-            module,
-            gc_stats,
-            heap_debug,
-            requires_elephc_tls,
-            emit,
-            &exported_functions,
-            regalloc_linear,
-            web,
-        ) {
-            Ok(asm) => asm,
-            Err(err) => {
-                eprintln!("EIR backend error: {}", err);
-                process::exit(1);
-            }
+    let user_asm = match codegen_ir::generate_user_asm_from_ir_with_options(
+        ir_module.as_ref().unwrap(),
+        gc_stats,
+        heap_debug,
+        requires_elephc_tls,
+        emit,
+        &exported_functions,
+        regalloc_linear,
+        web,
+    ) {
+        Ok(asm) => asm,
+        Err(err) => {
+            eprintln!("EIR backend error: {}", err);
+            process::exit(1);
         }
-    } else {
-        codegen::generate_user_asm(
-            &ast,
-            &check_result.global_env,
-            &check_result.functions,
-            &check_result.callable_param_sigs,
-            &check_result.callable_return_sigs,
-            &check_result.callable_array_return_sigs,
-            &check_result.interfaces,
-            &check_result.classes,
-            &check_result.enums,
-            &check_result.packed_classes,
-            &check_result.extern_functions,
-            &check_result.extern_classes,
-            &check_result.extern_globals,
-            heap_size,
-            gc_stats,
-            heap_debug,
-            target,
-            requires_elephc_tls,
-            null_repr,
-            emit,
-            &exported_functions,
-        )
     };
-    timings.record_since(codegen_timing, phase_started);
+    timings.record_since("codegen-ir", phase_started);
 
     for lib in &check_result.required_libraries {
         if !extra_link_libs.contains(lib) {
