@@ -24,6 +24,7 @@ fn map_anon_private_flags(platform: Platform) -> i32 {
     match platform {
         Platform::MacOS => 0x1002, // MAP_PRIVATE | MAP_ANON
         Platform::Linux => 0x22,   // MAP_PRIVATE | MAP_ANONYMOUS
+        Platform::Windows => 0x22, // MAP_PRIVATE | MAP_ANONYMOUS — ignored by __rt_sys_mmap/VirtualAlloc shim
     }
 }
 

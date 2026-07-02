@@ -2,7 +2,7 @@
 title: "ptr_get()"
 description: "Lowers `ptr_get(pointer)` by reading one machine word through a checked pointer."
 sidebar:
-  order: 286
+  order: 287
 ---
 
 ## ptr_get()

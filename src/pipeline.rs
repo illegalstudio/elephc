@@ -341,7 +341,7 @@ pub(crate) fn compile(config: CliConfig) {
     } else {
         "codegen"
     };
-    let user_asm = if let Some(module) = &ir_module {
+    let mut user_asm = if let Some(module) = &ir_module {
         match codegen_ir::generate_user_asm_from_ir_with_options(
             module,
             gc_stats,
@@ -394,6 +394,13 @@ pub(crate) fn compile(config: CliConfig) {
         if !extra_link_libs.contains(&lib) {
             extra_link_libs.push(lib);
         }
+    }
+
+    // On Windows, rewrite the raw Linux `mov eax, N; syscall` sequences shared by
+    // the x86_64 backend into `call __rt_sys_<name>` shim calls before the assembly
+    // is written, source-mapped, or assembled. Linux/macOS assembly is untouched.
+    if target.platform == Platform::Windows {
+        user_asm = codegen::platform::transform_for_windows(&user_asm);
     }
 
     let phase_started = Instant::now();
@@ -462,6 +469,7 @@ fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
         Emit::Cdylib => match target.platform {
             Platform::MacOS => format!("lib{}.dylib", stem),
             Platform::Linux => format!("lib{}.so", stem),
+            Platform::Windows => format!("{}.dll", stem),
         },
     };
     OutputPaths {

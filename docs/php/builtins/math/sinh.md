@@ -2,7 +2,7 @@
 title: "sinh()"
 description: "sinh() — math builtin supported by Elephc."
 sidebar:
-  order: 265
+  order: 266
 ---
 
 ## sinh()

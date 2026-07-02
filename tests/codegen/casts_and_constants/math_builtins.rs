@@ -148,4 +148,45 @@ fn test_number_format_space_thousands() {
     assert_eq!(out, "1 234 567");
 }
 
+// --- random_bytes ---
+
+/// Verifies `random_bytes(16)` returns a 16-byte binary string (constant length).
+#[test]
+fn test_random_bytes_length() {
+    let out = compile_and_run("<?php echo strlen(random_bytes(16));");
+    assert_eq!(out, "16");
+}
+
+/// Verifies `random_bytes()` honors a runtime-unknown length (via `$argc`) so the
+/// dynamic-length runtime path is exercised rather than a folded constant.
+#[test]
+fn test_random_bytes_runtime_length() {
+    let out = compile_and_run("<?php echo strlen(random_bytes(32 + $argc - $argc));");
+    assert_eq!(out, "32");
+}
+
+/// Verifies a fully-qualified `\random_bytes()` call resolves through namespace
+/// fallback and still returns the requested number of bytes.
+#[test]
+fn test_random_bytes_namespaced() {
+    let out = compile_and_run("<?php echo strlen(\\random_bytes(8));");
+    assert_eq!(out, "8");
+}
+
+/// Verifies PHP case-insensitive builtin lookup: `RANDOM_BYTES(8)` resolves to
+/// `random_bytes` and returns 8 bytes.
+#[test]
+fn test_random_bytes_case_insensitive() {
+    let out = compile_and_run("<?php echo strlen(RANDOM_BYTES(8));");
+    assert_eq!(out, "8");
+}
+
+/// Verifies two `random_bytes(16)` results differ (guards against the impure call
+/// being constant-folded or deduplicated): `var_dump` shows `bool(true)`.
+#[test]
+fn test_random_bytes_distinct() {
+    let out = compile_and_run("<?php var_dump(random_bytes(16) !== random_bytes(16));");
+    assert_eq!(out, "bool(true)\n");
+}
+
 // --- Constants ---

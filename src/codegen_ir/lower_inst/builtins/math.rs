@@ -28,7 +28,7 @@ pub(super) use binary::{lower_fdiv, lower_fmod, lower_intdiv, lower_pow};
 pub(super) use libm::{
     lower_atan2, lower_deg2rad, lower_hypot, lower_log, lower_rad2deg, lower_unary_libm,
 };
-pub(super) use random::{lower_rand, lower_random_int};
+pub(super) use random::{lower_rand, lower_random_bytes, lower_random_int};
 
 const CLAMP_MIN_NAN_MESSAGE: &str = "clamp(): Argument #2 ($min) must not be NAN";
 const CLAMP_MAX_NAN_MESSAGE: &str = "clamp(): Argument #3 ($max) must not be NAN";

@@ -296,6 +296,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "putenv",
     "rad2deg",
     "rand",
+    "random_bytes",
     "random_int",
     "range",
     "rawurldecode",

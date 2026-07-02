@@ -2,7 +2,7 @@
 title: "popen()"
 description: "Lowers `popen(command, mode)` and boxes the process pipe as `resource|false`."
 sidebar:
-  order: 305
+  order: 306
 ---
 
 ## popen()

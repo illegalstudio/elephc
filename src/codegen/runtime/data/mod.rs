@@ -28,6 +28,12 @@ pub(crate) const DIRNAME_LEVELS_MSG: &str =
 /// Fatal error message when `str_repeat()` receives a `$times` argument less than 0.
 pub(crate) const STR_REPEAT_TIMES_MSG: &str =
     "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";
+/// Fatal error message when `random_bytes()` receives a `$length` argument below 1.
+pub(crate) const RANDOM_BYTES_LENGTH_MSG: &str =
+    "Fatal error: random_bytes(): Argument #1 ($length) must be greater than 0\n";
+/// Fatal error message when `random_bytes()` cannot obtain cryptographically secure random data.
+pub(crate) const RANDOM_BYTES_SOURCE_MSG: &str =
+    "Fatal error: random_bytes(): Cannot gather sufficient random data\n";
 /// Catchable `\ValueError` message when `hash()` receives an unknown algorithm name.
 pub(crate) const HASH_UNKNOWN_ALGO_MSG: &str =
     "hash(): Argument #1 ($algo) must be a valid hashing algorithm";

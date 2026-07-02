@@ -773,6 +773,13 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
         (Platform::MacOS, Arch::X86_64) => {
             panic!("exit() is not implemented yet for target macos-x86_64");
         }
+        (Platform::Windows, Arch::X86_64) => {
+            ctx.emitter.instruction("mov rdi, rax");                            // move exit code into SysV first-arg for the shim
+            ctx.emitter.instruction("call __rt_sys_exit");                      // call Win32 ExitProcess shim
+        }
+        (Platform::Windows, Arch::AArch64) => {
+            panic!("Windows ARM64 target is not yet supported (see issue #379)");
+        }
     }
 }
 

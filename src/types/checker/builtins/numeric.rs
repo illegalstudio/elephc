@@ -30,7 +30,7 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 /// - Numeric: `abs`, `floor`, `ceil`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,
 ///   `sinh`, `cosh`, `tanh`, `log2`, `log10`, `exp`, `deg2rad`, `rad2deg`, `atan2`, `hypot`,
 ///   `pi`, `round`, `pow`, `intdiv`, `fmod`, `fdiv`, `log`
-/// - Random: `rand`, `mt_rand`, `random_int`
+/// - Random: `rand`, `mt_rand`, `random_int`, `random_bytes`
 /// - Cast/retype: `floatval`, `settype`, `gettype`
 /// - Array/string helpers: `min`, `max`, `number_format`
 /// - Control: `exit`, `die`, `empty`
@@ -248,6 +248,29 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             checker.infer_type(&args[1], env)?;
             Ok(Some(PhpType::Int))
+        }
+        "random_bytes" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "random_bytes() takes exactly 1 argument",
+                ));
+            }
+            // `random_bytes()` is a CSPRNG; PHP throws a ValueError for a length
+            // below 1. elephc has no catchable path from the runtime helper, so a
+            // constant length literal below 1 (0 or a folded negative) is rejected
+            // at compile time here; runtime-unknown lengths are guarded in the
+            // `__rt_random_bytes` runtime helper instead.
+            if let ExprKind::IntLiteral(length) = args[0].kind {
+                if length < 1 {
+                    return Err(CompileError::new(
+                        span,
+                        "random_bytes(): Argument #1 ($length) must be greater than 0",
+                    ));
+                }
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
         }
         "number_format" => {
             if args.is_empty() || args.len() > 4 {

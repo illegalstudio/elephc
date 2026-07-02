@@ -2,7 +2,7 @@
 title: "gzuncompress() — internals"
 description: "Compiler internals for gzuncompress(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 349
+  order: 350
 ---
 
 ## `gzuncompress()` — internals

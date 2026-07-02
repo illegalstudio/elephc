@@ -21,7 +21,9 @@ use super::pointers;
 use super::spl;
 use super::strings;
 use super::system;
+use super::win32;
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Platform;
 use crate::codegen::RuntimeFeatures;
 
 /// Emits all runtime helper labels in dependency order for supported targets.
@@ -32,6 +34,12 @@ use crate::codegen::RuntimeFeatures;
 /// Each category is emitted before any code that depends on it, ensuring labels
 /// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
+    if emitter.platform == Platform::Windows {
+        win32::emit_win32_shims(emitter);
+        win32::emit_fd_to_handle(emitter);
+        win32::emit_main_wrapper(emitter);
+    }
+
     diagnostics::emit_diagnostics(emitter);
 
     // String runtime functions
@@ -196,6 +204,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_hash_union(emitter);
     arrays::emit_hash_array_union(emitter);
     arrays::emit_random_u32(emitter);
+    arrays::emit_random_bytes(emitter);
     arrays::emit_random_uniform(emitter);
     arrays::emit_sort_int(emitter, false);
     arrays::emit_sort_int(emitter, true);
@@ -592,6 +601,51 @@ mod tests {
                 sym
             );
         }
+    }
+
+    /// Regression net for wiring the Windows syscall→shim transform into the
+    /// runtime build (FIX #1). Generates the full shared x86_64 runtime for a
+    /// Windows target and applies `transform_for_windows` exactly as the runtime
+    /// cache does, then asserts that no raw `syscall` instruction and no `int3`
+    /// (unmapped-syscall marker) survive. `int3` would only appear if the runtime
+    /// emits a syscall number missing from `linux_syscall_to_shim`, so this also
+    /// guards syscall→shim coverage. Needs no MinGW toolchain.
+    #[test]
+    fn test_windows_runtime_has_no_raw_syscalls_after_transform() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+        let raw = crate::codegen::generate_runtime_with_features_pic(
+            8 * 1024 * 1024,
+            target,
+            RuntimeFeatures::all(),
+            false,
+        );
+
+        // Sanity: the untransformed shared x86_64 runtime really does emit raw
+        // syscalls, so a passing assertion below is not vacuous.
+        assert!(
+            raw.lines().any(|line| line.trim() == "syscall"),
+            "expected the raw x86_64 runtime to contain standalone syscall instructions"
+        );
+
+        let transformed = crate::codegen::platform::transform_for_windows(&raw);
+
+        let leftover: Vec<&str> = transformed
+            .lines()
+            .filter(|line| {
+                let t = line.trim();
+                t == "syscall" || t.starts_with("syscall ") || t.starts_with("syscall\t")
+            })
+            .collect();
+        assert!(
+            leftover.is_empty(),
+            "Windows runtime still contains raw syscall lines after transform: {:?}",
+            leftover
+        );
+        assert!(
+            !transformed.contains("int3"),
+            "Windows runtime transform produced int3 — an unmapped Linux syscall number \
+             is emitted by the runtime but missing from linux_syscall_to_shim"
+        );
     }
 
     /// Verifies the full macOS AArch64 runtime still assembles once per-symbol

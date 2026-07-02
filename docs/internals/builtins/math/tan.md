@@ -2,7 +2,7 @@
 title: "tan() — internals"
 description: "Compiler internals for tan(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 267
+  order: 268
 ---
 
 ## `tan()` — internals

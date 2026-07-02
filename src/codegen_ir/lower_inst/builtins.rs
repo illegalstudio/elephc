@@ -69,6 +69,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "rad2deg" => math::lower_rad2deg(ctx, inst),
         "rand" | "mt_rand" => math::lower_rand(ctx, inst, key.as_str()),
         "random_int" => math::lower_random_int(ctx, inst),
+        "random_bytes" => math::lower_random_bytes(ctx, inst),
         "min" => math::lower_min_max(ctx, inst, false),
         "max" => math::lower_min_max(ctx, inst, true),
         "pi" => lower_pi(ctx, inst),

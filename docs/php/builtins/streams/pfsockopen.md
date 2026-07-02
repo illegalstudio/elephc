@@ -2,7 +2,7 @@
 title: "pfsockopen()"
 description: "pfsockopen() — streams builtin supported by Elephc."
 sidebar:
-  order: 329
+  order: 330
 ---
 
 ## pfsockopen()

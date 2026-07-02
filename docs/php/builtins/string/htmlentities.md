@@ -2,7 +2,7 @@
 title: "htmlentities()"
 description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 357
+  order: 358
 ---
 
 ## htmlentities()

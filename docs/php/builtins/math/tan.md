@@ -2,7 +2,7 @@
 title: "tan()"
 description: "tan() — math builtin supported by Elephc."
 sidebar:
-  order: 267
+  order: 268
 ---
 
 ## tan()

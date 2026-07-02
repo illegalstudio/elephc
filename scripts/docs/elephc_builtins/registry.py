@@ -508,6 +508,7 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     "rand": ["int", "int"],
     "mt_rand": ["int", "int"],
     "random_int": ["int", "int"],
+    "random_bytes": ["int"],
     "is_nan": ["float"],
     "is_finite": ["float"],
     "is_infinite": ["float"],

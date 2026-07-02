@@ -2,7 +2,7 @@
 title: "htmlspecialchars()"
 description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 358
+  order: 359
 ---
 
 ## htmlspecialchars()
