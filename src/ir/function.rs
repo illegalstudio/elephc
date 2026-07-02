@@ -65,6 +65,17 @@ pub struct Function {
     pub signature: Option<FunctionSig>,
     pub generator_source: Option<GeneratorSource>,
     pub flags: FunctionFlags,
+    /// By-value closure-capture slots that the body REASSIGNED at least once.
+    ///
+    /// A capture param slot enters the body as a borrow the closure descriptor
+    /// owns and frees; the first reassignment transfers ownership of the stored
+    /// value to the slot (see `ir_lower::context::store_local`). Such a slot is
+    /// no longer a descriptor borrow, so every function exit must release it
+    /// (unless it is the directly-returned value, which moves out). Both the
+    /// native epilogue (`codegen_ir::frame`) and the WASM `Return` epilogue
+    /// (`codegen_wasm::function`) consult this set. Empty for non-closures and
+    /// for captures that are never reassigned.
+    pub reassigned_capture_slots: std::collections::HashSet<LocalSlotId>,
 }
 
 impl Function {
@@ -85,6 +96,7 @@ impl Function {
             signature: None,
             generator_source: None,
             flags: FunctionFlags::default(),
+            reassigned_capture_slots: std::collections::HashSet::new(),
         }
     }
 
@@ -188,4 +200,11 @@ pub struct FunctionFlags {
     pub is_static: bool,
     /// `true` when the function/closure returns by reference (`function &f()` / `fn &()`).
     pub by_ref_return: bool,
+    /// For a closure, the number of trailing `params` that are capture params
+    /// (appended after the visible user params, in source order). Set by the EIR
+    /// closure lowerer (`lower_closure_function_with_signature`) so backends that
+    /// build a per-closure wrapper from the `Function` alone — without the
+    /// `ClosureNew` instruction in hand — can recover the visible/capture split.
+    /// Native ignores it; the WASM backend reads it to split wrapper unboxing.
+    pub closure_capture_count: usize,
 }

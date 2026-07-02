@@ -55,6 +55,12 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
+      - name: Install wasmer (WASM backend behavioral tests)
+        shell: bash
+        run: |
+          curl https://get.wasmer.io -sSfL | sh
+          echo "$HOME/.wasmer/bin" >> "$GITHUB_PATH"
+
       - name: Install native test dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install pcre2

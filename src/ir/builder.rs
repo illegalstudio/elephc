@@ -111,6 +111,23 @@ impl<'f> Builder<'f> {
         self.func.locals[slot.as_raw() as usize].kind
     }
 
+    /// Overwrites the semantic role of a local slot.
+    ///
+    /// Used when a by-value closure capture is reassigned: its slot transitions
+    /// `ClosureCapture` -> `PhpLocal` so subsequent stores release the prior owned
+    /// value and the backends treat it as an owned local (see `store_local`).
+    pub fn set_local_kind(&mut self, slot: LocalSlotId, kind: LocalKind) {
+        self.func.locals[slot.as_raw() as usize].kind = kind;
+    }
+
+    /// Records a by-value closure-capture slot as reassigned by the function body.
+    ///
+    /// The recorded slot now owns its stored value (no longer a descriptor borrow),
+    /// so the native and WASM exit epilogues release it unless it is returned.
+    pub fn mark_reassigned_capture_slot(&mut self, slot: LocalSlotId) {
+        self.func.reassigned_capture_slots.insert(slot);
+    }
+
     /// Returns the storage type for a value already emitted in this function.
     pub fn value_type(&self, value: ValueId) -> IrType {
         self.func.values[value.as_raw() as usize].ir_type
@@ -138,6 +155,42 @@ impl<'f> Builder<'f> {
             return None;
         };
         self.func.instructions.get(inst.as_raw() as usize)
+    }
+
+    /// Returns true when `slot` is a READ-ONLY trailing closure-capture parameter slot.
+    ///
+    /// A closure function appends its capture parameters after the visible user
+    /// parameters (the last `closure_capture_count` entries of `params`). A local slot
+    /// backs a capture parameter when the enclosing function is a closure and the slot's
+    /// name matches one of those trailing capture-parameter names.
+    ///
+    /// The read-only guard is essential: a capture that is REASSIGNED inside the body
+    /// (`$cap = newValue(); return $cap;`) is no longer borrowed from the descriptor —
+    /// `store_local` already emitted an `acquire_if_refcounted` into the slot and the
+    /// normal owned-local return-transfer path balances it. Adding Edit 1's
+    /// borrow-promoting acquire on top would double-count the refcount and corrupt
+    /// memory on a future `release`. Only captures whose slot is never written by
+    /// `Op::StoreLocal` in the body are still descriptor-borrows that need the extra
+    /// incref on return.
+    pub(crate) fn slot_is_closure_capture(&self, slot: LocalSlotId) -> bool {
+        if !self.func.flags.is_closure || self.func.flags.closure_capture_count == 0 {
+            return false;
+        }
+        let Some(local) = self.func.locals.get(slot.as_raw() as usize) else {
+            return false;
+        };
+        let Some(name) = local.name.as_deref() else {
+            return false;
+        };
+        let start = self
+            .func
+            .params
+            .len()
+            .saturating_sub(self.func.flags.closure_capture_count);
+        let is_capture_param = self.func.params[start..]
+            .iter()
+            .any(|param| param.name == name);
+        is_capture_param && !slot_has_store_local(self.func, slot)
     }
 
     /// Returns the current insertion block when one is selected.
@@ -379,6 +432,20 @@ impl<'f> Builder<'f> {
             "attempted to emit an EIR instruction after a terminator"
         );
     }
+}
+
+/// Returns true when `slot` is the target of at least one `Op::StoreLocal` instruction in `func`.
+///
+/// Used by `slot_is_closure_capture` as a read-only guard: a capture slot that is written
+/// inside the closure body has already been rebalanced by `store_local`'s
+/// `acquire_if_refcounted`; emitting an additional borrow-promoting acquire on return
+/// would double-count the refcount. Mirrors `local_slot_has_store` in
+/// `src/codegen_ir/frame.rs`.
+fn slot_has_store_local(func: &Function, slot: LocalSlotId) -> bool {
+    func.instructions.iter().any(|inst| {
+        inst.op == Op::StoreLocal
+            && matches!(inst.immediate, Some(Immediate::LocalSlot(candidate)) if candidate == slot)
+    })
 }
 
 /// Returns the local frame PHP representation that can store both observed types.

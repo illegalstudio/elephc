@@ -18,6 +18,10 @@ mod fibers;
 mod frame;
 mod function_variants;
 mod literal_defaults;
+// Re-export only the pure scalar-default extractor and its enum so other backends
+// (codegen_wasm) can reuse them without widening the module's FunctionContext-taking
+// emitters, which must stay private to `codegen_ir`.
+pub(crate) use literal_defaults::{literal_default_value, LiteralDefaultValue};
 mod lower_inst;
 mod lower_term;
 pub mod value_placement;
@@ -124,7 +128,9 @@ pub fn generate_user_asm_from_ir_with_options(
 ) -> Result<String> {
     let mut emitter = match emit {
         Emit::Cdylib => Emitter::new_pic(module.target),
-        Emit::Executable => Emitter::new(module.target),
+        // NpmPackage is wasm-only and never reaches the native EIR backend, but it
+        // behaves like Executable for codegen; keep the match exhaustive.
+        Emit::Executable | Emit::NpmPackage => Emitter::new(module.target),
     };
     if module.target.arch == Arch::X86_64 {
         emitter.emit_text_prelude();

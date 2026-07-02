@@ -1021,10 +1021,10 @@ statics, and static class properties all reset between requests). Run it with
 
 ## v0.29.x — WebAssembly target
 
-- [ ] WASM codegen backend
-- [ ] `.wat` / `.wasm` emission
-- [ ] WASI support for I/O
-- [ ] NPM package generation
+- [x] WASM codegen backend
+- [x] `.wat` / `.wasm` emission
+- [x] WASI support for I/O
+- [x] NPM package generation
 
 
 ## Deferred ideas

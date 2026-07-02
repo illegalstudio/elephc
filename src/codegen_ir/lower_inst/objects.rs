@@ -2326,6 +2326,7 @@ fn lower_allow_dynamic_prop_get(
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
             ctx.emitter.instruction(&format!("cbz x0, {}", miss_label));        // missing dynamic properties read as PHP null
             ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
+            ctx.emitter.instruction("bl __rt_incref");                          // retain the dynamic-property cell so the caller owns the result
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the null fallback after a successful dynamic-property hit
         }
         Arch::X86_64 => {
@@ -2336,6 +2337,9 @@ fn lower_allow_dynamic_prop_get(
             ctx.emitter.instruction("test rax, rax");                           // check whether the dynamic-property key was present
             ctx.emitter.instruction(&format!("je {}", miss_label));             // missing dynamic properties read as PHP null
             ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("call __rt_incref");                        // retain the dynamic-property cell so the caller owns the result
+            abi::emit_pop_reg(ctx.emitter, "rax");
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the null fallback after a successful dynamic-property hit
         }
     }

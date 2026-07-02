@@ -36,6 +36,11 @@ flate2 = "1"
 # bzip2-rs is a PURE-RUST bzip2 decoder (no system libbz2, no C toolchain) used by
 # the compiler to decompress bzip2 phar:// entries at compile time. Decompress-only.
 bzip2-rs = "0.1"
+# wat is the Bytecode Alliance's PURE-RUST WebAssembly-text assembler (no external
+# wat2wasm / wasm-tools CLI). The wasm32-wasi backend emits `.wat` text and encodes
+# it to a `.wasm` binary with `wat::parse_str`, matching the pure-Rust ethos of
+# flate2 / bzip2-rs above.
+wat = "1"
 elephc-phar = { path = "crates/elephc-phar" }
 
 # Bridge crates are runtime staticlibs, not used by the Rust compiler itself,
@@ -59,6 +64,11 @@ flate2 = "1"
 # success coverage does not depend on outbound network access.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-pemfile = "2"
+# wasmparser fully validates (type-checks) the WebAssembly the wasm32-wasi backend
+# emits, so the dispatch-loop/terminator lowering tests assert real wasm validity
+# rather than mere textual assembly. Version matches the wasmparser that `wat`
+# already pulls in, so the dependency graph is deduplicated.
+wasmparser = "0.252"
 
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of

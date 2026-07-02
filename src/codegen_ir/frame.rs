@@ -530,9 +530,48 @@ fn zero_initialize_function_cleanup_locals(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Returns reassigned by-value closure-capture slots to release at the epilogue.
+///
+/// A capture-param slot is param-named, so `function_cleanup_locals` excludes it from
+/// both the zero-init and the epilogue pass — correct for a still-borrowed capture
+/// (the descriptor frees it), but a slot the body REASSIGNED now owns its value and
+/// must be released here. Slots that are directly returned are skipped: the return
+/// path moves the value out, so releasing it would double-free. Kept disjoint from
+/// `function_cleanup_locals` (those exclude param-named slots) so the two lists never
+/// release the same slot twice, and deliberately NOT folded into the zero-init pass so
+/// a caller-initialized capture is never clobbered to null before the body reads it.
+fn reassigned_capture_epilogue_locals(
+    ctx: &FunctionContext<'_>,
+) -> Vec<(String, LocalSlotId, PhpType, usize)> {
+    if ctx.function.reassigned_capture_slots.is_empty() {
+        return Vec::new();
+    }
+    let returned_slots = direct_return_local_slots(ctx.function);
+    ctx.function
+        .locals
+        .iter()
+        .filter(|local| ctx.function.reassigned_capture_slots.contains(&local.id))
+        .filter(|local| !returned_slots.contains(&local.id))
+        .filter(|local| local_slot_has_store(ctx.function, local.id))
+        .filter_map(|local| {
+            let ty = local.php_type.codegen_repr();
+            if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {
+                return None;
+            }
+            let offset = ctx.local_offset(local.id).ok()?;
+            let name = local
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("slot{}", local.id.as_raw()));
+            Some((name, local.id, ty, offset))
+        })
+        .collect()
+}
+
 /// Releases owned function locals that do not directly provide the return value.
 fn emit_function_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
-    let cleanup_locals = function_cleanup_locals(ctx, false);
+    let mut cleanup_locals = function_cleanup_locals(ctx, false);
+    cleanup_locals.extend(reassigned_capture_epilogue_locals(ctx));
     let ref_cell_owners = ref_cell_owner_locals(ctx);
     if cleanup_locals.is_empty() && ref_cell_owners.is_empty() {
         return;

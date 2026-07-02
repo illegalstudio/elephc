@@ -1083,3 +1083,177 @@ echo "done";
         "promoting an indexed array literal to hash storage must free the source array (issue #408)"
     );
 }
+
+/// Regression test: reading an `#[AllowDynamicProperties]` dynamic property must
+/// hand the caller an OWNED Mixed cell. The native `lower_allow_dynamic_prop_get`
+/// hit path used to return the hash cell as a borrow (no `__rt_incref`), while the
+/// shared owning-temporary classification treats `DynamicPropGet` as owned; the
+/// consumer's release then dropped the only reference and the object's hash kept a
+/// dangling pointer — a hard double-free under heap-debug ("bad refcount"). This
+/// reads the dynamic property 50 times in a loop (each `echo` releases the result)
+/// and once more in a top-level `return` (Void main discards it), so without the
+/// hit-path incref the cell is freed while still referenced. Asserts the program
+/// runs cleanly with the expected output and no heap-debug refcount fault.
+#[test]
+fn test_regression_allow_dynamic_properties_read_does_not_double_free() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+#[AllowDynamicProperties]
+class C {}
+$c = new C();
+$c->v = 7;
+for ($i = 0; $i < 50; $i++) {
+    echo $c->v;
+}
+return $c->v;
+"#,
+    );
+    assert!(out.success, "program failed (double free?): {}", out.stderr);
+    assert_eq!(out.stdout, "7".repeat(50));
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: a top-level `return $c->v;` runs the Void-return path, which
+/// evaluates the owning Mixed property-read result but used to discard it without
+/// releasing it (unlike `echo`, which already releases). The boxed dynamic-property
+/// cell read from the stdClass hash is retained by `__rt_stdclass_get`, so the
+/// dropped reference leaked 40 bytes. Mirrors `lower_echo`'s release of the owning
+/// temporary; asserts a clean heap at exit.
+#[test]
+fn test_regression_void_return_dynamic_property_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$c = new stdClass();
+$c->v = 3;
+echo "ok";
+return $c->v;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: `$s = $s + $c->v` in a loop reads an owning Mixed property
+/// operand into `Op::MixedNumericBinop`. The binop lowering consumed the operands
+/// without releasing the owning property-read temporary (unlike `lower_concat`,
+/// which releases both operands), so each iteration leaked the retained dynamic
+/// property cell. Mirrors the concat operand release; asserts the loop computes the
+/// correct sum and leaves a clean heap.
+#[test]
+fn test_regression_mixed_numeric_binop_releases_property_operand() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$c = new stdClass();
+$c->v = 3;
+$s = 0;
+for ($i = 0; $i < 50; $i++) {
+    $s = $s + $c->v;
+}
+echo $s;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "150");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression (P7d0b): a by-value closure capture that the body REASSIGNS and then
+/// RETURNS must not double-account its refcount. The capture enters the body as the
+/// descriptor's borrow; the first `$base = new` must NOT release that borrow (it is
+/// descriptor-owned), and the slot's new owned object moves out via the return. Before
+/// the fix the spurious first-write decref freed the descriptor's borrowed object, so
+/// across 50 calls the descriptor's captured `$base` was used-after-free / double-freed.
+/// Each loop iteration reassigns `$r` (releasing the previous returned object), so a clean
+/// heap proves the move-out is balanced; the final `echo $r->v` confirms correctness.
+/// (Deliberately avoids `$sum + $r->v`: a per-iteration dynamic-property numeric binop
+/// hits a separate pre-existing leak unrelated to closure captures.)
+#[test]
+fn test_regression_reassigned_closure_capture_return_no_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$base = new stdClass();
+$base->v = 1;
+$f = function() use ($base) { $base = new stdClass(); $base->v = 9; return $base; };
+for ($i = 0; $i < 50; $i++) {
+    $r = $f();
+}
+echo $r->v;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "9");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression (P7d0b): a by-value closure capture that the body REASSIGNS and then
+/// DROPS (does not return) must release the new owned value at function exit. The
+/// epilogue normally excludes capture-param-named slots, so before the fix the new
+/// object leaked (2 blocks / 600 B per call). Loops 50 times and asserts a clean heap.
+#[test]
+fn test_regression_reassigned_closure_capture_drop_no_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$base = new stdClass();
+$base->v = 1;
+$f = function() use ($base) { $base = new stdClass(); $base->v = 9; return 0; };
+for ($i = 0; $i < 50; $i++) {
+    $f();
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression (P7d0b): a by-value closure capture REASSIGNED twice must release the
+/// first body-owned value on the second write. After the first write demotes the slot
+/// `ClosureCapture` -> `PhpLocal`, the second `$base = new` takes the normal owned-local
+/// store path that releases the previous occupant; the final value moves out via the
+/// return. Loops 50 times reassigning `$r` and asserts a clean heap (a regression that
+/// skipped the second-write release would leak the first object each call) plus the
+/// correct returned value (7). (Avoids `$sum + $r->v` for the same reason as the
+/// reassign-return test above.)
+#[test]
+fn test_regression_double_reassigned_closure_capture_no_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$base = new stdClass();
+$base->v = 1;
+$f = function() use ($base) { $base = new stdClass(); $base = new stdClass(); $base->v = 7; return $base; };
+for ($i = 0; $i < 50; $i++) {
+    $r = $f();
+}
+echo $r->v;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "7");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

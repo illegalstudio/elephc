@@ -15,7 +15,7 @@ pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 
 /// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--ir-backend] [--ast-backend] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] <source.php>";
+pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--ir-backend] [--ast-backend] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] <source.php>\n  TARGET: macos-aarch64 | linux-aarch64 | linux-x86_64 | wasm32-wasi";
 
 /// Backend selected for assembly generation after frontend and optimization passes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -195,6 +195,17 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     if explicit_ir_backend && explicit_ast_backend {
         fail("cannot use --ir-backend and --ast-backend together");
     }
+    // The WebAssembly backend consumes EIR only; the frozen AST backend has no
+    // WebAssembly path. Reject the combination explicitly instead of silently
+    // falling back.
+    if target.is_wasm() && matches!(backend, CodegenBackend::Ast) {
+        fail("the wasm32-wasi target requires the EIR backend; remove --ast-backend");
+    }
+    // NPM packaging wraps a `.wasm` module, so it is only meaningful for the
+    // WebAssembly target.
+    if matches!(emit, Emit::NpmPackage) && !target.is_wasm() {
+        fail("--emit npm requires --target wasm32-wasi");
+    }
     if explicit_ast_backend {
         eprintln!(
             "warning: --ast-backend is deprecated and will be removed in v0.26.0. The EIR backend is now the default. See docs/internals/the-ir.md for details."
@@ -242,17 +253,22 @@ fn parse_required_emit(args: &[String], index: usize) -> Emit {
     if index < args.len() {
         parse_emit(&args[index])
     } else {
-        fail("Missing emit kind after --emit (expected: executable, cdylib)")
+        fail("Missing emit kind after --emit (expected: executable, cdylib, npm)")
     }
 }
 
 /// Parse an emit-kind string into an `Emit` value, or fail with an error message.
+///
+/// `npm`/`npm-package` selects WebAssembly NPM-package output and is only valid
+/// with `--target wasm32-wasi`; that cross-flag constraint is enforced in
+/// `parse_args` once the target is known.
 fn parse_emit(value: &str) -> Emit {
     match value {
         "executable" | "exe" | "bin" => Emit::Executable,
         "cdylib" | "dylib" | "shared" => Emit::Cdylib,
+        "npm" | "npm-package" => Emit::NpmPackage,
         other => fail(&format!(
-            "Invalid --emit kind '{}': expected one of: executable, cdylib",
+            "Invalid --emit kind '{}': expected one of: executable, cdylib, npm",
             other
         )),
     }
@@ -359,6 +375,7 @@ mod tests {
     fn emit_kind_parses_canonical_spellings() {
         assert_eq!(parse_emit("executable"), Emit::Executable);
         assert_eq!(parse_emit("cdylib"), Emit::Cdylib);
+        assert_eq!(parse_emit("npm"), Emit::NpmPackage);
     }
 
     /// Verifies the accepted aliases map to their canonical variants so users coming
@@ -369,6 +386,7 @@ mod tests {
         assert_eq!(parse_emit("bin"), Emit::Executable);
         assert_eq!(parse_emit("dylib"), Emit::Cdylib);
         assert_eq!(parse_emit("shared"), Emit::Cdylib);
+        assert_eq!(parse_emit("npm-package"), Emit::NpmPackage);
     }
 
     /// Verifies the canonical `--ir-opt=` spellings toggle the EIR optimization

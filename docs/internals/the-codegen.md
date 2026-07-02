@@ -9,7 +9,7 @@ sidebar:
 
 The code generator (codegen) is the heart of the compiler. The default path lowers the checked and optimized AST into EIR first, then emits native assembly text for the selected target from that EIR. The temporary `--ast-backend` fallback still walks the checked AST directly and emits assembly while the legacy emitter remains in-tree.
 
-elephc currently supports more than one backend. AArch64 is still the clearest reference path in the codebase and in this document, while Linux `x86_64` is also a supported backend that goes through the same high-level lowering pipeline.
+elephc currently supports more than one backend. AArch64 is still the clearest reference path in the codebase and in this document, while Linux `x86_64` is also a supported backend that goes through the same high-level lowering pipeline. Alongside these native assembly backends, `src/codegen_wasm/` consumes the same EIR to emit a WebAssembly module (`.wat`/`.wasm`) for the non-native `wasm32-wasi` target; it bypasses native assembly emission and the `as`/`ld` tail (see [Targets](../compiling/targets.md#webassembly-partial-parity)).
 
 Most snippets below use AArch64 because the instruction forms are compact and the surrounding docs already explain them in detail. When a section talks about target-specific ABI or runtime behavior, it calls out Linux `x86_64` explicitly.
 

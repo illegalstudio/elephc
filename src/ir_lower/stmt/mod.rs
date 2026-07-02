@@ -1752,7 +1752,10 @@ fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, sp
     }
     if ctx.return_type == IrType::Void {
         if let Some(value_expr) = value_expr {
-            lower_expr(ctx, value_expr);
+            let value = lower_expr(ctx, value_expr);
+            if ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
         }
         terminate_return(ctx, None);
         return;
@@ -1815,6 +1818,16 @@ fn persist_scratch_return_string(
 }
 
 /// Acquires return values read from heap containers before local cleanup runs.
+///
+/// Also acquires a captured refcounted value returned by reference from a closure body
+/// (`return $captured`): such a value is a `LoadLocal` of a trailing closure-capture
+/// parameter slot, which the descriptor still owns. The closure descriptor holds exactly
+/// one ref per refcounted capture (stamped at create), the body borrows it (no incref on
+/// the native/WASM unbox path), and the caller hands the result to a local whose cleanup
+/// releases it. Without an extra reference here, that release drops the descriptor's only
+/// ref to zero and frees a value the descriptor still points at — a use-after-free when the
+/// descriptor's release walk later decrefs the freed slot. Incrementing the refcount here
+/// promotes the borrow to an owned return ref and balances the caller's release.
 fn acquire_borrowed_return_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -1826,6 +1839,9 @@ fn acquire_borrowed_return_value(
     let php_type = ctx.builder.value_php_type(value.value);
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;
+    }
+    if returns_borrowed_closure_capture(ctx, value) {
+        return crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
     }
     if !matches!(
         ctx.builder.value_defining_op(value.value),
@@ -1840,6 +1856,30 @@ fn acquire_borrowed_return_value(
         return value;
     }
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+}
+
+/// Returns true when `value` is a `LoadLocal` of a read-only closure-capture parameter slot.
+///
+/// A returned captured value is loaded straight from its capture-parameter slot, so its
+/// defining op is `Op::LoadLocal` carrying an `Immediate::LocalSlot` that
+/// `slot_is_closure_capture` recognizes as a trailing capture parameter. The
+/// `slot_is_closure_capture` check is backed by a read-only guard: a capture that was
+/// reassigned inside the body (`$cap = newValue(); return $cap;`) is no longer borrowed from
+/// the descriptor and must NOT receive the extra acquire (the reassignment already balanced
+/// the refcount via `store_local`'s `acquire_if_refcounted`). Owned locals, hidden temps
+/// (ternary/match merges), and container reads are not capture parameters and do not match,
+/// so the borrow-promoting acquire stays scoped to direct, unmodified capture returns.
+fn returns_borrowed_closure_capture(ctx: &LoweringContext<'_, '_>, value: LoweredValue) -> bool {
+    let Some(inst) = ctx.builder.value_defining_instruction(value.value) else {
+        return false;
+    };
+    if inst.op != Op::LoadLocal {
+        return false;
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+        return false;
+    };
+    ctx.builder.slot_is_closure_capture(slot)
 }
 
 /// Terminates with a return after running active finally bodies from inner to outer.
