@@ -410,6 +410,11 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
         }
+        LoadArrayElemRefCell => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
+        }
         MixedArrayAppend => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Mixed), "Heap(Mixed)")

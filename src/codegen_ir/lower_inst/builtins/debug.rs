@@ -14,51 +14,118 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::Instruction;
+use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 
 /// Lowers `print_r(value)` for concrete scalar/resource values and array/hash shells.
+///
+/// With one operand the value is rendered to stdout (PHP `print_r` echo mode) and
+/// the call returns `true`. With two operands where the second is a constant
+/// `true`, the value is rendered into the in-memory capture buffer and returned
+/// as an owned string via `__rt_pr_finish` (PHP `print_r($v, true)` return mode).
+/// A constant `false` (or any non-`true` second operand) keeps the echo-mode path.
 pub(super) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "print_r", 1)?;
-    ctx.emitter.blank();
-    ctx.emitter.comment("print_r()");
+    if inst.operands.is_empty() || inst.operands.len() > 2 {
+        return Err(CodegenIrError::unsupported(
+            "print_r() takes 1 or 2 arguments",
+        ));
+    }
     let value = expect_operand(inst, 0)?;
-    let ty = loaded_php_semantic_type(ctx, value)?;
-    emit_print_r_loaded_value(ctx, &ty)?;
-    store_if_result(ctx, inst)
+    let return_mode = if inst.operands.len() == 2 {
+        is_const_bool_true(ctx, inst.operands[1])?
+    } else {
+        false
+    };
+
+    if return_mode {
+        ctx.emitter.blank();
+        ctx.emitter.comment("print_r(value, true) — return mode");
+        // -- reset the capture offset and enable buffer mode --
+        let zero_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_int_immediate(ctx.emitter, zero_reg, 0);
+        abi::emit_store_reg_to_symbol(ctx.emitter, zero_reg, "_print_r_off", 0);
+        abi::emit_load_int_immediate(ctx.emitter, zero_reg, 1);
+        abi::emit_store_reg_to_symbol(ctx.emitter, zero_reg, "_print_r_mode", 0);
+        // -- load the value into result regs and render it into the buffer --
+        let ty = loaded_php_semantic_type(ctx, value)?;
+        emit_print_r_loaded_value(ctx, &ty)?;
+        // -- finalize the captured bytes into an owned heap string --
+        abi::emit_call_label(ctx.emitter, "__rt_pr_finish");
+        // -- result is in the platform string result regs (x1/x2 or rax/rdx) --
+        store_if_result(ctx, inst)
+    } else {
+        ctx.emitter.blank();
+        ctx.emitter.comment("print_r()");
+        let ty = loaded_php_semantic_type(ctx, value)?;
+        emit_print_r_loaded_value(ctx, &ty)?;
+        // PHP `print_r` echo mode always returns true, regardless of the bytes
+        // written. The rendering above leaves the syscall/byte-count in the
+        // integer result register, so materialize a literal 1 before storing.
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        store_if_result(ctx, inst)
+    }
 }
 
-/// Lowers `var_dump(value)` for concrete scalar/resource values and array/hash shells.
+/// Returns `true` when `value` is a constant `Op::ConstBool` with immediate `true`.
+fn is_const_bool_true(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    Ok(matches!(
+        (inst_ref.op, inst_ref.immediate.as_ref()),
+        (Op::ConstBool, Some(Immediate::Bool(true)))
+    ))
+}
+
+/// Lowers `var_dump(value, ...values)` for concrete scalar/resource values and array/hash shells.
+/// Each operand is dumped independently in source order, matching PHP's variadic var_dump.
 pub(super) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "var_dump", 1)?;
-    ctx.emitter.blank();
-    ctx.emitter.comment("var_dump()");
-    let value = expect_operand(inst, 0)?;
-    let ty = loaded_php_semantic_type(ctx, value)?;
-    match &ty {
-        PhpType::Int => emit_var_dump_int(ctx),
-        PhpType::TaggedScalar => emit_var_dump_tagged_scalar(ctx),
-        PhpType::Float => emit_var_dump_float(ctx),
-        PhpType::Str => emit_var_dump_string(ctx),
-        PhpType::Bool => emit_var_dump_bool(ctx),
-        PhpType::Resource(_) => emit_var_dump_resource(ctx),
-        PhpType::Void | PhpType::Never => {
-            emit_var_dump_null(ctx);
-            Ok(())
+    if inst.operands.is_empty() {
+        return Err(CodegenIrError::unsupported(
+            "var_dump() requires at least 1 argument",
+        ));
+    }
+    for (index, operand) in inst.operands.iter().enumerate() {
+        ctx.emitter.blank();
+        if index > 0 {
+            ctx.emitter.comment(&format!("var_dump() — argument {}", index + 1));
+        } else {
+            ctx.emitter.comment("var_dump()");
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
-            emit_var_dump_array(ctx, &ty)
-        }
-        PhpType::Object(_) => emit_var_dump_dynamic_object(ctx),
-        PhpType::Mixed | PhpType::Union(_) => emit_var_dump_mixed(ctx),
-        other => Err(CodegenIrError::unsupported(format!(
-            "var_dump for PHP type {:?}",
-            other
-        ))),
-    }?;
+        let value = *operand;
+        let ty = loaded_php_semantic_type(ctx, value)?;
+        match &ty {
+            PhpType::Int => emit_var_dump_int(ctx),
+            PhpType::TaggedScalar => emit_var_dump_tagged_scalar(ctx),
+            PhpType::Float => emit_var_dump_float(ctx),
+            PhpType::Str => emit_var_dump_string(ctx),
+            PhpType::Bool => emit_var_dump_bool(ctx),
+            PhpType::Resource(_) => emit_var_dump_resource(ctx),
+            PhpType::Void | PhpType::Never => {
+                emit_var_dump_null(ctx);
+                Ok(())
+            }
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+                emit_var_dump_array(ctx, &ty)
+            }
+            PhpType::Object(_) => emit_var_dump_dynamic_object(ctx),
+            PhpType::Mixed | PhpType::Union(_) => emit_var_dump_mixed(ctx),
+            other => Err(CodegenIrError::unsupported(format!(
+                "var_dump for PHP type {:?}",
+                other
+            ))),
+        }?;
+    }
     store_if_result(ctx, inst)
 }
 
@@ -594,17 +661,4 @@ fn emit_branch_if_eq(ctx: &mut FunctionContext<'_>, label: &str) {
             ctx.emitter.instruction(&format!("je {}", label));                  // branch when the compared register payloads are equal
         }
     }
-}
-
-/// Verifies that the builtin call has exactly the expected operand count.
-fn ensure_arg_count(inst: &Instruction, name: &str, expected: usize) -> Result<()> {
-    if inst.operands.len() == expected {
-        return Ok(());
-    }
-    Err(CodegenIrError::invalid_module(format!(
-        "{} expected {} args, got {}",
-        name,
-        expected,
-        inst.operands.len()
-    )))
 }

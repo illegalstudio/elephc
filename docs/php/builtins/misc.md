@@ -20,7 +20,7 @@ sidebar:
 | [`isset()`](./misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` |
 | [`php_uname()`](./misc/php_uname.md) | `(string $mode): string` | `string` |
 | [`phpversion()`](./misc/phpversion.md) | `(string $extension = null): string` | `string` |
-| [`print_r()`](./misc/print_r.md) | `(...$values): void` | `void` |
+| [`print_r()`](./misc/print_r.md) | `(...$values): string` | `string` |
 | [`serialize()`](./misc/serialize.md) | `(mixed $value): string` | `string` |
 | [`unserialize()`](./misc/unserialize.md) | `(mixed $data, mixed $options): mixed` | `mixed` |
 | [`unset()`](./misc/unset.md) | `(mixed $var, ...$vars): void` | `void` |

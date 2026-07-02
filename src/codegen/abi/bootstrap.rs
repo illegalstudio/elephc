@@ -61,6 +61,9 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
         (super::super::platform::Platform::MacOS, Arch::X86_64) => {
             panic!("process exit emission is not implemented yet for target macos-x86_64");
         }
+        (super::super::platform::Platform::Windows, _) => {
+            panic!("Windows target is not yet supported (see issue #379)");
+        }
     }
 }
 
@@ -92,6 +95,9 @@ pub fn emit_exit_with_result_reg(emitter: &mut Emitter) {
         }
         (super::super::platform::Platform::MacOS, Arch::X86_64) => {
             panic!("process exit emission is not implemented yet for target macos-x86_64");
+        }
+        (super::super::platform::Platform::Windows, _) => {
+            panic!("Windows target is not yet supported (see issue #379)");
         }
     }
 }

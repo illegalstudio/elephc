@@ -64,6 +64,49 @@ fn test_interpolation_complex_braces() {
     );
 }
 
+/// Verifies the deprecated `${var}` interpolation form lexes the braced expression
+/// as a parenthesized operand, matching PHP 8.x behavior (deprecated but supported).
+#[test]
+fn test_interpolation_deprecated_dollar_brace() {
+    let t = tokens("<?php \"a${b}c\";");
+    assert_eq!(
+        &t[1..t.len() - 2],
+        &[
+            Token::LParen,
+            Token::StringLiteral("a".into()),
+            Token::Dot,
+            Token::LParen,
+            Token::Variable("b".into()),
+            Token::RParen,
+            Token::Dot,
+            Token::StringLiteral("c".into()),
+            Token::RParen,
+        ]
+    );
+}
+
+/// Verifies the deprecated `${expr}` interpolation form with array access lexes
+/// the full expression including the key, not just the variable name.
+#[test]
+fn test_interpolation_deprecated_dollar_brace_array() {
+    let t = tokens("<?php \"${a['x']}\";");
+    assert_eq!(
+        &t[1..t.len() - 2],
+        &[
+            Token::LParen,
+            Token::StringLiteral(String::new()),
+            Token::Dot,
+            Token::LParen,
+            Token::Variable("a".into()),
+            Token::LBracket,
+            Token::StringLiteral("x".into()),
+            Token::RBracket,
+            Token::RParen,
+            Token::RParen,
+        ]
+    );
+}
+
 /// Verifies simple `$arr[key]` interpolation lexes a bareword offset as a string-keyed
 /// array access on the variable.
 #[test]

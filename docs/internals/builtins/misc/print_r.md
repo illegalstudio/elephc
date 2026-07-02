@@ -10,22 +10,28 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/debug.rs`:24](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/debug.rs#L24) (`lower_print_r`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/debug.rs`:30](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/debug.rs#L30) (`lower_print_r`)
 - **Function symbol**: `lower_print_r()`
 
 
 ### Lowering notes
 
 - Lowers `print_r(value)` for concrete scalar/resource values and array/hash shells.
+- With one operand the value is rendered to stdout (PHP `print_r` echo mode) and
+- the call returns `true`. With two operands where the second is a constant
+- `true`, the value is rendered into the in-memory capture buffer and returned
+- as an owned string via `__rt_pr_finish` (PHP `print_r($v, true)` return mode).
+- A constant `false` (or any non-`true` second operand) keeps the echo-mode path.
 
 ## Runtime helpers
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+The following runtime helpers are referenced:
+- `__rt_pr_finish`
 
 ## Signature summary
 
 ```php
-function print_r(...$values): void
+function print_r(...$values): string
 ```
 
 ## What the type checker enforces

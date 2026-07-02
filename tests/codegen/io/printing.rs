@@ -253,6 +253,80 @@ fn test_print_r_mixed_scalar_element() {
     assert_eq!(out, "two|1");
 }
 
+/// Verifies `print_r($value, true)` returns the rendered int as a string instead
+/// of writing to stdout.
+#[test]
+fn test_print_r_return_int() {
+    let out = compile_and_run(r#"<?php echo print_r(42, true);"#);
+    assert_eq!(out, "42");
+}
+
+/// Verifies `print_r($value, true)` returns the rendered string unchanged.
+#[test]
+fn test_print_r_return_string() {
+    let out = compile_and_run(r#"<?php echo print_r("hello", true);"#);
+    assert_eq!(out, "hello");
+}
+
+/// Verifies `print_r($value, true)` returns `1` for boolean true (no type label).
+#[test]
+fn test_print_r_return_bool_true() {
+    let out = compile_and_run(r#"<?php echo print_r(true, true);"#);
+    assert_eq!(out, "1");
+}
+
+/// Verifies `print_r($value, true)` returns the empty string for boolean false.
+#[test]
+fn test_print_r_return_bool_false() {
+    let out = compile_and_run(r#"<?php $s = print_r(false, true); echo strlen($s);"#);
+    assert_eq!(out, "0");
+}
+
+/// Verifies `print_r($value, true)` returns the full array body as a string.
+#[test]
+fn test_print_r_return_array() {
+    let out = compile_and_run(r#"<?php echo print_r([1, 2, 3], true);"#);
+    assert_eq!(out, "Array\n(\n    [0] => 1\n    [1] => 2\n    [2] => 3\n)\n");
+}
+
+/// Verifies `print_r($value, true)` returns the associative-array body as a string.
+#[test]
+fn test_print_r_return_assoc_array() {
+    let out = compile_and_run(r#"<?php echo print_r(["a" => 1], true);"#);
+    assert_eq!(out, "Array\n(\n    [a] => 1\n)\n");
+}
+
+/// Verifies `print_r($value, true)` captures nested array output recursively.
+#[test]
+fn test_print_r_return_nested_array() {
+    let out = compile_and_run(r#"<?php echo print_r([[1, 2], [3, 4]], true);"#);
+    assert_eq!(
+        out,
+        "Array\n(\n    [0] => Array\n        (\n            [0] => 1\n            [1] => 2\n        )\n\n    [1] => Array\n        (\n            [0] => 3\n            [1] => 4\n        )\n\n)\n"
+    );
+}
+
+/// Verifies `print_r($value)` without `$return` still writes to stdout (backward compat).
+#[test]
+fn test_print_r_no_return_still_echoes() {
+    let out = compile_and_run(r#"<?php $r = print_r(42); echo "|$r";"#);
+    assert_eq!(out, "42|1");
+}
+
+/// Verifies `print_r($value, false)` keeps echo mode (writes to stdout, returns true).
+#[test]
+fn test_print_r_return_false_echoes() {
+    let out = compile_and_run(r#"<?php $r = print_r(42, false); echo "|$r";"#);
+    assert_eq!(out, "42|1");
+}
+
+/// Verifies the string returned by `print_r($value, true)` has the correct length.
+#[test]
+fn test_print_r_return_length() {
+    let out = compile_and_run(r#"<?php echo strlen(print_r(["a" => 1], true));"#);
+    assert_eq!(out, "23");
+}
+
 /// Verifies `var_dump` formats each argument independently with correct type tags and a trailing newline per call, in source order.
 #[test]
 fn test_var_dump_multiple() {

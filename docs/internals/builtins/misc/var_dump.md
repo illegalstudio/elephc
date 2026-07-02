@@ -10,13 +10,14 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/debug.rs`:35](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/debug.rs#L35) (`lower_var_dump`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/debug.rs`:92](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/debug.rs#L92) (`lower_var_dump`)
 - **Function symbol**: `lower_var_dump()`
 
 
 ### Lowering notes
 
-- Lowers `var_dump(value)` for concrete scalar/resource values and array/hash shells.
+- Lowers `var_dump(value, ...values)` for concrete scalar/resource values and array/hash shells.
+- Each operand is dumped independently in source order, matching PHP's variadic var_dump.
 
 ## Runtime helpers
 

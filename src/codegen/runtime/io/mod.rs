@@ -119,6 +119,7 @@ mod user_wrapper_path_op;
 mod user_wrapper_set_option;
 mod user_wrapper_url_stat;
 mod print_r_walk;
+mod print_r_buffer;
 mod var_dump_walk;
 
 pub(crate) use basename::emit_basename;
@@ -252,6 +253,7 @@ pub(crate) use print_r_walk::{
     emit_print_r_close, emit_print_r_hash, emit_print_r_indexed, emit_print_r_int_key,
     emit_print_r_open, emit_print_r_spaces, emit_print_r_str_key, emit_print_r_value,
 };
+pub(crate) use print_r_buffer::{emit_pr_append, emit_pr_finish, emit_pr_write};
 pub(crate) use var_dump_walk::{
     emit_var_dump_array_bool, emit_var_dump_array_float, emit_var_dump_array_int,
     emit_var_dump_array_mixed, emit_var_dump_array_str, emit_var_dump_emit_bool_line,

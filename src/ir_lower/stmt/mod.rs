@@ -282,6 +282,7 @@ fn contextualize_array_assignment(
 /// - `$a = &$b` aliases two locals to one ref-cell.
 /// - `$a = &$obj->prop` binds the local to the object's reference-property cell (write-through).
 /// - `$a = &call()` binds the local to the cell returned by a by-reference callee.
+/// - `$a = &$arr[idx]` binds the local to the indexed-array element's inline storage.
 fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &Expr, span: Span) {
     match &source.kind {
         ExprKind::Variable(source_name) => {
@@ -301,8 +302,11 @@ fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &Ex
         | ExprKind::ExprCall { .. } => {
             crate::ir_lower::expr::lower_ref_assign_call(ctx, target, source, span);
         }
+        ExprKind::ArrayAccess { .. } => {
+            crate::ir_lower::expr::lower_ref_assign_array_elem(ctx, target, source, span);
+        }
         _ => {
-            // Other source shapes (e.g. array elements) are rejected by the checker;
+            // Other source shapes are rejected by the checker;
             // evaluate for side effects to keep lowering total.
             lower_expr(ctx, source);
         }

@@ -11795,11 +11795,18 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/debug.rs",
       "codegen_function": "lower_print_r",
-      "codegen_line": 24,
+      "codegen_line": 30,
       "notes": [
-        "Lowers `print_r(value)` for concrete scalar/resource values and array/hash shells."
+        "Lowers `print_r(value)` for concrete scalar/resource values and array/hash shells.",
+        "With one operand the value is rendered to stdout (PHP `print_r` echo mode) and",
+        "the call returns `true`. With two operands where the second is a constant",
+        "`true`, the value is rendered into the in-memory capture buffer and returned",
+        "as an owned string via `__rt_pr_finish` (PHP `print_r($v, true)` return mode).",
+        "A constant `false` (or any non-`true` second operand) keeps the echo-mode path."
       ],
-      "runtime_helpers": [],
+      "runtime_helpers": [
+        "__rt_pr_finish"
+      ],
       "sig_arm": null,
       "sig_file": null,
       "sig_line": null
@@ -11807,7 +11814,7 @@
     "name": "print_r",
     "sig": {
       "params": [],
-      "return_type": "void",
+      "return_type": "string",
       "variadic": "values"
     },
     "slug": "print_r",
@@ -18762,9 +18769,10 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/debug.rs",
       "codegen_function": "lower_var_dump",
-      "codegen_line": 35,
+      "codegen_line": 92,
       "notes": [
-        "Lowers `var_dump(value)` for concrete scalar/resource values and array/hash shells."
+        "Lowers `var_dump(value, ...values)` for concrete scalar/resource values and array/hash shells.",
+        "Each operand is dumped independently in source order, matching PHP's variadic var_dump."
       ],
       "runtime_helpers": [],
       "sig_arm": null,

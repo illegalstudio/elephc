@@ -85,6 +85,9 @@ pub(crate) fn default_link_paths() -> Vec<String> {
                 }
             }
         }
+        Platform::Windows => {
+            panic!("Windows target is not yet supported (see issue #379)");
+        }
     }
     // The elephc-tls / elephc-pdo bridge staticlib directory is added directly by
     // `link_binary` (an absolute, manifest-anchored `-L` keyed on the program
@@ -133,6 +136,7 @@ pub(crate) fn qemu_sysroot() -> Option<&'static str> {
                 None
             }
             Platform::MacOS => None,
+            Platform::Windows => None,
         })
         .as_deref()
 }
