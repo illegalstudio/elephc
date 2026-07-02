@@ -442,3 +442,40 @@ echo C::init();
     );
     assert_eq!(out, "84");
 }
+
+/// Regression for #370: `+=` on an undefined variable treats it as null/0
+/// and produces the correct value, matching PHP's behavior.
+#[test]
+fn test_undefined_var_plus_equals() {
+    let out = compile_and_run(r#"<?php $x += 1; echo $x;"#);
+    assert_eq!(out, "1");
+}
+
+/// Regression for #370: `-=` on an undefined variable treats it as null/0.
+#[test]
+fn test_undefined_var_minus_equals() {
+    let out = compile_and_run(r#"<?php $x -= 1; echo $x;"#);
+    assert_eq!(out, "-1");
+}
+
+/// Regression for #370: `.=` on an undefined variable treats it as null/"".
+#[test]
+fn test_undefined_var_dot_equals() {
+    let out = compile_and_run(r#"<?php $y .= "world"; echo $y;"#);
+    assert_eq!(out, "world");
+}
+
+/// Regression for #370: `??=` on an undefined variable does NOT emit a warning
+/// and assigns the default value, matching PHP's null-coalesce semantics.
+#[test]
+fn test_undefined_var_null_coalesce_equals() {
+    let out = compile_and_run(r#"<?php $z ??= 42; echo $z;"#);
+    assert_eq!(out, "42");
+}
+
+/// Regression for #370: `*=` on an undefined variable treats it as 0.
+#[test]
+fn test_undefined_var_star_equals() {
+    let out = compile_and_run(r#"<?php $w *= 5; echo $w;"#);
+    assert_eq!(out, "0");
+}

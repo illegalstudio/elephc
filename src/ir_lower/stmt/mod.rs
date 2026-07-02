@@ -212,6 +212,18 @@ fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) {
 
 /// Lowers a plain PHP local assignment.
 fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
+    // PHP allows compound assignment on an undefined variable (`$x += 1`),
+    // treating the undefined variable as null/0 with a warning. The type
+    // checker injects the variable as `Void` and emits a warning. At the
+    // lowering level, we must initialize the local slot to null/0 before
+    // the compound read so the runtime does not read garbage from the stack.
+    if is_compound_assignment_self_read(value, name) && !ctx.has_local_slot(name) {
+        let null_value = ctx.builder.emit_const_null();
+        let null_lowered = LoweredValue { value: null_value, ir_type: IrType::I64 };
+        ctx.store_local(name, null_lowered, PhpType::Void, Some(span));
+        ctx.mark_local_initialized(name);
+    }
+
     // A by-reference `Closure::bind(fn &() => $this->prop, $obj, $obj)` assigned to a variable is
     // tracked as a static callable, like a closure literal, so a later `$b()` lowers to a direct
     // call that carries the property's reference-cell pointer instead of boxing it.
@@ -244,6 +256,24 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     }
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);
+    }
+}
+
+/// Returns `true` if `value` is a compound-assignment expression (`$x op= rhs`)
+/// where the left operand is a read of the assignment target variable `name`.
+///
+/// The parser lowers `$x += 1` to `Assign { name: "x", value: BinaryOp { left:
+/// Variable("x"), op: Add, right: 1 } }` and `$x ??= 2` to `Assign { name: "x",
+/// value: NullCoalesce { value: Variable("x"), default: 2 } }`.
+fn is_compound_assignment_self_read(value: &Expr, name: &str) -> bool {
+    match &value.kind {
+        ExprKind::BinaryOp { left, .. } => {
+            matches!(&left.kind, ExprKind::Variable(v) if v == name)
+        }
+        ExprKind::NullCoalesce { value: inner, .. } => {
+            matches!(&inner.kind, ExprKind::Variable(v) if v == name)
+        }
+        _ => false,
     }
 }
 
