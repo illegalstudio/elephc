@@ -1674,15 +1674,7 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         );
     }
     if is_user_function {
-        let data = ctx.intern_function_name(canonical);
-        return ctx.emit_value(
-            Op::Call,
-            operands,
-            Some(Immediate::Data(data)),
-            php_type,
-            effects_lookup::user_call_effects(canonical),
-            Some(expr.span),
-        );
+        return emit_user_call(ctx, canonical, operands, php_type, expr.span);
     }
     emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span)
 }
@@ -2855,6 +2847,48 @@ fn static_callable_return_type(
     }
 }
 
+/// Emits a user-function `Op::Call`, marking the result `Borrowed` when the
+/// callee returns one of its never-rebound by-value parameters.
+///
+/// A borrowed result aliases the caller's argument, so it must not be released
+/// or freed by the caller; this prevents the `$x = f($x)` double-free where the
+/// call result and the old slot value point to the same heap block.
+fn emit_user_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    function_name: &str,
+    operands: Vec<ValueId>,
+    php_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let data = ctx.intern_function_name(function_name);
+    let effects = effects_lookup::user_call_effects(function_name);
+    // Only heap/refcounted results can alias the caller's argument and need the
+    // borrowed treatment; non-refcounted results (e.g. `int`) must stay NonHeap
+    // per the EIR ownership invariant and carry no double-free risk.
+    if ctx.is_borrowed_passthrough_fn(function_name)
+        && Ownership::php_type_needs_lifetime_tracking(&php_type)
+    {
+        ctx.emit_value_with_ownership(
+            Op::Call,
+            operands,
+            Some(Immediate::Data(data)),
+            php_type,
+            Ownership::Borrowed,
+            effects,
+            Some(span),
+        )
+    } else {
+        ctx.emit_value(
+            Op::Call,
+            operands,
+            Some(Immediate::Data(data)),
+            php_type,
+            effects,
+            Some(span),
+        )
+    }
+}
+
 /// Lowers one resolved static callable target using already-evaluated positional operands.
 fn lower_static_callable_value_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -2865,15 +2899,7 @@ fn lower_static_callable_value_call(
     match target {
         StaticCallableBinding::UserFunction(function_name) => {
             let php_type = call_return_type(ctx, &function_name, &operands);
-            let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
-                Op::Call,
-                operands,
-                Some(Immediate::Data(data)),
-                php_type,
-                effects_lookup::user_call_effects(&function_name),
-                Some(expr.span),
-            ))
+            Some(emit_user_call(ctx, &function_name, operands, php_type, expr.span))
         }
         StaticCallableBinding::ExternFunction(function_name) => {
             let php_type = call_return_type(ctx, &function_name, &operands);
@@ -3211,15 +3237,7 @@ fn lower_static_callable_call(
             let sig = ctx.functions.get(&function_name).cloned();
             let operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
-            let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
-                Op::Call,
-                operands,
-                Some(Immediate::Data(data)),
-                php_type,
-                effects_lookup::user_call_effects(&function_name),
-                Some(expr.span),
-            ))
+            Some(emit_user_call(ctx, &function_name, operands, php_type, expr.span))
         }
         StaticCallableBinding::ExternFunction(function_name) => {
             let sig = ctx

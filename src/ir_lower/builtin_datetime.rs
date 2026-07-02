@@ -68,6 +68,7 @@ fn builtin_datetime_class_in_type(ty: &PhpType) -> Option<String> {
 pub(crate) fn lower_referenced_builtin_datetime_methods(
     module: &mut Module,
     check_result: &CheckResult,
+    borrowed_passthrough: &std::collections::HashSet<String>,
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
@@ -86,6 +87,7 @@ pub(crate) fn lower_referenced_builtin_datetime_methods(
                 &method_key,
                 module,
                 check_result,
+                borrowed_passthrough,
                 constants,
                 fiber_return_sigs,
             );
@@ -216,6 +218,7 @@ fn lower_builtin_datetime_method(
     method_key: &str,
     module: &mut Module,
     check_result: &CheckResult,
+    borrowed_passthrough: &std::collections::HashSet<String>,
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
@@ -241,6 +244,7 @@ fn lower_builtin_datetime_method(
         &method.body,
         module,
         check_result,
+        borrowed_passthrough,
         constants,
         fiber_return_sigs,
     );

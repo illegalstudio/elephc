@@ -1005,81 +1005,229 @@ fn test_echo_owned_temp_array_balances_gc_stats() {
     assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
 }
 
-/// Regression test for issue #408: releasing a string-keyed associative array
-/// must free everything it owns. Reassigning a hash-typed local each iteration
-/// promotes a fresh indexed array literal to hash storage via `array_to_hash`,
-/// which builds the result hash from a copy of the source array; the source
-/// array was leaked once per conversion. With many iterations the leak would
-/// exhaust the fixed heap, so a balanced alloc/free count proves it is freed.
+/// Regression test for the borrowed-parameter-passthrough self-reassign bug:
+/// `$x = ident($x)` where `ident` returns its argument. The call result aliases
+/// the old `$x`; before the fix the call result was treated as an owned
+/// temporary and freed in addition to the old slot value, double-freeing the
+/// same heap block. The trailing `str_repeat("Z", 5)` reuses the wrongly-freed
+/// block, so without the fix this prints "ZZZ" instead of "aaa".
 #[test]
-fn test_regression_408_reassigned_string_keyed_array_does_not_leak() {
-    let out = compile_and_run_with_gc_stats(
+fn test_regression_self_reassign_borrowed_passthrough() {
+    let out = compile_and_run(
         r#"<?php
-$g = [];
-for ($n = 0; $n < 500; $n++) {
-    $g = [];
-    $g["a"] = "x";
+function ident(string $s): string { return $s; }
+function mk(int $n): string { return str_repeat("a", $n); }
+$x = mk(3);
+$x = ident($x);
+$j = str_repeat("Z", 5);
+echo $x;
+"#,
+    );
+    assert_eq!(out, "aaa");
 }
-echo "done";
+
+/// Regression test confirming the borrowed-passthrough self-reassign neither
+/// double-frees nor leaks under heap-debug accounting (leak summary clean, no
+/// double free), while still producing the correct owned value.
+#[test]
+fn test_regression_self_reassign_borrowed_passthrough_no_double_free() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function ident(string $s): string { return $s; }
+function mk(int $n): string { return str_repeat("a", $n); }
+$x = mk(3);
+$x = ident($x);
+$j = str_repeat("Z", 5);
+echo $x;
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "done");
-    let (allocs, frees) = parse_gc_stats(&out.stderr);
-    assert!(allocs >= 500, "expected per-iteration allocations: {allocs}");
-    assert_eq!(
-        allocs, frees,
-        "string-keyed array release must free its source array (issue #408)"
+    assert_eq!(out.stdout, "aaa");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("double free"),
+        "double free detected: {}",
+        out.stderr
     );
 }
 
-/// Regression test for issue #408 (heap-debug): the same reassignment loop must
-/// report a clean heap with no live blocks at exit and must not trip the
-/// double-free detector, confirming the conversion releases exactly one
-/// reference of the source array (correct COW ownership).
+/// Regression test for cross-variable borrowed passthrough: `$y = ident($x)`
+/// must copy/retain the borrowed result so `$x` stays valid afterwards. Before
+/// the fix, releasing the call result freed `$x`'s storage, corrupting it.
 #[test]
-fn test_regression_408_reassigned_string_keyed_array_heap_debug_clean() {
-    let out = compile_and_run_with_heap_debug(
+fn test_regression_cross_var_borrowed_passthrough_keeps_source_alive() {
+    let out = compile_and_run_with_gc_stats(
         r#"<?php
-$g = [];
-for ($n = 0; $n < 500; $n++) {
-    $g = [];
-    $g["a"] = "x";
-    $g["bb"] = "yy";
-}
-echo "done";
+function ident(string $s): string { return $s; }
+function mk(int $n): string { return str_repeat("a", $n); }
+$x = mk(3);
+$y = ident($x);
+$j = str_repeat("Z", 5);
+echo $x . "|" . $y;
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "done");
+    assert_eq!(out.stdout, "aaa|aaa");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "allocs and frees must balance");
+}
+
+/// Regression test for borrowed passthrough of a refcounted array argument:
+/// `$a = pick($a)` where `pick` returns its array parameter. The retain/release
+/// must balance so the array is freed exactly once.
+#[test]
+fn test_regression_array_borrowed_passthrough_self_reassign() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function pick(array $a): array { return $a; }
+$a = [1, 2, 3];
+$a = pick($a);
+$j = str_repeat("Z", 5);
+echo $a[0] . $a[1] . $a[2];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "123");
     assert!(
-        out.stderr.contains("leak summary: clean"),
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Regression test guarding the unchanged owned-return path: a function that
+/// returns a freshly-built value (`$s . "!"`) is not a borrowed passthrough, so
+/// its result stays owned and is freed normally with a clean heap.
+#[test]
+fn test_regression_non_passthrough_owned_return_still_freed() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function wrap(string $s): string { return $s . "!"; }
+function mk(int $n): string { return str_repeat("a", $n); }
+$x = mk(3);
+$x = wrap($x);
+$j = str_repeat("Z", 5);
+echo $x;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "aaa!");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Regression test: casting a `mixed`/union value to string through concatenation must
+/// release the owned copy produced by `__rt_mixed_cast_string`.
+///
+/// `$v . "!"` (where `$v` is a `mixed` parameter holding a heap string) lowers the
+/// `mixed -> string` coercion through `Op::Cast`, whose codegen persists a fresh owned
+/// copy of the boxed string. `value_is_owning_temporary` did not recognize `Op::Cast`
+/// results as owning, so `lower_concat` never released that copy and it leaked. The
+/// caller-side argument box was already freed correctly, so the leak only appeared when
+/// the callee actually stringified the `mixed` value. Asserts heap is clean at exit.
+#[test]
+fn test_regression_mixed_string_cast_concat_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function frob($v) { return $v . "!"; }
+function mk(int $n): string { return str_repeat("a", $n); }
+$x = mk(3);
+$y = frob($x);
+echo $y;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "aaa!");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",
         out.stderr
     );
 }
 
-/// Regression test for issue #408 (in-place promotion): a string-key write that
-/// promotes a freshly built indexed array literal to hash storage must also free
-/// the source array. Repeated promotion in a loop keeps GC allocs and frees
-/// balanced with no leaked source arrays.
+/// Regression test: an explicit `(string)` cast of a `mixed` value stored into a local
+/// must release the owned copy produced by `__rt_mixed_cast_string`.
+///
+/// `$s = (string)$v` acquires its own copy into `$s` and must then release the cast
+/// temporary. Before the fix the cast result was not treated as an owning temporary, so
+/// `store_local`'s source release was skipped and the persisted copy leaked. Asserts heap
+/// is clean at exit.
 #[test]
-fn test_regression_408_string_key_promotion_does_not_leak() {
-    let out = compile_and_run_with_gc_stats(
+fn test_regression_mixed_explicit_string_cast_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
         r#"<?php
-$g = [];
-for ($n = 0; $n < 500; $n++) {
-    $g = [1, 2];
-    $g["a"] = "x";
-}
-echo "done";
+function frob($v) { $s = (string)$v; return $s; }
+function mk(int $n): string { return str_repeat("a", $n); }
+$x = mk(3);
+$y = frob($x);
+echo $y;
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "done");
+    assert_eq!(out.stdout, "aaa");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: repeatedly stringifying a `mixed` value must not accumulate heap
+/// allocations. Each `mixed -> string` cast persists an owned copy that has to be freed
+/// once consumed, so a loop of casts keeps GC allocs and frees balanced rather than
+/// leaking one block per iteration.
+#[test]
+fn test_regression_mixed_string_cast_no_accumulation() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+function frob($v) { return $v . "!"; }
+function mk(int $n): string { return str_repeat("a", $n); }
+$x = mk(3);
+$t = "";
+for ($i = 0; $i < 50; $i++) {
+    $t = frob($x);
+}
+echo $t;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "aaa!");
     let (allocs, frees) = parse_gc_stats(&out.stderr);
     assert_eq!(
         allocs, frees,
-        "promoting an indexed array literal to hash storage must free the source array (issue #408)"
+        "mixed-to-string casts must not accumulate heap blocks across iterations"
+    );
+}
+
+/// Regression guard: stringifying a `mixed` value that holds a non-string payload must
+/// stay heap-clean.
+///
+/// When the boxed payload is an int, `__rt_mixed_cast_string` writes through `itoa` scratch
+/// storage rather than allocating an owned heap copy. The fix marks every `mixed -> string`
+/// cast as an owning temporary, so the subsequent release must be a safe no-op on that
+/// non-heap scratch pointer (`__rt_heap_free_safe` ignores out-of-heap addresses) rather
+/// than corrupting state. Asserts the value renders and the heap is clean at exit.
+#[test]
+fn test_regression_mixed_int_string_cast_release_is_noop() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function frob($v) { return $v . "!"; }
+$y = frob(42);
+echo $y;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "42!");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
     );
 }

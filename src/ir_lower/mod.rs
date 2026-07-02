@@ -10,6 +10,7 @@
 //!   source order and emitting high-level EIR operations.
 //! - The legacy AST-to-ASM backend remains the production path.
 
+mod borrow_passthrough;
 mod builtin_datetime;
 mod context;
 mod effects_lookup;

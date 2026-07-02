@@ -755,15 +755,118 @@ fn apply_inline_at_site(
     host.blocks
         .push(BasicBlock::new(cont_id, cont_name, cont_params));
 
+    // Transplanted parameter slots that need acquire/release balancing.
+    let mut inline_param_slots: Vec<(LocalSlotId, IrType, PhpType)> = Vec::new();
+
     // Install post-call tail into continuation; fix value defs for moved result producers.
     {
+        // Prepend cleanup for transplanted parameter slots: load, release, and
+        // null the slot so the host epilogue does not double-free the borrowed
+        // argument (which aliases a caller local the epilogue will also release).
+        let mut cleanup_insts: Vec<InstId> = Vec::new();
+        for &(slot, ir_type, ref php_type) in &inline_param_slots {
+            // Load the parameter slot value.
+            let loaded_vid = ValueId::from_raw(host.values.len() as u32);
+            host.values.push(Value {
+                ir_type,
+                php_type: php_type.clone(),
+                def: ValueDef::Instruction {
+                    block: cont_id,
+                    index: cleanup_insts.len() as u32,
+                    inst: InstId::from_raw(host.instructions.len() as u32),
+                },
+                ownership: Ownership::MaybeOwned,
+            });
+            let load_iid = InstId::from_raw(host.instructions.len() as u32);
+            let load_inst = Instruction::new(
+                Op::LoadLocal,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                Some(loaded_vid),
+                ir_type,
+                php_type.clone(),
+                Ownership::MaybeOwned,
+                Op::LoadLocal.default_effects(),
+                None,
+            );
+            host.instructions.push(load_inst);
+            cleanup_insts.push(load_iid);
+
+            // Release the loaded value (decref the reference acquired at bind time).
+            let release_iid = InstId::from_raw(host.instructions.len() as u32);
+            let release_inst = Instruction::new(
+                Op::Release,
+                vec![loaded_vid],
+                None,
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+                Op::Release.default_effects(),
+                None,
+            );
+            host.instructions.push(release_inst);
+            cleanup_insts.push(release_iid);
+
+            // Null the slot so the host epilogue skips it.
+            let null_vid = ValueId::from_raw(host.values.len() as u32);
+            let null_ownership = if ir_type.is_refcounted_storage() {
+                Ownership::Borrowed
+            } else {
+                Ownership::NonHeap
+            };
+            host.values.push(Value {
+                ir_type,
+                php_type: php_type.clone(),
+                def: ValueDef::Instruction {
+                    block: cont_id,
+                    index: cleanup_insts.len() as u32,
+                    inst: InstId::from_raw(host.instructions.len() as u32),
+                },
+                ownership: null_ownership,
+            });
+            let null_iid = InstId::from_raw(host.instructions.len() as u32);
+            let null_inst = Instruction::new(
+                Op::ConstNull,
+                Vec::new(),
+                None,
+                Some(null_vid),
+                ir_type,
+                php_type.clone(),
+                null_ownership,
+                Op::ConstNull.default_effects(),
+                None,
+            );
+            host.instructions.push(null_inst);
+            cleanup_insts.push(null_iid);
+
+            let store_null_iid = InstId::from_raw(host.instructions.len() as u32);
+            let store_null_inst = Instruction::new(
+                Op::StoreLocal,
+                vec![null_vid],
+                Some(Immediate::LocalSlot(slot)),
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+                Op::StoreLocal.default_effects(),
+                None,
+            );
+            host.instructions.push(store_null_inst);
+            cleanup_insts.push(store_null_iid);
+        }
+
+        // Prepend cleanup before the original tail instructions.
+        let mut new_instrs = cleanup_insts;
+        new_instrs.extend(tail.iter().copied());
         let contb = host.block_mut(cont_id).unwrap();
-        contb.instructions = tail;
+        contb.instructions = new_instrs;
+
         let cont_instrs: Vec<(usize, InstId)> = contb
             .instructions
             .iter()
             .enumerate()
-            .map(|(k, &iid)| (k, iid))
+            .map(|(k, iid)| (k, *iid))
             .collect();
         for (local_idx, iid) in cont_instrs {
             if let Some(inst) = host.instruction(iid) {
@@ -790,6 +893,13 @@ fn apply_inline_at_site(
     // Bind the call arguments (already evaluated into pre values) into the
     // remapped param local slots. The transplanted body uses load_local on those
     // slots (as seen in real lowered EIR); the stores make the values visible.
+    //
+    // Each refcounted argument is acquired before storing so the transplanted
+    // slot owns its own reference, mirroring the caller-side retain a real call
+    // would perform. The matching release is emitted at the top of the
+    // continuation block (below), so the slot's refcount is balanced and the
+    // slot is cleared before the host epilogue sees it — preventing double-free
+    // when the argument aliases a caller local that the epilogue also releases.
     {
         let call_operands = call_inst.operands.clone();
         for (i, arg_vid) in call_operands.into_iter().enumerate() {
@@ -798,10 +908,50 @@ fn apply_inline_at_site(
             }
             let old_slot = LocalSlotId::from_raw(i as u32);
             if let Some(&new_slot) = local_map.get(&old_slot) {
+                let param = &callee.params[i];
+                let param_ir_type = param.ir_type;
+                let param_php_type = param.php_type.clone();
+                let is_refcounted = param_ir_type.is_refcounted_storage();
+
+                // Acquire the argument so the transplanted slot owns a reference.
+                // For non-refcounted types (int/bool/float), acquire is skipped and
+                // the argument is stored directly.
+                let stored_vid = if is_refcounted {
+                    let acquired_vid = ValueId::from_raw(host.values.len() as u32);
+                    host.values.push(Value {
+                        ir_type: param_ir_type,
+                        php_type: param_php_type.clone(),
+                        def: ValueDef::Instruction {
+                            block: BlockId::from_raw(call_block_idx as u32),
+                            index: host.blocks[call_block_idx].instructions.len() as u32,
+                            inst: InstId::from_raw(host.instructions.len() as u32),
+                        },
+                        ownership: Ownership::MaybeOwned,
+                    });
+                    let acquire_iid = InstId::from_raw(host.instructions.len() as u32);
+                    let acquire_inst = Instruction::new(
+                        Op::Acquire,
+                        vec![arg_vid],
+                        None,
+                        Some(acquired_vid),
+                        param_ir_type,
+                        param_php_type.clone(),
+                        Ownership::MaybeOwned,
+                        Op::Acquire.default_effects(),
+                        None,
+                    );
+                    host.instructions.push(acquire_inst);
+                    host.blocks[call_block_idx].instructions.push(acquire_iid);
+                    acquired_vid
+                } else {
+                    arg_vid
+                };
+
+                // Store the (acquired or direct) value into the transplanted parameter slot.
                 let store_iid = InstId::from_raw(host.instructions.len() as u32);
                 let store_inst = Instruction::new(
                     Op::StoreLocal,
-                    vec![arg_vid],
+                    vec![stored_vid],
                     Some(Immediate::LocalSlot(new_slot)),
                     None,
                     IrType::Void,
@@ -812,6 +962,10 @@ fn apply_inline_at_site(
                 );
                 host.instructions.push(store_inst);
                 host.blocks[call_block_idx].instructions.push(store_iid);
+
+                if is_refcounted {
+                    inline_param_slots.push((new_slot, param_ir_type, param_php_type));
+                }
             }
         }
     }
