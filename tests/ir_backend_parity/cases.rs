@@ -662,7 +662,7 @@ echo is_callable($stat) ? "yes" : "no";
     );
 }
 
-/// Verifies recent callable dispatch fixes preserve legacy backend behavior.
+/// Verifies first-class callable dispatch fixes preserve legacy backend behavior.
 #[test]
 fn parity_function_first_class_callable_dispatch() {
     assert_backend_parity(
@@ -730,6 +730,11 @@ echo ("eir_direct_string_add")(4);
 "#,
         &[],
     );
+}
+
+/// Verifies stored callable dispatch fixes preserve legacy backend behavior.
+#[test]
+fn parity_function_stored_callable_dispatch() {
     assert_backend_parity(
         "assignment_expression_callable_call",
         r#"<?php
@@ -819,6 +824,11 @@ echo preg_replace_callback("/[A-Z]/", $regex, "AB");
 "#,
         &[],
     );
+}
+
+/// Verifies runtime-resolved callable dispatch fixes preserve legacy backend behavior.
+#[test]
+fn parity_function_runtime_callable_dispatch() {
     assert_backend_parity(
         "runtime_string_callable_direct_call_first",
         r#"<?php
