@@ -6613,6 +6613,7 @@ mod tests {
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
             reference_properties: HashSet::new(),
+            owned_reference_properties: HashSet::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
             static_properties: Vec::new(),
@@ -7241,6 +7242,7 @@ mod tests {
             declared_params: (0..user_params.len()).map(|_| true).collect(),
             variadic: None,
             deprecation: None,
+            by_ref_return: false,
         }
     }
 
