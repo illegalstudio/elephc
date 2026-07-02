@@ -469,3 +469,72 @@ echo ($i == $m ? "y" : "n"), ($m == $i ? "y" : "n"), ($i == $h["n"] ? "y" : "n")
     );
     assert_eq!(out, "yyyn");
 }
+
+// --- Issue #362: numeric string arithmetic ---
+
+/// Verifies that a pure integer-form string added to an int coerces to int and yields the PHP result:
+/// `"123" + 3` produces `int(126)`.
+#[test]
+fn test_numeric_string_plus_int() {
+    let out = compile_and_run(r#"<?php echo "123" + 3;"#);
+    assert_eq!(out, "126");
+}
+
+/// Verifies that a float-form string operand routes through the float path at runtime:
+/// `"1.5" + 3` must produce `float(4.5)`, not `int(4)`.
+#[test]
+fn test_numeric_string_float_form_plus_int() {
+    let out = compile_and_run(r#"<?php echo "1.5" + 3;"#);
+    assert_eq!(out, "4.5");
+}
+
+/// Verifies string division: `"10" / 3` produces `float(3.3333333333333)`.
+#[test]
+fn test_numeric_string_division() {
+    let out = compile_and_run(r#"<?php echo "10" / 3;"#);
+    assert_eq!(out, "3.3333333333333");
+}
+
+/// Verifies string modulo: `"10" % 3` produces `int(1)`.
+#[test]
+fn test_numeric_string_modulo() {
+    let out = compile_and_run(r#"<?php echo "10" % 3;"#);
+    assert_eq!(out, "1");
+}
+
+/// Verifies string multiplication: `"2" * 5` produces `int(10)`.
+#[test]
+fn test_numeric_string_multiplication() {
+    let out = compile_and_run(r#"<?php echo "2" * 5;"#);
+    assert_eq!(out, "10");
+}
+
+/// Verifies that a leading-numeric string like `"  +12foo"` coerces its numeric prefix (12) and
+/// produces a compile-time warning, matching PHP's `int(15)` result for `"  +12foo" + 3`.
+#[test]
+fn test_leading_numeric_string_plus_int() {
+    let out = compile_and_run(r#"<?php echo "  +12foo" + 3;"#);
+    assert_eq!(out, "15");
+}
+
+/// Verifies that a float-form string on the right operand also routes to float: `3 + "1.5"` must
+/// produce `float(4.5)`.
+#[test]
+fn test_int_plus_numeric_string_float_form() {
+    let out = compile_and_run(r#"<?php echo 3 + "1.5";"#);
+    assert_eq!(out, "4.5");
+}
+
+/// Verifies that string subtraction works with int-form strings: `"100" - 30` produces `int(70)`.
+#[test]
+fn test_numeric_string_subtraction() {
+    let out = compile_and_run(r#"<?php echo "100" - 30;"#);
+    assert_eq!(out, "70");
+}
+
+/// Verifies that float-form string subtraction routes to float: `"10.5" - 3` produces `float(7.5)`.
+#[test]
+fn test_numeric_string_float_form_subtraction() {
+    let out = compile_and_run(r#"<?php echo "10.5" - 3;"#);
+    assert_eq!(out, "7.5");
+}

@@ -45,7 +45,13 @@ impl Checker {
                         "Exponentiation requires numeric operands",
                     ));
                 }
-                Ok(PhpType::Float)
+                if lt == PhpType::Str || rt == PhpType::Str {
+                    self.warn_numeric_string_operand(left, &lt);
+                    self.warn_numeric_string_operand(right, &rt);
+                    Ok(PhpType::Mixed)
+                } else {
+                    Ok(PhpType::Float)
+                }
             }
             BinOp::Add => {
                 if is_array_like_type(&lt) || is_array_like_type(&rt) {
@@ -59,7 +65,11 @@ impl Checker {
                         "Arithmetic operators require numeric operands",
                     ));
                 }
-                if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
+                if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt)
+                    || lt == PhpType::Str || rt == PhpType::Str
+                {
+                    self.warn_numeric_string_operand(left, &lt);
+                    self.warn_numeric_string_operand(right, &rt);
                     Ok(PhpType::Mixed)
                 } else if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
@@ -76,11 +86,20 @@ impl Checker {
                         "Arithmetic operators require numeric operands",
                     ));
                 }
+                if lt == PhpType::Str || rt == PhpType::Str {
+                    self.warn_numeric_string_operand(left, &lt);
+                    self.warn_numeric_string_operand(right, &rt);
+                }
                 // Division always returns float (PHP compat: 10/3 → 3.333...)
                 if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
-                    Ok(PhpType::Float)
+                    if lt == PhpType::Str || rt == PhpType::Str {
+                        Ok(PhpType::Mixed)
+                    } else {
+                        Ok(PhpType::Float)
+                    }
                 } else if matches!(op, BinOp::Sub | BinOp::Mul)
-                    && (uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt))
+                    && (uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt)
+                        || lt == PhpType::Str || rt == PhpType::Str)
                 {
                     Ok(PhpType::Mixed)
                 } else {
@@ -149,6 +168,31 @@ impl Checker {
                     Ok(lt)
                 }
             }
+        }
+    }
+
+    /// Emits a compile-time warning when a constant string operand used in arithmetic
+    /// is not purely numeric (e.g. `"12abc"`, `"abc"`). PHP 8 emits
+    /// `Warning: A non-numeric value encountered` for leading-numeric strings and
+    /// `TypeError: Unsupported operand types: string + int` for fully non-numeric
+    /// strings at runtime; elephc warns at compile time for the constant case.
+    fn warn_numeric_string_operand(&mut self, expr: &Expr, ty: &PhpType) {
+        if *ty != PhpType::Str {
+            return;
+        }
+        let value = match &expr.kind {
+            ExprKind::StringLiteral(s) => s,
+            _ => return,
+        };
+        if is_php_numeric_string(value) {
+            return;
+        }
+        let warning = crate::errors::CompileWarning::new(
+            expr.span,
+            "A non-numeric value encountered in arithmetic",
+        );
+        if !self.warnings.iter().any(|w| w.span.line == warning.span.line && w.span.col == warning.span.col && w.message == warning.message) {
+            self.warnings.push(warning);
         }
     }
 
@@ -1184,12 +1228,14 @@ fn is_array_like_type(ty: &PhpType) -> bool {
 
 /// Returns `true` if `ty` is a valid operand type for numeric binary operators
 /// (addition, subtraction, multiplication, division, modulo, comparison, spaceship).
-/// Numeric operands include `Int`, `Float`, `Bool`, `Void`, `Mixed`, or a union
-/// with mixed integer dispatch behavior.
+/// Numeric operands include `Int`, `Float`, `Bool`, `Void`, `Mixed`, `Str`, or a union
+/// with mixed integer dispatch behavior. `Str` is accepted because PHP coerces numeric
+/// strings at runtime; the result type becomes `Mixed` to capture int-or-float outcomes.
 fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     matches!(
         ty,
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Mixed
+            | PhpType::Str
     ) || checker.is_union_with_mixed_int_dispatch(ty)
 }
 
@@ -1222,4 +1268,49 @@ fn uses_mixed_numeric_dispatch(ty: &PhpType) -> bool {
 /// Returns `true` if `expr` is an empty array literal (`[]`).
 fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::ArrayLiteral(elems) if elems.is_empty())
+}
+
+/// Returns `true` if `s` is a purely numeric string per PHP's `is_numeric()`.
+/// PHP accepts leading/trailing whitespace and optional sign, followed by an
+/// integer, float, or scientific-notation literal. Strings like `"12abc"` or
+/// `"abc"` return `false` (leading-numeric or non-numeric).
+fn is_php_numeric_string(s: &str) -> bool {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    if bytes[i] == b'+' || bytes[i] == b'-' {
+        i += 1;
+    }
+    if i >= bytes.len() {
+        return false;
+    }
+    let mut has_digit = false;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        has_digit = true;
+        i += 1;
+    }
+    if i < bytes.len() && bytes[i] == b'.' {
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            has_digit = true;
+            i += 1;
+        }
+    }
+    if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+        i += 1;
+        if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+            i += 1;
+        }
+        let exp_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == exp_start {
+            return false;
+        }
+    }
+    has_digit && i == bytes.len()
 }

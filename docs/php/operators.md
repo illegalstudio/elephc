@@ -17,6 +17,13 @@ sidebar:
 | `**` | `$a ** $b` | Exponentiation (right-associative, returns float) |
 | `-$x` | `-$x` | Unary negation |
 
+Numeric strings are accepted as arithmetic operands and coerced at runtime,
+matching PHP semantics. Pure integer-form strings (e.g. `"123"`) coerce to
+`int`; float-form strings (e.g. `"1.5"`) coerce to `float`. Leading-numeric
+strings (e.g. `"12abc"`) emit a compile-time `Warning: A non-numeric value
+encountered` and use the numeric prefix. The result type is `Mixed` when either
+operand is a string, since the runtime type depends on the string's content.
+
 ## Comparison
 
 | Operator | Example | Notes |

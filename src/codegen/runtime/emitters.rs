@@ -44,6 +44,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_eq(emitter);
     strings::emit_str_to_number(emitter);
     strings::emit_str_to_int(emitter);
+    strings::emit_str_is_float_form(emitter);
     strings::emit_str_loose_eq(emitter);
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
