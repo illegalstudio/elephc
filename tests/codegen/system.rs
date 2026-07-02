@@ -1222,6 +1222,35 @@ echo date("D", $ts);
     assert_eq!(out, "Wed");
 }
 
+/// Regression for #391: `strtotime("next Mon")` with a short weekday abbreviation
+/// after a modifier must correctly match the 3-letter abbreviation. On x86_64 the
+/// weekday scan previously used a fixed length 16 instead of min(remaining, 16),
+/// which could scan into zero-padded buffer tail. This test ensures the short
+/// abbreviation after a modifier resolves correctly.
+#[test]
+fn test_strtotime_next_mon_abbrev() {
+    let out = compile_and_run(
+        r#"<?php
+$ts = strtotime("next Mon");
+echo date("D", $ts);
+"#,
+    );
+    assert_eq!(out, "Mon");
+}
+
+/// Regression for #391: `strtotime("last Fri")` with a short weekday abbreviation
+/// after a modifier must resolve to the previous Friday.
+#[test]
+fn test_strtotime_last_fri_abbrev() {
+    let out = compile_and_run(
+        r#"<?php
+$ts = strtotime("last Fri");
+echo date("D", $ts);
+"#,
+    );
+    assert_eq!(out, "Fri");
+}
+
 /// Verifies `strtotime("3 days ago")` produces a timestamp roughly 3 days behind now
 /// (259200 seconds ±1 hour for DST).
 #[test]
