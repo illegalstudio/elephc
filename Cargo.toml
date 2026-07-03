@@ -2,6 +2,7 @@
 name = "elephc"
 version = "0.26.0"
 edition = "2021"
+default-run = "elephc"
 description = "A PHP-to-native AOT compiler"
 license = "MIT"
 repository = "https://github.com/illegalstudio/elephc"
