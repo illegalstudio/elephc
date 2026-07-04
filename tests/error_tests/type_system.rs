@@ -122,6 +122,12 @@ fn test_error_undefined_variable() {
     expect_error("<?php echo $x;", "Undefined variable: $x");
 }
 
+/// Verifies that a plain self-referential assignment is not mistaken for `+=`.
+#[test]
+fn test_error_plain_self_read_assignment_remains_undefined() {
+    expect_error("<?php $x = $x + 1;", "Undefined variable: $x");
+}
+
 /// Verifies that reassigning a typed variable to a different type is rejected.
 /// Input: `$x = 42; $x = "hello";` — `$x` is int, reassignment to string fails.
 #[test]

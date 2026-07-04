@@ -11,7 +11,9 @@
 use crate::errors::CompileError;
 use crate::errors::CompileWarning;
 use crate::names::{php_symbol_key, Name};
-use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, TypeExpr};
+use crate::parser::ast::{
+    is_compound_assignment_self_read, CallableTarget, Expr, ExprKind, StaticReceiver, TypeExpr,
+};
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
 
@@ -115,7 +117,7 @@ pub(super) fn check_assign(
     // Inject the variable as Void (null) so inference treats it as 0/null,
     // matching PHP semantics. `??=` is exempt: null-coalesce is designed to
     // handle undefined variables without warning.
-    if !env.contains_key(name) && is_compound_assignment_self_read(value, name) {
+    if !env.contains_key(name) && is_compound_assignment_self_read(value, name, span) {
         let is_null_coalesce = matches!(&value.kind, ExprKind::NullCoalesce { .. });
         env.insert(name.to_string(), PhpType::Void);
         if !is_null_coalesce {
@@ -176,27 +178,6 @@ pub(super) fn check_assign(
     let ty = ty_result?;
     metadata_result?;
     merge_local_assignment_type(checker, name, &ty, span, env)
-}
-
-/// Returns `true` if `value` is a compound-assignment expression (`$x op= rhs`)
-/// where the left operand is a read of the assignment target variable `name`.
-///
-/// The parser lowers `$x += 1` to `Assign { name: "x", value: BinaryOp { left:
-/// Variable("x"), op: Add, right: 1 } }` and `$x ??= 2` to `Assign { name: "x",
-/// value: NullCoalesce { value: Variable("x"), default: 2 } }`. This helper
-/// detects both shapes so the caller can inject the undefined variable as
-/// `Void` (null) before inferring the value type, matching PHP's behavior of
-/// treating undefined variables as null in compound assignments.
-fn is_compound_assignment_self_read(value: &Expr, name: &str) -> bool {
-    match &value.kind {
-        ExprKind::BinaryOp { left, .. } => {
-            matches!(&left.kind, ExprKind::Variable(v) if v == name)
-        }
-        ExprKind::NullCoalesce { value: inner, .. } => {
-            matches!(&inner.kind, ExprKind::Variable(v) if v == name)
-        }
-        _ => false,
-    }
 }
 
 /// Type-checks a reference alias assignment (`$target =& <source>`).

@@ -23,7 +23,9 @@ use crate::ir_lower::expr::{
     type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
-use crate::parser::ast::{CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::parser::ast::{
+    is_compound_assignment_self_read, CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
+};
 use crate::span::Span;
 use crate::types::PhpType;
 
@@ -217,7 +219,7 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     // checker injects the variable as `Void` and emits a warning. At the
     // lowering level, we must initialize the local slot to null/0 before
     // the compound read so the runtime does not read garbage from the stack.
-    if is_compound_assignment_self_read(value, name) && !ctx.has_local_slot(name) {
+    if is_compound_assignment_self_read(value, name, span) && !ctx.has_local_slot(name) {
         let null_value = ctx.builder.emit_const_null();
         let null_lowered = LoweredValue { value: null_value, ir_type: IrType::I64 };
         ctx.store_local(name, null_lowered, PhpType::Void, Some(span));
@@ -256,24 +258,6 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     }
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);
-    }
-}
-
-/// Returns `true` if `value` is a compound-assignment expression (`$x op= rhs`)
-/// where the left operand is a read of the assignment target variable `name`.
-///
-/// The parser lowers `$x += 1` to `Assign { name: "x", value: BinaryOp { left:
-/// Variable("x"), op: Add, right: 1 } }` and `$x ??= 2` to `Assign { name: "x",
-/// value: NullCoalesce { value: Variable("x"), default: 2 } }`.
-fn is_compound_assignment_self_read(value: &Expr, name: &str) -> bool {
-    match &value.kind {
-        ExprKind::BinaryOp { left, .. } => {
-            matches!(&left.kind, ExprKind::Variable(v) if v == name)
-        }
-        ExprKind::NullCoalesce { value: inner, .. } => {
-            matches!(&inner.kind, ExprKind::Variable(v) if v == name)
-        }
-        _ => false,
     }
 }
 

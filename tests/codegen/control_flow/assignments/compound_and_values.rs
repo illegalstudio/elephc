@@ -451,6 +451,14 @@ fn test_undefined_var_plus_equals() {
     assert_eq!(out, "1");
 }
 
+/// Regression for #370: `+=` on an undefined variable also initializes to
+/// null/0 when the compound assignment is used as an expression.
+#[test]
+fn test_undefined_var_plus_equals_expression() {
+    let out = compile_and_run(r#"<?php echo ($x += 1); echo ":"; echo $x;"#);
+    assert_eq!(out, "1:1");
+}
+
 /// Regression for #370: `-=` on an undefined variable treats it as null/0.
 #[test]
 fn test_undefined_var_minus_equals() {
@@ -471,6 +479,14 @@ fn test_undefined_var_dot_equals() {
 fn test_undefined_var_null_coalesce_equals() {
     let out = compile_and_run(r#"<?php $z ??= 42; echo $z;"#);
     assert_eq!(out, "42");
+}
+
+/// Regression for #370: `??=` on an undefined variable assigns and returns the
+/// default value when used as an expression.
+#[test]
+fn test_undefined_var_null_coalesce_equals_expression() {
+    let out = compile_and_run(r#"<?php echo ($z ??= 42); echo ":"; echo $z;"#);
+    assert_eq!(out, "42:42");
 }
 
 /// Regression for #370: `*=` on an undefined variable treats it as 0.
