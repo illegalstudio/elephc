@@ -101,7 +101,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FAdd => floats::lower_float_binop(ctx, &inst, "fadd", "addsd"),
         Op::FSub => floats::lower_float_binop(ctx, &inst, "fsub", "subsd"),
         Op::FMul => floats::lower_float_binop(ctx, &inst, "fmul", "mulsd"),
-        Op::FDiv => floats::lower_float_binop(ctx, &inst, "fdiv", "divsd"),
+        Op::FDiv => floats::lower_float_div(ctx, &inst),
         Op::FPow => floats::lower_float_pow(ctx, &inst),
         Op::FNeg => floats::lower_float_neg(ctx, &inst),
         Op::ICmp => lower_int_compare(ctx, &inst),

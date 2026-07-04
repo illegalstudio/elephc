@@ -169,6 +169,14 @@ echo (1.0 <=> 2.0);
     assert_eq!(out, "1,1,1,-1");
 }
 
+/// Verifies the constant folder computes `i64::MIN % -1` as `0` without panicking the compiler.
+/// A direct `left % right` fold would overflow (`i64::MIN % -1`) and abort this debug build.
+#[test]
+fn test_constant_folding_int_min_mod_minus_one_does_not_panic() {
+    let out = compile_and_run("<?php echo (-9223372036854775807 - 1) % -1;");
+    assert_eq!(out, "0");
+}
+
 /// Verifies that a literal int-cast from a string is folded, eliminating the
 /// `__rt_str_to_int` call from user assembly.
 #[test]

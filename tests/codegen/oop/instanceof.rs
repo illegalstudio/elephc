@@ -393,3 +393,52 @@ echo ($value instanceof $target) ? "T" : "F";
         out.stderr
     );
 }
+
+/// Verifies `is_subclass_of()`/`is_a()` accept a string class-name subject (not only an object):
+/// `is_subclass_of` always allows a string, `is_a` only with a literal `allow_string = true`, and
+/// an undeclared class name or a self-comparison yields false — matching PHP.
+#[test]
+fn test_is_a_relation_string_class_name_subject() {
+    let out = compile_and_run(
+        r#"<?php
+interface I {}
+class A {}
+class B extends A implements I {}
+class C extends B {}
+echo is_subclass_of("C", "A") ? "1" : "0";
+echo is_subclass_of("B", "I") ? "1" : "0";
+echo is_subclass_of("A", "A") ? "1" : "0";
+echo is_subclass_of("Nope", "A") ? "1" : "0";
+echo "|";
+echo is_a("B", "A", true) ? "1" : "0";
+echo is_a("B", "A") ? "1" : "0";
+echo is_a("B", "I", true) ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "1100|101");
+}
+
+/// Verifies `is_a()`/`is_subclass_of()` work on a boxed Mixed receiver by comparing the unboxed
+/// object's runtime class id against the compile-time set satisfying the relation; a non-object
+/// (e.g. int) Mixed payload is never is-a a class.
+#[test]
+fn test_is_a_relation_mixed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+interface I {}
+class A {}
+class B extends A implements I {}
+class C extends B {}
+function makeC(): mixed { return new C(); }
+function makeInt(): mixed { return 5; }
+$obj = makeC();
+$scalar = makeInt();
+echo is_a($obj, "A") ? "1" : "0";
+echo is_subclass_of($obj, "I") ? "1" : "0";
+echo is_a($obj, "C") ? "1" : "0";
+echo is_subclass_of($obj, "C") ? "1" : "0";
+echo is_a($scalar, "A") ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "11100");
+}

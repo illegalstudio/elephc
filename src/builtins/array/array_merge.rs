@@ -6,15 +6,14 @@
 //!   backend (lower hook), all via `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The PHP golden signature is `variadic(&[], "arrays")` (min=0). The legacy CHECK
-//!   arm requires exactly 2 arguments. `min_args: 2, max_args: 2` reproduce that
-//!   enforcement in `check_arity` only; `function_sig` and the parity gate keep the
-//!   variadic shape from the golden.
-//! - `check` validates that the first argument is an indexed or associative array and
-//!   returns the merged result type. The return type logic mirrors the legacy checker:
-//!   when the first operand is an empty array (element type `Void`), the result adopts
-//!   the second operand's element type if it is a scalar-merge type.
-//! - Arity is pre-validated by `check_arity`; the hook can assume exactly 2 args.
+//! - The PHP golden signature is `variadic(&[], "arrays")` (min=0). `min_args: 2` enforces
+//!   at least two arrays in `check_arity`; the variadic shape (unbounded max) accepts three
+//!   or more, matching PHP. `function_sig` and the parity gate keep the golden shape.
+//! - `check` validates that every argument is an indexed or associative array and folds the
+//!   merged result type left-to-right (`f(f(a, b), c)`), mirroring the ir_lower rewrite. When
+//!   an operand is an empty array (element type `Void`), the result adopts the next operand's
+//!   element type if it is a scalar-merge type.
+//! - Arity (>= 2 args) is pre-validated by `check_arity`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::codegen_ir::context::FunctionContext;
@@ -29,7 +28,6 @@ builtin! {
     params: [],
     variadic: "arrays",
     min_args: 2,
-    max_args: 2,
     returns: Mixed,
     check: check,
     lower: lower,
@@ -37,22 +35,30 @@ builtin! {
     php_manual: "https://www.php.net/manual/en/function.array-merge.php",
 }
 
-/// Validates the first argument is an array and returns the merged result type.
+/// Validates every argument is an array and returns the merged result type.
 ///
-/// Arity (exactly 2 args) is pre-validated by `check_arity`. The hook re-infers both
-/// argument types to derive the precise result type: when the left operand is an empty
-/// indexed array (element type `Void`), the result adopts the right operand's element
-/// type if it is a scalar-merge-compatible type.
+/// Arity (>= 2 args) is pre-validated by `check_arity`. The hook infers every argument type and
+/// folds them left-to-right through `array_merge_return_type` (mirroring the ir_lower rewrite of
+/// `array_merge(a, b, c)` into `array_merge(array_merge(a, b), c)`), so a three-plus-array merge
+/// gets the same result type the nested two-array lowering produces.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    let ty2 = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    if !matches!(ty1, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-        return Err(CompileError::new(
-            cx.span,
-            "array_merge() first argument must be array",
-        ));
+    let mut types = Vec::with_capacity(cx.args.len());
+    for arg in cx.args {
+        types.push(cx.checker.infer_type(arg, cx.env)?);
     }
-    Ok(array_merge_return_type(ty1, ty2))
+    for ty in &types {
+        if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            return Err(CompileError::new(
+                cx.span,
+                "array_merge() arguments must be arrays",
+            ));
+        }
+    }
+    let mut result = types[0].clone();
+    for ty in &types[1..] {
+        result = array_merge_return_type(result, ty.clone());
+    }
+    Ok(result)
 }
 
 /// Lowers an `array_merge` call by delegating to the shared array-merge emitter.
@@ -83,10 +89,18 @@ fn is_empty_array_element_type(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Void)
 }
 
-/// Returns true for element types that the scalar merge runtime helper copies safely.
+/// Returns true for element types the merged array can adopt from the next operand when the
+/// current accumulator is statically empty. Scalars use the 8-byte merge helper; strings use the
+/// dedicated 16-byte `__rt_array_merge_str` helper, so `Str` is included here as well (kept in sync
+/// with the ir_lower copy in `src/ir_lower/expr/mod.rs`).
 fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
     matches!(
         ty.codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable | PhpType::Void
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Callable
+            | PhpType::Void
+            | PhpType::Str
     )
 }

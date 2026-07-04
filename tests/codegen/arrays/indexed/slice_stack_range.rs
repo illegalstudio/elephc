@@ -23,6 +23,38 @@ echo $b[0] . " " . $b[1] . " " . $b[2];
     assert_eq!(out, "20 30 40");
 }
 
+/// Verifies `array_slice($a, $off, $len, true)` preserves the original integer keys, producing an
+/// integer-keyed associative result routed through `__rt_array_slice_preserve`.
+/// Matches PHP: keys 1,2,3 hold 20,30,40; a `preserve_keys = false` slice re-indexes from 0.
+#[test]
+fn test_array_slice_preserve_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20, 30, 40, 50];
+$s = array_slice($a, 1, 3, true);
+echo $s[1]; echo ","; echo $s[2]; echo ","; echo $s[3];
+echo "|";
+$r = array_slice($a, 2, 2, false);
+echo $r[0]; echo ","; echo $r[1];
+"#,
+    );
+    assert_eq!(out, "20,30,40|30,40");
+}
+
+/// Verifies `array_slice(..., true)` over a float array preserves keys and float values, exercising
+/// the value-tag argument passed to `__rt_array_slice_preserve` (float boxed cells read back intact).
+#[test]
+fn test_array_slice_preserve_keys_float() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1.5, 2.5, 3.5, 4.5];
+$s = array_slice($a, 1, 2, true);
+echo $s[1]; echo ","; echo $s[2];
+"#,
+    );
+    assert_eq!(out, "2.5,3.5");
+}
+
 /// Tests `array_shift` removes and returns the first element from a 3-element array.
 /// Verifies the popped value (10) and that remaining array length is reduced to 2.
 #[test]

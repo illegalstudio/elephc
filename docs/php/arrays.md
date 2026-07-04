@@ -202,7 +202,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice |
 | `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove a slice in place and return the removed elements |
 | `array_chunk()` | `array_chunk($arr, $size): array` | Split into chunks |
-| `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |
+| `array_merge()` | `array_merge($arr1, $arr2, ...): array` | Merge two or more arrays (concatenated left to right) |
 | `array_merge_recursive()` | `array_merge_recursive($arr1, $arr2): array` | Recursively merge two arrays: integer keys append (renumbered), string keys that collide recurse when both values are arrays and otherwise combine into a list. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool); nested indexed-array values are treated as opaque. |
 | `array_replace()` | `array_replace($arr, $replacements): array` | Overwrite matching keys in `$arr` (in place, keeping position) and append new keys from `$replacements`; later values win. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
 | `array_replace_recursive()` | `array_replace_recursive($arr, $replacements): array` | Like `array_replace()`, but when both values at a key are associative arrays they are merged recursively instead of overwritten. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool); nested indexed arrays are overwritten, not merged. |
@@ -211,8 +211,8 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `array_fill_keys()` | `array_fill_keys($keys, $value): array` | Fill with values using keys |
 | `array_pad()` | `array_pad($arr, $size, $value): array` | Pad to length |
 | `range()` | `range($start, $end): array` | Sequential integers |
-| `array_diff()` | `array_diff($arr1, $arr2): array` | Values in $arr1 not in $arr2 |
-| `array_intersect()` | `array_intersect($arr1, $arr2): array` | Values in both |
+| `array_diff()` | `array_diff($arr1, $arr2, ...): array` | Values in $arr1 not present in any of the other arrays |
+| `array_intersect()` | `array_intersect($arr1, $arr2, ...): array` | Values present in every array |
 | `array_diff_key()` | `array_diff_key($arr1, $arr2): array` | Keys in $arr1 not in $arr2 |
 | `array_intersect_key()` | `array_intersect_key($arr1, $arr2): array` | Keys in both |
 | `array_diff_assoc()` | `array_diff_assoc($arr1, $arr2): array` | Entries of $arr1 whose `(key, value)` pair is absent from $arr2 (values compared as `(string)$a === (string)$b`). Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |

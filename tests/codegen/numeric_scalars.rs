@@ -168,6 +168,48 @@ fn test_round_down() {
     assert_eq!(out, "3");
 }
 
+/// Verifies round() accepts an optional $mode argument: the default and PHP_ROUND_HALF_UP round
+/// ties away from zero, while PHP_ROUND_HALF_EVEN rounds ties to even (banker's rounding), both
+/// with and without precision. The PHP_ROUND_* constants also resolve to their PHP values.
+#[test]
+fn test_round_modes_half_up_and_half_even() {
+    let out = compile_and_run(
+        r#"<?php
+echo round(2.5);
+echo "|" . round(2.5, 0, PHP_ROUND_HALF_EVEN);
+echo "|" . round(3.5, 0, PHP_ROUND_HALF_EVEN);
+echo "|" . round(1.45, 1, PHP_ROUND_HALF_EVEN);
+echo "|" . round(1.55, 1);
+echo "|" . round(2.5, 0, PHP_ROUND_HALF_UP);
+echo "|" . PHP_ROUND_HALF_EVEN;
+"#,
+    );
+    assert_eq!(out, "3|2|4|1.4|1.6|3|3");
+}
+
+/// Verifies min()/max() coerce a boxed Mixed/Union operand to its numeric value instead of
+/// comparing the cell pointer (which produced garbage). The heterogeneous array makes its elements
+/// Mixed; the comparison must use the unboxed value. Covers Mixed in either position, an int and a
+/// float Mixed, and the assignment form (the local is float-typed from the emitter).
+#[test]
+fn test_min_max_coerce_mixed_operand() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [5, "x", 9];
+$m = $a[0];
+$b = [2.5, "y"];
+$f = $b[0];
+echo max($m, 3);
+echo "|" . min($m, 8);
+echo "|" . max(3, $m);
+echo "|" . max($f, 1);
+$r = max($m, 7);
+echo "|" . $r;
+"#,
+    );
+    assert_eq!(out, "5|5|5|2.5|7");
+}
+
 /// Verifies sqrt() of a perfect square (16.0) produces 4.
 #[test]
 fn test_sqrt() {

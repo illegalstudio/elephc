@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_walk_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_walk_recursive.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1542](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1542) (`lower_array_walk_recursive`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1713](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1713) (`lower_array_walk_recursive`)
 - **Function symbol**: `lower_array_walk_recursive()`
 
 

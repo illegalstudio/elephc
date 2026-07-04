@@ -49,12 +49,18 @@ pub(crate) fn lower_call_user_func_builtin_escape(
 
 /// Lowers `array_sum()` over supported indexed-array payloads.
 pub(crate) fn lower_array_sum(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_aggregate(ctx, inst, "array_sum", "__rt_array_sum")
+    lower_indexed_array_aggregate(ctx, inst, "array_sum", "__rt_array_sum", "__rt_array_sum_float")
 }
 
 /// Lowers `array_product()` over supported indexed-array payloads.
 pub(crate) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_aggregate(ctx, inst, "array_product", "__rt_array_product")
+    lower_indexed_array_aggregate(
+        ctx,
+        inst,
+        "array_product",
+        "__rt_array_product",
+        "__rt_array_product_float",
+    )
 }
 
 /// Lowers `array_push()` by appending one value and publishing the mutated array.
@@ -310,6 +316,9 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
 
 /// Lowers `array_map()` through the callback runtime helper matching the callback result type.
 pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() == 3 {
+        return lower_array_map2(ctx, inst);
+    }
     super::ensure_arg_count(inst, "array_map", 2)?;
     let callback = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
@@ -409,6 +418,103 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     normalize_indexed_array_result(ctx, "array_map", &callback_elem_ty, &result_elem_ty)?;
     box_array_result_for_mixed_builtin(ctx, inst, &result_elem_ty);
     store_if_result(ctx, inst)
+}
+
+/// Lowers the two-input-array form `array_map($callback, $a, $b)` (bounded H11 subset).
+///
+/// The checker restricts this path to two arrays sharing one scalar element type (both integer or
+/// both string) with a callback returning that same type, so the visible callback argument types and
+/// the result element type are all that shared element type. Dispatches every supported callback
+/// shape (closure descriptor, runtime-string name, closure-holding local, or static binding) through
+/// the same `__rt_array_map2`/`__rt_array_map2_str` runtime the shared helpers select on element type.
+fn lower_array_map2(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let callback = expect_operand(inst, 0)?;
+    let array0 = expect_operand(inst, 1)?;
+    let array1 = expect_operand(inst, 2)?;
+    let elem_ty = array_map_callback_array_element_type(ctx.value_php_type(array0)?)?;
+    let runtime_label = if elem_ty == PhpType::Str {
+        "__rt_array_map2_str"
+    } else {
+        "__rt_array_map2"
+    };
+    let visible_arg_types = vec![elem_ty.clone(), elem_ty.clone()];
+    let result_elem_ty = elem_ty.clone();
+    match ctx.value_php_type(callback)?.codegen_repr() {
+        PhpType::Callable => {
+            lower_descriptor_callback_runtime(
+                ctx,
+                callback,
+                visible_arg_types.clone(),
+                result_elem_ty.clone(),
+                |ctx, wrapper_label, env_bytes| {
+                    emit_array_map2_call(ctx, wrapper_label, array0, array1, env_bytes, runtime_label)
+                },
+            )?;
+        }
+        PhpType::Str => {
+            lower_runtime_string_descriptor_callback(
+                ctx,
+                callback,
+                Some(&PhpType::Array(Box::new(elem_ty.clone()))),
+                visible_arg_types.clone(),
+                result_elem_ty.clone(),
+                "array_map",
+                |ctx, wrapper_label, env_bytes| {
+                    emit_array_map2_call(ctx, wrapper_label, array0, array1, env_bytes, runtime_label)
+                },
+            )?;
+        }
+        _ if descriptor_callback_local_without_same_block_store(ctx, callback)? => {
+            lower_descriptor_callback_runtime(
+                ctx,
+                callback,
+                visible_arg_types.clone(),
+                result_elem_ty.clone(),
+                |ctx, wrapper_label, env_bytes| {
+                    emit_array_map2_call(ctx, wrapper_label, array0, array1, env_bytes, runtime_label)
+                },
+            )?;
+        }
+        _ => {
+            let binding = static_sort_callback_binding(
+                ctx,
+                callback,
+                "array_map callback",
+                Some(&visible_arg_types),
+            )?;
+            let env_bytes = reserve_static_callback_env(ctx, binding.env_source)?;
+            emit_array_map2_call(ctx, &binding.label, array0, array1, env_bytes, runtime_label)?;
+            if env_bytes != 0 {
+                abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
+            }
+        }
+    }
+    normalize_indexed_array_result(ctx, "array_map", &result_elem_ty, &result_elem_ty)?;
+    box_array_result_for_mixed_builtin(ctx, inst, &result_elem_ty);
+    store_if_result(ctx, inst)
+}
+
+/// Emits the runtime call for a two-input-array `array_map`, loading the callback wrapper, both
+/// source arrays, and the captured-environment pointer into the first four integer argument
+/// registers before branching to the selected `__rt_array_map2*` helper.
+fn emit_array_map2_call(
+    ctx: &mut FunctionContext<'_>,
+    callback_label: &str,
+    array0: ValueId,
+    array1: ValueId,
+    env_bytes: usize,
+    runtime_label: &str,
+) -> Result<()> {
+    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let array0_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let array1_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, callback_label);
+    ctx.load_value_to_reg(array0, array0_arg_reg)?;
+    ctx.load_value_to_reg(array1, array1_arg_reg)?;
+    load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    Ok(())
 }
 
 /// Lowers `array_map()` through a descriptor-backed callback wrapper.
@@ -851,11 +957,19 @@ pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
     super::ensure_arg_count(inst, "array_merge", 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
-    let elem_ty = compatible_eight_byte_indexed_array_element_type(
-        ctx.value_php_type(first)?,
-        ctx.value_php_type(second)?,
-        "array_merge",
-    )?;
+    let first_ty = ctx.value_php_type(first)?;
+    let second_ty = ctx.value_php_type(second)?;
+    // String elements use 16-byte (ptr+len) slots; routing them through the 8-byte helper corrupts
+    // every element past the first, so a dedicated str helper handles them. An empty `[]` argument
+    // carries no element-type hint, so the str path triggers whenever EITHER argument is a string
+    // array (the common `$r = []; array_merge($r, $strs)` shape).
+    let helper = if is_str_element_array(&first_ty) || is_str_element_array(&second_ty) {
+        "__rt_array_merge_str"
+    } else {
+        let elem_ty =
+            compatible_eight_byte_indexed_array_element_type(first_ty, second_ty, "array_merge")?;
+        array_merge_runtime_helper(&elem_ty)
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(first, "x0")?;
@@ -866,8 +980,16 @@ pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.load_value_to_reg(second, "rsi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, array_merge_runtime_helper(&elem_ty));
+    abi::emit_call_label(ctx.emitter, helper);
     store_if_result(ctx, inst)
+}
+
+/// Returns true when a value's static type is an indexed array of string elements.
+///
+/// String indexed arrays use 16-byte (pointer, length) slots, so `array_merge` routes them to the
+/// dedicated `__rt_array_merge_str` helper rather than the 8-byte scalar/refcounted merges.
+fn is_str_element_array(ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Array(elem) if matches!(*elem, PhpType::Str))
 }
 
 /// Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots.
@@ -904,7 +1026,7 @@ pub(crate) fn lower_array_intersect_key(ctx: &mut FunctionContext<'_>, inst: &In
 
 /// Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
 pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "array_slice", 2, 3)?;
+    ensure_arg_count_between(inst, "array_slice", 2, 4)?;
     let array = expect_operand(inst, 0)?;
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
@@ -913,12 +1035,18 @@ pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return lower_mixed_array_slice(ctx, inst);
     }
     let offset = expect_operand(inst, 1)?;
-    let length = if inst.operands.len() == 3 {
+    let length = if inst.operands.len() >= 3 {
         Some(expect_operand(inst, 2)?)
     } else {
         None
     };
     let source_elem_ty = array_slice_source_element_type(ctx.value_php_type(array)?)?;
+    // A literal `preserve_keys = true` 4th argument is typed by the checker/EIR as an integer-keyed
+    // associative array; route it to the key-preserving hash helper instead of the re-indexing path.
+    if matches!(inst.result_php_type.codegen_repr(), PhpType::AssocArray { .. }) {
+        lower_array_slice_preserve_call(ctx, array, offset, length, inst)?;
+        return store_if_result(ctx, inst);
+    }
     let result_elem_ty = result_array_element_type("array_slice", &inst.result_php_type.codegen_repr())?;
     require_array_slice_result_type(&source_elem_ty, &result_elem_ty)?;
     lower_array_slice_call(ctx, array, offset, length, &source_elem_ty)?;
@@ -926,11 +1054,40 @@ pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
+/// Builds a key-preserving `array_slice()` result through `__rt_array_slice_preserve`.
+///
+/// Materializes `(array, offset, length)` exactly like the indexed slice (offset/length are unboxed
+/// from `Mixed` cells and an absent length becomes the until-the-end sentinel), then passes the
+/// result hash's runtime value-type tag in the 4th argument register so the boxed hash values read
+/// back as the correct type. The result is the integer-keyed associative array the checker typed.
+fn lower_array_slice_preserve_call(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    offset: ValueId,
+    length: Option<ValueId>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_slice_like_args(ctx, array, offset, length, "array_slice")?;
+    let value_ty = match inst.result_php_type.codegen_repr() {
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_slice preserve_keys result PHP type {:?}",
+                other
+            )))
+        }
+    };
+    let value_tag = crate::codegen::runtime_value_tag(&value_ty) as i64;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), value_tag);
+    abi::emit_call_label(ctx.emitter, "__rt_array_slice_preserve");
+    Ok(())
+}
+
 /// Lowers `array_slice()` for an indexed array stored inside a boxed Mixed cell.
 fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let offset = expect_operand(inst, 1)?;
-    let length = if inst.operands.len() == 3 {
+    let length = if inst.operands.len() >= 3 {
         Some(expect_operand(inst, 2)?)
     } else {
         None
@@ -1074,22 +1231,36 @@ pub(crate) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
 
 /// Lowers `sort()` for indexed integer arrays by mutating the source array in place.
 pub(crate) fn lower_sort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_sort(ctx, inst, "sort", "__rt_sort_int", Some("__rt_sort_str"))
+    lower_indexed_array_sort(
+        ctx,
+        inst,
+        "sort",
+        "__rt_sort_int",
+        Some("__rt_sort_str"),
+        Some("__rt_sort_float"),
+    )
 }
 
 /// Lowers `rsort()` for indexed integer arrays by mutating the source array in place.
 pub(crate) fn lower_rsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_sort(ctx, inst, "rsort", "__rt_rsort_int", Some("__rt_rsort_str"))
+    lower_indexed_array_sort(
+        ctx,
+        inst,
+        "rsort",
+        "__rt_rsort_int",
+        Some("__rt_rsort_str"),
+        Some("__rt_rsort_float"),
+    )
 }
 
 /// Lowers `asort()` for indexed integer arrays through the value-sort runtime wrapper.
 pub(crate) fn lower_asort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_sort(ctx, inst, "asort", "__rt_asort", None)
+    lower_indexed_array_sort(ctx, inst, "asort", "__rt_asort", None, None)
 }
 
 /// Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper.
 pub(crate) fn lower_arsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_sort(ctx, inst, "arsort", "__rt_arsort", None)
+    lower_indexed_array_sort(ctx, inst, "arsort", "__rt_arsort", None, None)
 }
 
 /// Lowers `ksort()` through the legacy key-sort helper surface.
@@ -1104,12 +1275,12 @@ pub(crate) fn lower_krsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 
 /// Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper.
 pub(crate) fn lower_natsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_sort(ctx, inst, "natsort", "__rt_natsort", None)
+    lower_indexed_array_sort(ctx, inst, "natsort", "__rt_natsort", None, None)
 }
 
 /// Lowers `natcasesort()` for indexed integer arrays through the case-insensitive wrapper.
 pub(crate) fn lower_natcasesort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_sort(ctx, inst, "natcasesort", "__rt_natcasesort", None)
+    lower_indexed_array_sort(ctx, inst, "natcasesort", "__rt_natcasesort", None, None)
 }
 
 /// Lowers `shuffle()` for indexed arrays with 8-byte slots by mutating the source array in place.
@@ -1708,7 +1879,9 @@ pub(crate) fn lower_array_multisort(ctx: &mut FunctionContext<'_>, inst: &Instru
 
 /// Lowers `array_search()` for indexed arrays with integer-like payloads.
 pub(crate) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "array_search", 2)?;
+    // The optional 3rd `$strict` operand is already evaluated during EIR arg lowering; elephc's
+    // same-type comparison is strict-equivalent, so the backend ignores the flag value here.
+    ensure_arg_count_between(inst, "array_search", 2, 3)?;
     let needle = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
     let needle_ty = ctx.value_php_type(needle)?;
@@ -1727,7 +1900,9 @@ pub(crate) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instructi
 
 /// Lowers `in_array()` for indexed arrays with scalar or string payloads.
 pub(crate) fn lower_in_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "in_array", 2)?;
+    // The optional 3rd `$strict` operand is already evaluated (for side effects) during EIR arg
+    // lowering; elephc's same-type comparison is strict-equivalent, so the backend ignores it.
+    ensure_arg_count_between(inst, "in_array", 2, 3)?;
     let needle = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
     let needle_ty = ctx.value_php_type(needle)?;
@@ -1752,15 +1927,23 @@ fn lower_indexed_array_aggregate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
-    helper: &str,
+    int_helper: &str,
+    float_helper: &str,
 ) -> Result<()> {
     super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
-    require_supported_indexed_array(ctx.value_php_type(array)?, name)?;
+    let elem_ty = aggregate_indexed_array_element_type(ctx.value_php_type(array)?, name)?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the runtime helper argument
     }
+    // Float payloads accumulate with floating-point adds/muls and return in the float result
+    // register (`d0`/`xmm0`); integer-like payloads use the raw-word helper returning `x0`/`rax`.
+    let helper = if matches!(elem_ty, PhpType::Float) {
+        float_helper
+    } else {
+        int_helper
+    };
     abi::emit_call_label(ctx.emitter, helper);
     store_if_result(ctx, inst)
 }
@@ -1838,10 +2021,16 @@ fn lower_indexed_array_sort(
     name: &str,
     int_helper: &str,
     str_helper: Option<&str>,
+    float_helper: Option<&str>,
 ) -> Result<()> {
     super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
-    let elem_ty = indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
+    let elem_ty = indexed_sort_element_type(
+        ctx.value_php_type(array)?,
+        name,
+        str_helper.is_some(),
+        float_helper.is_some(),
+    )?;
     let source_local = source_load_local_slot(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     if let Some(slot) = source_local {
@@ -1857,6 +2046,8 @@ fn lower_indexed_array_sort(
     }
     let helper = if elem_ty == PhpType::Str {
         str_helper.expect("string sort helper is required after validation")
+    } else if elem_ty == PhpType::Float {
+        float_helper.expect("float sort helper is required after validation")
     } else {
         int_helper
     };
@@ -2036,12 +2227,14 @@ fn indexed_sort_element_type(
     ty: PhpType,
     name: &str,
     allow_strings: bool,
+    allow_floats: bool,
 ) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
             if matches!(elem, PhpType::Int | PhpType::Void | PhpType::Never)
                 || (allow_strings && elem == PhpType::Str)
+                || (allow_floats && elem == PhpType::Float)
             {
                 return Ok(elem);
             }
@@ -2105,10 +2298,20 @@ fn ensure_unique_sort_source(ctx: &mut FunctionContext<'_>, array: ValueId) -> R
     ctx.store_result_value(array)
 }
 
-/// Verifies the aggregate can use the current raw integer-slot runtime helper.
-fn require_supported_indexed_array(ty: PhpType, name: &str) -> Result<()> {
+/// Returns the aggregate element type routed to a raw-word or floating-point runtime helper.
+///
+/// Integer/bool/never element arrays sum through the raw-word helper; float element arrays sum
+/// through the floating-point helper. Any other payload is unsupported and errors loudly.
+fn aggregate_indexed_array_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
     match ty.codegen_repr() {
-        PhpType::Array(elem) if matches!(*elem, PhpType::Int | PhpType::Bool | PhpType::Never) => Ok(()),
+        PhpType::Array(elem)
+            if matches!(
+                *elem,
+                PhpType::Int | PhpType::Bool | PhpType::Never | PhpType::Float
+            ) =>
+        {
+            Ok((*elem).clone())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name,

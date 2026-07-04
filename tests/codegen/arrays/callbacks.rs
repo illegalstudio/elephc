@@ -26,6 +26,33 @@ echo $b[0] . $b[1] . $b[2];
     assert_eq!(out, "246");
 }
 
+/// Verifies the two-input-array form `array_map($cb, $a, $b)` pairs elements positionally across
+/// every supported integer callback shape (arrow closure, capturing closure, named function) and
+/// the string-array form (capture-less closure), routed through `__rt_array_map2`/`_str`.
+/// Matches PHP: `11,22,33|110,140,190|9,18,27|ax,by`.
+#[test]
+fn test_array_map_two_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+function combine($x, $y) { return $x - $y; }
+$a = [1, 2, 3];
+$b = [10, 20, 30];
+$arrow = array_map(fn($x, $y) => $x + $y, $a, $b);
+echo $arrow[0]; echo ","; echo $arrow[1]; echo ","; echo $arrow[2]; echo "|";
+$k = 100;
+$cap = array_map(function ($x, $y) use ($k) { return $x * $y + $k; }, $a, $b);
+echo $cap[0]; echo ","; echo $cap[1]; echo ","; echo $cap[2]; echo "|";
+$named = array_map("combine", $b, $a);
+echo $named[0]; echo ","; echo $named[1]; echo ","; echo $named[2]; echo "|";
+$s1 = ["a", "b"];
+$s2 = ["x", "y"];
+$strs = array_map(fn($p, $q) => $p . $q, $s1, $s2);
+echo $strs[0]; echo ","; echo $strs[1];
+"#,
+    );
+    assert_eq!(out, "11,22,33|110,140,190|9,18,27|ax,by");
+}
+
 // Tests `array_map` on a single-element array with a user-defined increment callback.
 /// Verifies that array map single.
 #[test]

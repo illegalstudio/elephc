@@ -39,7 +39,7 @@ sidebar:
 | [`rad2deg()`](./math/rad2deg.md) | `(float $num): float` | `float` |
 | [`rand()`](./math/rand.md) | `(int $min, int $max): int` | `int` |
 | [`random_int()`](./math/random_int.md) | `(int $min, int $max): int` | `int` |
-| [`round()`](./math/round.md) | `(float $num, int $precision = 0): float` | `float` |
+| [`round()`](./math/round.md) | `(float $num, int $precision = 0, int $mode = 1): float` | `float` |
 | [`sin()`](./math/sin.md) | `(float $num): float` | `float` |
 | [`sinh()`](./math/sinh.md) | `(float $num): float` | `float` |
 | [`sqrt()`](./math/sqrt.md) | `(float $num): float` | `float` |

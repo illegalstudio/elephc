@@ -7,12 +7,13 @@
 //!
 //! Key details:
 //! - The PHP golden signature is `variadic(&["callback","array"], "arrays")` (two
-//!   required params plus a variadic `arrays`). The legacy CHECK arm required exactly
-//!   2 arguments, so `min_args: 2, max_args: 2` reproduce that enforcement in
-//!   `check_arity` only; `function_sig` and the parity gate keep the variadic shape.
+//!   required params plus a variadic `arrays`). `min_args: 2, max_args: 3` bound
+//!   `check_arity` to the single-array form plus the supported two-input-array form
+//!   (`array_map($cb, $a, $b)`); `function_sig` and the parity gate keep the variadic shape.
 //! - `check` validates that the second argument is an indexed array and infers the
 //!   callback return element type; the result preserves the input array element type
-//!   unless the callback returns Mixed.
+//!   unless the callback returns Mixed. The two-input-array form defers to
+//!   `check_array_map_multi`, which enforces the bounded (int/str, shared-type) subset.
 //! - `lower` is a thin wrapper over the shared `arrays::lower_array_map` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -28,7 +29,7 @@ builtin! {
     params: [callback: Mixed, array: Mixed],
     variadic: "arrays",
     min_args: 2,
-    max_args: 2,
+    max_args: 3,
     returns: Mixed,
     check: check,
     lower: lower,
@@ -40,8 +41,14 @@ builtin! {
 ///
 /// Validates that the second argument is an indexed array, checks the callback
 /// with a dummy element argument, and derives the result element type from the
-/// callback return type. Arity (exactly 2 args) is pre-validated by `check_arity`.
+/// callback return type. Arity (2 or 3 args) is pre-validated by `check_arity`; the
+/// two-input-array form (`array_map($cb, $a, $b)`) defers to `check_array_map_multi`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    if cx.args.len() > 2 {
+        return crate::types::checker::builtins::check_array_map_multi(
+            cx.checker, cx.args, cx.span, cx.env,
+        );
+    }
     for arg in cx.args {
         cx.checker.infer_type(arg, cx.env)?;
     }

@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::Instruction;
+use crate::ir::{Immediate, Instruction};
 use crate::types::PhpType;
 
 use crate::codegen_ir::{CodegenIrError, Result};
@@ -184,20 +184,44 @@ pub(crate) fn lower_is_finite(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 
 /// Lowers `round()` for concrete integer-like and floating operands.
 pub(crate) fn lower_round(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if inst.operands.is_empty() || inst.operands.len() > 2 {
+    if inst.operands.is_empty() || inst.operands.len() > 3 {
         return Err(CodegenIrError::invalid_module(format!(
-            "round expected 1 or 2 args, got {}",
+            "round expected 1 to 3 args, got {}",
             inst.operands.len()
         )));
     }
+    let half_even = round_mode_is_half_even(ctx, inst);
     let value = expect_operand(inst, 0)?;
     load_numeric_as_float(ctx, value, "round")?;
     if inst.operands.len() == 1 {
-        emit_round_loaded_float(ctx);
+        emit_round_loaded_float(ctx, half_even);
     } else {
-        emit_round_loaded_float_with_precision(ctx, inst)?;
+        emit_round_loaded_float_with_precision(ctx, inst, half_even)?;
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns whether the optional 3rd `round()` mode operand statically selects `PHP_ROUND_HALF_EVEN`.
+///
+/// The mode is resolved at compile time from a constant operand (`PHP_ROUND_HALF_EVEN` lowers to the
+/// integer literal `3`). A runtime or absent mode — and the only other checker-accepted value,
+/// `PHP_ROUND_HALF_UP` — uses the default ties-away-from-zero rounding, matching the legacy backend.
+fn round_mode_is_half_even(ctx: &FunctionContext<'_>, inst: &Instruction) -> bool {
+    let Some(mode) = inst.operands.get(2) else {
+        return false;
+    };
+    let Some(value) = ctx.function.value(*mode) else {
+        return false;
+    };
+    let crate::ir::ValueDef::Instruction { inst: def_inst, .. } = &value.def else {
+        return false;
+    };
+    matches!(
+        ctx.function
+            .instruction(*def_inst)
+            .and_then(|def| def.immediate.as_ref()),
+        Some(Immediate::I64(3))
+    )
 }
 
 /// Lowers numeric `min()` and `max()` over concrete integer-like or float operands.
@@ -222,8 +246,11 @@ pub(crate) fn lower_min_max(
         PhpType::Float => lower_float_min_max(ctx, inst, want_max)?,
         PhpType::Int | PhpType::Bool => lower_int_min_max(ctx, inst, want_max)?,
         PhpType::Mixed | PhpType::Union(_) => {
-            lower_int_min_max(ctx, inst, want_max)?;
-            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+            // A Mixed/Union operand holds a boxed cell, not a comparable scalar; compare in float
+            // space (each operand unboxes through `__rt_mixed_cast_float` in `load_numeric_as_float`)
+            // and box the winning value as a float so the numeric value is used, not the pointer.
+            lower_float_min_max(ctx, inst, want_max)?;
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -703,14 +730,25 @@ fn lower_float_rounding_builtin(
     store_if_result(ctx, inst)
 }
 
-/// Rounds the loaded float to the nearest integer using PHP's ties-away behavior.
-fn emit_round_loaded_float(ctx: &mut FunctionContext<'_>) {
+/// Rounds the loaded float to the nearest integer.
+///
+/// `half_even` selects PHP_ROUND_HALF_EVEN (round to nearest, ties to even); otherwise PHP's
+/// default ties-away-from-zero behavior is used.
+fn emit_round_loaded_float(ctx: &mut FunctionContext<'_>, half_even: bool) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("frinta d0, d0");                           // round to nearest with ties away from zero
+            if half_even {
+                ctx.emitter.instruction("frintn d0, d0");                       // PHP_ROUND_HALF_EVEN: round to nearest, ties to even
+            } else {
+                ctx.emitter.instruction("frinta d0, d0");                       // round to nearest with ties away from zero
+            }
         }
         Arch::X86_64 => {
-            ctx.emitter.bl_c("round");
+            if half_even {
+                ctx.emitter.bl_c("rint");
+            } else {
+                ctx.emitter.bl_c("round");
+            }
         }
     }
 }
@@ -719,6 +757,7 @@ fn emit_round_loaded_float(ctx: &mut FunctionContext<'_>) {
 fn emit_round_loaded_float_with_precision(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    half_even: bool,
 ) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -733,7 +772,11 @@ fn emit_round_loaded_float_with_precision(
             ctx.emitter.instruction("ldr d1, [sp], #16");                       // restore the original value after pow() returns the multiplier
             ctx.emitter.instruction("fmul d1, d1, d0");                         // scale the original value by the precision multiplier
             ctx.emitter.instruction("str d0, [sp, #-16]!");                     // preserve the multiplier for the final division
-            ctx.emitter.instruction("frinta d0, d1");                           // round the scaled value with ties away from zero
+            if half_even {
+                ctx.emitter.instruction("frintn d0, d1");                       // PHP_ROUND_HALF_EVEN: round the scaled value to nearest, ties to even
+            } else {
+                ctx.emitter.instruction("frinta d0, d1");                       // round the scaled value with ties away from zero
+            }
             ctx.emitter.instruction("ldr d1, [sp], #16");                       // restore the precision multiplier for rescaling
             ctx.emitter.instruction("fdiv d0, d0, d1");                         // scale the rounded value back to the requested precision
         }
@@ -749,7 +792,11 @@ fn emit_round_loaded_float_with_precision(
             ctx.emitter.instruction("mulsd xmm1, xmm0");                        // scale the original value by the precision multiplier
             abi::emit_push_float_reg(ctx.emitter, "xmm0");
             ctx.emitter.instruction("movsd xmm0, xmm1");                        // move the scaled value into the round() argument register
-            ctx.emitter.bl_c("round");
+            if half_even {
+                ctx.emitter.bl_c("rint");
+            } else {
+                ctx.emitter.bl_c("round");
+            }
             abi::emit_pop_float_reg(ctx.emitter, "xmm1");
             ctx.emitter.instruction("divsd xmm0, xmm1");                        // scale the rounded value back to the requested precision
         }

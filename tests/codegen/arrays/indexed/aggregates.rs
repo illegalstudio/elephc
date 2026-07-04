@@ -48,3 +48,20 @@ echo array_product($a);
     );
     assert_eq!(out, "24");
 }
+
+/// Compiles `array_sum($a)`/`array_product($a)` over a float-element array and verifies the
+/// floating-point runtime helpers accumulate and return in the float result register.
+/// Input: `[1.5, 2.5, 3.5]` → sum = 7.5; `[2.5, 3.0]` → product = 7.5 (matches PHP).
+#[test]
+fn test_array_sum_and_product_over_float_array() {
+    let out = compile_and_run(
+        r#"<?php
+$sum = [1.5, 2.5, 3.5];
+$prod = [2.5, 3.0];
+echo array_sum($sum);
+echo "|";
+echo array_product($prod);
+"#,
+    );
+    assert_eq!(out, "7.5|7.5");
+}

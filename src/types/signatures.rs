@@ -308,9 +308,9 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "array_pad" => Some(fixed(&["array", "length", "value"])),
         "array_fill" => Some(fixed(&["start_index", "count", "value"])),
         "array_slice" => Some(optional(
-            &["array", "offset", "length"],
+            &["array", "offset", "length", "preserve_keys"],
             2,
-            vec![null_lit()],
+            vec![null_lit(), bool_lit(false)],
         )),
         "array_splice" => Some(first_param_ref(optional(
             &["array", "offset", "length"],
@@ -353,7 +353,11 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "clamp" => Some(fixed(&["value", "min", "max"])),
         "min" | "max" => Some(variadic(&["value"], "values")),
         "rand" | "mt_rand" | "random_int" => Some(fixed(&["min", "max"])),
-        "round" => Some(optional(&["num", "precision"], 1, vec![int_lit(0)])),
+        "round" => Some(optional(
+            &["num", "precision", "mode"],
+            1,
+            vec![int_lit(0), int_lit(1)],
+        )),
 
         "sleep" => Some(fixed(&["seconds"])),
         "usleep" => Some(fixed(&["microseconds"])),

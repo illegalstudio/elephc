@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/shuffle.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/shuffle.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1116](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1116) (`lower_shuffle`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1287](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1287) (`lower_shuffle`)
 - **Function symbol**: `lower_shuffle()`
 
 

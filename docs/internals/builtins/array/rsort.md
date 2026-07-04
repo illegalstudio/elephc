@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/rsort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/rsort.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1081](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1081) (`lower_rsort`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1245](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1245) (`lower_rsort`)
 - **Function symbol**: `lower_rsort()`
 
 
@@ -25,7 +25,7 @@ The following runtime helpers are referenced:
 - `__rt_asort`
 - `__rt_krsort`
 - `__rt_ksort`
-- `__rt_natsort`
+- `__rt_rsort_float`
 - `__rt_rsort_int`
 - `__rt_rsort_str`
 

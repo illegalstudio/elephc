@@ -88,6 +88,42 @@ echo $c[0] . $c[1] . $c[2] . $c[3];
     assert_eq!(out, "41234");
 }
 
+/// Verifies `array_merge` over two indexed STRING arrays keeps every element intact.
+///
+/// String arrays use 16-byte (ptr+len) slots; the dedicated `__rt_array_merge_str` helper must copy
+/// each slot, or every element past the first would be corrupted by the 8-byte scalar merge helper.
+#[test]
+fn test_array_merge_string_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["apple", "banana"];
+$b = ["cherry", "date"];
+$c = array_merge($a, $b);
+echo count($c);
+echo ":";
+echo $c[0]; echo ","; echo $c[1]; echo ","; echo $c[2]; echo ","; echo $c[3];
+"#,
+    );
+    assert_eq!(out, "4:apple,banana,cherry,date");
+}
+
+/// Verifies `array_merge([], $strings)` adopts the string element type (16-byte slot path) so the
+/// common `$r = []; array_merge($r, $strs)` accumulation shape returns intact strings.
+#[test]
+fn test_array_merge_empty_left_with_string_right() {
+    let out = compile_and_run(
+        r#"<?php
+$r = [];
+$s = ["cherry", "date", "fig"];
+$m = array_merge($r, $s);
+echo count($m);
+echo ":";
+echo $m[0]; echo ","; echo $m[1]; echo ","; echo $m[2];
+"#,
+    );
+    assert_eq!(out, "3:cherry,date,fig");
+}
+
 /// Verifies `array_merge` uses the right operand element type when the left array is empty.
 #[test]
 fn test_array_merge_empty_left_uses_right_element_type() {
@@ -145,4 +181,60 @@ echo count($result) . ":" . $result[0] . "," . $result[1];
 "#,
     );
     assert_eq!(out, "2:first,second");
+}
+
+/// Verifies in_array()/array_search() accept the optional `$strict` flag instead of failing to
+/// compile. elephc's element comparison is value/byte-exact, so it already yields strict semantics
+/// for a needle whose type matches the array element type (the common case). Uses string and
+/// integer arrays for in_array and an integer array for array_search (array_search on
+/// string-element arrays is a separate pre-existing gap).
+#[test]
+fn test_in_array_and_array_search_accept_strict_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$nums = [1, 2, 3];
+$strs = ["a", "b", "c"];
+$vals = [10, 20, 30];
+echo in_array(3, $nums, true) ? "1" : "0";
+echo in_array(9, $nums, true) ? "1" : "0";
+echo in_array("b", $strs, true) ? "1" : "0";
+echo "|";
+echo array_search(20, $vals, true);
+echo array_search(99, $vals, true) === false ? "F" : "?";
+"#,
+    );
+    assert_eq!(out, "101|1F");
+}
+
+/// Verifies a non-literal `$strict` argument is still evaluated for its side effects, even though
+/// elephc's same-type comparison does not depend on the flag value. The side-effecting call must
+/// run exactly once before the search result is produced.
+#[test]
+fn test_in_array_strict_argument_side_effect_evaluated() {
+    let out = compile_and_run(
+        r#"<?php
+function strictFlag() { echo "S"; return true; }
+$r = in_array(2, [1, 2, 3], strictFlag());
+echo $r ? "Y" : "N";
+"#,
+    );
+    assert_eq!(out, "SY");
+}
+
+/// Verifies `array_merge` accepts three or more arrays (variadic), concatenating them left-to-right.
+/// Lowered by folding into left-nested two-array calls; covers int and string element arrays and the
+/// empty-left accumulator adopting a later operand's element type.
+#[test]
+fn test_array_merge_three_or_more_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$ints = array_merge([1, 2], [3], [4, 5], [6]);
+echo count($ints); echo ":"; echo implode(",", $ints); echo "|";
+$strs = array_merge(["a"], ["b", "c"], ["d"]);
+echo implode(",", $strs); echo "|";
+$acc = array_merge([], [7], [8, 9]);
+echo implode(",", $acc);
+"#,
+    );
+    assert_eq!(out, "6:1,2,3,4,5,6|a,b,c,d|7,8,9");
 }

@@ -365,23 +365,119 @@ pub(crate) fn lower_class_name_lookup(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `is_a()` and `is_subclass_of()` for object operands and literal targets.
+/// Lowers `is_a()` and `is_subclass_of()` for object, boxed-Mixed, and string-class-name operands.
 pub(crate) fn lower_is_a_relation(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
     super::ensure_arg_count_between(inst, name, 2, 3)?;
+    let object = expect_operand(inst, 0)?;
+    let target = expect_operand(inst, 1)?;
+    let exclude_self = name == "is_subclass_of";
+
+    // Runtime path: a boxed Mixed/Union receiver with a literal target class. The relation cannot be
+    // folded because the runtime class is unknown statically, so compute the compile-time set of
+    // class ids that satisfy the relation and compare the unboxed receiver's header class id against
+    // it. Resolved before the operand-materialization loop because it borrows `ctx` immutably.
+    let runtime_ids = if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_)) {
+        optional_const_string_operand(ctx, target)?
+            .map(|target_class| matching_class_ids(ctx, &target_class, exclude_self))
+    } else {
+        None
+    };
+
     for value in &inst.operands {
         ctx.load_value_to_result(*value)?;
     }
 
-    let object = expect_operand(inst, 0)?;
-    let target = expect_operand(inst, 1)?;
-    let exclude_self = name == "is_subclass_of";
-    let result = static_relation_holds(ctx, object, target, exclude_self)?;
+    if let Some(ids) = runtime_ids {
+        ctx.load_value_to_result(object)?;
+        emit_runtime_class_is_a(ctx, &ids);
+        return store_if_result(ctx, inst);
+    }
+
+    let result = static_relation_holds(ctx, inst, object, target, exclude_self)?;
     emit_bool_result(ctx, result);
     store_if_result(ctx, inst)
+}
+
+/// Returns the class ids of every known class that satisfies `is_a(_, target)` (the target class
+/// itself, a subclass, or an implementer), excluding the target's own id when `exclude_self` is set
+/// (the `is_subclass_of` semantics). Ids are sorted and deduplicated for deterministic emission.
+fn matching_class_ids(ctx: &FunctionContext<'_>, target: &str, exclude_self: bool) -> Vec<u64> {
+    let target_key = php_symbol_key(target.trim_start_matches('\\'));
+    let mut ids: Vec<u64> = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(class_name, _)| {
+            class_satisfies_relation(ctx, class_name.trim_start_matches('\\'), &target_key, exclude_self)
+        })
+        .map(|(_, info)| info.class_id)
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// Returns true when `class_name` satisfies the relation to the target symbol key: the same class
+/// (unless `exclude_self`), a subclass via the parent chain, or an implementer of the interface.
+fn class_satisfies_relation(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    target_key: &str,
+    exclude_self: bool,
+) -> bool {
+    if !exclude_self && php_symbol_key(class_name) == target_key {
+        return true;
+    }
+    parent_chain_contains(ctx, class_name, target_key)
+        || class_interfaces_contain(ctx, class_name, target_key)
+}
+
+/// Emits the runtime class-relation check for a boxed receiver already in the integer result
+/// register: unboxes it, returns `0` for a non-object payload, otherwise compares the header class
+/// id against each id in `ids` (the compile-time set satisfying the relation) and leaves `1`/`0`.
+fn emit_runtime_class_is_a(ctx: &mut FunctionContext<'_>, ids: &[u64]) {
+    let no_match = ctx.next_label("is_a_no");
+    let matched = ctx.next_label("is_a_yes");
+    let done = ctx.next_label("is_a_done");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 means the receiver is an object
+            ctx.emitter.instruction(&format!("b.ne {}", no_match));             // a non-object receiver is never is-a a class
+            ctx.emitter.instruction("ldr x9, [x1]");                            // load the receiver's class id from the object header
+            for id in ids {
+                abi::emit_load_int_immediate(ctx.emitter, "x10", *id as i64);
+                ctx.emitter.instruction("cmp x9, x10");                         // compare the receiver class id against the candidate
+                ctx.emitter.instruction(&format!("b.eq {}", matched));          // matched: the relation holds
+            }
+            ctx.emitter.label(&no_match);
+            ctx.emitter.instruction("mov x0, #0");                              // relation does not hold
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the matched path
+            ctx.emitter.label(&matched);
+            ctx.emitter.instruction("mov x0, #1");                              // relation holds
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 means the receiver is an object
+            ctx.emitter.instruction(&format!("jne {}", no_match));              // a non-object receiver is never is-a a class
+            ctx.emitter.instruction("mov r9, QWORD PTR [rdi]");                 // load the receiver's class id from the object header
+            for id in ids {
+                abi::emit_load_int_immediate(ctx.emitter, "r10", *id as i64);
+                ctx.emitter.instruction("cmp r9, r10");                         // compare the receiver class id against the candidate
+                ctx.emitter.instruction(&format!("je {}", matched));            // matched: the relation holds
+            }
+            ctx.emitter.label(&no_match);
+            ctx.emitter.instruction("xor rax, rax");                            // relation does not hold
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the matched path
+            ctx.emitter.label(&matched);
+            ctx.emitter.instruction("mov rax, 1");                              // relation holds
+            ctx.emitter.label(&done);
+        }
+    }
 }
 
 /// Lowers `get_declared_classes/interfaces/traits()` using the shared declaration registry.
@@ -545,26 +641,77 @@ fn emit_bool_result(ctx: &mut FunctionContext<'_>, value: bool) {
 /// Statically evaluates an object/class relation against a literal target class name.
 fn static_relation_holds(
     ctx: &FunctionContext<'_>,
+    inst: &Instruction,
     object: ValueId,
     target: ValueId,
     exclude_self: bool,
 ) -> Result<bool> {
-    let PhpType::Object(object_class) = ctx.value_php_type(object)? else {
-        return Ok(false);
-    };
     let Some(target_class) = optional_const_string_operand(ctx, target)? else {
         return Ok(false);
     };
-    let object_class = object_class.trim_start_matches('\\');
+    // The subject is either an object receiver (use its static class) or a constant string class
+    // name. `is_subclass_of()` always accepts a string subject; `is_a()` accepts one only with a
+    // literal `allow_string = true` third argument (PHP defaults it to false).
+    let subject_class = match ctx.value_php_type(object)? {
+        PhpType::Object(object_class) => object_class,
+        _ => {
+            let Some(class_name) = optional_const_string_operand(ctx, object)? else {
+                return Ok(false);
+            };
+            let allow_string = exclude_self
+                || inst
+                    .operands
+                    .get(2)
+                    .copied()
+                    .map(|allow| optional_const_bool_operand(ctx, allow))
+                    .transpose()?
+                    .flatten()
+                    == Some(true);
+            if !allow_string {
+                return Ok(false);
+            }
+            // A string subject only satisfies the relation when the named class is actually declared.
+            if lookup_class(ctx, class_name.trim_start_matches('\\')).is_none() {
+                return Ok(false);
+            }
+            class_name
+        }
+    };
+    let subject_class = subject_class.trim_start_matches('\\');
     let target_class = target_class.trim_start_matches('\\');
     let target_key = php_symbol_key(target_class);
-    if !exclude_self && php_symbol_key(object_class) == target_key {
+    if !exclude_self && php_symbol_key(subject_class) == target_key {
         return Ok(true);
     }
-    if parent_chain_contains(ctx, object_class, &target_key) {
+    if parent_chain_contains(ctx, subject_class, &target_key) {
         return Ok(true);
     }
-    Ok(class_interfaces_contain(ctx, object_class, &target_key))
+    Ok(class_interfaces_contain(ctx, subject_class, &target_key))
+}
+
+/// Returns `Some(bool)` when `value` is a constant boolean EIR operand, else `None`.
+///
+/// Used to read a literal `is_a(..., allow_string)` third argument at compile time; a non-literal
+/// (runtime) flag yields `None` so the caller conservatively treats a string subject as disallowed.
+fn optional_const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<bool>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op != Op::ConstBool {
+        return Ok(None);
+    }
+    match inst_ref.immediate {
+        Some(Immediate::Bool(value)) => Ok(Some(value)),
+        _ => Ok(None),
+    }
 }
 
 /// Returns true when an object's parent chain contains the target PHP symbol key.

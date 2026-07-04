@@ -1612,12 +1612,65 @@ fn lower_inc_dec(
 }
 
 /// Lowers a direct function, builtin, or extern call.
+/// Lowers a 3-or-more-array `array_merge`/`array_diff`/`array_intersect` call by folding the
+/// two-argument runtime helper left-associatively (`f(f(a, b), c)`). Left association matches PHP:
+/// `merge` concatenates in order, and `diff`/`intersect` compare the first array against every
+/// other (`a \ b \ c` and `a ∩ b ∩ c`).
+///
+/// Each intermediate result is a freshly allocated, uniquely owned array (these helpers never alias
+/// an input into their result), so it is explicitly `Release`d once the next fold step has consumed
+/// it — otherwise it would leak (nested array-returning builtin results are not otherwise reclaimed).
+///
+/// Returns `None` for the two-argument case, other builtins, or when spread/named arguments prevent
+/// a static fold (those fall through to the normal call path, which handles or rejects them).
+fn lower_variadic_array_set_op(
+    ctx: &mut LoweringContext<'_, '_>,
+    _name: &Name,
+    canonical: &str,
+    args: &[Expr],
+) -> Option<LoweredValue> {
+    if !matches!(
+        php_symbol_key(canonical.trim_start_matches('\\')).as_str(),
+        "array_merge" | "array_diff" | "array_intersect"
+    ) {
+        return None;
+    }
+    if args.len() <= 2 {
+        return None;
+    }
+    if args
+        .iter()
+        .any(|arg| matches!(arg.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. }))
+    {
+        return None;
+    }
+    // Evaluate every argument left-to-right (PHP source order) before folding.
+    let operands: Vec<crate::ir::ValueId> = args.iter().map(|arg| lower_expr(ctx, arg).value).collect();
+    let span = args[0].span;
+    let first_pair = vec![operands[0], operands[1]];
+    let first_type = call_return_type(ctx, canonical, &first_pair);
+    let mut acc = emit_builtin_call_value(ctx, canonical, first_pair, first_type, span);
+    for &operand in &operands[2..] {
+        let pair = vec![acc.value, operand];
+        let result_type = call_return_type(ctx, canonical, &pair);
+        let next = emit_builtin_call_value(ctx, canonical, pair, result_type, span);
+        // The accumulator array has now been consumed by the fold step; release it so the
+        // intermediate does not leak (the final `acc` is returned and keeps its ownership).
+        crate::ir_lower::ownership::release_if_owned(ctx, acc, Some(span));
+        acc = next;
+    }
+    Some(acc)
+}
+
 fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
     constants::register_static_define_call(ctx, name, args);
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
         return value;
     }
     let canonical = name.as_str();
+    if let Some(value) = lower_variadic_array_set_op(ctx, name, canonical, args) {
+        return value;
+    }
     if let Some(value) = lower_lazy_isset(ctx, canonical, args, expr) {
         return value;
     }
@@ -5622,10 +5675,40 @@ fn call_return_type_for_args(
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "array_fill" => array_fill_builtin_return_type_for_args(ctx, args, operands),
         "array_map" => array_map_builtin_return_type(ctx, args, operands),
+        "array_slice" => array_slice_builtin_return_type(ctx, args, operands),
         "iterator_to_array" => iterator_to_array_builtin_return_type(ctx, args, operands),
         "microtime" => microtime_builtin_return_type_for_args(args),
         _ => None,
     }
+}
+
+/// Returns the precise `array_slice()` result type when a literal `preserve_keys = true` 4th argument
+/// is present over a scalar (int/float/bool) indexed array.
+///
+/// The literal-true + scalar-element predicate MUST stay identical to the type checker
+/// (`src/builtins/array/array_slice.rs`) and the emitter (`lower_array_slice`): all three must agree
+/// on Array-vs-AssocArray or the result heap shape and the value-tag reads back inconsistently.
+/// Returns `None` (falling back to the indexed slice type) for every other shape.
+fn array_slice_builtin_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+    operands: &[crate::ir::ValueId],
+) -> Option<PhpType> {
+    if !crate::types::array_slice_literal_preserve_keys(args) {
+        return None;
+    }
+    let elem = match ctx.builder.value_php_type(*operands.first()?).codegen_repr() {
+        PhpType::Array(inner)
+            if matches!(*inner, PhpType::Int | PhpType::Float | PhpType::Bool) =>
+        {
+            *inner
+        }
+        _ => return None,
+    };
+    Some(PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: Box::new(elem),
+    })
 }
 
 /// Returns `microtime()` metadata when the literal `as_float` flag is still available.
@@ -5677,6 +5760,21 @@ fn array_map_builtin_return_type(
     args: &[Expr],
     operands: &[crate::ir::ValueId],
 ) -> Option<PhpType> {
+    // The two-input-array form `array_map($cb, $a, $b)` is checker-bounded to integer- or string-
+    // element arrays whose callback returns that same scalar kind, so the result list element type
+    // is the shared element type (independent of the callback's possibly-untyped return).
+    if args.len() == 3 {
+        let array = operands.get(1)?;
+        return match ctx.builder.value_php_type(*array).codegen_repr() {
+            PhpType::Array(elem) if matches!(*elem, PhpType::Str) => {
+                Some(PhpType::Array(Box::new(PhpType::Str)))
+            }
+            PhpType::Array(elem) if matches!(*elem, PhpType::Int | PhpType::Bool) => {
+                Some(PhpType::Array(Box::new(PhpType::Int)))
+            }
+            _ => None,
+        };
+    }
     if args.len() != 2 {
         return None;
     }
@@ -5793,6 +5891,22 @@ fn numeric_builtin_return_type(
             let value = operands.first()?;
             let ty = ctx.builder.value_php_type(*value).codegen_repr();
             Some(abs_builtin_return_type(&ty))
+        }
+        "array_sum" | "array_product" => {
+            // A float-element array sums/multiplies through the floating-point runtime helper
+            // and returns a float (matching the EIR backend dispatch); every other element
+            // kind returns an integer.
+            let value = operands.first()?;
+            let float_elements = match ctx.builder.value_php_type(*value).codegen_repr() {
+                PhpType::Array(elem) => matches!(*elem, PhpType::Float),
+                PhpType::AssocArray { value, .. } => matches!(*value, PhpType::Float),
+                _ => false,
+            };
+            Some(if float_elements {
+                PhpType::Float
+            } else {
+                PhpType::Int
+            })
         }
         "min" | "max" => {
             let mut saw_float = false;
@@ -6112,11 +6226,18 @@ fn is_empty_array_element_type(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Void)
 }
 
-/// Returns true for element types copied safely by the scalar merge runtime helper.
+/// Returns true for element types the merged array can adopt from the second operand when the
+/// first is statically empty. Scalars use the 8-byte merge helper; strings use the dedicated
+/// `__rt_array_merge_str` (16-byte slots), so `Str` is included here as well.
 fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
     matches!(
         ty.codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable | PhpType::Void
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Callable
+            | PhpType::Void
+            | PhpType::Str
     )
 }
 
