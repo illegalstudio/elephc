@@ -10,7 +10,7 @@
 //!   helpers rather than duplicating libc/syscall behavior in the EIR backend.
 
 use crate::codegen::abi;
-use crate::codegen::platform::{Arch, Platform};
+use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
@@ -629,15 +629,55 @@ pub(crate) fn lower_usleep(
     lower_unary_blocking_c_call(ctx, inst, "usleep", "usleep microseconds")
 }
 
-/// Lowers `exit(status?)` and `die(status?)` by terminating the current process.
+/// Lowers `exit(arg?)` and `die(arg?)` through the `__rt_exit` runtime helper,
+/// which decides at runtime between a real process exit and a request-boundary
+/// bailout.
+///
+/// Matching PHP's `exit(int|string $status = 0)`:
+/// - no argument or an integer/bool argument → that value is the exit status,
+///   materialized in the int result register (`x0`/`rax`) where `__rt_exit`
+///   reads it; a bare `exit()`/`die()` uses status 0;
+/// - a string argument → the string is printed first (routed through
+///   `__rt_stdout_write`, so `--web` output capture applies), then the exit
+///   status is 0.
+///
+/// In a CLI build, during worker boot, or in `--web-worker` handler mode
+/// `__rt_exit` terminates the process (as `exit()` always did). In a live
+/// `--web`/`--web-worker=script` request it longjmps to the request boundary,
+/// ending the request and flushing the response while the worker keeps serving.
+/// The call never returns.
 pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "exit", 0, 1)?;
-    let Some(status) = inst.operands.first().copied() else {
-        abi::emit_exit(ctx.emitter, 0);
-        return Ok(());
-    };
-    require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
-    emit_dynamic_exit(ctx);
+    match inst.operands.first().copied() {
+        None => {
+            // Bare exit()/die(): status 0 in the int result register.
+            let reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_load_int_immediate(ctx.emitter, reg, 0);
+        }
+        Some(arg) => {
+            let ty = ctx.load_value_to_result(arg)?;
+            match ty.codegen_repr() {
+                PhpType::Int | PhpType::Bool => {
+                    // Integer/bool exit status: already in the int result register.
+                }
+                PhpType::Str => {
+                    // String message: print it (same path echo takes for a string,
+                    // so `--web` capture appends it to the response body), then
+                    // exit with status 0.
+                    abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
+                    let reg = abi::int_result_reg(ctx.emitter);
+                    abi::emit_load_int_immediate(ctx.emitter, reg, 0);
+                }
+                other => {
+                    return Err(CodegenIrError::unsupported(format!(
+                        "exit status/message for PHP type {:?}",
+                        other
+                    )));
+                }
+            }
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_exit");
     Ok(())
 }
 
@@ -757,26 +797,6 @@ fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
-}
-
-/// Emits a process-exit sequence using the already-loaded integer result register.
-fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
-    match (ctx.emitter.target.platform, ctx.emitter.target.arch) {
-        (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
-            ctx.emitter.syscall(1);
-        }
-        (Platform::Linux, Arch::X86_64) => {
-            ctx.emitter.instruction("mov rdi, rax");                            // move the computed exit code into the SysV first-argument register
-            ctx.emitter.instruction("mov eax, 60");                             // Linux x86_64 syscall 60 = exit
-            ctx.emitter.instruction("syscall");                                 // terminate the process through the Linux x86_64 syscall ABI
-        }
-        (Platform::MacOS, Arch::X86_64) => {
-            panic!("exit() is not implemented yet for target macos-x86_64");
-        }
-        (Platform::Windows, _) => {
-            panic!("Windows target is not yet supported (see issue #379)");
-        }
-    }
 }
 
 /// Emits the AArch64 persistent-copy path for `putenv()`.
@@ -995,4 +1015,48 @@ fn ensure_arg_count_between(
         max,
         inst.operands.len()
     )))
+}
+
+/// Lowers `elephc_worker_register($handler)` for `--web-worker` mode.
+///
+/// Stores the callable handler argument into the process-static global
+/// `$__elephc_worker_handler` (symbol `_eir_global___elephc_worker_handler`),
+/// then loads the address of the compiled trampoline
+/// `elephc_worker_handle_request` (symbol `_fn_elephc_worker_handle_request`)
+/// into the first C-ABI argument register and calls the Rust bridge
+/// `elephc_web_worker_register`, which never returns (it transfers control to
+/// the Rust-driven HTTP accept loop).
+pub(super) fn lower_elephc_worker_register(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "elephc_worker_register", 1)?;
+    let handler = expect_operand(inst, 0)?;
+    // Store the callable handler into the global slot so the trampoline can read
+    // it back per request. The callable is a single-word pointer (descriptor).
+    let handler_ty = ctx.load_value_to_result(handler)?;
+    let global_symbol = crate::names::ir_global_symbol("__elephc_worker_handler");
+    ctx.data
+        .add_comm(global_symbol.clone(), handler_ty.codegen_repr().stack_size().max(8));
+    abi::emit_store_result_to_symbol(ctx.emitter, &global_symbol, &handler_ty, false);
+    // Load the trampoline function address into the first argument register and
+    // call the Rust bridge, which enters the worker accept loop (never returns).
+    // The trampoline is a local function label (_fn_...), so it is referenced
+    // directly without the platform extern-symbol prefix.
+    let trampoline_symbol = crate::names::function_symbol("elephc_worker_handle_request");
+    let target = ctx.emitter.target;
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 0), &trampoline_symbol);
+    let bridge = target.extern_symbol("elephc_web_worker_register");
+    abi::emit_call_label(ctx.emitter, &bridge);
+    // The bridge never returns; the EIR block terminator handles the unreachable
+    // control flow. Emit a trap as a defensive guard against fallthrough.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("brk #0");                                  // unreachable: elephc_web_worker_register never returns
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("ud2");                                     // unreachable: elephc_web_worker_register never returns
+        }
+    }
+    Ok(())
 }

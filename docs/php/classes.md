@@ -501,7 +501,12 @@ echo $user?->{$segment}?->name ?? "anonymous";
 When a nullsafe receiver is `null`, elephc skips the rest of that postfix chain and returns `null`. This matches PHP for mixed chains such as `$user?->profile->address`: the ordinary `->address` segment is skipped when `$user` is `null`, but still warns or fatals normally if `$user` is non-null and `profile` itself is `null`. Method arguments, array indexes, and callable arguments on the skipped branch are not evaluated.
 
 ## parent::method()
-Direct parent implementation call.
+Direct parent implementation call. A subclass of a built-in `Throwable`
+(`Exception`, `Error`, `RuntimeException`, and the rest of the SPL exception
+hierarchy) may declare its own constructor and forward to the built-in one with
+`parent::__construct($message, $code)`; the inherited `message` and `code` are
+initialized just as `new Exception(...)` would, so `getMessage()` and
+`getCode()` read them back while the subclass adds fields of its own.
 
 ## self::method()
 Binds to lexical class, not runtime child.

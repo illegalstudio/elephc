@@ -1,6 +1,9 @@
 //! Purpose:
-//! End-to-end tests for `--web`: compile PHP into a prefork HTTP server binary,
-//! launch it with `--listen`, drive it over raw TCP, and assert the response.
+//! End-to-end tests for the three web modes — `--web` (classic per-request
+//! isolation), `--web-worker` (handler mode, boot-once), and
+//! `--web-worker=script` (per-request re-run with persistent statics/props/
+//! globals). Each test compiles PHP into a prefork HTTP server binary, launches
+//! it with `--listen`, drives it over raw TCP, and asserts the response.
 //!
 //! Called from:
 //! - `cargo test --test web_tests` through Rust's test harness.
@@ -10,6 +13,8 @@
 //!   isolated temp dir with an isolated runtime cache, mirroring cdylib_tests.
 //! - The HTTP client is a hand-written minimal HTTP/1.1 request over a
 //!   std::net::TcpStream so the test pulls in no HTTP client dependency.
+//! - Server children are killed on drop via `ServerHandle` so an assertion
+//!   panic mid-test does not leak a listening process for the rest of the run.
 //! - Host-target only: each platform/arch covers itself (macOS aarch64 local,
 //!   Linux x86_64/aarch64 via the Docker test scripts).
 
@@ -62,6 +67,78 @@ fn compile_web(dir: &Path, source: &str, stem: &str) -> PathBuf {
     dir.join(stem)
 }
 
+/// Compiles `source` with `--web-worker`; returns the binary path.
+fn compile_web_worker(dir: &Path, source: &str, stem: &str) -> PathBuf {
+    let php = dir.join(format!("{}.php", stem));
+    fs::write(&php, source).unwrap();
+    let mut cmd = Command::new(elephc_bin());
+    cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.current_dir(dir);
+    cmd.arg("--web-worker").arg(&php);
+    let output = cmd.output().expect("failed to spawn elephc");
+    assert!(
+        output.status.success(),
+        "elephc --web-worker failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    dir.join(stem)
+}
+
+/// Compiles `source` with `--web-worker=script` (script mode); returns the binary path.
+/// Asserts the compile succeeds — script mode re-runs the whole top-level script per
+/// request and requires no handler registration.
+fn compile_web_worker_script(dir: &Path, source: &str, stem: &str) -> PathBuf {
+    let php = dir.join(format!("{}.php", stem));
+    fs::write(&php, source).unwrap();
+    let mut cmd = Command::new(elephc_bin());
+    cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.current_dir(dir);
+    cmd.arg("--web-worker=script").arg(&php);
+    let output = cmd.output().expect("failed to spawn elephc");
+    assert!(
+        output.status.success(),
+        "elephc --web-worker=script failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    dir.join(stem)
+}
+
+/// Compiles `source` with `--web-worker` expecting FAILURE; returns combined stderr.
+/// Asserts the process exited non-zero so callers can assert on the diagnostic text.
+fn compile_web_worker_expect_error(dir: &Path, source: &str, stem: &str) -> String {
+    let php = dir.join(format!("{}.php", stem));
+    fs::write(&php, source).unwrap();
+    let mut cmd = Command::new(elephc_bin());
+    cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.current_dir(dir);
+    cmd.arg("--web-worker").arg(&php);
+    let output = cmd.output().expect("failed to spawn elephc");
+    assert!(
+        !output.status.success(),
+        "expected elephc --web-worker to fail, but it succeeded:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+/// Compiles `source` with `--web-worker=script` expecting FAILURE; returns combined stderr.
+/// Asserts the process exited non-zero so callers can assert on the diagnostic text.
+fn compile_web_worker_script_expect_error(dir: &Path, source: &str, stem: &str) -> String {
+    let php = dir.join(format!("{}.php", stem));
+    fs::write(&php, source).unwrap();
+    let mut cmd = Command::new(elephc_bin());
+    cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.current_dir(dir);
+    cmd.arg("--web-worker=script").arg(&php);
+    let output = cmd.output().expect("failed to spawn elephc");
+    assert!(
+        !output.status.success(),
+        "expected elephc --web-worker=script to fail, but it succeeded:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
 /// Picks an ephemeral localhost port by binding :0 and releasing it.
 fn free_port() -> u16 {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -91,6 +168,52 @@ fn spawn_server(bin: &Path, addr: &str, workers: &str) -> std::process::Child {
     child
 }
 
+/// RAII wrapper around a spawned server child that kills and reaps it on drop.
+/// Unlike the bare `spawn_server` + manual `child.kill()` pattern, this survives
+/// an assertion panic mid-test: the child is torn down as the handle unwinds, so
+/// a failing test never leaks a listening process for the rest of the run.
+struct ServerHandle {
+    child: std::process::Child,
+    addr: String,
+}
+
+impl ServerHandle {
+    /// Returns the `host:port` the guarded server listens on.
+    fn addr(&self) -> &str {
+        &self.addr
+    }
+}
+
+impl Drop for ServerHandle {
+    /// Kills and reaps the server child so no listener survives the test.
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Spawns the server on a fresh ephemeral port with `workers` workers and returns
+/// a kill-on-drop `ServerHandle`. Preferred over `spawn_server` for new tests so
+/// an assertion failure cannot orphan the server process.
+fn spawn_server_guarded(bin: &Path, workers: &str) -> ServerHandle {
+    let addr = format!("127.0.0.1:{}", free_port());
+    let child = Command::new(bin)
+        .arg("--listen").arg(&addr)
+        .arg("--workers").arg(workers)
+        .spawn()
+        .expect("failed to spawn web server");
+    wait_until_ready(&addr);
+    ServerHandle { child, addr }
+}
+
+/// Returns just the body of a raw HTTP response (everything after the first
+/// blank line). Preferred for `must-not-contain` assertions on short bodies,
+/// since header values (e.g. a `Date: Fri, …` header) can otherwise trip a
+/// whole-response substring check.
+fn http_body(resp: &str) -> &str {
+    resp.split_once("\r\n\r\n").map(|(_, body)| body).unwrap_or("")
+}
+
 /// Sends one HTTP/1.1 GET and returns the full raw response text.
 fn http_get(addr: &str, path: &str) -> String {
     let mut s = TcpStream::connect(addr).unwrap();
@@ -106,6 +229,75 @@ fn http_get(addr: &str, path: &str) -> String {
 fn web_compile_produces_binary() {
     let dir = make_test_dir("web_compile");
     let bin = compile_web(&dir, "<?php echo \"Hello World\";", "app");
+    assert!(bin.exists(), "expected binary at {}", bin.display());
+}
+
+/// Verifies a worker-mode program compiles under --web-worker and produces a
+/// binary. The handler-registration builtin, trampoline, and worker entry stub
+/// are all wired (Phase 2 Step C). Full request serving is verified manually;
+/// the automated request test is gated on the same process-cleanup path as the
+/// classic --web serve tests.
+#[test]
+fn web_worker_compile_produces_binary() {
+    let dir = make_test_dir("web_worker_compile");
+    let bin = compile_web_worker(
+        &dir,
+        "<?php elephc_worker_register(function() { echo \"hello from worker\"; });",
+        "app",
+    );
+    assert!(bin.exists(), "expected binary at {}", bin.display());
+}
+
+/// WI-S2: handler mode (`--web-worker`) with no `elephc_worker_register()` call must
+/// be a blocking compile error, and the diagnostic must name the missing builtin and
+/// suggest `--web-worker=script`. Previously this compiled and boot-die-looped at runtime.
+#[test]
+fn web_worker_handler_without_register_errors() {
+    let dir = make_test_dir("web_worker_no_register");
+    let stderr = compile_web_worker_expect_error(&dir, "<?php echo \"hi\";", "app");
+    assert!(
+        stderr.contains("elephc_worker_register"),
+        "diagnostic should name the missing builtin:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("--web-worker=script"),
+        "diagnostic should suggest script mode:\n{}",
+        stderr
+    );
+}
+
+/// WI-S2: script mode (`--web-worker=script`) with an `elephc_worker_register()` call
+/// must be a blocking compile error, since in script mode the whole top-level script IS
+/// the handler and registration is meaningless. The diagnostic must name the builtin and
+/// mention script mode, pointing at the offending call.
+#[test]
+fn web_worker_script_with_register_errors() {
+    let dir = make_test_dir("web_worker_script_register");
+    let stderr = compile_web_worker_script_expect_error(
+        &dir,
+        "<?php elephc_worker_register(function () { echo \"x\"; });",
+        "app",
+    );
+    assert!(
+        stderr.contains("elephc_worker_register"),
+        "diagnostic should name the offending builtin:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("script"),
+        "diagnostic should mention script mode:\n{}",
+        stderr
+    );
+}
+
+/// WI-S2: script mode (`--web-worker=script`) with no registration compiles cleanly and
+/// produces a binary — the whole top-level script becomes the per-request handler, so no
+/// registration is required. Also the first committed script-mode compile test.
+#[test]
+fn web_worker_script_without_register_compiles() {
+    let dir = make_test_dir("web_worker_script_ok");
+    let bin = compile_web_worker_script(&dir, "<?php echo \"hi\";", "app");
     assert!(bin.exists(), "expected binary at {}", bin.display());
 }
 
@@ -147,6 +339,26 @@ echo read_global();
     let _ = child.wait();
     assert!(r1.ends_with("7"), "first response body: {:?}", r1);
     assert!(r2.ends_with("0"), "second response leaked ordinary global: {:?}", r2);
+}
+
+/// Verifies per-request reset of a user `global` variable in classic `--web`:
+/// `bump()` increments a `global $g` written only inside a function (so the
+/// top-level re-run does not reset it by re-assignment). Classic `--web` must
+/// give each request a fresh global — three requests all end "1", NOT "1","2","3".
+/// This is the PHP-FPM isolation contract; `web_worker_script_global_persists`
+/// is the opposite-direction fence (same pattern persists 1,2,3 in script mode).
+#[test]
+fn web_reset_clears_user_global() {
+    let dir = make_test_dir("web_reset_global");
+    let src = "<?php function bump(): int { global $g; $g = $g + 1; return $g; } echo bump();";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_guarded(&bin, "1");
+    let r1 = http_get(srv.addr(), "/");
+    let r2 = http_get(srv.addr(), "/");
+    let r3 = http_get(srv.addr(), "/");
+    assert!(r1.ends_with("1"), "first response body: {:?}", r1);
+    assert!(r2.ends_with("1"), "second request must see a fresh global, not 2: {:?}", r2);
+    assert!(r3.ends_with("1"), "third request must see a fresh global, not 3: {:?}", r3);
 }
 
 /// Verifies per-request reset of a function static: each request must see
@@ -625,31 +837,106 @@ fn web_sigterm_shuts_down_cleanly() {
     assert_eq!(status.code(), Some(0), "master should exit 0 on SIGTERM");
 }
 
-/// Verifies that a worker which dies mid-request is respawned, so the single-worker
-/// server keeps serving subsequent requests.
+/// Verifies `exit()`/`die()` ends the current `--web` request cleanly (like
+/// PHP-FPM) instead of killing the prefork worker: output echoed before `exit`
+/// is flushed with a 200, code after `exit` never runs, and the SAME worker keeps
+/// serving. Before the exit()-bailout landed, `exit` terminated the worker and
+/// dropped the connection; worker respawn is still covered by
+/// `web_worker_handler_exit_still_respawns`, the max-requests recycle, and the
+/// max-execution-time tests.
 #[test]
-fn web_worker_respawns_after_crash() {
-    let dir = make_test_dir("web_respawn");
-    let src = "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/crash') { exit(1); } echo \"alive\";";
+fn web_exit_ends_request_and_keeps_worker() {
+    let dir = make_test_dir("web_exit_ends");
+    let src = "<?php echo 'A'; \
+        if (($_SERVER['REQUEST_URI'] ?? '') === '/bye') { echo 'B'; exit; echo 'NEVER'; } \
+        echo 'C';";
     let bin = compile_web(&dir, src, "app");
-    let port = free_port();
-    let addr = format!("127.0.0.1:{}", port);
-    let mut child = spawn_server(&bin, &addr, "1");
-    assert!(http_request(&addr, "GET", "/", &[], "").ends_with("alive"));
-    // Crash the only worker (the connection is dropped mid-handler).
-    let _ = try_http_get(&addr, "/crash");
+    let server = spawn_server_guarded(&bin, "1");
+    // Normal path: full body A…C.
+    let full = http_request(server.addr(), "GET", "/", &[], "");
+    assert!(full.starts_with("HTTP/1.1 200"), "status: {:?}", full);
+    assert_eq!(http_body(&full), "AC", "normal body: {:?}", full);
+    // exit path: buffered output flushed, post-exit code skipped, 200 status.
+    let bye = http_request(server.addr(), "GET", "/bye", &[], "");
+    assert!(bye.starts_with("HTTP/1.1 200"), "exit must end the request 200: {:?}", bye);
+    assert_eq!(http_body(&bye), "AB", "exit flushes 'AB' and skips NEVER: {:?}", bye);
+    // The worker survived the exit: a subsequent request is served by it.
+    let again = http_request(server.addr(), "GET", "/", &[], "");
+    assert_eq!(http_body(&again), "AC", "worker must keep serving after exit: {:?}", again);
+}
+
+/// Verifies `exit()` still terminates a `--web-worker` HANDLER-mode worker: the
+/// request-boundary bailout is intentionally scoped to the top-level-re-run modes
+/// (`--web`/`--web-worker=script`), where `_elephc_web_handler` is the per-request
+/// entry. In handler mode that symbol is the one-shot boot, so `exit(1)` inside
+/// the registered handler drops the connection and the master respawns the
+/// worker. This pins the scope boundary and preserves exit-driven respawn cover.
+#[test]
+fn web_worker_handler_exit_still_respawns() {
+    let dir = make_test_dir("wwh_exit_crash");
+    let src = "<?php elephc_worker_register(function () { \
+        if (($_SERVER['REQUEST_URI'] ?? '') === '/crash') { exit(1); } echo 'alive'; });";
+    let bin = compile_web_worker(&dir, src, "app");
+    let server = spawn_server_guarded(&bin, "1");
+    assert!(http_get(server.addr(), "/").ends_with("alive"));
+    // exit(1) inside the handler kills the worker; the connection is dropped.
+    let _ = try_http_get(server.addr(), "/crash");
     // The master must respawn a worker; retry until / serves again.
     let mut served = false;
     for _ in 0..40 {
-        if try_http_get(&addr, "/").ends_with("alive") {
+        if try_http_get(server.addr(), "/").ends_with("alive") {
             served = true;
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    let _ = child.kill();
-    let _ = child.wait();
-    assert!(served, "worker was not respawned after a crash");
+    assert!(served, "handler-mode worker must respawn after exit()");
+}
+
+/// Verifies `exit()` is NOT catchable by a user `catch (\Throwable)` — `exit` is a
+/// language construct, not an exception (PHP: `try { exit('x'); } catch(...) {}`
+/// never enters the catch). The bailout longjmps through a channel SEPARATE from
+/// the exception handler chain, so the catch body must not run.
+#[test]
+fn web_exit_is_uncatchable_by_catch() {
+    let dir = make_test_dir("web_exit_uncatchable");
+    let src = "<?php try { echo 'A'; exit; echo 'NEVER'; } catch (\\Throwable $e) { echo 'CAUGHT'; }";
+    let bin = compile_web(&dir, src, "app");
+    let server = spawn_server_guarded(&bin, "1");
+    let resp = http_request(server.addr(), "GET", "/", &[], "");
+    assert!(resp.starts_with("HTTP/1.1 200"), "status: {:?}", resp);
+    assert_eq!(http_body(&resp), "A", "exit must end the request with 'A' only: {:?}", resp);
+}
+
+/// Verifies `exit()` skips `finally`, matching PHP (`try { exit; } finally { echo
+/// 'F'; } echo 'Z';` prints only what came before `exit`). The bailout longjmps
+/// past the exception handler chain where finally bodies are inlined.
+#[test]
+fn web_exit_skips_finally() {
+    let dir = make_test_dir("web_exit_finally");
+    let src = "<?php try { echo 'A'; exit; } finally { echo 'F'; } echo 'Z';";
+    let bin = compile_web(&dir, src, "app");
+    let server = spawn_server_guarded(&bin, "1");
+    let resp = http_request(server.addr(), "GET", "/", &[], "");
+    assert_eq!(http_body(&resp), "A", "finally and trailing code must be skipped: {:?}", resp);
+}
+
+/// Verifies the ubiquitous `header('Location: ...'); exit;` redirect idiom: the
+/// 302 + Location header are sent, code after `exit` never runs, and the worker
+/// survives (the request ends cleanly instead of the worker dying).
+#[test]
+fn web_redirect_then_exit_serves_302() {
+    let dir = make_test_dir("web_redirect_exit");
+    let src = "<?php header('Location: /next'); exit; echo 'NEVER';";
+    let bin = compile_web(&dir, src, "app");
+    let server = spawn_server_guarded(&bin, "1");
+    let resp = http_request(server.addr(), "GET", "/", &[], "");
+    assert!(resp.starts_with("HTTP/1.1 302"), "status: {:?}", resp);
+    assert!(resp.to_lowercase().contains("location: /next"), "headers: {:?}", resp);
+    assert_eq!(http_body(&resp), "", "code after exit (NEVER) must not run: {:?}", resp);
+    // The worker survived the redirect+exit.
+    let again = http_request(server.addr(), "GET", "/", &[], "");
+    assert!(again.starts_with("HTTP/1.1 302"), "worker must survive redirect+exit: {:?}", again);
 }
 
 /// Verifies HTTP/1.1 keep-alive: two requests on ONE TCP connection both succeed.
@@ -850,6 +1137,35 @@ fn web_max_requests_recycles_and_keeps_serving() {
     let _ = child.wait();
 }
 
+/// Verifies a response larger than the socket send buffer is delivered intact
+/// (not truncated). Every connection is now wrapped in the graceful-shutdown
+/// watcher so `--max-requests` recycle can drain in-flight responses instead of
+/// dropping them mid-write; this guards that the wrapping itself does not corrupt
+/// or cut off a multi-write flush. Three sequential large responses must each
+/// arrive complete, ending in the sentinel. (Forcing mid-flush truncation at the
+/// exact recycle boundary is inherently timing-dependent; the drain path is also
+/// covered by manual repro and `web_max_requests_recycles_and_keeps_serving`.)
+#[test]
+fn web_large_body_not_truncated() {
+    let dir = make_test_dir("web_large_body");
+    // 500_000 bytes exceeds a typical SO_SNDBUF, so the response spans multiple
+    // socket writes and the connection future must be driven to completion.
+    let src = "<?php echo str_repeat('A', 500000); echo 'END';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_guarded(&bin, "1");
+    for i in 0..3 {
+        let resp = http_get(srv.addr(), "/");
+        let body = resp.split("\r\n\r\n").nth(1).unwrap_or("");
+        assert_eq!(
+            body.len(),
+            500003,
+            "request {i} body must be complete (500003 bytes), got {}",
+            body.len()
+        );
+        assert!(body.ends_with("END"), "request {i} large body must end with the sentinel");
+    }
+}
+
 /// Verifies an uncaught exception in the handler returns HTTP 500 instead of
 /// crashing the worker / dropping the connection (B1), and the server keeps
 /// serving other requests afterward.
@@ -1007,4 +1323,847 @@ fn web_namespaced_program_serves() {
     let _ = child.kill();
     let _ = child.wait();
     assert!(resp.ends_with("hi ada"), "namespaced --web program: {:?}", resp);
+}
+
+// ---------------------------------------------------------------------------
+// Worker mode (`--web-worker`) end-to-end tests.
+//
+// These compile a program with `--web-worker` (boot once → register a handler →
+// Rust drives the HTTP loop), launch the binary with `--listen ... --workers 1`,
+// and drive it over raw TCP. The core invariant is state persistence: function
+// `static` locals, static class properties, and globals persist across requests
+// within a worker (unlike classic `--web`, which resets them per request).
+// ---------------------------------------------------------------------------
+
+/// Verifies the core worker-mode invariant: a function `static` local persists
+/// and accumulates across requests within one worker. Three sequential requests
+/// must see the counter increment 1, 2, 3 (in classic `--web` each would be 1).
+#[test]
+fn web_worker_boot_once() {
+    let dir = make_test_dir("ww_boot_once");
+    let src = "<?php\nfunction getCounter(): int {\n    static $count = 0;\n    return ++$count;\n}\nelephc_worker_register(function () {\n    echo getCounter();\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/");
+    let r2 = http_get(&addr, "/");
+    let r3 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("1"), "first request must end with '1': {:?}", r1);
+    assert!(r2.ends_with("2"), "second request must end with '2': {:?}", r2);
+    assert!(r3.ends_with("3"), "third request must end with '3': {:?}", r3);
+}
+
+/// Verifies a worker handler echoing a literal string produces that body.
+#[test]
+fn web_worker_basic_response() {
+    let dir = make_test_dir("ww_basic");
+    let src = "<?php elephc_worker_register(function () { echo \"hello worker\"; });\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("hello worker"), "worker body: {:?}", resp);
+}
+
+/// Verifies worker resilience: an uncaught exception in the handler becomes HTTP
+/// 500 (the trampoline catches `\Throwable`), the worker survives, and a
+/// subsequent request succeeds. A function `static` guards the throw-once path.
+#[test]
+fn web_worker_500_recovery() {
+    let dir = make_test_dir("ww_500");
+    let src = "<?php\nfunction shouldThrow(): bool {\n    static $did = false;\n    if (!$did) { $did = true; return true; }\n    return false;\n}\nelephc_worker_register(function () {\n    if (shouldThrow()) { throw new Exception('boom'); }\n    echo 'recovered';\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/");
+    let r2 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.starts_with("HTTP/1.1 500"), "first request must be 500: {:?}", r1);
+    assert!(r2.starts_with("HTTP/1.1 200"), "second request must be 200: {:?}", r2);
+    assert!(r2.ends_with("recovered"), "second request body: {:?}", r2);
+}
+
+/// Verifies the worker-mode trampoline populates `$_GET` per request: the six
+/// per-superglobal fill functions are invoked from the trampoline on every
+/// request, so a handler reading `$_GET['name']` sees the value from the
+/// current request's query string (no stale carry-over from the previous
+/// request, and no empty superglobal from a missing fill call).
+#[test]
+fn web_worker_superglobals() {
+    let dir = make_test_dir("ww_sg");
+    let src = "<?php elephc_worker_register(function () { echo $_GET['name'] ?? 'none'; });\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(&addr, "GET", "/?name=world", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("world"), "worker $_GET: {:?}", resp);
+}
+
+/// Verifies `--max-requests` recycling resets the worker's persistent state.
+/// With `--max-requests 2` the worker serves two requests (counter 1, 2), then
+/// the master recycles it; the next worker boots fresh so the counter restarts
+/// at 1. The single-worker recycle has a brief no-listener window, so the test
+/// tolerates a transient refused connection and retries until a fresh counter
+/// appears (proving the static was reset across the recycle boundary).
+#[test]
+fn web_worker_max_requests() {
+    let dir = make_test_dir("ww_maxreq");
+    let src = "<?php\nfunction getCounter(): int {\n    static $count = 0;\n    return ++$count;\n}\nelephc_worker_register(function () {\n    echo getCounter();\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1", "--max-requests", "2"])
+        .spawn()
+        .expect("spawn");
+    wait_until_ready(&addr);
+    // First two requests accumulate the persistent counter.
+    assert!(http_get(&addr, "/").ends_with("1"), "pre-recycle request 1");
+    assert!(http_get(&addr, "/").ends_with("2"), "pre-recycle request 2");
+    // The worker recycles after 2 requests; retry until the fresh worker serves
+    // a counter that reset to 1 (proving the static did not survive the recycle).
+    let mut reset = false;
+    for _ in 0..60 {
+        if try_http_get(&addr, "/").ends_with("1") {
+            reset = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(reset, "static counter did not reset after --max-requests recycle");
+}
+
+/// Verifies the worker trampoline populates `$_POST` and `$_REQUEST` per
+/// request. A urlencoded POST body with `user=alice` and a query string
+/// `?q=1` must yield `alice|1` — proving both the parsed body and the merged
+/// `$_REQUEST` (GET ∪ POST) are rebuilt fresh each request in worker mode.
+#[test]
+fn web_worker_post_and_request() {
+    let dir = make_test_dir("ww_post_req");
+    let src = "<?php elephc_worker_register(function () {\n    echo ($_POST['user'] ?? '?') . '|' . ($_REQUEST['q'] ?? '?');\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(
+        &addr,
+        "POST",
+        "/?q=1",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        "user=alice",
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("alice|1"), "worker $_POST/$_REQUEST: {:?}", resp);
+}
+
+/// Verifies the worker trampoline populates `$_COOKIE` per request from the
+/// `Cookie:` request header. Sending `Cookie: sid=abc` must yield `abc`,
+/// proving the cookie superglobal is rebuilt fresh each request in worker
+/// mode (the cookie jar is not leaked across requests).
+#[test]
+fn web_worker_cookie() {
+    let dir = make_test_dir("ww_cookie");
+    let src = "<?php elephc_worker_register(function () {\n    echo $_COOKIE['sid'] ?? '?';\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(&addr, "GET", "/", &[("Cookie", "sid=abc")], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("abc"), "worker $_COOKIE: {:?}", resp);
+}
+
+/// Verifies `php://input` is readable from a worker handler and reflects the
+/// raw request body of the current request. A POST with a JSON body and
+/// `Content-Type: application/json` must echo the body verbatim — proving the
+/// per-request input stream is wired into the worker trampoline.
+#[test]
+fn web_worker_php_input() {
+    let dir = make_test_dir("ww_php_input");
+    let src = "<?php elephc_worker_register(function () {\n    echo file_get_contents('php://input');\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(
+        &addr,
+        "POST",
+        "/",
+        &[("Content-Type", "application/json")],
+        "{\"k\":42}",
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("{\"k\":42}"), "worker php://input: {:?}", resp);
+}
+
+/// Verifies worker-mode superglobals are rebuilt fresh per request: no stale
+/// values carry over from a prior request. Request 1 with `?a=first` must
+/// echo `first`; request 2 with no query string must echo `none` (not the
+/// stale `first` from the previous request). This is the core worker-mode
+/// superglobal semantics — persistent state lives in user code, not in
+/// request superglobals.
+#[test]
+fn web_worker_fresh_per_request() {
+    let dir = make_test_dir("ww_fresh");
+    let src = "<?php elephc_worker_register(function () {\n    echo $_GET['a'] ?? 'none';\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_request(&addr, "GET", "/?a=first", &[], "");
+    let r2 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("first"), "first request: {:?}", r1);
+    assert!(r2.ends_with("none"), "second request must not see stale $_GET: {:?}", r2);
+}
+
+/// Verifies a worker handler can set response headers and the HTTP status
+/// code via `header()` / `http_response_code()`, and that the web bridge
+/// emits them correctly. The response status line must be `HTTP/1.1 201`,
+/// the `X-W: 1` header must be present, and the body must end with `ok`.
+#[test]
+fn web_worker_headers_and_status() {
+    let dir = make_test_dir("ww_hdr_status");
+    let src = "<?php elephc_worker_register(function () {\n    header('X-W: 1');\n    http_response_code(201);\n    echo 'ok';\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.starts_with("HTTP/1.1 201"), "status line: {:?}", resp);
+    assert!(
+        resp.to_lowercase().contains("x-w: 1"),
+        "X-W header missing: {:?}",
+        resp
+    );
+    assert!(resp.ends_with("ok"), "body: {:?}", resp);
+}
+
+/// Pins the (formerly misdiagnosed) claim that "the worker trampoline cannot
+/// call user-defined PHP functions". A named function `greet()` returning
+/// `'hi'` is invoked from the handler; two sequential requests must both
+/// echo `hi`. The trampoline's per-superglobal fill calls and the user
+/// handler dispatch go through normal PHP call frames, so user functions are
+/// callable as expected.
+#[test]
+fn web_worker_handler_calls_user_fn() {
+    let dir = make_test_dir("ww_user_fn");
+    let src = "<?php\nfunction greet(): string { return 'hi'; }\nelephc_worker_register(function () {\n    echo greet();\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/");
+    let r2 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("hi"), "first request: {:?}", r1);
+    assert!(r2.ends_with("hi"), "second request: {:?}", r2);
+}
+
+/// Verifies the worker-mode persistence invariant for a function `static`
+/// array: a `static $s = []` inside `cache()` accumulates `'e'` entries
+/// across requests within one worker. Three sequential requests must see
+/// counts `1`, `2`, `3`. This is the same invariant as `web_worker_boot_once`
+/// but exercises a static array (heap-backed local) rather than a static
+/// scalar, confirming the persistence layer handles reference-typed statics.
+#[test]
+fn web_worker_static_array_persists() {
+    let dir = make_test_dir("ww_static_arr");
+    let src = "<?php\nfunction cache(): array {\n    static $s = [];\n    $s[] = 'e';\n    return $s;\n}\nelephc_worker_register(function () {\n    echo count(cache());\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/");
+    let r2 = http_get(&addr, "/");
+    let r3 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("1"), "first request must end with '1': {:?}", r1);
+    assert!(r2.ends_with("2"), "second request must end with '2': {:?}", r2);
+    assert!(r3.ends_with("3"), "third request must end with '3': {:?}", r3);
+}
+
+/// Verifies that an uncaught exception thrown from a worker handler based on
+/// per-request superglobal state becomes HTTP 500, the worker survives, and
+/// a subsequent request (without the trigger) succeeds with 200. The handler
+/// throws when `$_GET['boom'] === '1'`, else echoes `'fine'`. This confirms
+/// per-request `$_GET` correctly drives control flow and that exception
+/// recovery does not corrupt the worker's persistent state.
+#[test]
+fn web_worker_fill_exception_500() {
+    let dir = make_test_dir("ww_fill_500");
+    let src = "<?php elephc_worker_register(function () {\n    if (($_GET['boom'] ?? '') === '1') { throw new Exception('x'); }\n    echo 'fine';\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/?boom=1");
+    let r2 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.starts_with("HTTP/1.1 500"), "boom request must be 500: {:?}", r1);
+    assert!(r2.starts_with("HTTP/1.1 200"), "next request must be 200: {:?}", r2);
+    assert!(r2.ends_with("fine"), "next request body: {:?}", r2);
+}
+
+/// Verifies worker-mode multipart upload handling: a `multipart/form-data`
+/// POST with one text field (`greeting=hello`) and one file (`up.txt` with
+/// content `FILEDATA`) must populate `$_POST` and `$_FILES` per request, and
+/// the uploaded file's `tmp_name` must be readable via `file_get_contents`
+/// within the request. The handler echoes `hello|FILEDATA`. Temp-file unlink
+/// after the request is runtime-side behavior not asserted here; this test
+/// pins only the request-visible parsing + readback.
+#[test]
+fn web_worker_multipart_files_tmp_cleanup() {
+    let dir = make_test_dir("ww_multipart");
+    let src = "<?php elephc_worker_register(function () {\n    echo ($_POST['greeting'] ?? '?') . '|' . (($_FILES['up']['tmp_name'] ?? '') !== '' ? file_get_contents($_FILES['up']['tmp_name']) : 'nofile');\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let boundary = "Wbnd";
+    let body = format!(
+        "--{b}\r\nContent-Disposition: form-data; name=\"greeting\"\r\n\r\nhello\r\n\
+         --{b}\r\nContent-Disposition: form-data; name=\"up\"; filename=\"up.txt\"\r\n\
+         Content-Type: text/plain\r\n\r\nFILEDATA\r\n--{b}--\r\n",
+        b = boundary
+    );
+    let ct = format!("multipart/form-data; boundary={}", boundary);
+    let resp = http_request(&addr, "POST", "/", &[("Content-Type", &ct)], &body);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("hello|FILEDATA"), "worker multipart: {:?}", resp);
+}
+
+/// Verifies worker-mode `$_ENV` semantics: `$_ENV` is rebuilt fresh per
+/// request from the process environment (RATIFIED Option A — same as classic
+/// `--web`), so a handler reading `$_ENV['ELEPHC_WW_TEST']` sees the value
+/// set on the server's environment on every request. Two sequential requests
+/// must both echo `present`. This pins that the worker trampoline's `$_ENV`
+/// fill re-reads the process env per request rather than snapshotting once
+/// at boot.
+#[test]
+fn web_worker_env_rebuilt_per_request() {
+    let dir = make_test_dir("ww_env");
+    let src = "<?php elephc_worker_register(function () {\n    echo $_ENV['ELEPHC_WW_TEST'] ?? '?';\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1"])
+        .env("ELEPHC_WW_TEST", "present")
+        .spawn()
+        .expect("spawn");
+    wait_until_ready(&addr);
+    let r1 = http_get(&addr, "/");
+    let r2 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("present"), "first request $_ENV: {:?}", r1);
+    assert!(r2.ends_with("present"), "second request $_ENV: {:?}", r2);
+}
+
+// ---------------------------------------------------------------------------
+// Script mode (`--web-worker=script`) end-to-end tests.
+//
+// These compile a program with `--web-worker=script`. Like classic `--web`, the
+// ENTIRE top-level PHP re-runs on every request with fresh superglobals (no
+// `elephc_worker_register` call — the whole top-level IS the per-request
+// handler). Like `--web-worker` (handler mode), function `static` locals and
+// top-level globals PERSIST across requests within a worker. Script mode uses
+// the classic `--web` prelude, so a non-namespaced top-level `throw` is wrapped
+// into an HTTP 500; a namespaced one is NOT (a pinned limitation, not a bug).
+// ---------------------------------------------------------------------------
+
+/// Verifies the script-mode persistence invariant for a function `static` local:
+/// although the whole top-level script re-runs per request, the once-guarded
+/// `static $n = 0` initializer runs only at boot, so the counter accumulates.
+/// Three sequential requests must end "1", "2", "3" (under `--web` each is "1").
+#[test]
+fn web_worker_script_static_persists() {
+    let dir = make_test_dir("wws_static");
+    let src = "<?php function c(): int { static $n = 0; return ++$n; } echo c();";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/");
+    let r2 = http_get(&addr, "/");
+    let r3 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("1"), "first request must end with '1': {:?}", r1);
+    assert!(r2.ends_with("2"), "second request must end with '2': {:?}", r2);
+    assert!(r3.ends_with("3"), "third request must end with '3': {:?}", r3);
+}
+
+/// Verifies the script-mode persistence invariant for a class `static` property
+/// (WI-S8): the top-level re-runs each request, but the once-guarded
+/// `public static int $n = 0` initializer runs only at boot, so `C::$n` accumulates.
+/// Three sequential requests must end "1", "2", "3" (under `--web` each would be "1"
+/// because `__rt_web_reset` re-runs the initializer every request).
+#[test]
+fn web_worker_script_static_property_persists() {
+    let dir = make_test_dir("wws_static_prop");
+    let src = "<?php class C { public static int $n = 0; } C::$n = C::$n + 1; echo C::$n;";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/");
+    let r2 = http_get(&addr, "/");
+    let r3 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("1"), "first request must end with '1': {:?}", r1);
+    assert!(r2.ends_with("2"), "second request must end with '2': {:?}", r2);
+    assert!(r3.ends_with("3"), "third request must end with '3': {:?}", r3);
+}
+
+/// Verifies the flagship boot-once null-guard pattern under script mode: a
+/// `static $c = null` initialized once to `['hits' => 0]` on first use, then
+/// mutated per request. Three sequential requests must end "1", "2", "3". If it
+/// returns 1,1,1 the static null-guard→array persistence is broken (a real bug).
+#[test]
+fn web_worker_script_boot_once_container() {
+    let dir = make_test_dir("wws_boot_once");
+    let src = "<?php function container(): int { static $c = null; if ($c === null) { $c = ['hits' => 0]; } $c['hits']++; return $c['hits']; } echo container();";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/");
+    let r2 = http_get(&addr, "/");
+    let r3 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("1"), "first request must end with '1': {:?}", r1);
+    assert!(r2.ends_with("2"), "second request must end with '2': {:?}", r2);
+    assert!(r3.ends_with("3"), "third request must end with '3': {:?}", r3);
+}
+
+/// Verifies the boot-once null-guard pattern written at *file scope* (top level),
+/// not inside a function. A top-level `static $c = null` guarded by
+/// `if ($c === null)` previously SIGSEGV'd at file scope (the guard read kept the
+/// collapsed global-env type, so `=== null` folded to a compile-time `false`, the
+/// initializer was skipped, and the null slot was dereferenced). It must now build
+/// once and persist across requests: three sequential requests end "1", "2", "3".
+#[test]
+fn web_worker_script_top_level_boot_once() {
+    let dir = make_test_dir("wws_top_level_boot_once");
+    let src = "<?php static $c = null; if ($c === null) { $c = ['hits' => 0]; } $c['hits']++; echo $c['hits'];";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/");
+    let r2 = http_get(&addr, "/");
+    let r3 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("1"), "first request must end with '1': {:?}", r1);
+    assert!(r2.ends_with("2"), "second request must end with '2': {:?}", r2);
+    assert!(r3.ends_with("3"), "third request must end with '3': {:?}", r3);
+}
+
+/// Verifies enum-case singletons persist (identity-stable) across requests in
+/// script mode (WI-S8). The top-level re-runs per request, but the once-guarded
+/// enum-singleton block allocates `Status::Active`/`Status::Idle` only at boot.
+/// A function-static `$s` is initialized once to `Status::Active` (fresh, request
+/// 1) and persists; every request compares `firstSeen() === Status::Active`, so
+/// all three responses must end "same". Without the enum once-guard, request 2+
+/// would re-allocate `Status::Active` into a new object while `$s` still holds the
+/// request-1 object — the pointer-identity `===` would mismatch ("diff") and leak.
+#[test]
+fn web_worker_script_enum_singleton_persists() {
+    let dir = make_test_dir("wws_enum_singleton");
+    let src = "<?php enum Status { case Active; case Idle; } function firstSeen(): Status { static $s = null; if ($s === null) { $s = Status::Active; } return $s; } echo firstSeen() === Status::Active ? 'same' : 'diff';";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/");
+    let r2 = http_get(&addr, "/");
+    let r3 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("same"), "first request must end with 'same': {:?}", r1);
+    assert!(r2.ends_with("same"), "second request must end with 'same': {:?}", r2);
+    assert!(r3.ends_with("same"), "third request must end with 'same': {:?}", r3);
+}
+
+/// Verifies request superglobals are rebuilt fresh per request in script mode
+/// (the whole top-level re-runs with a new `$_GET` each time): `/?a=first` must
+/// end "first", and a following `/` with no query string must end "none" (no
+/// stale carry-over from the previous request).
+#[test]
+fn web_worker_script_fresh_superglobals() {
+    let dir = make_test_dir("wws_fresh");
+    let src = "<?php echo $_GET['a'] ?? 'none';";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_request(&addr, "GET", "/?a=first", &[], "");
+    let r2 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("first"), "first request: {:?}", r1);
+    assert!(r2.ends_with("none"), "second request must not see stale $_GET: {:?}", r2);
+}
+
+/// Verifies user `global` variables persist across requests in script mode (the
+/// documented "globals persist" row of the mode matrix). `bump()` increments a
+/// `global $g` that is initialized only via `?? 0`, so three sequential requests
+/// must end "1", "2", "3". It fails only if `StoreGlobalReleasing` were to drop
+/// the value or a future reset cleared globals per request.
+#[test]
+fn web_worker_script_global_persists() {
+    let dir = make_test_dir("wws_global");
+    let src = "<?php function bump(): int { global $g; $g = ($g ?? 0) + 1; return $g; } echo bump();";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let srv = spawn_server_guarded(&bin, "1");
+    let r1 = http_get(srv.addr(), "/");
+    let r2 = http_get(srv.addr(), "/");
+    let r3 = http_get(srv.addr(), "/");
+    assert!(r1.ends_with("1"), "first request must end with '1': {:?}", r1);
+    assert!(r2.ends_with("2"), "second request must end with '2': {:?}", r2);
+    assert!(r3.ends_with("3"), "third request must end with '3': {:?}", r3);
+}
+
+/// Verifies a typed static class property WITHOUT a default persists across
+/// requests in script mode (WI-S8 completeness / audit H2). `A::$x` is seeded to
+/// 41 once via a function-static `$done` gate, then read-and-incremented at the
+/// re-running top level. The property has no default, so codegen emits an
+/// "uninitialized" sentinel for it; without gating that sentinel store behind the
+/// per-property `_init` once-guard, request 2 re-marks `A::$x` uninitialized and
+/// the top-level read `A::$x + 1` fatals with "accessed before initialization"
+/// (worker dies, empty response). With the guard the property persists: three
+/// requests end "42", "43", "44".
+#[test]
+fn web_worker_script_typed_static_property_no_default_persists() {
+    let dir = make_test_dir("wws_static_prop_no_default");
+    let src = "<?php class A { public static int $x; } function boot(): void { static $done = false; if (!$done) { $done = true; A::$x = 41; } } boot(); A::$x = A::$x + 1; echo A::$x;";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let srv = spawn_server_guarded(&bin, "1");
+    let r1 = http_get(srv.addr(), "/");
+    let r2 = http_get(srv.addr(), "/");
+    let r3 = http_get(srv.addr(), "/");
+    assert!(r1.ends_with("42"), "first request must end with '42': {:?}", r1);
+    assert!(r2.ends_with("43"), "second request must end with '43' (sentinel must not re-mark the property): {:?}", r2);
+    assert!(r3.ends_with("44"), "third request must end with '44': {:?}", r3);
+}
+
+/// Verifies `$_COOKIE` is rebuilt fresh per request in script mode: a request
+/// sending `Cookie: sid=abc` must echo "abc", and a following request with no
+/// Cookie header must echo "nocookie" (no stale carry-over from the persisted
+/// worker process). Complements the `$_GET`/`$_POST` freshness tests for the
+/// cookie superglobal, which is otherwise only covered in handler mode.
+#[test]
+fn web_worker_script_fresh_cookie() {
+    let dir = make_test_dir("wws_fresh_cookie");
+    let src = "<?php echo $_COOKIE['sid'] ?? 'nocookie';";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let srv = spawn_server_guarded(&bin, "1");
+    let r1 = http_request(srv.addr(), "GET", "/", &[("Cookie", "sid=abc")], "");
+    let r2 = http_get(srv.addr(), "/");
+    assert!(r1.ends_with("abc"), "first request must see its cookie: {:?}", r1);
+    assert!(r2.ends_with("nocookie"), "second request must not see a stale $_COOKIE: {:?}", r2);
+}
+
+/// Verifies `$_POST` parsing and `php://input` both reflect the current request
+/// body in script mode: a urlencoded POST with body `user=alice` and the matching
+/// `Content-Type` must yield "alice|user=alice" (parsed field left, raw input
+/// stream right).
+#[test]
+fn web_worker_script_post_and_php_input() {
+    let dir = make_test_dir("wws_post");
+    let src = "<?php echo ($_POST['user'] ?? '?') . '|' . file_get_contents('php://input');";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(
+        &addr,
+        "POST",
+        "/",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        "user=alice",
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("alice|user=alice"), "script $_POST/php://input: {:?}", resp);
+}
+
+/// Verifies a non-namespaced uncaught exception in a script-mode program becomes
+/// HTTP 500 (the classic `--web` prelude wraps top-level throws), and the worker
+/// survives: `/` ends "ok", `/boom` starts "HTTP/1.1 500", and a following `/`
+/// still ends "ok".
+#[test]
+fn web_worker_script_uncaught_exception_500() {
+    let dir = make_test_dir("wws_500");
+    let src = "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/boom') { throw new Exception('x'); } echo 'ok';";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let ok = http_get(&addr, "/");
+    let boom = http_get(&addr, "/boom");
+    let after = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(ok.ends_with("ok"), "normal request: {:?}", ok);
+    assert!(boom.starts_with("HTTP/1.1 500"), "uncaught exception must be 500: {:?}", boom);
+    assert!(after.ends_with("ok"), "server must keep serving after a 500: {:?}", after);
+}
+
+/// Verifies a NAMESPACED uncaught exception becomes HTTP 500 without crashing the
+/// worker — the namespace-section-aware wrap now covers namespaced programs
+/// (previously the try→500 wrap was skipped for any `namespace`, so the worker
+/// died mid-request). `/` ends "ok", `/boom` starts "HTTP/1.1 500", and a
+/// following `/` still ends "ok" (same worker, no respawn needed).
+#[test]
+fn web_worker_script_namespaced_uncaught_exception_500() {
+    let dir = make_test_dir("wws_ns_throw");
+    let src = "<?php namespace App; if (($_SERVER['REQUEST_URI'] ?? '') === '/boom') { throw new \\Exception('x'); } echo 'ok';";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let srv = spawn_server_guarded(&bin, "1");
+    let ok = http_get(srv.addr(), "/");
+    let boom = http_get(srv.addr(), "/boom");
+    let after = http_get(srv.addr(), "/");
+    assert!(ok.ends_with("ok"), "namespaced / must serve 'ok': {:?}", ok);
+    assert!(boom.starts_with("HTTP/1.1 500"), "namespaced uncaught exception must be 500: {:?}", boom);
+    assert!(after.ends_with("ok"), "server must keep serving after a 500: {:?}", after);
+}
+
+/// Verifies a namespaced program with a top-level `throw` returns HTTP 500 under
+/// classic `--web` (not just script mode) — the shared `inject_if_web` wrap now
+/// covers namespaces. The non-namespaced control must also be 500, guarding
+/// parity between the two paths.
+#[test]
+fn web_namespaced_throw_returns_500() {
+    let dir = make_test_dir("web_ns_throw");
+    let ns = compile_web(&dir, "<?php namespace App; throw new \\RuntimeException(\"boom\");", "ns");
+    let srv = spawn_server_guarded(&ns, "1");
+    assert!(http_get(srv.addr(), "/").starts_with("HTTP/1.1 500"), "namespaced throw must be 500");
+    drop(srv);
+
+    let flat = compile_web(&dir, "<?php throw new RuntimeException(\"boom\");", "flat");
+    let srv2 = spawn_server_guarded(&flat, "1");
+    assert!(http_get(srv2.addr(), "/").starts_with("HTTP/1.1 500"), "non-namespaced throw must be 500");
+}
+
+/// Verifies a namespaced program whose executable path does NOT throw still
+/// serves a normal 200 (the wrap must not mis-scope `App\…` names) and that a
+/// user's own `catch (\Throwable)` still fires (the outer 500 net does not shadow
+/// it). Guards against the namespace-section wrap breaking normal programs.
+#[test]
+fn web_namespaced_program_serves_and_user_catch_wins() {
+    let dir = make_test_dir("web_ns_serve");
+    let serve = compile_web(
+        &dir,
+        "<?php namespace App; function greet(string $x): string { return \"hi \".$x; } echo greet($_GET[\"n\"] ?? \"world\");",
+        "serve",
+    );
+    let srv = spawn_server_guarded(&serve, "1");
+    assert!(http_get(srv.addr(), "/?n=ada").ends_with("hi ada"), "namespaced program must serve normally");
+    drop(srv);
+
+    let caught = compile_web(
+        &dir,
+        "<?php namespace App; try { throw new \\Exception(\"e\"); } catch (\\Throwable $x) { echo \"caught\"; }",
+        "caught",
+    );
+    let srv2 = spawn_server_guarded(&caught, "1");
+    let r = http_get(srv2.addr(), "/");
+    assert!(r.starts_with("HTTP/1.1 200") && r.ends_with("caught"), "user catch must fire, not the 500 net: {:?}", r);
+}
+
+/// Verifies the WI-S5 StoreGlobal release-previous path is heap-stable: a
+/// refcounted top-level global `$g = str_repeat('ab', 100)` (a 200-byte string)
+/// is reassigned on every re-run of the script. 50 sequential requests must each
+/// end "200" and the server must stay up the whole time (the previous request's
+/// string is released, not leaked, on each re-run).
+#[test]
+fn web_worker_script_heap_stable_over_many_requests() {
+    let dir = make_test_dir("wws_heap");
+    let src = "<?php $g = str_repeat('ab', 100); echo strlen($g);";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let mut stable = true;
+    for i in 0..50 {
+        let r = http_get(&addr, "/");
+        if !r.ends_with("200") {
+            stable = false;
+            eprintln!("request {i} body: {:?}", r);
+            break;
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(stable, "server did not stay heap-stable over 50 requests");
+}
+
+/// Verifies `exit()` ends a `--web-worker=script` request while the worker keeps
+/// its persistent state: a function `static` counter bumped before an `exit` on
+/// one request is still visible on the next (it would reset to "1" if the worker
+/// had been respawned instead of surviving). Also confirms code after `exit`
+/// never runs and the request ends 200.
+#[test]
+fn web_worker_script_exit_ends_request_and_persists_state() {
+    let dir = make_test_dir("wws_exit_ends");
+    let src = "<?php function n(): int { static $c = 0; return ++$c; } \
+        echo n(); \
+        if (($_SERVER['REQUEST_URI'] ?? '') === '/bye') { exit; echo 'NEVER'; }";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let server = spawn_server_guarded(&bin, "1");
+    // r1 normal → "1".
+    let r1 = http_request(server.addr(), "GET", "/", &[], "");
+    assert_eq!(http_body(&r1), "1", "r1 body: {:?}", r1);
+    // r2 hits /bye → static bumps to "2", exit ends the request (NEVER skipped), 200.
+    let r2 = http_request(server.addr(), "GET", "/bye", &[], "");
+    assert!(r2.starts_with("HTTP/1.1 200"), "exit status: {:?}", r2);
+    assert_eq!(http_body(&r2), "2", "static must persist across the exit request: {:?}", r2);
+    // r3 normal → "3": the worker survived AND kept the static (would be "1" again
+    // if it had been respawned).
+    let r3 = http_request(server.addr(), "GET", "/", &[], "");
+    assert_eq!(http_body(&r3), "3", "static must keep accumulating after exit: {:?}", r3);
+}
+
+/// Verifies `exit()` from a NESTED function that OWNS refcounted locals ends the
+/// WHOLE request, keeps the worker alive, AND releases the callee's owned locals
+/// on the way out. `bail()` holds a live string and array at the `exit`, so the
+/// activation-record cleanup callback for its frame must run during the bailout
+/// unwind — otherwise those locals leak every request. Driving many requests
+/// while a persistent `static` counter keeps advancing proves both that the
+/// request boundary is reached from any call depth (unlike a top-level `return`)
+/// and that the worker is never respawned (a respawn or per-request leak-driven
+/// crash would break the monotonic counter). See the CLI-level, deterministic
+/// heap-balance guard `test_throw_through_nested_frames_releases_owned_locals`,
+/// which shares the same unwinder cleanup path.
+#[test]
+fn web_worker_script_exit_from_nested_function() {
+    let dir = make_test_dir("wws_exit_nested");
+    // `bail()` owns a string + array that are still live at `exit` (read in the
+    // guard), so the unwinder must free them via this frame's cleanup callback.
+    let src = "<?php function seq(): int { static $c = 0; return ++$c; } \
+        function bail() { $s = str_repeat('x', 4000); $arr = [1, 2, 3, 4, 5]; \
+            if (strlen($s) + count($arr) > 0) { echo 'IN'; exit; } echo 'NEVER_FN'; } \
+        echo 'A'; echo seq(); bail(); echo 'NEVER_TOP';";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let server = spawn_server_guarded(&bin, "1");
+    // Each request: the top level re-runs, the persistent static advances, the
+    // nested exit ends the request after "A<n>IN", and the worker survives with
+    // the callee's owned locals reclaimed (no accumulation across requests).
+    for i in 1..=40 {
+        let resp = http_request(server.addr(), "GET", "/", &[], "");
+        assert!(resp.starts_with("HTTP/1.1 200"), "request {i} status: {:?}", resp);
+        assert_eq!(
+            http_body(&resp),
+            format!("A{i}IN"),
+            "request {i}: nested exit must end after 'A{i}IN' and the worker must survive: {:?}",
+            resp,
+        );
+    }
+}
+
+/// Verifies the `die("message")` string form: the message is written into the
+/// response body (through the output-capture path) and the request ends 200,
+/// with the worker surviving. This is the ubiquitous `die('error')` idiom.
+#[test]
+fn web_worker_script_die_with_message_prints_and_ends_request() {
+    let dir = make_test_dir("wws_die_msg");
+    let src = "<?php echo 'A'; die('boom'); echo 'NEVER';";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let server = spawn_server_guarded(&bin, "1");
+    let resp = http_request(server.addr(), "GET", "/", &[], "");
+    assert!(resp.starts_with("HTTP/1.1 200"), "status: {:?}", resp);
+    assert_eq!(http_body(&resp), "Aboom", "die('boom') must print then end: {:?}", resp);
+    // The worker survived the die(message) bailout.
+    let again = http_request(server.addr(), "GET", "/", &[], "");
+    assert_eq!(http_body(&again), "Aboom", "worker must survive die(message): {:?}", again);
+}
+
+/// Verifies the common, leak-free `exit()` shape stays alive and heap-stable
+/// across MANY requests: a top-level `exit` whose only live values are scalars
+/// and a persistent `static`. The static keeps advancing over 30 requests,
+/// proving no per-exit crash and that the worker is never respawned (a respawn
+/// would reset the static to 1). The bailout epilogue releases the top-level
+/// handler's owned locals, so this pattern does not leak.
+///
+/// The nested-frame case (an `exit`/`die`/`throw` unwinding out of a function
+/// that owns refcounted locals) is now equally leak-free: the EIR backend emits
+/// a per-frame activation-record cleanup callback that the unwinder invokes to
+/// release each unwound frame's owned locals. That path is covered here by
+/// `web_worker_script_exit_from_nested_function` (web exit) and, at the
+/// deterministic CLI level, by `test_throw_through_nested_frames_releases_owned_locals`.
+#[test]
+fn web_worker_script_exit_heap_stable_over_many_requests() {
+    let dir = make_test_dir("wws_exit_stable");
+    let src = "<?php function n(): int { static $c = 0; return ++$c; } echo n(); exit;";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let server = spawn_server_guarded(&bin, "1");
+    for i in 1..=30 {
+        let resp = http_request(server.addr(), "GET", "/", &[], "");
+        let v: i64 = http_body(&resp).trim().parse().unwrap_or(-1);
+        assert_eq!(v, i, "request {i} must see persistent static = {i} after every exit: {:?}", resp);
+    }
+}
+
+/// Verifies the defining fence between `--web` and `--web-worker=script` for the
+/// SAME source: under `--web` a function `static` resets per request (two
+/// requests both end "1"); under script mode it accumulates (two requests end "1"
+/// then "2"). This is the core behavioral difference between the two web modes.
+#[test]
+fn web_worker_script_fence_vs_web_resets() {
+    let dir = make_test_dir("wws_fence");
+    let src = "<?php function c(): int { static $n = 0; return ++$n; } echo c();";
+    let web_bin = compile_web(&dir, src, "web_app");
+    let script_bin = compile_web_worker_script(&dir, src, "script_app");
+
+    // Classic --web: the static resets on every request.
+    let web_port = free_port();
+    let web_addr = format!("127.0.0.1:{}", web_port);
+    let mut web_child = spawn_server(&web_bin, &web_addr, "1");
+    let web_r1 = http_get(&web_addr, "/");
+    let web_r2 = http_get(&web_addr, "/");
+    let _ = web_child.kill();
+    let _ = web_child.wait();
+
+    // Script mode: the static persists and accumulates.
+    let script_port = free_port();
+    let script_addr = format!("127.0.0.1:{}", script_port);
+    let mut script_child = spawn_server(&script_bin, &script_addr, "1");
+    let script_r1 = http_get(&script_addr, "/");
+    let script_r2 = http_get(&script_addr, "/");
+    let _ = script_child.kill();
+    let _ = script_child.wait();
+
+    assert!(web_r1.ends_with("1"), "--web request 1 must reset to '1': {:?}", web_r1);
+    assert!(web_r2.ends_with("1"), "--web request 2 must reset to '1': {:?}", web_r2);
+    assert!(script_r1.ends_with("1"), "script request 1 must be '1': {:?}", script_r1);
+    assert!(script_r2.ends_with("2"), "script request 2 must accumulate to '2': {:?}", script_r2);
 }

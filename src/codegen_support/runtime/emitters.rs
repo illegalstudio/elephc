@@ -171,6 +171,12 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
 
+    // PHP exit()/die() dispatch: terminate the process (CLI / worker boot /
+    // handler mode) or longjmp to the active --web/--web-worker=script request
+    // boundary. Always emitted so `lower_exit`'s `call __rt_exit` resolves; the
+    // longjmp arm is dead in non-web builds (the boundary flag stays 0).
+    system::emit_rt_exit(emitter);
+
     // Generator runtime helpers for Iterator methods, send/throw, and return-value retrieval.
     generators::emit_generator_runtime(emitter);
 

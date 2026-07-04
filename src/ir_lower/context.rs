@@ -125,6 +125,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// still promoting for keys that may be strings (generic `Array(Mixed)`,
     /// `AssocArray`, `Mixed`, `Union` sources).
     foreach_int_key_locals: HashSet<String>,
+    /// Persisted slot types for `static` locals whose null initializer is widened by
+    /// a body pre-scan (`static $x = null` later reassigned). `lower_static_var` reads
+    /// this so the static slot is declared with the widened type (`Mixed`) up front
+    /// instead of the narrow `Void` null-sentinel type, letting the reassigned value
+    /// survive across calls.
+    static_persisted_types: HashMap<String, PhpType>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
@@ -191,6 +197,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ref_bound_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
+            static_persisted_types: HashMap::new(),
             return_type,
             return_php_type,
             by_ref_return: false,
@@ -256,7 +263,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns the current known PHP type for a local or `Mixed` when unknown.
+    ///
+    /// Request superglobals have a fixed `AssocArray{Str, Mixed}` type in every
+    /// scope so all consumers (loads, stores, contextual array conversions)
+    /// agree with the global-slot contract that the slot always holds a Hash
+    /// pointer. This makes `local_type` the single authority for the slot type
+    /// and removes the need for per-call-site superglobal special casing.
     pub(crate) fn local_type(&self, name: &str) -> PhpType {
+        if crate::superglobals::is_superglobal(name) {
+            return crate::superglobals::superglobal_type();
+        }
         self.local_types.get(name).cloned().unwrap_or(PhpType::Mixed)
     }
 
@@ -273,7 +289,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.foreach_int_key_locals.contains(name)
     }
 
-    /// Returns the storage type for a `global` alias name.
+    /// Records the persisted slot type computed for a `static` local by the body pre-scan.
+    ///
+    /// A `static $x = null` that is later reassigned must survive across calls carrying the
+    /// widened value, but the null initializer alone would type the slot as `Void` (a null
+    /// sentinel). `lower_static_var` consults this map to declare the slot with the wider
+    /// persisted type instead. Populated once by `seed_static_persisted_types` before the body
+    /// statement loop runs.
+    pub(crate) fn set_static_persisted_type(&mut self, name: &str, ty: PhpType) {
+        self.static_persisted_types.insert(name.to_string(), ty);
+    }
+
+    /// Returns the persisted slot type recorded for a `static` local, if the pre-scan found one.
+    pub(crate) fn static_persisted_type(&self, name: &str) -> Option<PhpType> {
+        self.static_persisted_types.get(name).cloned()
+    }
+
+    /// Returns the checker-known top-level type for a `global` alias name.
     ///
     /// Request superglobals resolve to their fixed `AssocArray{Str, Mixed}` type
     /// directly: inside a function the `top_level_env` snapshot may not carry
@@ -686,7 +718,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         {
             self.release_stored_local_value(name, slot, span);
         }
-        let value = if (uses_global || previous_kind == LocalKind::PhpLocal)
+        // Static-local stores acquire an owning value like global stores so the
+        // codegen store is a plain overwrite.
+        let value = if (uses_global
+            || previous_kind == LocalKind::PhpLocal
+            || previous_kind == LocalKind::StaticLocal)
             && !transfer_callable_source_to_store
             && !self.is_ref_bound_local(name)
         {
@@ -713,7 +749,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             value
         };
         if uses_global {
-            self.store_global_name(name, slot, value, span);
+            // Authentic `$g = expr` assignment: the operand was already acquired
+            // above (owning value), so the codegen store may safely release the
+            // previous global occupant.
+            self.store_global_name(name, slot, value, true, span);
             self.set_local_type(name, php_type);
             if release_source_after_store && !transfer_callable_source_to_store {
                 crate::ir_lower::ownership::release_if_owned(self, source, span);
@@ -843,7 +882,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let uses_global = self.uses_global_storage(name, previous_kind);
         let slot = self.declare_local(name, php_type.clone());
         if uses_global {
-            self.store_global_name(name, slot, value, span);
+            // In-place mutation write-back: no acquire happened for this store
+            // and the previous heap block is already invalidated by the mutation
+            // path, so this must stay a raw store (release-previous would UAF).
+            self.store_global_name(name, slot, value, false, span);
             self.set_local_type(name, php_type);
             return value;
         }
@@ -1256,22 +1298,32 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Emits a store to the program-global symbol for a global alias variable.
+    ///
+    /// `releasing` selects the opcode: `true` emits `Op::StoreGlobalReleasing`,
+    /// which the codegen backend lowers to release the previous refcounted value
+    /// before overwriting it (release-previous). This is only safe when the
+    /// caller has already acquired `value` (an authentic `$g = expr` assignment,
+    /// mirroring `store_static_local`). `false` emits raw `Op::StoreGlobal` for
+    /// write-backs and other paths where the operand is not a freshly acquired
+    /// owning value and the previous slot occupant must not be released here.
     fn store_global_name(
         &mut self,
         name: &str,
         slot: LocalSlotId,
         value: LoweredValue,
+        releasing: bool,
         span: Option<Span>,
     ) {
         let data = self.intern_global_name(name);
+        let op = if releasing { Op::StoreGlobalReleasing } else { Op::StoreGlobal };
         self.builder.emit_with_effects(
-            Op::StoreGlobal,
+            op,
             vec![value.value],
             Some(Immediate::GlobalName(data)),
             IrType::Void,
             PhpType::Void,
             Ownership::NonHeap,
-            Op::StoreGlobal.default_effects(),
+            op.default_effects(),
             span,
         );
         self.initialized_slots.insert(slot);

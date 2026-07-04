@@ -398,7 +398,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         UnsetLocal | PromoteLocalRefCell | AliasLocalRefCell | ReleaseLocalRefCell => {
             check_count(inst_id, inst, 0, "0")
         }
-        StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty | ExternGlobalStore
+        StoreLocal | StoreGlobal | StoreGlobalReleasing | StoreStaticLocal | InitStaticLocal | StoreStaticProperty | ExternGlobalStore
         | StoreRefCell | BindRefCellPtr | Acquire | Release | Move | Borrow | EnsureOwned
         | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR
         | ThrowException | GeneratorReturn | PtrCheckNonnull => {

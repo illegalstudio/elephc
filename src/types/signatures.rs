@@ -371,6 +371,17 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "sleep" => Some(fixed(&["seconds"])),
         "usleep" => Some(fixed(&["microseconds"])),
         "http_response_code" => Some(optional(&["response_code"], 0, vec![int_lit(0)])),
+        "elephc_worker_register" => Some(FunctionSig {
+            params: vec![("handler".to_string(), PhpType::Callable)],
+            defaults: vec![None],
+            return_type: PhpType::Never,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false],
+            declared_params: vec![true],
+            variadic: None,
+            deprecation: None,
+        }),
         "header" => Some(optional(
             &["header", "replace", "response_code"],
             1,

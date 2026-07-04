@@ -19,6 +19,12 @@ use crate::types::TypeEnv;
 
 use super::Checker;
 
+// Re-exported so sibling checker modules (e.g. the call-form
+// `array_push`/`array_unshift` hook in `inference::expr::effects`) can reach
+// the shared push/unshift element-type merge helper without the `assignments`
+// submodule itself becoming crate-visible.
+pub(crate) use assignments::merge_pushed_element_type;
+
 /// Statement-level type checking for the Checker context.
 impl Checker {
     /// Dispatches to assignment or control-flow checking based on statement kind.

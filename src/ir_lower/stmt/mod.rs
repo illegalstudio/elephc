@@ -1893,7 +1893,36 @@ fn persist_scratch_return_string(
     )
 }
 
-/// Acquires return values read from heap containers before local cleanup runs.
+/// Acquires return values read from borrowed storage before local cleanup runs.
+///
+/// PHP return values have value semantics: the caller must receive a snapshot
+/// it can safely own. Owned temporaries already transfer ownership, but values
+/// read from borrowed storage must be acquired so the caller gets its own
+/// reference. This covers container reads (array/hash/property), as well as
+/// values loaded from persistent symbol storage such as function statics and
+/// globals/superglobals. For containers, acquiring gives the caller a separate
+/// refcount so later copy-on-write mutation in the callee does not corrupt the
+/// caller's snapshot. For strings, acquiring persists the borrowed value into an
+/// independent heap copy.
+///
+/// A reference-bound local (`$r = &$x` promotes `$x` to a ref-cell) returned BY
+/// VALUE hands the caller an owned snapshot of the payload: containers get an
+/// incref so the caller holds an independent reference, and strings get
+/// persisted into an independent heap copy. The function epilogue's ref-cell
+/// owner cleanup then releases only the cell's own reference (decrementing the
+/// payload, never freeing it out from under the caller). Without this, the
+/// returned payload escapes unacquired and the epilogue frees it (refcount
+/// 1→0), so the caller's snapshot aliases a freed block (its length word is
+/// clobbered by the free-list link → `count()` reads 0), and a second call's
+/// double-free corrupts the free list into a cycle, hanging the binary.
+///
+/// This acquisition is skipped for by-reference-returning functions
+/// (`function &f()`): such a function hands the caller the ref-cell pointer
+/// itself (so `$x = &f()` aliases the cell), not the dereferenced payload. The
+/// by-ref early path in `lower_return` only intercepts `PropertyAccess`
+/// returns today, but the `!ctx.by_ref_return` gate here is mandatory so any
+/// other by-ref-return shape that re-enters this function never accidentally
+/// acquires (and thus dereferences and copies) the cell pointer.
 fn acquire_borrowed_return_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -1906,16 +1935,27 @@ fn acquire_borrowed_return_value(
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;
     }
-    if !matches!(
-        ctx.builder.value_defining_op(value.value),
+    let op = ctx.builder.value_defining_op(value.value);
+    let is_borrowed_read = matches!(
+        op,
         Some(
             Op::ArrayGet
                 | Op::HashGet
                 | Op::PropGet
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
+                | Op::LoadStaticLocal
+                | Op::LoadGlobal
         )
-    ) {
+    );
+    // A ref-cell load already dereferences the cell into the payload registers;
+    // when the function returns by value, the payload must be acquired so the
+    // caller owns its snapshot before the epilogue releases the cell's own
+    // reference. By-ref-returning functions instead hand back the cell pointer
+    // (handled by the by-ref early path), so they must NOT acquire here.
+    let is_refcell_by_value =
+        matches!(op, Some(Op::LoadRefCell)) && !ctx.by_ref_return;
+    if !(is_borrowed_read || is_refcell_by_value) {
         return value;
     }
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
@@ -2104,21 +2144,105 @@ fn lower_const_decl(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr,
 }
 
 /// Lowers simple positional list destructuring into indexed reads plus local writes.
+///
+/// For Hash sources whose concrete value type is not `Mixed`, each element is
+/// lowered with a guarded `HashIsset` + typed `HashGet` (hit) / boxed-null (miss)
+/// pattern that satisfies the codegen result-type gate while producing PHP null
+/// on missing keys. Array sources, the `RuntimeCall` fallback, and `Mixed`-valued
+/// Hashes keep the existing direct read path.
 fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[String], value: &Expr, span: Span) {
     let source = lower_expr(ctx, value);
     let item_type = list_unpack_item_type(ctx, source.value);
     let get_op = list_unpack_get_op(source.ir_type);
+
+    // Determine whether the Hash source has a concrete (non-Mixed) value type
+    // that requires the guarded isset + typed-get + box lowering.
+    let hash_concrete_value_type =
+        if matches!(source.ir_type, IrType::Heap(crate::ir::IrHeapKind::Hash)) {
+            list_unpack_hash_concrete_value_type(&ctx.builder.value_php_type(source.value).codegen_repr())
+        } else {
+            None
+        };
+
     for (index, var) in vars.iter().enumerate() {
         let index_value = lower_list_unpack_index(ctx, index, span);
-        let item = ctx.emit_value(
-            get_op,
-            vec![source.value, index_value.value],
-            None,
-            item_type.clone(),
-            get_op.default_effects(),
-            Some(span),
-        );
-        ctx.store_local(var, item, item_type.clone(), Some(span));
+
+        if let Some(concrete_ty) = &hash_concrete_value_type {
+            // --- Guarded path: HashIsset → typed HashGet (hit) or boxed null (miss) ---
+            let isset = ctx.emit_value(
+                Op::HashIsset,
+                vec![source.value, index_value.value],
+                None,
+                PhpType::Bool,
+                Op::HashIsset.default_effects(),
+                Some(span),
+            );
+
+            let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+            let hit_block = ctx.builder.create_named_block("listunpack.hit", Vec::new());
+            let miss_block = ctx.builder.create_named_block("listunpack.miss", Vec::new());
+            let merge_block = ctx.builder.create_named_block("listunpack.merge", Vec::new());
+
+            ctx.builder.terminate(Terminator::CondBr {
+                cond: isset.value,
+                then_target: hit_block,
+                then_args: Vec::new(),
+                else_target: miss_block,
+                else_args: Vec::new(),
+            });
+
+            // HIT: typed HashGet (result type = concrete value type) → Mixed temp.
+            ctx.builder.position_at_end(hit_block);
+            let item = ctx.emit_value(
+                Op::HashGet,
+                vec![source.value, index_value.value],
+                None,
+                concrete_ty.clone(),
+                Op::HashGet.default_effects(),
+                Some(span),
+            );
+            super::expr::store_value_into_temp(ctx, &temp_name, PhpType::Mixed, item, span);
+            super::expr::branch_to(ctx, merge_block);
+
+            // MISS: boxed Mixed null → same temp.
+            ctx.builder.position_at_end(miss_block);
+            let null_value = super::expr::lower_boxed_null(ctx, value);
+            super::expr::store_value_into_temp(ctx, &temp_name, PhpType::Mixed, null_value, span);
+            super::expr::branch_to(ctx, merge_block);
+
+            // MERGE: take temp and store into the local variable.
+            ctx.builder.position_at_end(merge_block);
+            let item = super::expr::take_owned_temp(ctx, &temp_name, span);
+            ctx.store_local(var, item, PhpType::Mixed, Some(span));
+        } else {
+            // --- Direct path: ArrayGet / HashGet(Mixed→Mixed) / RuntimeCall ---
+            let item = ctx.emit_value(
+                get_op,
+                vec![source.value, index_value.value],
+                None,
+                item_type.clone(),
+                get_op.default_effects(),
+                Some(span),
+            );
+            ctx.store_local(var, item, item_type.clone(), Some(span));
+        }
+    }
+}
+
+/// Returns the concrete (non-Mixed) value type of a Hash source for list-unpack,
+/// or `None` if the source is not an `AssocArray` or its normalized value type is
+/// already `Mixed` (heterogeneous hash, which keeps the direct Mixed→Mixed path).
+fn list_unpack_hash_concrete_value_type(source_php_type: &PhpType) -> Option<PhpType> {
+    match source_php_type.clone() {
+        PhpType::AssocArray { value, .. } => {
+            let normalized = normalize_materialized_element_type(*value);
+            if normalized == PhpType::Mixed {
+                None
+            } else {
+                Some(normalized)
+            }
+        }
+        _ => None,
     }
 }
 
@@ -2192,7 +2316,30 @@ fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String]) {
 /// Lowers a static local variable initialization.
 fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, init: &Expr, span: Span) {
     let value = lower_expr(ctx, init);
-    let slot = ctx.declare_local_with_kind(name, ctx.builder.value_php_type(value.value), LocalKind::StaticLocal);
+    let init_type = ctx.builder.value_php_type(value.value);
+    // A `static $x = null` reassigned in the body must persist the widened value across
+    // calls, but a Void-typed slot can only ever hold the null sentinel. If the body
+    // pre-scan recorded a persisted type for this static, declare the slot with that wider
+    // type (Mixed) so later stores widen into a boxed cell. The `InitStaticLocal` below
+    // still stores the original Void null; the static-local store path boxes it into the
+    // Mixed cell. Any non-null initializer keeps its own type unchanged.
+    let init_is_void = matches!(init_type.codegen_repr(), PhpType::Void);
+    let widened_to_persisted = init_is_void && ctx.static_persisted_type(name).is_some();
+    let slot_type = if init_is_void {
+        ctx.static_persisted_type(name).unwrap_or(init_type)
+    } else {
+        init_type
+    };
+    let slot = ctx.declare_local_with_kind(name, slot_type.clone(), LocalKind::StaticLocal);
+    // At file scope the static's name is pre-seeded in `local_types` from the global env (its
+    // whole-scope collapsed type), and `declare_local_with_kind`'s `or_insert` leaves that stale
+    // entry in place. When the slot was widened to the persisted type, force the read type to match
+    // the Mixed slot so a `static $x = null` null-guard reads back as the boxed cell — otherwise
+    // `$x === null` compares a stale concrete type, folds to a compile-time `false`, skips its
+    // initializer branch, and later dereferences the null slot (SIGSEGV at top level).
+    if widened_to_persisted {
+        ctx.set_local_type(name, slot_type);
+    }
     ctx.builder.emit_with_effects(
         Op::InitStaticLocal,
         vec![value.value],

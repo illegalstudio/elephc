@@ -1230,3 +1230,124 @@ echo "done";
         "promoting an indexed array literal to hash storage must free the source array (issue #408)"
     );
 }
+
+/// Regression: by-value ref-cell returns must release the cell's own
+/// reference without leaking the returned payload; 5 calls discarding the
+/// result must end with allocations == deallocations.
+#[test]
+fn test_refcell_return_gc_balanced() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+function f(): array {
+    $x = ['a'];
+    $r = &$x;
+    $x[] = 'b';
+    return $r;
+}
+for ($i = 0; $i < 5; $i++) {
+    f();
+}
+echo "done";
+"#,
+    );
+    assert_eq!(out.stdout, "done");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Regression (R11): a function static local's owned refcounted value must be
+/// released at CLI program exit. A single call to `f` COW-clones the empty
+/// `static $a = []` into one heap array (`$a[] = $i`), stores it back into the
+/// static symbol, and returns. The function epilogue never frees statics (they
+/// persist across calls by design), so without an exit-time release the final
+/// static array leaks at process exit. The CLI main epilogue's
+/// `emit_function_static_locals_release_at_exit` must free it so heap accounting
+/// balances (allocs == frees).
+///
+/// Uses a SINGLE call rather than a loop: with multiple calls the COW-writeback
+/// chain leaks each predecessor array (the separate R10 per-call Mixed/static
+/// writeback-release bug), which would mask R11's exit-release. A single call
+/// has no predecessor chain — the only refcounted value is the final static
+/// array itself, which R11 must free.
+#[test]
+fn test_function_static_local_freed_at_cli_exit() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+function f(int $i): int {
+    static $a = [];
+    $a[] = $i;
+    return count($a);
+}
+f(1);
+echo "done";
+"#,
+    );
+    assert_eq!(out.stdout, "done");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(
+        allocs, frees,
+        "function static local must be freed at CLI exit (R11), got: {}",
+        out.stderr
+    );
+}
+
+/// Regression: `static $map = []` with per-call write-back must release prior Mixed
+/// cells via the write-back's release-previous. 40 iterations must NOT accumulate
+/// ~40 leaked cells — the old cells must be freed by the Mixed store's
+/// release-previous, mirroring the `test_tostring_temp_object_released_on_echo`
+/// assertion style.
+#[test]
+fn test_static_empty_map_writeback_does_not_leak_cells() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+function reg(string $k): int {
+    static $map = [];
+    $map[$k] = 'v';
+    return count($map);
+}
+for ($i = 0; $i < 40; $i++) {
+    reg('k' . $i);
+}
+echo "done";
+"#,
+    );
+    assert_eq!(out.stdout, "done");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Regression: accessing a property (read or write) or calling a method on an object
+/// held in a `Mixed`/union local must NOT leak the object.
+///
+/// The `Mixed`→`Object` unbox on a borrowed receiver load used to incref the object
+/// unconditionally, but the receiver of `prop_get`/`prop_set`/a method call carries no
+/// matching `release` (ownership transfers use an explicit `Op::Acquire`). That left one
+/// unreleased reference per access, so reassigning `$o = new P()` each iteration never
+/// freed the previous object — a persistent-worker OOM driver. Verified with the
+/// authoritative `--heap-debug` live-block tracker (NOT `--gc-stats`, a call counter
+/// that reported this leak as balanced).
+#[test]
+fn test_property_access_on_mixed_object_local_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class P { public int $n = 0; public string $s = ""; function set(int $v): void { $this->n = $v; } }
+$o = null;
+$t = 0;
+for ($i = 0; $i < 40; $i++) {
+    $o = new P();
+    $o->n = $i;
+    $o->s = "v" . $i;
+    $o->set($i);
+    $t += $o->n;
+}
+echo $t;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "780");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "reassigned Mixed-object local with property/method access must not leak, got: {}",
+        out.stderr
+    );
+}

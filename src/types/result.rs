@@ -72,6 +72,9 @@ pub struct CheckResult {
     pub extern_classes: HashMap<String, ExternClassInfo>,
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
+    /// Source span of the first resolved `elephc_worker_register()` call, if any.
+    /// Drives the WI-S2 worker web-mode consistency diagnostics in the pipeline.
+    pub worker_register_call_span: Option<crate::span::Span>,
     pub warnings: Vec<CompileWarning>,
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.

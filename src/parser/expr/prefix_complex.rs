@@ -778,6 +778,17 @@ pub(super) fn parse_named_expr(
                 span,
             ))
         }
+    } else if name.is_unqualified()
+        && matches!(name.as_str().to_ascii_lowercase().as_str(), "exit" | "die")
+    {
+        // Bare `exit` / `die` (no parentheses) are PHP language constructs, not
+        // constants: PHP treats them as `exit()` / `die()` with status 0. They are
+        // case-insensitive and never namespace-resolved. Lower them to the same
+        // zero-argument function call `exit(...)`/`die(...)` produce (line ~674) so
+        // they flow through the identical exit lowering — including the
+        // `--web`/`--web-worker=script` request-end bailout — instead of resolving
+        // to an "Undefined constant" ConstRef.
+        Ok(Expr::new(ExprKind::FunctionCall { name, args: Vec::new() }, span))
     } else {
         Ok(Expr::new(ExprKind::ConstRef(name), span))
     }

@@ -254,7 +254,7 @@ fn lower_null(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
 }
 
 /// Lowers a nullsafe expression that is known to short-circuit to PHP null.
-fn lower_boxed_null(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
+pub(super) fn lower_boxed_null(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
     let null = lower_null(ctx, expr);
     ctx.emit_value(
         Op::MixedBox,
@@ -1780,6 +1780,9 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         return value;
     }
     if let Some(value) = lower_static_array_push(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_static_array_unshift(ctx, canonical, args, expr) {
         return value;
     }
     if let Some(value) = lower_static_is_callable(ctx, canonical, args, expr) {
@@ -4030,6 +4033,70 @@ fn lower_static_array_push(
     );
     super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, expr.span);
     Some(lower_null(ctx, expr))
+}
+
+/// Lowers `array_unshift($local, $value)` as a direct indexed-array mutation.
+///
+/// `ir_lower` tracks its own local-type facts (`ctx.local_types`), so the array
+/// type must be widened here exactly as `lower_static_array_push` does. Without
+/// this, `array_unshift($a, 'x')` on an empty `array<never>` leaves the local
+/// type stale, so later `$a[0]` reads lower against the wrong element layout.
+/// The runtime mutation is emitted as a raw `BuiltinCall` because EIR has no
+/// `Op::ArrayUnshift`; the backend's builtin lowering already handles runtime
+/// unshift, local-slot store-back and symbol write-back.
+fn lower_static_array_unshift(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "array_unshift" || args.len() != 2 {
+        return None;
+    }
+    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+        return None;
+    }
+    let ExprKind::Variable(array_name) = &args[0].kind else {
+        return None;
+    };
+    if !matches!(ctx.local_type(array_name).codegen_repr(), PhpType::Array(_)) {
+        return None;
+    }
+    let array_value = ctx.load_local(array_name, Some(args[0].span));
+    if array_value.ir_type != IrType::Heap(IrHeapKind::Array) {
+        return None;
+    }
+    let value = lower_expr(ctx, &args[1]);
+    let (array_value, updated_ty, needs_storeback) =
+        if super::stmt::ref_bound_mixed_indexed_array_write(ctx, array_name, value) {
+            (array_value, Some(ctx.local_type(array_name)), true)
+        } else {
+            super::stmt::prepare_indexed_array_local_write(ctx, array_value, value, expr.span)
+        };
+    let data = ctx.intern_function_name("array_unshift");
+    let call = ctx.emit_value(
+        Op::BuiltinCall,
+        vec![array_value.value, value.value],
+        Some(Immediate::Data(data)),
+        PhpType::Int,
+        effects_lookup::builtin_effects("array_unshift"),
+        Some(expr.span),
+    );
+    let elem_ty = super::stmt::indexed_array_write_element_type(
+        ctx,
+        array_value,
+        updated_ty.as_ref(),
+    );
+    super::stmt::finish_indexed_array_local_write(
+        ctx,
+        array_name,
+        array_value,
+        updated_ty,
+        needs_storeback,
+        expr.span,
+    );
+    super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, expr.span);
+    Some(call)
 }
 
 /// Lowers builtin call operands, applying builtin-specific preservation where source order matters.
@@ -10250,7 +10317,7 @@ fn store_expr_into_temp(
 }
 
 /// Stores an already lowered value into a hidden merge temporary.
-fn store_value_into_temp(
+pub(super) fn store_value_into_temp(
     ctx: &mut LoweringContext<'_, '_>,
     temp_name: &str,
     temp_type: PhpType,
@@ -10267,7 +10334,7 @@ fn store_value_into_temp(
 }
 
 /// Loads an owned hidden temp into SSA and clears the backing slot without releasing it.
-fn take_owned_temp(
+pub(super) fn take_owned_temp(
     ctx: &mut LoweringContext<'_, '_>,
     temp_name: &str,
     span: crate::span::Span,
@@ -10383,7 +10450,7 @@ fn coerce_value_for_temp(
 }
 
 /// Emits a branch to a target block when the current block can still fall through.
-fn branch_to(ctx: &mut LoweringContext<'_, '_>, target: BlockId) {
+pub(super) fn branch_to(ctx: &mut LoweringContext<'_, '_>, target: BlockId) {
     if !ctx.builder.insertion_block_is_terminated() {
         ctx.builder.terminate(Terminator::Br { target, args: Vec::new() });
     }

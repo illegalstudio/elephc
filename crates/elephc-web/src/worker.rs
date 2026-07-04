@@ -30,7 +30,8 @@ use crate::request_state;
 const LISTEN_BACKLOG: i32 = 1024;
 
 /// Builds a listening std::net::TcpListener with SO_REUSEPORT set, bound to `addr`.
-fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
+/// Shared with `crate::worker_mode` (worker mode reuses the same SO_REUSEPORT setup).
+pub(crate) fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
     let domain = if addr.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 };
     let sock = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
     sock.set_reuse_address(true)?;
@@ -85,6 +86,9 @@ pub struct WorkerConfig {
     pub max_exec_secs: u32,
     /// gzip the response body when the client sent `Accept-Encoding: gzip`.
     pub gzip: bool,
+    /// Run `__rt_gc_collect_cycles` every N requests (worker mode only);
+    /// `0` = never, `1` = every request. Defaults to `1` in worker mode.
+    pub worker_gc_interval: u32,
 }
 
 /// Minimum response size (bytes) worth gzip-compressing; below this the framing
@@ -101,6 +105,7 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         access_log,
         max_exec_secs,
         gzip,
+        worker_gc_interval: _,
     } = cfg;
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
@@ -245,7 +250,8 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
 
 /// gzip-compresses `data`, returning the compressed bytes, or `None` if encoding
 /// failed (so the caller leaves the body uncompressed and sets no Content-Encoding).
-fn gzip_bytes(data: &[u8]) -> Option<Vec<u8>> {
+/// Shared with `crate::worker_mode`.
+pub(crate) fn gzip_bytes(data: &[u8]) -> Option<Vec<u8>> {
     use std::io::Write;
     let mut encoder =
         flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());

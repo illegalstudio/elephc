@@ -16,6 +16,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "buffer_len",
     "buffer_new",
     "die",
+    "elephc_worker_register",
     "empty",
     "exit",
     "isset",

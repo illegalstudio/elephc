@@ -220,6 +220,7 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         Arch::X86_64 => lower_implode_x86_64(ctx, inst)?,
     }
     abi::emit_call_label(ctx.emitter, runtime_label);
+    release_implode_temp_array_if_assoc(ctx, inst)?;
     store_if_result(ctx, inst)
 }
 
@@ -2301,6 +2302,14 @@ fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
                 other
             ))),
         },
+        PhpType::AssocArray { value, .. } => match value.codegen_repr() {
+            PhpType::Int | PhpType::Bool => Ok("__rt_implode_int"),
+            PhpType::Str | PhpType::Mixed | PhpType::Never => Ok("__rt_implode"),
+            other => Err(CodegenIrError::unsupported(format!(
+                "implode associative array value PHP type {:?}",
+                other
+            ))),
+        },
         PhpType::Mixed | PhpType::Union(_) => Ok("__rt_implode"),
         other => Err(CodegenIrError::unsupported(format!(
             "implode array PHP type {:?}",
@@ -2313,24 +2322,52 @@ fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
 fn lower_implode_aarch64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let glue = expect_string_operand(ctx, inst, 0, "implode")?;
     let array = expect_operand(inst, 1)?;
-    ctx.load_string_value_to_regs(glue, "x1", "x2")?;
-    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the glue string while materializing the array argument
-    load_implode_array_aarch64(ctx, array)?;
-    ctx.emitter.instruction("mov x3, x0");                                      // pass the indexed array pointer as the third implode argument
-    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the glue string into primary implode argument registers
-    Ok(())
+    match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::AssocArray { value, .. } => {
+            let value_repr = value.codegen_repr();
+            ctx.load_value_to_reg(array, "x0")?;                                // load the associative-array hash-table pointer for value extraction
+            super::arrays::values::emit_loaded_assoc_array_values(ctx, &value_repr)?; // build a fresh packed values array in x0 from the associative hash entries
+            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the converted packed array pointer for post-call cleanup
+            ctx.load_string_value_to_regs(glue, "x1", "x2")?;                   // load the glue string into the primary implode argument registers
+            ctx.emitter.instruction("ldr x3, [sp]");                            // pass the converted packed array pointer as the third implode argument
+            Ok(())
+        }
+        _ => {
+            ctx.load_string_value_to_regs(glue, "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the glue string while materializing the array argument
+            load_implode_array_aarch64(ctx, array)?;
+            ctx.emitter.instruction("mov x3, x0");                              // pass the indexed array pointer as the third implode argument
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the glue string into primary implode argument registers
+            Ok(())
+        }
+    }
 }
 
 /// Materializes x86_64 glue and array arguments for `implode()`.
 fn lower_implode_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let glue = expect_string_operand(ctx, inst, 0, "implode")?;
     let array = expect_operand(inst, 1)?;
-    ctx.load_string_value_to_regs(glue, "rax", "rdx")?;
-    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-    load_implode_array_x86_64(ctx, array)?;
-    ctx.emitter.instruction("mov rdx, rax");                                    // pass the indexed array pointer as the third implode argument
-    abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
-    Ok(())
+    match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::AssocArray { value, .. } => {
+            let value_repr = value.codegen_repr();
+            ctx.load_value_to_reg(array, "rax")?;                               // load the associative-array hash-table pointer for value extraction
+            super::arrays::values::emit_loaded_assoc_array_values(ctx, &value_repr)?; // build a fresh packed values array in rax from the associative hash entries
+            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the converted packed array pointer for post-call cleanup
+            ctx.load_string_value_to_regs(glue, "rax", "rdx")?;                 // load the glue string into temporary scratch registers
+            ctx.emitter.instruction("mov rdi, rax");                            // move the glue string pointer into the first implode argument register
+            ctx.emitter.instruction("mov rsi, rdx");                            // move the glue string length into the second implode argument register
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp]");                // load the converted packed array pointer as the third implode argument
+            Ok(())
+        }
+        _ => {
+            ctx.load_string_value_to_regs(glue, "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_implode_array_x86_64(ctx, array)?;
+            ctx.emitter.instruction("mov rdx, rax");                            // pass the indexed array pointer as the third implode argument
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+            Ok(())
+        }
+    }
 }
 
 /// Loads the raw indexed-array payload consumed by `implode()` on AArch64.
@@ -3206,4 +3243,39 @@ fn load_as_int(ctx: &mut FunctionContext<'_>, value: ValueId, name: &str) -> Res
             name, other
         ))),
     }
+}
+
+/// Releases the temporary packed array created when `implode()` is called on an
+/// associative array, preserving the runtime helper's string result registers.
+fn release_implode_temp_array_if_assoc(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 1)?;
+    let value_repr = match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        _ => return Ok(()),
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // pop the temp packed array pointer into the refcount release input register
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // preserve the implode result string while the temp array is released
+            abi::emit_decref_if_refcounted(
+                ctx.emitter,
+                &PhpType::Array(Box::new(value_repr)),
+            );
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                    // restore the implode result string after temp-array release
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "rdi");                              // pop the temp packed array pointer into a register disjoint from the result pair
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // preserve the implode result string while the temp array is released
+            ctx.emitter.instruction("mov rax, rdi");                            // decref_if_refcounted expects the released pointer in rax on x86_64
+            abi::emit_decref_if_refcounted(
+                ctx.emitter,
+                &PhpType::Array(Box::new(value_repr)),
+            );
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");                  // restore the implode result string after temp-array release
+        }
+    }
+    Ok(())
 }

@@ -198,6 +198,12 @@ pub enum Op {
     ReleaseLocalRefCell,
     LoadGlobal,
     StoreGlobal,
+    /// Store to a global symbol that RELEASES the previous refcounted value
+    /// (release-previous). Emitted only for authentic `$g = expr` assignments
+    /// whose operand ir_lower has already acquired; raw `StoreGlobal` is used
+    /// for write-backs and const decls where the old block is already
+    /// consumed or the slot is a fresh `.comm` default.
+    StoreGlobalReleasing,
     LoadStaticLocal,
     StoreStaticLocal,
     InitStaticLocal,
@@ -440,8 +446,16 @@ impl Op {
             ReleaseLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
             LoadGlobal | LoadStaticProperty | ScopedConstantGet | ClassAttrNames
             | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
-            StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal | IncludeOnceMark
+            StoreGlobal | StoreStaticLocal | StoreStaticProperty
+            | InitStaticLocal | IncludeOnceMark
             | FunctionVariantMark | TryPushHandler | TryPopHandler => E::WRITES_GLOBAL,
+            // Reads the old global occupant, overwrites the slot, and releases the
+            // old value's heap storage — so it also reads-global, writes-heap, and
+            // is a refcount op. Missing these bits would let a future pass treat it
+            // as a pure overwrite and drop the release (use-after-free / leak).
+            StoreGlobalReleasing => {
+                E::READS_GLOBAL | E::WRITES_GLOBAL | E::WRITES_HEAP | E::REFCOUNT_OP
+            },
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
             IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
@@ -552,6 +566,7 @@ impl Op {
             ReleaseLocalRefCell => "release_local_ref_cell",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
+            StoreGlobalReleasing => "store_global_releasing",
             LoadStaticLocal => "load_static_local",
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",

@@ -719,9 +719,15 @@ pub(super) fn check_const_decl(
 
 /// Type-checks a list unpacking assignment (`[$a, $b, ...] = $arr`).
 ///
-/// Infers the type of the right-hand side expression and validates it is an array.
-/// For array types, extracts the element type and assigns it to each variable in `vars`.
-/// Returns an error if the right-hand side is not an array type.
+/// Infers the type of the right-hand side expression and validates it is an
+/// array. For indexed array types, extracts the element type and assigns it
+/// to each variable in `vars`. For associative arrays, positional unpacking
+/// reads integer keys `0..n-1` via the hash path (PHP semantics: `null` plus
+/// an undefined-key notice when absent); each variable is typed as `Mixed`
+/// regardless of the assoc's value type, since a positional key may be absent
+/// at runtime and PHP yields `NULL` then — only the boxed `Mixed` representation
+/// carries the tagged null through the `HashGet` miss path. Returns an error if
+/// the right-hand side is neither an indexed nor an associative array.
 pub(super) fn check_list_unpack(
     checker: &mut Checker,
     vars: &[String],
@@ -734,6 +740,21 @@ pub(super) fn check_list_unpack(
         PhpType::Array(elem_ty) => {
             for var in vars {
                 let unpack_ty = *elem_ty.clone();
+                env.insert(var.clone(), unpack_ty.clone());
+                update_list_unpack_callable_metadata(checker, var, value, &unpack_ty);
+            }
+        }
+        // AssocArray positional unpack: keys 0..n-1 may be absent at runtime, in
+        // which case PHP yields NULL (with an undefined-key notice). A concrete
+        // value type (e.g. Str) cannot represent that miss — the boxed `Mixed`
+        // alone carries the tagged null through the HashGet miss path — so every
+        // assoc-unpacked variable is typed `Mixed` regardless of the hash's value
+        // type. The sibling `Array(elem)` arm keeps its concrete-type behavior;
+        // indexed unpack miss semantics are a separate pre-existing concern and
+        // must not be touched here.
+        PhpType::AssocArray { value: _val_ty, .. } => {
+            for var in vars {
+                let unpack_ty = PhpType::Mixed;
                 env.insert(var.clone(), unpack_ty.clone());
                 update_list_unpack_callable_metadata(checker, var, value, &unpack_ty);
             }

@@ -367,6 +367,8 @@ fn iter_start_is_by_ref(inst: &Instruction) -> bool {
 }
 
 /// Splits statically typed array/hash sources before by-reference iteration.
+/// Symbol-backed sources (superglobals / static locals) also receive the
+/// authoritative pointer so later mutations see the unique copy.
 fn ensure_unique_static_iter_source(
     ctx: &mut FunctionContext<'_>,
     source: ValueId,
@@ -385,10 +387,13 @@ fn ensure_unique_static_iter_source(
     if let Some(slot) = source_load_local_slot(ctx, source)? {
         ctx.store_value_to_local(slot, source)?;
     }
+    ctx.writeback_symbol_array_source(source)?;
     Ok(())
 }
 
 /// Stores a converted dynamic iterator source back to its originating local when possible.
+/// Symbol-backed sources (superglobals / static locals) also receive the
+/// authoritative pointer so later mutations see the converted container.
 fn store_iter_source_to_origin_if_local(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
@@ -406,7 +411,9 @@ fn store_iter_source_to_origin_if_local(
         }
     }
     ctx.store_result_value(source)?;
-    ctx.store_value_to_local(slot, source)
+    ctx.store_value_to_local(slot, source)?;
+    ctx.writeback_symbol_array_source(source)?;
+    Ok(())
 }
 
 /// Resolves a source SSA value back to a local slot when it was produced by `load_local`.

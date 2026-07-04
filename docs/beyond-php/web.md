@@ -1,5 +1,5 @@
 ---
-title: "Web Server (--web)"
+title: "Web Server (--web / --web-worker)"
 description: "Compile a PHP program into a standalone prefork HTTP server binary with --web."
 sidebar:
   order: 7
@@ -150,14 +150,258 @@ pieces fit together in a real-ish application.
 Between requests, the runtime resets all process-persistent state so request
 N+1 sees the same clean environment request N did:
 
-- **Global variables** — reset to their uninitialized state.
+- **User `global` variables** — released and zero-initialized, so a global
+  written only inside a function (or conditionally) does not carry over.
 - **Function `static` variables** — released and zero-initialized; their
   initializers re-run on first call.
 - **Static class properties** — released; their initializers re-run at the
   start of the handler body.
+- **Superglobals** — released and rebuilt fresh from the incoming request.
 
 This matches PHP-FPM's per-request isolation model. No data leaks from one
 request to the next.
+
+## Worker mode (`--web-worker`)
+
+`--web-worker` is an alternative to `--web` for long-lived applications. Instead
+of re-running the program's top level per request (the PHP-FPM model), the
+top-level **boots once** per worker process, registers a request handler, and
+the Rust runtime drives the HTTP accept loop — invoking the registered handler
+for each request. This is the FrankenPHP / RoadRunner-style model.
+
+```bash
+elephc --web-worker app.php
+./app --listen 127.0.0.1:8080 --workers 4
+```
+
+### The API
+
+A worker-mode program registers exactly one handler with
+`elephc_worker_register`:
+
+```php
+<?php
+elephc_worker_register(function () {
+    echo "Hello from worker!";
+});
+```
+
+`elephc_worker_register(callable $handler): void` takes a single callable (a
+closure, named function, invokable object, or first-class callable syntax).
+Calling it transfers control to the Rust worker loop; any code after the call
+is unreachable. Exactly one handler must be registered per worker; registering
+more than once replaces the handler.
+
+Whatever the handler writes via `echo` / `print` becomes the HTTP response
+body, exactly as in classic `--web`. Response control (`http_response_code()`,
+`header()`, `setcookie()`) works identically.
+
+### State persistence
+
+Within a single worker process, persistent state **survives across requests**:
+
+- **Function `static` locals** — retain their value across requests.
+- **Static class properties** — retain their value across requests.
+- **Global variables** — retain their value across requests.
+
+This is the opposite of classic `--web`, which resets all of the above per
+request. A boot-heavy application (framework bootstrap, DI container build,
+config parse, database connection pool warmup) pays that cost once per worker
+instead of once per request.
+
+Request-scoped state still resets per request:
+
+- **`$_SERVER`, `$_GET`, `$_POST`, `$_COOKIE`, `$_REQUEST`, `$_FILES`** — are
+  rebuilt fresh per request (same as classic `--web`).
+- **`$_ENV`** — rebuilt fresh per request from the process environment
+  (contents are identical across requests unless the process environment
+  changes; mutations made during a request do not leak into the next).
+- **`php://input`** — returns the current request's raw body.
+- **`$argc` / `$argv`** — not populated (as in classic `--web`).
+
+### Lifecycle
+
+1. **Boot** (once per worker): the top-level PHP runs, initializing the
+   application (build the DI container, open connections, populate caches),
+   then calls `elephc_worker_register($handler)`.
+2. **Register**: the callable is stored; control transfers to the Rust worker
+   loop (`elephc_worker_register` never returns to PHP).
+3. **Per request**: the Rust loop accepts a connection, populates the request
+   superglobals and response state, invokes the registered handler, captures
+   its output, builds the HTTP response, sends it, then cleans up multipart
+   temp files and runs the cycle collector.
+4. **Recycle**: when the worker has served `--max-requests` requests, it exits
+   cleanly and the master forks a fresh one (re-running the boot).
+
+### GC
+
+After each handler invocation the runtime cycle collector
+(`__rt_gc_collect_cycles`) runs, gated by `--worker-gc-interval`, to reclaim
+cyclic garbage that plain refcounting cannot free — while keeping the
+persistent statics and globals alive. The default cadence in worker mode is
+`1` (collect after every request).
+
+Each request releases and rebuilds the request superglobals (a handful of hash
+allocations per request), and the default `--worker-gc-interval` of `1` runs
+the cycle collector on every request — raise the interval to trade peak
+memory for lower per-request latency.
+
+A request that ends by unwinding — an `exit()`, `die()`, or an uncaught `throw`
+out of a function/method — releases the owned refcounted locals (strings,
+arrays, objects) of every frame it unwinds through, not just the top-level body.
+Each function emits a per-frame cleanup callback that the unwinder invokes as it
+walks back to the request boundary, so aborting from deep in the call stack
+while holding a large working set does not leak across requests.
+
+### Worker-mode runtime arguments
+
+The `--web-worker` binary accepts the same runtime arguments as `--web`, plus
+two worker-mode defaults:
+
+| Argument | Default (worker mode) | Description |
+|---|---|---|
+| `--max-requests N` | `1000` | Recycle each worker after N requests (bounds memory growth; classic `--web` defaults to `0` = never). |
+| `--worker-gc-interval N` | `1` | Run the cycle collector every N requests (`0` = never, `1` = every request). |
+
+All other runtime arguments (`--listen`, `--workers`, `--max-body-size`,
+`--max-execution-time`, `--access-log`, `--gzip`, `--help`, `--version`) behave
+the same as in classic `--web`.
+
+### When to use worker mode
+
+Use `--web-worker` when the per-request boot cost dominates — typically
+frameworks with large DI containers, applications that open long-lived
+connections (database, Redis) at startup, or apps that warm caches once. Use
+classic `--web` when per-request isolation matters more than boot cost, or
+when the program is simple enough that boot is negligible.
+
+### Migrating from classic `--web`
+
+1. Replace `elephc --web app.php` with `elephc --web-worker app.php`.
+2. Move any per-request setup (reading the request, building a per-request
+   object) into the registered handler closure.
+3. Move any boot-once setup (DI container, config, connection pools) to the
+   top level, before `elephc_worker_register`.
+4. Audit `static` locals and static properties: in classic `--web` they reset
+   per request, in worker mode they persist. If you relied on the reset, move
+   the state into a per-request local inside the handler instead.
+5. Set `--max-requests` to bound long-running worker memory growth (the worker
+   default of 1000 recycles periodically).
+
+See `examples/web-worker-hello/` for a runnable demo.
+
+## Non-intrusive worker mode (`--web-worker=script`)
+
+`--web-worker=script` is a third point on the axis between classic `--web` and
+handler-mode `--web-worker`. Like `--web`, the **entire top level re-runs on
+every request** and the superglobals are rebuilt fresh — but like handler mode,
+**function `static` locals, static class properties, and global variables
+persist across requests** within a worker process. There is **no API**: no
+`elephc_worker_register`, no elephc-only syntax. The whole top level *is* the
+per-request handler.
+
+The payoff: you get persistent state (warm caches, long-lived connections)
+**without changing the code**. The exact same file still runs unmodified under
+php-fpm or `php -S` — persistence is simply expressed in portable PHP.
+
+```bash
+elephc --web-worker=script app.php
+./app --listen 127.0.0.1:8080 --workers 4
+```
+
+### The three web modes
+
+| | `--web` | `--web-worker` (handler) | `--web-worker=script` |
+|---|---|---|---|
+| Top-level | re-runs per request | boots once | re-runs per request |
+| Function statics / static props | reset per request | persist | persist |
+| Globals (`global`) | reset per request | persist | persist |
+| Superglobals | fresh per request | fresh per request | fresh per request |
+| Code changes | none | `elephc_worker_register` required | none |
+| Runs under php-fpm | yes | no (elephc API) | yes |
+
+### Boot-once in portable PHP
+
+Because the top level re-runs per request but statics persist, the classic
+null-guard idiom performs one-time setup that survives across requests:
+
+```php
+<?php
+static $container = null;
+if ($container === null) {
+    $container = build_container(); // heavy: runs on request 1 only
+}
+$container->handle();               // runs on every request
+```
+
+On **request 1** the guard is `null`, so `build_container()` runs and its result
+is stored in the `static`. On **request 2 and later** the `static` still holds
+the container, the guard is non-null, and the build is skipped. Under classic
+`--web` (or php-fpm) the `static` resets each request, so the same code rebuilds
+every time — correct either way, just faster under script mode.
+
+### What is fresh vs persistent
+
+**Fresh on every request** (rebuilt by the runtime, same as classic `--web`):
+
+- The seven superglobals: `$_SERVER`, `$_GET`, `$_POST`, `$_COOKIE`,
+  `$_REQUEST`, `$_FILES`, `$_ENV`.
+- `php://input` (the raw request body).
+- The response status, headers, and body.
+
+**Persistent for the worker's lifetime** (this is the whole point):
+
+- **Function `static` locals** — retain their value across requests; their
+  initializers run **once per worker**, not once per request. This differs from
+  php-fpm, where a `static` initializer runs on every request.
+- **Static class properties** — retain their value across requests; their
+  initializers likewise run once per worker.
+- **Global variables** — retain their value across requests.
+- **Process-global state** — timezone (`date_default_timezone_set()`), current
+  working directory (`chdir()`), and open file/directory/stream handles are
+  **not reset** between requests. See the limitations below.
+
+### Migration ladder
+
+The modes form a zero-to-max-performance ladder:
+
+1. **`--web`** — PHP-FPM semantics, full per-request isolation.
+2. **`--web-worker=script`** — swap `--web` for `--web-worker=script`. **Zero
+   code changes.** State that used to reset now persists; add a null-guard where
+   you want boot-once behaviour. The same file still runs under php-fpm.
+3. **`--web-worker`** (handler) — maximum performance: boot the app once, call
+   `elephc_worker_register($handler)`, and the top level never re-runs. This
+   step requires the elephc API, so the file no longer runs under php-fpm.
+
+### Script-mode limitations
+
+Script mode inherits classic `--web`'s [limitations](#limitations) and adds a
+few that follow from persistence and the worker loop. The most important:
+
+- **`exit()` / `die()` end the request, not the worker** (matching php-fpm).
+  Calling `exit` or `die` — with or without parentheses (`exit;`, `die;`,
+  `exit(0)`, `die("error")`), at any call depth — ends the current request: the
+  output already `echo`-ed is flushed with the current status, code after the
+  `exit` does not run, and the worker stays alive to serve the next request with
+  its persistent statics intact. A string argument (`die("message")`) is written
+  into the response body first. As in PHP, `exit` is a language construct, not
+  an exception: it is **not catchable** by `catch (\Throwable)` and does **not**
+  run `finally` blocks. The one exception is `--web-worker` handler mode, where
+  the top level is a one-shot boot rather than a per-request entry — an `exit()`
+  there still terminates the worker (and the master respawns it), so `return`
+  from your handler instead.
+- **`$argc` / `$argv` are not populated** — the binary's argv is consumed by the
+  server (php-fpm does not set them either).
+- **`ob_*` output buffering is not implemented.** The response
+  body is still fully buffered by the runtime before it is sent, but the
+  `ob_start()` family of builtins is unavailable.
+- **Process-global state persists and is not reset.** Timezone changes
+  (`date_default_timezone_set()`), a changed working directory (`chdir()`), and
+  open file/directory/stream handles carry over from one request to the next.
+  **Do not rely on per-request isolation of process state** — a request that
+  changes the timezone or cwd affects every later request served by that worker.
+  Set such process-global state once at the top of the top level (so it is
+  re-applied per request) rather than assuming it starts clean.
 
 ## Concurrency model
 
@@ -175,8 +419,11 @@ count; a slow request occupies exactly one worker for its duration.
 - **Graceful shutdown** — the master shuts down cleanly on `SIGINT` (Ctrl-C) and
   `SIGTERM`: it forwards termination to the workers, reaps them, and exits `0`. An
   in-flight request may be dropped when shutdown arrives.
-- **Worker respawn** — a worker that dies unexpectedly (a crash, or PHP calling
-  `exit()`) is replaced so the pool stays at `--workers` N.
+- **Worker respawn** — a worker that dies unexpectedly (a crash, a
+  `--max-execution-time` kill, or a handler-mode `exit()`) is replaced so the
+  pool stays at `--workers` N. In `--web`/`--web-worker=script` mode `exit()`
+  ends the request without killing the worker, so it no longer triggers a
+  respawn.
 - **Request body cap** — see `--max-body-size`; oversized bodies are rejected with
   `413` before the handler runs.
 - **Slow-connection bound** — HTTP/1.1 keep-alive is enabled, but a connection that
@@ -214,5 +461,7 @@ the server to `127.0.0.1:8080` and points the proxy at it.
 
 ## Mutual exclusions
 
-`--web` cannot be combined with `--check`, `--emit cdylib`, `--emit-asm`, or
-`--emit-ir`.
+`--web`, `--web-worker` (handler mode), and `--web-worker=script` (script mode)
+each cannot be combined with `--check`, `--emit cdylib`, `--emit-asm`, or
+`--emit-ir`, and the three web modes are mutually exclusive with each other (a
+program is compiled in exactly one mode).

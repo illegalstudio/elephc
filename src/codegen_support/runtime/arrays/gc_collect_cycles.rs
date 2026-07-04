@@ -9,7 +9,7 @@
 //! - GC helpers must honor cycle-collection suppression, mark bits, and parent/child references without double-releasing values.
 
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::platform::{Arch, Platform};
 
 use super::gc_collect_cycles_x86_64::emit_gc_collect_cycles_linux_x86_64;
 
@@ -367,4 +367,18 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     emitter.label("__rt_gc_collect_cycles_done");
     emitter.instruction("ret");                                                 // return to the caller
+
+    // -- macOS C-ABI alias for the Rust elephc-web worker-mode call --
+    // The Rust bridge calls `__rt_gc_collect_cycles` via `extern "C"`, which on
+    // Mach-O resolves to `___rt_gc_collect_cycles` (Rust prepends the leading `_`
+    // that the C ABI mandates). The runtime body above is labeled literally
+    // `__rt_gc_collect_cycles` (assembly `bl` calls use that exact name), so emit
+    // a one-instruction tail-call stub under the Mach-O name that Rust expects.
+    // Linux defines no leading underscore, so no alias is needed there.
+    if emitter.platform == Platform::MacOS {
+        emitter.blank();
+        emitter.comment("-- macOS C-ABI alias: ___rt_gc_collect_cycles -> __rt_gc_collect_cycles --");
+        emitter.label_global("___rt_gc_collect_cycles");
+        emitter.instruction("b __rt_gc_collect_cycles");                        // tail-call the real collector
+    }
 }

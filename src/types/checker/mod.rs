@@ -133,6 +133,8 @@ pub(crate) struct Checker {
     pub extern_globals: HashMap<String, PhpType>,
     /// Libraries required by `#[link]` attributes on extern blocks, in link order.
     pub required_libraries: Vec<String>,
+    /// Source span of the first resolved elephc_worker_register() call, if any (drives WI-S2 worker-mode diagnostics).
+    pub worker_register_call_span: Option<crate::span::Span>,
     /// Best-known top-level variable types visible to `global` statements in the
     /// current file scope.
     pub top_level_env: TypeEnv,
@@ -220,6 +222,7 @@ pub fn check_types(program: &Program, target_platform: Platform) -> Result<Check
         extern_classes: checker.extern_classes,
         extern_globals: checker.extern_globals,
         required_libraries: checker.required_libraries,
+        worker_register_call_span: checker.worker_register_call_span,
         warnings,
         throw_access_sites: checker.throw_access_sites,
     })

@@ -348,6 +348,31 @@ pub fn static_property_symbol(class_name: &str, property_name: &str) -> String {
     )
 }
 
+/// Returns the storage symbol for a function static local (`_static_<fn>_<name>`),
+/// using an assembly-safe encoding of the owning function's name.
+pub fn static_local_symbol(function_name: &str, local_name: &str) -> String {
+    format!(
+        "_static_{}_{}",
+        static_local_function_fragment(function_name),
+        local_name
+    )
+}
+
+/// Builds an assembly-safe function fragment for a static-local storage symbol.
+fn static_local_function_fragment(name: &str) -> String {
+    let mut fragment = String::new();
+    for ch in name.chars() {
+        match ch {
+            'A'..='Z' | 'a'..='z' | '0'..='9' => fragment.push(ch),
+            '_' => fragment.push_str("_u_"),
+            '\\' => fragment.push_str("_N_"),
+            ':' => fragment.push_str("_C_"),
+            _ => fragment.push('_'),
+        }
+    }
+    fragment
+}
+
 /// Returns the synthetic accessor-method name for a property's `get` hook.
 ///
 /// Format: `__propget_<property>`. The parser compiles a `get { ... }` / `get => expr` hook into a

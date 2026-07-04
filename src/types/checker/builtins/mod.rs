@@ -123,6 +123,27 @@ impl Checker {
         if let Some(result) = arrays::check_builtin(self, name, args, span, env)? {
             return Ok(Some(result));
         }
+        if name == "elephc_worker_register" {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "elephc_worker_register() takes exactly 1 argument",
+                ));
+            }
+            self.infer_type(&args[0], env)?;
+            // Records the first syntactic call site so the pipeline can enforce
+            // web-mode ↔ registration consistency. This is a purely syntactic
+            // signal over checked code: a call inside a declared-but-never-invoked
+            // function still counts as "present", and a dynamic call
+            // (`$f = 'elephc_worker_register'; $f($h);`) is invisible here. Both
+            // are acceptable edges — the diagnostic guides the common case; a
+            // handler that is registered only through unreachable or dynamic code
+            // is a program bug the runtime crash-loop policy still contains.
+            if self.worker_register_call_span.is_none() {
+                self.worker_register_call_span = Some(span);
+            }
+            return Ok(Some(PhpType::Never));
+        }
         Ok(None)
     }
 }

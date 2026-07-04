@@ -52,6 +52,16 @@ const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 /// `web` restructures the entry point: the top-level body is emitted as the
 /// C-callable `_elephc_web_handler` and the real entry becomes a stub that calls
 /// `elephc_web_run`. When false the normal exit-based main is emitted unchanged.
+///
+/// `web_worker` selects the worker variant: the top-level body becomes the boot
+/// function and a per-request Rust trampoline invokes the compiled handler with
+/// persistent statics/globals.
+///
+/// `web_worker_script` selects the `--web-worker=script` variant: the top-level
+/// body is registered directly as the per-request handler (no PHP boot/register
+/// phase). It shares `web_worker`'s narrow per-request reset but emits a
+/// distinct process-entry stub. `web_worker` and `web_worker_script` are
+/// mutually exclusive (the CLI never sets both).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_module(
     module: &Module,
@@ -63,6 +73,8 @@ pub(super) fn emit_module(
     emit: Emit,
     regalloc_linear: bool,
     web: bool,
+    web_worker: bool,
+    web_worker_script: bool,
 ) -> Result<()> {
     function_variants::emit_dispatchers(module, emitter, data);
     for function in module
@@ -97,13 +109,29 @@ pub(super) fn emit_module(
         requires_elephc_tls,
         regalloc_linear,
         web,
+        web_worker,
+        web_worker_script,
     )?;
-    // Generate the per-request reset routine only for `--web`, and only after the
-    // handler body is emitted so every function static local (including any in the
-    // main body) has been recorded into `data`. The handler prologue's
-    // `bl __rt_web_reset` forward-references the label emitted here.
+    // Generate the per-request reset routine only for `--web` modes, and only
+    // after the handler body is emitted so every function static local (including
+    // any in the main body) has been recorded into `data`. The handler
+    // prologue's `bl __rt_web_reset` (classic) or the trampoline's
+    // `bl __rt_web_worker_request_reset` (worker/script) forward-references the
+    // label emitted here. In worker and script mode only the request-scoped
+    // reset is emitted (statics persist for the worker lifetime); in classic web
+    // mode the full reset (statics + superglobals + concat) is emitted.
     if web {
-        super::web::emit_web_reset(emitter, module, data);
+        if web_worker || web_worker_script {
+            super::web::emit_web_worker_request_reset(emitter, module, data);
+        } else {
+            // Classic --web emits its full per-request reset AND the worker
+            // request-reset routine. The classic runtime never calls the latter,
+            // but the shared Rust `spawn_worker` links the worker loop's static
+            // reference to `__rt_web_worker_request_reset` into every --web binary,
+            // so the symbol must exist even in classic builds to link.
+            super::web::emit_web_reset(emitter, module, data);
+            super::web::emit_web_worker_request_reset(emitter, module, data);
+        }
     }
     Ok(())
 }
@@ -746,6 +774,14 @@ fn class_method_entry_symbol(function: &Function) -> Result<String> {
 /// (a `ret`-based function that runs the body and returns without exiting), and
 /// a separate process-entry stub is emitted that calls `elephc_web_run` with
 /// argc/argv and the handler address, then exits with the bridge return value.
+///
+/// `web_worker` is threaded through to the frame context to select the worker
+/// boot/trampoline codegen (narrow per-request reset, worker entry stub).
+///
+/// `web_worker_script` is threaded through to the frame context to select the
+/// `--web-worker=script` codegen: it shares `web_worker`'s narrow per-request
+/// reset (statics persist) but selects a distinct entry stub that calls
+/// `elephc_web_run_script` instead of `elephc_web_run_worker`.
 #[allow(clippy::too_many_arguments)]
 fn emit_main_function(
     module: &Module,
@@ -757,6 +793,8 @@ fn emit_main_function(
     requires_elephc_tls: bool,
     regalloc_linear: bool,
     web: bool,
+    web_worker: bool,
+    web_worker_script: bool,
 ) -> Result<()> {
     let entry_symbol = if web {
         frame::WEB_HANDLER_SYMBOL
@@ -770,6 +808,8 @@ fn emit_main_function(
     );
     if web {
         ctx.web = true;
+        ctx.web_worker = web_worker;
+        ctx.web_worker_script = web_worker_script;
         frame::emit_web_handler_prologue(&mut ctx);
     } else {
         frame::emit_main_prologue(&mut ctx);
@@ -787,10 +827,24 @@ fn emit_main_function(
             frame::emit_main_epilogue(&mut ctx);
         }
     }
-    emit_endfn_marker(ctx.emitter, &function.name);
-    if web {
-        frame::emit_web_entry_stub(&mut ctx);
+    // Emit the exit()/die() bailout landing for the top-level-re-run web modes,
+    // the longjmp target of __rt_exit installed by emit_web_handler_prologue. Its
+    // gating mirrors emit_web_exit_boundary (`web && !web_worker`), so the forward
+    // reference from the boundary setjmp always resolves and never appears
+    // otherwise.
+    if web && !web_worker {
+        frame::emit_web_exit_bailout_landing(&mut ctx);
     }
+    if web {
+        if web_worker {
+            frame::emit_web_worker_entry_stub(&mut ctx);
+        } else if web_worker_script {
+            frame::emit_web_worker_script_entry_stub(&mut ctx);
+        } else {
+            frame::emit_web_entry_stub(&mut ctx);
+        }
+    }
+    emit_endfn_marker(ctx.emitter, &function.name);
     Ok(())
 }
 
@@ -800,7 +854,44 @@ fn is_main(function: &Function) -> bool {
 }
 
 /// Emits global singleton objects for enum cases used by EIR user code.
+///
+/// In `--web-worker` / `--web-worker=script` mode the whole block is wrapped in a single
+/// `_enum_singletons_init` once-guard so the singleton objects are allocated at most once
+/// per worker and persist (identity-stable) across the re-running top-level body. Without
+/// it each request would re-run every allocation and overwrite the singleton symbol without
+/// releasing the prior object — one leaked object per case per request, plus identity churn
+/// (`Enum::Case` becoming a new object each request, breaking `===` and coherence with the
+/// persisted static-property/function-static fix). In classic `--web` / CLI the guard is
+/// omitted: those must keep re-running enum init unconditionally, because nothing zeroes or
+/// re-publishes the singleton symbols between requests there.
 fn emit_enum_singleton_initializers(ctx: &mut FunctionContext<'_>) {
+    // Worker/script modes re-run the entire top-level body on every request, so guard the
+    // whole enum-singleton block behind a single `_enum_singletons_init` marker. The branch
+    // is placed BEFORE any allocation, so an already-initialized re-run creates no orphaned
+    // heap object — there is nothing to release. In classic `--web` / CLI the guard is
+    // omitted (unconditional re-init, as before).
+    let end_label = if ctx.web_worker || ctx.web_worker_script {
+        let end_label = ctx.next_label("enum_singletons_initialized");
+        // -- once-guard: skip all enum-singleton allocations when the marker is already set --
+        abi::emit_load_symbol_to_reg(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            "_enum_singletons_init",
+            0,
+        );
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &end_label);
+        // -- first request this worker: set the marker before allocating the singletons --
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            "_enum_singletons_init",
+            0,
+        );
+        Some(end_label)
+    } else {
+        None
+    };
     let allowed_class_names = super::runtime_referenced_class_names(ctx.module);
     let mut sorted_enums = ctx.module.enum_infos.iter().collect::<Vec<_>>();
     sorted_enums.sort_by_key(|(name, _)| name.as_str());
@@ -828,6 +919,12 @@ fn emit_enum_singleton_initializers(ctx: &mut FunctionContext<'_>) {
                 case,
             );
         }
+    }
+    // -- worker/script once-guard landing pad: an already-initialized re-run branches here,
+    // skipping every enum-singleton allocation and store so the persisted singletons survive
+    // untouched --
+    if let Some(end_label) = end_label {
+        ctx.emitter.label(&end_label);
     }
 }
 
@@ -973,7 +1070,36 @@ fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()
 }
 
 /// Marks one typed static property without a default as uninitialized.
-fn emit_static_property_sentinel(ctx: &mut FunctionContext<'_>, class_name: &str, property: &str) {
+///
+/// In `--web-worker` / `--web-worker=script` mode the sentinel store is wrapped
+/// in the same per-property `_init` once-guard the defaulted path uses, so the
+/// "uninitialized" mark is written at most once per worker. Without it, request
+/// N+1 re-runs the top-level and re-marks a property the app already assigned in
+/// request N as uninitialized — a fatal "accessed before initialization" on the
+/// next read, and for a refcounted value the stale offset-0 pointer is also
+/// overwritten without release (leak). A property is either defaulted or
+/// sentinel-marked, never both, so sharing the marker is safe. In classic
+/// `--web` / CLI the store is unconditional (main runs once; `__rt_web_reset`
+/// does not touch declared-but-unset typed properties).
+fn emit_static_property_sentinel(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+) {
+    let symbol = static_property_symbol(class_name, property);
+    let done_label = if ctx.web_worker || ctx.web_worker_script {
+        let init_symbol = format!("{}_init", symbol);
+        let done_label = ctx.next_label("static_prop_initialized");
+        // -- once-guard: skip the sentinel store when the marker is already set --
+        abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &init_symbol, 0);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &done_label);
+        // -- first request this worker: set the marker before writing the sentinel --
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &init_symbol, 0);
+        Some(done_label)
+    } else {
+        None
+    };
     ctx.emitter.comment(&format!(
         "mark static property {}::${} uninitialized",
         class_name, property
@@ -984,8 +1110,12 @@ fn emit_static_property_sentinel(ctx: &mut FunctionContext<'_>, class_name: &str
         marker_reg,
         UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
     );
-    let symbol = static_property_symbol(class_name, property);
     abi::emit_store_reg_to_symbol(ctx.emitter, marker_reg, &symbol, 8);
+    // -- worker/script once-guard landing pad: an already-initialized re-run
+    // branches here, leaving the persisted property value untouched --
+    if let Some(done_label) = done_label {
+        ctx.emitter.label(&done_label);
+    }
 }
 
 /// Writes a supported literal static-property default into its symbol storage.
@@ -1036,6 +1166,12 @@ fn ensure_static_property_default_type_supported(
 }
 
 /// Emits the target-specific literal load and symbol store for one static-property default.
+///
+/// In `--web-worker` / `--web-worker=script` mode the evaluation, store, and sentinel
+/// clear are wrapped in a per-property `_init` once-guard so the default runs at most once
+/// per worker and the property persists across the re-running top-level body. In classic
+/// `--web` and CLI mode the store is unconditional (required: `__rt_web_reset` releases the
+/// prop without zeroing and relies on this initializer re-running every request).
 fn emit_static_property_default_value(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
@@ -1043,6 +1179,29 @@ fn emit_static_property_default_value(
     php_type: &PhpType,
     value: &LiteralDefaultValue,
 ) -> Result<()> {
+    let symbol = static_property_symbol(class_name, property);
+    // Worker/script modes re-run the entire top-level body on every request, so guard
+    // the initializer with a per-property `_init` marker to make static-property
+    // defaults persist across requests (mirroring `lower_init_static_local`). The branch
+    // is placed BEFORE the initializer evaluation, so a re-run creates no orphaned temp —
+    // there is nothing to release. In classic `--web` / CLI the guard is omitted: this
+    // must keep the current unconditional behavior, because `__rt_web_reset` releases
+    // each static prop without zeroing and depends on the handler re-running this
+    // initializer every request. A once-guard there would skip re-init after the release
+    // (use-after-free for refcounted props / stale sentinel for typed scalars).
+    let done_label = if ctx.web_worker || ctx.web_worker_script {
+        let init_symbol = format!("{}_init", symbol);
+        let done_label = ctx.next_label("static_prop_initialized");
+        // -- once-guard: skip the whole initializer when the marker is already set --
+        abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &init_symbol, 0);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &done_label);
+        // -- first request this worker: set the marker before evaluating the default --
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &init_symbol, 0);
+        Some(done_label)
+    } else {
+        None
+    };
     match value {
         LiteralDefaultValue::Int(value) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
@@ -1104,13 +1263,18 @@ fn emit_static_property_default_value(
             emit_empty_assoc_array_literal_to_result(ctx, value_type);
         }
     }
-    let symbol = static_property_symbol(class_name, property);
     abi::emit_store_result_to_symbol(ctx.emitter, &symbol, php_type, false);
     if !matches!(
         php_type.codegen_repr(),
         PhpType::Str | PhpType::TaggedScalar
     ) {
         abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
+    }
+    // -- worker/script once-guard landing pad: an already-initialized re-run branches here,
+    // skipping the initializer evaluation, the value store, and the sentinel clear so the
+    // persisted static-property value survives untouched --
+    if let Some(done_label) = done_label {
+        ctx.emitter.label(&done_label);
     }
     Ok(())
 }

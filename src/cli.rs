@@ -15,7 +15,7 @@ pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 
 /// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--debug-info] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--with-CRATE] <source.php>";
+pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--debug-info] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--web-worker[=handler|script]] [--with-CRATE] <source.php>";
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
@@ -40,6 +40,8 @@ pub(crate) struct CliConfig {
     pub(crate) extra_frameworks: Vec<String>,
     pub(crate) defines: HashSet<String>,
     pub(crate) web: bool,
+    pub(crate) web_worker: bool,
+    pub(crate) web_worker_script: bool,
     /// Bridge crates the user force-enabled with `--with-<crate>` (short flag
     /// names such as `"pdo"`). Each one force-links the matching staticlib and,
     /// for crates with a PHP-surface prelude, forces that prelude's injection so
@@ -72,6 +74,9 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut extra_frameworks: Vec<String> = Vec::new();
     let mut defines: HashSet<String> = HashSet::new();
     let mut web = false;
+    let mut web_explicit = false;
+    let mut web_worker = false;
+    let mut web_worker_script = false;
     let mut with_crates: HashSet<String> = HashSet::new();
     let mut null_repr = match std::env::var("ELEPHC_NULL_REPR").as_deref() {
         Ok("tagged") => crate::codegen::NullRepr::Tagged,
@@ -167,6 +172,18 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             ));
         } else if arg == "--web" {
             web = true;
+            web_explicit = true;
+        } else if arg == "--web-worker" || arg == "--web-worker=handler" {
+            web_worker = true;
+            web = true;
+        } else if arg == "--web-worker=script" {
+            web_worker_script = true;
+            web = true;
+        } else if arg.starts_with("--web-worker=") {
+            fail(&format!(
+                "Unknown --web-worker mode: {} (expected --web-worker, --web-worker=handler, or --web-worker=script)",
+                arg
+            ));
         } else if let Some(name) = arg.strip_prefix("--with-") {
             // `--with-web` aliases the full `--web` mode (it owns the program
             // entry point); every other known crate is recorded for force-link
@@ -215,6 +232,41 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         fail("--web cannot be combined with --emit-ir");
     }
 
+    if web_worker && check_only {
+        fail("--web-worker cannot be combined with --check");
+    }
+    if web_worker && matches!(emit, Emit::Cdylib) {
+        fail("--web-worker cannot be combined with --emit cdylib");
+    }
+    if web_worker && emit_asm {
+        fail("--web-worker cannot be combined with --emit-asm");
+    }
+    if web_worker && emit_ir {
+        fail("--web-worker cannot be combined with --emit-ir");
+    }
+
+    if web_worker_script && check_only {
+        fail("--web-worker=script cannot be combined with --check");
+    }
+    if web_worker_script && matches!(emit, Emit::Cdylib) {
+        fail("--web-worker=script cannot be combined with --emit cdylib");
+    }
+    if web_worker_script && emit_asm {
+        fail("--web-worker=script cannot be combined with --emit-asm");
+    }
+    if web_worker_script && emit_ir {
+        fail("--web-worker=script cannot be combined with --emit-ir");
+    }
+    if web_explicit && web_worker_script {
+        fail("--web and --web-worker=script are mutually exclusive");
+    }
+    if web_explicit && web_worker {
+        fail("--web and --web-worker are mutually exclusive");
+    }
+    if web_worker && web_worker_script {
+        fail("--web-worker (handler mode) and --web-worker=script are mutually exclusive");
+    }
+
     CliConfig {
         filename,
         heap_size,
@@ -236,6 +288,8 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         extra_frameworks,
         defines,
         web,
+        web_worker,
+        web_worker_script,
         with_crates,
     }
 }
@@ -395,6 +449,8 @@ mod tests {
         let args = vec!["elephc".into(), "--web".into(), "app.php".into()];
         let config = parse_args(&args);
         assert!(config.web);
+        assert!(!config.web_worker);
+        assert!(!config.web_worker_script);
     }
 
     /// Verifies the absence of `--web` leaves the web flag off.
@@ -403,6 +459,50 @@ mod tests {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = parse_args(&args);
         assert!(!config.web);
+        assert!(!config.web_worker);
+        assert!(!config.web_worker_script);
+    }
+
+    /// Verifies `--web-worker` sets both `web` and `web_worker` to true, and
+    /// leaves `web_worker_script` off (the bare flag is handler mode).
+    #[test]
+    fn web_worker_flag_sets_web_and_web_worker() {
+        let args = vec!["elephc".into(), "--web-worker".into(), "app.php".into()];
+        let config = parse_args(&args);
+        assert!(config.web);
+        assert!(config.web_worker);
+        assert!(!config.web_worker_script);
+    }
+
+    /// Verifies `--web-worker=script` sets `web` and `web_worker_script`, while
+    /// leaving `web_worker` (handler mode) off — script mode reuses the classic
+    /// `--web` prelude instead of the worker-handler trampoline.
+    #[test]
+    fn web_worker_script_flag_sets_web_and_script() {
+        let args = vec![
+            "elephc".into(),
+            "--web-worker=script".into(),
+            "app.php".into(),
+        ];
+        let config = parse_args(&args);
+        assert!(config.web);
+        assert!(!config.web_worker);
+        assert!(config.web_worker_script);
+    }
+
+    /// Verifies `--web-worker=handler` is equivalent to the bare `--web-worker`
+    /// flag: handler mode is on, script mode is off.
+    #[test]
+    fn web_worker_handler_flag_is_handler_mode() {
+        let args = vec![
+            "elephc".into(),
+            "--web-worker=handler".into(),
+            "app.php".into(),
+        ];
+        let config = parse_args(&args);
+        assert!(config.web);
+        assert!(config.web_worker);
+        assert!(!config.web_worker_script);
     }
 
     /// Verifies `--with-pdo` records the crate for force-link/prelude forcing

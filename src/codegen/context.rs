@@ -38,9 +38,20 @@ pub(crate) struct FunctionContext<'a> {
     try_handler_offsets: HashMap<i64, usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
+    /// Base offset of this frame's exception-cleanup activation record, or `None`
+    /// when the function owns no refcounted locals. Set from the frame layout; drives
+    /// whether the prologue pushes a record, the epilogue pops it, and the cleanup
+    /// callback is emitted. See `FrameLayout::activation_record_offset`.
+    pub(super) activation_record_offset: Option<usize>,
+    /// Local label of this frame's cleanup callback, set by the prologue when it
+    /// pushes an activation record and consumed by the epilogue to emit the callback
+    /// body after the return. `None` for frames that push no record.
+    pub(super) frame_cleanup_label: Option<String>,
     pub(super) epilogue_emitted: bool,
     pub(super) is_main: bool,
     pub(super) web: bool,
+    pub(super) web_worker: bool,
+    pub(super) web_worker_script: bool,
     pub(super) gc_stats: bool,
     pub(super) heap_debug: bool,
     pub(super) epilogue_label: Option<String>,
@@ -73,9 +84,13 @@ impl<'a> FunctionContext<'a> {
             try_handler_offsets: layout.try_handler_offsets,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
+            activation_record_offset: layout.activation_record_offset,
+            frame_cleanup_label: None,
             epilogue_emitted: false,
             is_main,
             web: false,
+            web_worker: false,
+            web_worker_script: false,
             gc_stats,
             heap_debug,
             epilogue_label,
@@ -408,14 +423,21 @@ impl<'a> FunctionContext<'a> {
 
     /// After an in-place hash/array mutation whose runtime helper returns the
     /// possibly-reallocated container pointer in `value`'s register (already
-    /// persisted via `store_result_value`), writes that pointer back to global
-    /// storage when `value` was loaded from a global — i.e. a superglobal such as
-    /// `$_SERVER`/`$_GET`/`$_POST`. Mirrors the local-slot write-back that array
-    /// and hash set/append lowerings already perform; without it a global array
-    /// that grows past its initial capacity leaves the global symbol pointing at
-    /// freed storage (corruption / crash). No-op unless `value` came from
-    /// `Op::LoadGlobal`.
-    pub(super) fn writeback_global_array_source(&mut self, value: ValueId) -> Result<()> {
+    /// persisted via `store_result_value`), writes that pointer back to symbol-backed
+    /// storage when `value` was loaded from a global or static local. For globals
+    /// this is a superglobal such as `$_SERVER`/`$_GET`/`$_POST`; for static locals
+    /// it is a function-scoped `.comm` slot such as `static $store = [...]`. Mirrors
+    /// the local-slot write-back that array and hash set/append lowerings already
+    /// perform; without it a container that grows past its initial capacity leaves the
+    /// symbol pointing at freed storage (corruption / crash).
+    ///
+    /// Ownership invariant: loads from symbol-backed storage are borrows (own =
+    /// maybe_owned; no release at value death) for both `LoadGlobal` and
+    /// `LoadStaticLocal`. The runtime mutation helpers free or replace the old
+    /// allocation internally and return the sole authoritative pointer; therefore
+    /// the symbol store is a plain pointer overwrite — no incref, and no release of
+    /// the old symbol value.
+    pub(super) fn writeback_symbol_array_source(&mut self, value: ValueId) -> Result<()> {
         let Some(value_ref) = self.function.value(value) else {
             return Err(CodegenIrError::missing_entry("value", value.as_raw()));
         };
@@ -425,18 +447,80 @@ impl<'a> FunctionContext<'a> {
         let Some(inst_ref) = self.function.instruction(inst) else {
             return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
         };
-        if inst_ref.op != Op::LoadGlobal {
-            return Ok(());
+        match inst_ref.op {
+            Op::LoadGlobal => {
+                let Some(crate::ir::Immediate::GlobalName(data)) = inst_ref.immediate else {
+                    return Ok(());
+                };
+                let name = self.global_name_data(data)?.to_string();
+                let symbol = crate::names::ir_global_symbol(&name);
+                let ty = self.value_php_type(value)?;
+                self.data
+                    .add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
+                // Record the user global (non-superglobal) so classic `--web`
+                // resets it per request; superglobals reset via their own loop.
+                if !crate::superglobals::is_superglobal(&name) {
+                    self.data.record_user_global(crate::codegen::data_section::UserGlobalRecord {
+                        symbol: symbol.clone(),
+                        php_type: ty.clone(),
+                    });
+                }
+                self.load_value_to_result(value)?;
+                abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
+            }
+            Op::LoadStaticLocal => {
+                let Some(crate::ir::Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+                    return Ok(());
+                };
+                let local = self
+                    .function
+                    .locals
+                    .get(slot.as_raw() as usize)
+                    .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))?;
+                let name = local.name.clone().ok_or_else(|| {
+                    CodegenIrError::invalid_module(
+                        "LoadStaticLocal is missing a source name".to_string(),
+                    )
+                })?;
+                let symbol = crate::names::static_local_symbol(&self.function.name, &name);
+                let slot_storage_ty = local.php_type.codegen_repr();
+                let ty = self.value_php_type(value)?;
+                self.data.add_comm(symbol.clone(), 16);
+                // When the slot widened to Mixed, the authoritative container must be
+                // re-boxed into a fresh Mixed cell and the OLD cell released via
+                // release-previous — never overwrite the cell pointer in place. A
+                // payload swap inside the old cell would be unsafe if that cell is
+                // shared (rc>1). Refcount proof: new cell (rc1) -> new container;
+                // old cell decref -> 0 -> mixed_free_deep frees old cell + old
+                // container.
+                if matches!(slot_storage_ty, PhpType::Mixed)
+                    && !matches!(ty.codegen_repr(), PhpType::Mixed)
+                {
+                    let source_ty = self.load_value_to_result(value)?;
+                    // Re-box the mutated container into a fresh Mixed cell and
+                    // release the old cell (release-previous). Ownership-aware
+                    // box selection mirrors `store_value_to_local`: when the
+                    // source value's producer left an owned result, transfer it
+                    // (no incref); otherwise borrow-box (retain). This gate keeps
+                    // the writeback correct whether or not the source is a
+                    // freshly-owned COW-unique container.
+                    if self.value_can_own_mixed_box_source(value)? {
+                        emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
+                    } else {
+                        emit_box_current_value_as_mixed(self.emitter, &source_ty);
+                    }
+                    abi::emit_store_result_to_symbol(self.emitter, &symbol, &PhpType::Mixed, true);
+                    abi::emit_store_zero_to_symbol(self.emitter, &symbol, 8);
+                } else {
+                    self.load_value_to_result(value)?;
+                    abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
+                    if !matches!(ty.codegen_repr(), PhpType::Str | PhpType::TaggedScalar) {
+                        abi::emit_store_zero_to_symbol(self.emitter, &symbol, 8);
+                    }
+                }
+            }
+            _ => {}
         }
-        let Some(crate::ir::Immediate::GlobalName(data)) = inst_ref.immediate else {
-            return Ok(());
-        };
-        let name = self.global_name_data(data)?.to_string();
-        let symbol = crate::names::ir_global_symbol(&name);
-        let ty = self.value_php_type(value)?;
-        self.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
-        self.load_value_to_result(value)?;
-        abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
         Ok(())
     }
 

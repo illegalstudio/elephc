@@ -132,6 +132,8 @@ pub fn generate_user_asm_from_ir(
         &exported_functions,
         true,
         false,
+        false,
+        false,
     )
 }
 
@@ -144,6 +146,17 @@ pub fn generate_user_asm_from_ir(
 /// the C-callable `_elephc_web_handler` and the real entry point becomes a thin
 /// stub that calls `elephc_web_run`. When false the entry is byte-for-byte the
 /// normal exit-based main.
+///
+/// `web_worker` selects the worker variant of `--web`: the top-level body becomes
+/// the boot function and a separate C-ABI trampoline handles per-request
+/// invocation.
+///
+/// `web_worker_script` selects the `--web-worker=script` variant: the top-level
+/// body is registered directly as the per-request handler (no PHP boot/register
+/// phase). It shares the worker's narrow per-request reset with `web_worker` but
+/// emits a distinct process-entry stub that calls `elephc_web_run_script`.
+/// `web_worker` and `web_worker_script` are mutually exclusive (the CLI never
+/// sets both).
 #[allow(clippy::too_many_arguments)]
 pub fn generate_user_asm_from_ir_with_options(
     module: &Module,
@@ -154,6 +167,8 @@ pub fn generate_user_asm_from_ir_with_options(
     exported_functions: &HashMap<String, ExportedFunction>,
     regalloc_linear: bool,
     web: bool,
+    web_worker: bool,
+    web_worker_script: bool,
 ) -> Result<String> {
     let mut emitter = match emit {
         Emit::Cdylib => Emitter::new_pic(module.target),
@@ -173,6 +188,8 @@ pub fn generate_user_asm_from_ir_with_options(
         emit,
         regalloc_linear,
         web,
+        web_worker,
+        web_worker_script,
     )?;
     Ok(finalize_user_asm(
         module,
