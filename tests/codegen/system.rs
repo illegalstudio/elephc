@@ -1251,6 +1251,65 @@ echo date("D", $ts);
     assert_eq!(out, "Fri");
 }
 
+/// Regression for #391: the Linux x86_64 weekday-modifier parser must pass
+/// `min(end - weekday_cursor, 16)` to `match_word`, not a fixed 16-byte window.
+#[test]
+fn test_strtotime_x86_64_weekday_modifier_match_window_is_remaining_capped() {
+    let target = Target::parse("linux-x86_64").expect("valid linux x86_64 target");
+    let runtime_asm = elephc::codegen::generate_runtime_with_features(
+        8_388_608,
+        target,
+        elephc::codegen::RuntimeFeatures::none(),
+    );
+    let modifier_block = asm_between_labels(
+        &runtime_asm,
+        "__rt_strtotime_weekdays_entry_linux_x86_64:",
+        "__rt_strtotime_weekdays_direct_linux_x86_64:",
+    );
+
+    assert_asm_contains_ordered(
+        modifier_block,
+        &[
+            "mov QWORD PTR [rsp + 112], rdi",
+            "lea rdi, [rbp - 64]",
+            "mov rcx, r10",
+            "sub rcx, QWORD PTR [rsp + 112]",
+            "mov r8, 16",
+            "cmp rcx, r8",
+            "cmovae rcx, r8",
+            "call __rt_strtotime_match_word_linux_x86_64",
+        ],
+    );
+    assert!(
+        !modifier_block.contains("mov rcx, 16"),
+        "weekday modifier path must not pass a fixed 16-byte window:\n{modifier_block}"
+    );
+}
+
+/// Returns the assembly slice between two labels, including the start label and
+/// excluding the end label.
+fn asm_between_labels<'a>(asm: &'a str, start_label: &str, end_label: &str) -> &'a str {
+    let start = asm
+        .find(start_label)
+        .unwrap_or_else(|| panic!("missing start label {start_label}"));
+    let tail = &asm[start..];
+    let end = tail
+        .find(end_label)
+        .unwrap_or_else(|| panic!("missing end label {end_label} after {start_label}"));
+    &tail[..end]
+}
+
+/// Asserts that every assembly needle appears in the provided order.
+fn assert_asm_contains_ordered(asm: &str, needles: &[&str]) {
+    let mut cursor = 0;
+    for needle in needles {
+        let relative = asm[cursor..].find(needle).unwrap_or_else(|| {
+            panic!("missing assembly line `{needle}` after byte {cursor}:\n{asm}")
+        });
+        cursor += relative + needle.len();
+    }
+}
+
 /// Verifies `strtotime("3 days ago")` produces a timestamp roughly 3 days behind now
 /// (259200 seconds ±1 hour for DST).
 #[test]
