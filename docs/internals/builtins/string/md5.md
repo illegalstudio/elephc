@@ -2,14 +2,14 @@
 title: "md5() — internals"
 description: "Compiler internals for md5(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 369
+  order: 366
 ---
 
 ## `md5()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/md5.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/md5.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:355](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L355) (`lower_md5`)
 - **Function symbol**: `lower_md5()`
 
@@ -28,7 +28,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function md5(string $string, bool $binary): string
+function md5(string $string, bool $binary = false): string
 ```
 
 ## What the type checker enforces

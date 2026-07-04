@@ -1,6 +1,6 @@
 ---
 title: "ptr_write8()"
-description: "Lowers `ptr_write8(pointer, value)` by writing one byte through a checked pointer."
+description: "Writes one byte through a raw pointer."
 sidebar:
   order: 298
 ---
@@ -11,7 +11,7 @@ sidebar:
 function ptr_write8(pointer $pointer, int $value): void
 ```
 
-Lowers `ptr_write8(pointer, value)` by writing one byte through a checked pointer.
+Writes one byte through a raw pointer.
 
 **Parameters**:
 - `$pointer` (`pointer`)

@@ -1,8 +1,8 @@
 ---
 title: "sys_get_temp_dir()"
-description: "Lowers `sys_get_temp_dir()` as the project's hardcoded `/tmp` string."
+description: "Returns the directory path used for temporary files."
 sidebar:
-  order: 145
+  order: 147
 ---
 
 ## sys_get_temp_dir()
@@ -11,7 +11,7 @@ sidebar:
 function sys_get_temp_dir(): string
 ```
 
-Lowers `sys_get_temp_dir()` as the project's hardcoded `/tmp` string.
+Returns the directory path used for temporary files.
 
 **Parameters**: none.
 

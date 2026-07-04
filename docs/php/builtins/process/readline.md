@@ -1,6 +1,6 @@
 ---
 title: "readline()"
-description: "Lowers `readline(prompt?)` by optionally writing a prompt and reading stdin."
+description: "Reads a line from the user's terminal."
 sidebar:
   order: 306
 ---
@@ -8,13 +8,13 @@ sidebar:
 ## readline()
 
 ```php
-function readline(string $prompt): mixed
+function readline(string $prompt = null): mixed
 ```
 
-Lowers `readline(prompt?)` by optionally writing a prompt and reading stdin.
+Reads a line from the user's terminal.
 
 **Parameters**:
-- `$prompt` (`string`), optional
+- `$prompt` (`string`), default `null`, optional
 
 **Returns**: `mixed`
 

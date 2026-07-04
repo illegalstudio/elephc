@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_multisort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_multisort.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1671](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1671) (`lower_array_multisort`)
 - **Function symbol**: `lower_array_multisort()`
 
@@ -35,6 +35,7 @@ function array_multisort(array $array1, int $array2): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+- **By-reference parameters**: `$array1`, `$array2`.
 
 ## Cross-references
 

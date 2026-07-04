@@ -19,7 +19,7 @@ use super::super::{expect_operand, store_if_result};
 use crate::codegen_ir::{CodegenIrError, Result};
 
 /// Lowers `is_numeric()` for concrete scalar values.
-pub(super) fn lower_is_numeric(
+pub(crate) fn lower_is_numeric(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

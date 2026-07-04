@@ -1,6 +1,6 @@
 ---
 title: "array_walk_recursive()"
-description: "Lowers `array_walk_recursive()`: invokes the callback on each scalar leaf of a (possibly nested)"
+description: "Applies a user function recursively to every member of an array."
 sidebar:
   order: 46
 ---
@@ -8,15 +8,14 @@ sidebar:
 ## array_walk_recursive()
 
 ```php
-function array_walk_recursive(array $array, callable $callback, mixed $value): void
+function array_walk_recursive(array $array, callable $callback): void
 ```
 
-Lowers `array_walk_recursive()`: invokes the callback on each scalar leaf of a (possibly nested)
+Applies a user function recursively to every member of an array.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
 - `$callback` (`callable`)
-- `$value` (`mixed`)
 
 **Returns**: `void`
 

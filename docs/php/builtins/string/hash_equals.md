@@ -1,6 +1,6 @@
 ---
 title: "hash_equals()"
-description: "Lowers `hash_equals(known, user)` through the timing-safe runtime compare helper."
+description: "Compares two strings using a constant-time algorithm."
 sidebar:
   order: 350
 ---
@@ -11,7 +11,7 @@ sidebar:
 function hash_equals(string $known_string, string $user_string): bool
 ```
 
-Lowers `hash_equals(known, user)` through the timing-safe runtime compare helper.
+Compares two strings using a constant-time algorithm.
 
 **Parameters**:
 - `$known_string` (`string`)

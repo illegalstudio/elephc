@@ -1,8 +1,8 @@
 ---
 title: "stream_set_chunk_size()"
-description: "Lowers `stream_set_chunk_size(stream, size)` and returns the previous size."
+description: "Sets the read chunk size on a stream."
 sidebar:
-  order: 210
+  order: 212
 ---
 
 ## stream_set_chunk_size()
@@ -11,7 +11,7 @@ sidebar:
 function stream_set_chunk_size(resource $stream, int $size): int
 ```
 
-Lowers `stream_set_chunk_size(stream, size)` and returns the previous size.
+Sets the read chunk size on a stream.
 
 **Parameters**:
 - `$stream` (`resource`)

@@ -1,20 +1,20 @@
 ---
 title: "hrtime()"
-description: "Lowers `hrtime([$as_number])` through the monotonic-clock runtime helper."
+description: "Returns the current high-resolution time."
 sidebar:
-  order: 90
+  order: 92
 ---
 
 ## hrtime()
 
 ```php
-function hrtime(bool $as_number): mixed
+function hrtime(bool $as_number = false): mixed
 ```
 
-Lowers `hrtime([$as_number])` through the monotonic-clock runtime helper.
+Returns the current high-resolution time.
 
 **Parameters**:
-- `$as_number` (`bool`), optional
+- `$as_number` (`bool`), default `false`, optional
 
 **Returns**: `mixed`
 

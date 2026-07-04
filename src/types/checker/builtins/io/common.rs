@@ -1,9 +1,12 @@
 //! Purpose:
 //! Type-checks PHP IO builtin common helpers and signatures.
-//! Validates arity, argument categories, resource handling, and return types before codegen sees calls.
+//! Validates argument categories, resource handling, and return types before codegen sees calls.
 //!
 //! Called from:
-//! - `crate::types::checker::builtins::io::check_builtin()`
+//! - `crate::types::checker::builtins::io::common::ensure_stream_resource()` — used by
+//!   check hooks in `src/builtins/io/` (fstat, stream_socket_shutdown, stream_socket_get_name,
+//!   stream_socket_sendto, stream_socket_enable_crypto, stream_socket_accept,
+//!   stream_socket_recvfrom, stream_filter_append, stream_filter_prepend, flock, and others).
 //!
 //! Key details:
 //! - Return types and diagnostics must stay aligned with `crate::types::signatures` and builtin codegen emitters.
@@ -14,13 +17,12 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
 
-/// Re-export of `Result<Option<PhpType>, CompileError>` for subsystem checkers.
-pub(super) type BuiltinResult = Result<Option<PhpType>, CompileError>;
-
 /// Validates that `arg` is a stream resource (or a type that accepts a stream resource).
 ///
-/// Emits a type error if the argument is not a compatible stream type.
-pub(super) fn ensure_stream_resource(
+/// Emits a type error if the argument is not a compatible stream type. Widened to
+/// `pub(crate)` so `fstat`'s check hook in `src/builtins/io/fstat.rs` can call it;
+/// `streams.rs` continues to use it via `super::common::ensure_stream_resource`.
+pub(crate) fn ensure_stream_resource(
     checker: &mut Checker,
     name: &str,
     arg: &Expr,

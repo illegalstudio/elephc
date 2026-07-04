@@ -1,6 +1,6 @@
 ---
 title: "array_any()"
-description: "Lowers `array_any()`: returns true when some element satisfies the predicate."
+description: "Returns true when at least one array element satisfies the predicate callback."
 sidebar:
   order: 2
 ---
@@ -8,16 +8,16 @@ sidebar:
 ## array_any()
 
 ```php
-function array_any(array $array, mixed $callback): mixed
+function array_any(mixed $array, mixed $callback): bool
 ```
 
-Lowers `array_any()`: returns true when some element satisfies the predicate.
+Returns true when at least one array element satisfies the predicate callback.
 
 **Parameters**:
-- `$array` (`array`)
+- `$array` (`mixed`)
 - `$callback` (`mixed`)
 
-**Returns**: `mixed`
+**Returns**: `bool`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

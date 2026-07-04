@@ -569,7 +569,7 @@ checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
 name = "elephc"
-version = "0.25.2"
+version = "0.26.0"
 dependencies = [
  "bitflags 2.13.0",
  "bzip2-rs",
@@ -581,6 +581,7 @@ dependencies = [
  "elephc-tz",
  "elephc-web",
  "flate2",
+ "inventory",
  "rustls",
  "rustls-pemfile",
  "serde_json",
@@ -1136,6 +1137,15 @@ dependencies = [
  "hashbrown 0.17.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "inventory"
+version = "0.3.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4f0c30c76f2f4ccee3fe55a2435f691ca00c0e4bd87abe4f4a851b1d4dac39b"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]

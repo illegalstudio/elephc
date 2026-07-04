@@ -1,6 +1,6 @@
 ---
 title: "array_diff()"
-description: "Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots."
+description: "Computes the difference of arrays."
 sidebar:
   order: 6
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_diff(array $array, ...$arrays): array
 ```
 
-Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots.
+Computes the difference of arrays.
 
 **Parameters**:
 - `$array` (`array`)

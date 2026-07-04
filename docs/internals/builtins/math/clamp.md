@@ -2,14 +2,14 @@
 title: "clamp() — internals"
 description: "Compiler internals for clamp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 239
+  order: 241
 ---
 
 ## `clamp()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/math/clamp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/clamp.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/math.rs`:80](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math.rs#L80) (`lower_clamp`)
 - **Function symbol**: `lower_clamp()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function clamp(int $value, int $min, int $max): string
+function clamp(int $value, int $min, int $max): mixed
 ```
 
 ## What the type checker enforces

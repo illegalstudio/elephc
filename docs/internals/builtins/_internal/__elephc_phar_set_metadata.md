@@ -2,14 +2,14 @@
 title: "__elephc_phar_set_metadata() — internals"
 description: "Compiler internals for __elephc_phar_set_metadata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 442
+  order: 441
 ---
 
 ## `__elephc_phar_set_metadata()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/__elephc_phar_set_metadata.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_set_metadata.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3882](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3882) (`lower_elephc_phar_set_metadata`)
 - **Function symbol**: `lower_elephc_phar_set_metadata()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function __elephc_phar_set_metadata(mixed $filename, mixed $metadata): bool
+function __elephc_phar_set_metadata(string $filename, string $metadata): bool
 ```
 
 ## What the type checker enforces

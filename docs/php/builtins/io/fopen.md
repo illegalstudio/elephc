@@ -1,23 +1,23 @@
 ---
 title: "fopen()"
-description: "Lowers `fopen(filename, mode)` and boxes stream resources or PHP false."
+description: "Opens file or URL."
 sidebar:
-  order: 163
+  order: 165
 ---
 
 ## fopen()
 
 ```php
-function fopen(string $filename, string $mode, bool $use_include_path, mixed $context): mixed
+function fopen(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): mixed
 ```
 
-Lowers `fopen(filename, mode)` and boxes stream resources or PHP false.
+Opens file or URL.
 
 **Parameters**:
 - `$filename` (`string`)
 - `$mode` (`string`)
-- `$use_include_path` (`bool`), optional
-- `$context` (`mixed`), optional
+- `$use_include_path` (`bool`), default `false`, optional
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 

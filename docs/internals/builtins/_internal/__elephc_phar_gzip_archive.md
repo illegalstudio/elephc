@@ -2,14 +2,14 @@
 title: "__elephc_phar_gzip_archive() — internals"
 description: "Compiler internals for __elephc_phar_gzip_archive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 438
+  order: 437
 ---
 
 ## `__elephc_phar_gzip_archive()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/__elephc_phar_gzip_archive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_gzip_archive.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4105](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4105) (`lower_elephc_phar_gzip_archive`)
 - **Function symbol**: `lower_elephc_phar_gzip_archive()`
 
@@ -26,7 +26,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function __elephc_phar_gzip_archive(mixed $src): string
+function __elephc_phar_gzip_archive(string $src): string
 ```
 
 ## What the type checker enforces

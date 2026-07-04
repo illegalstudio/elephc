@@ -1,6 +1,6 @@
 ---
 title: "ptr_null()"
-description: "Lowers `ptr_null()` by materializing the raw null pointer sentinel."
+description: "Returns a null raw pointer."
 sidebar:
   order: 288
 ---
@@ -11,7 +11,7 @@ sidebar:
 function ptr_null(): mixed
 ```
 
-Lowers `ptr_null()` by materializing the raw null pointer sentinel.
+Returns a null raw pointer.
 
 **Parameters**: none.
 

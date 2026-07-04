@@ -38,7 +38,7 @@ use super::{CodegenIrError, Result};
 mod arithmetic;
 mod arrays;
 mod buffers;
-mod builtins;
+pub(crate) mod builtins;
 mod callables;
 mod comparisons;
 mod conversions;

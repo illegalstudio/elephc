@@ -1,8 +1,8 @@
 ---
 title: "lstat()"
-description: "Lowers `lstat(path)` and boxes the runtime lstat array or PHP false result."
+description: "Gives information about a file or symbolic link."
 sidebar:
-  order: 131
+  order: 133
 ---
 
 ## lstat()
@@ -11,7 +11,7 @@ sidebar:
 function lstat(string $filename): mixed
 ```
 
-Lowers `lstat(path)` and boxes the runtime lstat array or PHP false result.
+Gives information about a file or symbolic link.
 
 **Parameters**:
 - `$filename` (`string`)

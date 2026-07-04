@@ -1,6 +1,6 @@
 ---
 title: "array_replace_recursive()"
-description: "Lowers `array_replace_recursive()` (recursive right-wins hash merge)."
+description: "Replaces elements from passed arrays into the first array recursively."
 sidebar:
   order: 33
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_replace_recursive(array $array, array $replacements): mixed
 ```
 
-Lowers `array_replace_recursive()` (recursive right-wins hash merge).
+Replaces elements from passed arrays into the first array recursively.
 
 **Parameters**:
 - `$array` (`array`)

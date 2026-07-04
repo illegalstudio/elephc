@@ -1,8 +1,8 @@
 ---
 title: "fpassthru()"
-description: "Lowers `fpassthru(stream)` through the remaining-bytes stream runtime helper."
+description: "Output all remaining data on a file pointer."
 sidebar:
-  order: 164
+  order: 166
 ---
 
 ## fpassthru()
@@ -11,7 +11,7 @@ sidebar:
 function fpassthru(resource $stream): int
 ```
 
-Lowers `fpassthru(stream)` through the remaining-bytes stream runtime helper.
+Output all remaining data on a file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)

@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_uintersect.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_uintersect.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1663](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1663) (`lower_array_uintersect`)
 - **Function symbol**: `lower_array_uintersect()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function array_uintersect(array $array1, array $array2, callable $callback): mixed
+function array_uintersect(array $array1, array $array2, callable $callback): array
 ```
 
 ## What the type checker enforces

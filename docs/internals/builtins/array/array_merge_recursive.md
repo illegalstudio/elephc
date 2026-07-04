@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_merge_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_merge_recursive.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1366](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1366) (`lower_array_merge_recursive`)
 - **Function symbol**: `lower_array_merge_recursive()`
 
@@ -28,7 +28,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_merge_recursive(...$arrays): mixed
+function array_merge_recursive(...$arrays): array
 ```
 
 ## What the type checker enforces

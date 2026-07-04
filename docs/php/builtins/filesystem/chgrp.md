@@ -1,21 +1,21 @@
 ---
 title: "chgrp()"
-description: "Lowers `chgrp(path, group)` for integer GIDs and string group names."
+description: "Changes file group."
 sidebar:
-  order: 98
+  order: 100
 ---
 
 ## chgrp()
 
 ```php
-function chgrp(string $filename, int $group): bool
+function chgrp(string $filename, string $group): bool
 ```
 
-Lowers `chgrp(path, group)` for integer GIDs and string group names.
+Changes file group.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$group` (`int`)
+- `$group` (`string`)
 
 **Returns**: `bool`
 

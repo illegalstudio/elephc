@@ -1,6 +1,6 @@
 ---
 title: "preg_replace_callback()"
-description: "Lowers `preg_replace_callback(pattern, callback, subject)` through supported direct callbacks."
+description: "Performs a regular expression search and replace using a callback."
 sidebar:
   order: 314
 ---
@@ -8,20 +8,17 @@ sidebar:
 ## preg_replace_callback()
 
 ```php
-function preg_replace_callback(string $pattern, callable $callback, string $subject, int $limit = -1, int $count = null, int $flags = 0): array
+function preg_replace_callback(string $pattern, callable $callback, string $subject): string
 ```
 
-Lowers `preg_replace_callback(pattern, callback, subject)` through supported direct callbacks.
+Performs a regular expression search and replace using a callback.
 
 **Parameters**:
 - `$pattern` (`string`)
 - `$callback` (`callable`)
 - `$subject` (`string`)
-- `$limit` (`int`), default `-1`, optional
-- `$count` (`int`), passed by reference, default `null`, optional
-- `$flags` (`int`), default `0`, optional
 
-**Returns**: `array`
+**Returns**: `string`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

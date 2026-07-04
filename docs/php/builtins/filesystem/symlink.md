@@ -1,8 +1,8 @@
 ---
 title: "symlink()"
-description: "Lowers `symlink(target, link)` through the target-aware libc wrapper."
+description: "Creates a symbolic link."
 sidebar:
-  order: 144
+  order: 146
 ---
 
 ## symlink()
@@ -11,7 +11,7 @@ sidebar:
 function symlink(string $target, string $link): bool
 ```
 
-Lowers `symlink(target, link)` through the target-aware libc wrapper.
+Creates a symbolic link.
 
 **Parameters**:
 - `$target` (`string`)

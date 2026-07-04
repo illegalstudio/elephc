@@ -27,7 +27,7 @@ enum AssocArg {
 }
 
 /// Lowers `json_decode(json, associative?, depth?, flags?)` through the shared JSON decoder runtime.
-pub(super) fn lower_json_decode(
+pub(crate) fn lower_json_decode(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -49,7 +49,7 @@ pub(super) fn lower_json_decode(
 }
 
 /// Lowers `json_encode(value, flags?, depth?)` through the shared JSON encoder runtime.
-pub(super) fn lower_json_encode(
+pub(crate) fn lower_json_encode(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -67,7 +67,7 @@ pub(super) fn lower_json_encode(
 }
 
 /// Lowers `json_last_error()` by reading the shared runtime error-code symbol.
-pub(super) fn lower_json_last_error(
+pub(crate) fn lower_json_last_error(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -82,7 +82,7 @@ pub(super) fn lower_json_last_error(
 }
 
 /// Lowers `json_last_error_msg()` through the runtime message lookup table.
-pub(super) fn lower_json_last_error_msg(
+pub(crate) fn lower_json_last_error_msg(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -92,7 +92,7 @@ pub(super) fn lower_json_last_error_msg(
 }
 
 /// Lowers `json_validate(json, depth?, flags?)` into the shared validator runtime.
-pub(super) fn lower_json_validate(
+pub(crate) fn lower_json_validate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

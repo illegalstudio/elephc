@@ -1,8 +1,8 @@
 ---
 title: "usort()"
-description: "Lowers `usort()` for indexed integer arrays with a static user comparator."
+description: "Sorts an array by values using a user-defined comparison function."
 sidebar:
-  order: 61
+  order: 63
 ---
 
 ## usort()
@@ -11,7 +11,7 @@ sidebar:
 function usort(array $array, callable $callback): bool
 ```
 
-Lowers `usort()` for indexed integer arrays with a static user comparator.
+Sorts an array by values using a user-defined comparison function.
 
 **Parameters**:
 - `$array` (`array`), passed by reference

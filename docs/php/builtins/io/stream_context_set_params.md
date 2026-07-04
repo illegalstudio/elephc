@@ -1,8 +1,8 @@
 ---
 title: "stream_context_set_params()"
-description: "Lowers `stream_context_set_params(context, params)` as an accepted parameter update."
+description: "Sets parameters on the specified context."
 sidebar:
-  order: 195
+  order: 197
 ---
 
 ## stream_context_set_params()
@@ -11,7 +11,7 @@ sidebar:
 function stream_context_set_params(resource $context, array $params): bool
 ```
 
-Lowers `stream_context_set_params(context, params)` as an accepted parameter update.
+Sets parameters on the specified context.
 
 **Parameters**:
 - `$context` (`resource`)

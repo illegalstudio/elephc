@@ -1,8 +1,8 @@
 ---
 title: "json_last_error_msg()"
-description: "Lowers `json_last_error_msg()` through the runtime message lookup table."
+description: "Returns the error string of the last json_encode() or json_decode() call."
 sidebar:
-  order: 231
+  order: 233
 ---
 
 ## json_last_error_msg()
@@ -11,7 +11,7 @@ sidebar:
 function json_last_error_msg(): string
 ```
 
-Lowers `json_last_error_msg()` through the runtime message lookup table.
+Returns the error string of the last json_encode() or json_decode() call.
 
 **Parameters**: none.
 

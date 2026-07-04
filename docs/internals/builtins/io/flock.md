@@ -2,14 +2,14 @@
 title: "flock() — internals"
 description: "Compiler internals for flock(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 162
+  order: 164
 ---
 
 ## `flock()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/flock.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/flock.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3309](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3309) (`lower_flock`)
 - **Function symbol**: `lower_flock()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function flock(resource $stream, int $operation, bool $would_block): bool
+function flock(resource $stream, int $operation, bool $would_block = null): bool
 ```
 
 ## What the type checker enforces

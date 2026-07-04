@@ -2,14 +2,14 @@
 title: "stream_copy_to_stream() — internals"
 description: "Compiler internals for stream_copy_to_stream(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 196
+  order: 198
 ---
 
 ## `stream_copy_to_stream()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_copy_to_stream.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_copy_to_stream.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1360](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1360) (`lower_stream_copy_to_stream`)
 - **Function symbol**: `lower_stream_copy_to_stream()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function stream_copy_to_stream(resource $from, resource $to, int $length, int $offset): mixed
+function stream_copy_to_stream(resource $from, resource $to, int $length = null, int $offset = -1): mixed
 ```
 
 ## What the type checker enforces

@@ -1,8 +1,8 @@
 ---
 title: "natsort()"
-description: "Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper."
+description: "Sorts an array using a natural order algorithm."
 sidebar:
-  order: 54
+  order: 56
 ---
 
 ## natsort()
@@ -11,7 +11,7 @@ sidebar:
 function natsort(array $array): bool
 ```
 
-Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper.
+Sorts an array using a natural order algorithm.
 
 **Parameters**:
 - `$array` (`array`), passed by reference

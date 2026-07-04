@@ -1,6 +1,6 @@
 ---
 title: "array_merge_recursive()"
-description: "Lowers `array_merge_recursive()` (recursive merge with scalar collisions combined into lists)."
+description: "Recursively merges two arrays, combining scalar collisions into lists."
 sidebar:
   order: 24
 ---
@@ -8,15 +8,15 @@ sidebar:
 ## array_merge_recursive()
 
 ```php
-function array_merge_recursive(...$arrays): mixed
+function array_merge_recursive(...$arrays): array
 ```
 
-Lowers `array_merge_recursive()` (recursive merge with scalar collisions combined into lists).
+Recursively merges two arrays, combining scalar collisions into lists.
 
 **Parameters**:
 - `...$arrays` — variadic: collects excess arguments into `$arrays`.
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

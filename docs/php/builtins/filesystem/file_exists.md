@@ -1,8 +1,8 @@
 ---
 title: "file_exists()"
-description: "Lowers `file_exists(path)` through the target-aware runtime stat helper."
+description: "Checks whether a file or directory exists."
 sidebar:
-  order: 106
+  order: 108
 ---
 
 ## file_exists()
@@ -11,7 +11,7 @@ sidebar:
 function file_exists(string $filename): bool
 ```
 
-Lowers `file_exists(path)` through the target-aware runtime stat helper.
+Checks whether a file or directory exists.
 
 **Parameters**:
 - `$filename` (`string`)

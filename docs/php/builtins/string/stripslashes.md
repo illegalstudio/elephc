@@ -1,6 +1,6 @@
 ---
 title: "stripslashes()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Removes backslashes from a string previously escaped by addslashes."
 sidebar:
   order: 387
 ---
@@ -11,7 +11,7 @@ sidebar:
 function stripslashes(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Removes backslashes from a string previously escaped by addslashes.
 
 **Parameters**:
 - `$string` (`string`)

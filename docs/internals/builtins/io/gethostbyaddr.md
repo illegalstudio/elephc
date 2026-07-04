@@ -2,14 +2,14 @@
 title: "gethostbyaddr() — internals"
 description: "Compiler internals for gethostbyaddr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 175
+  order: 177
 ---
 
 ## `gethostbyaddr()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/gethostbyaddr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/gethostbyaddr.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3431](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3431) (`lower_gethostbyaddr`)
 - **Function symbol**: `lower_gethostbyaddr()`
 

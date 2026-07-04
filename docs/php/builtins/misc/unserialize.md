@@ -1,6 +1,6 @@
 ---
 title: "unserialize()"
-description: "Lowers `unserialize($data, $options?)` into the shared unserialize runtime helper."
+description: "Creates a PHP value from a stored representation."
 sidebar:
   order: 282
 ---
@@ -8,14 +8,14 @@ sidebar:
 ## unserialize()
 
 ```php
-function unserialize(mixed $data, mixed $options): mixed
+function unserialize(string $data, mixed $options = []): mixed
 ```
 
-Lowers `unserialize($data, $options?)` into the shared unserialize runtime helper.
+Creates a PHP value from a stored representation.
 
 **Parameters**:
-- `$data` (`mixed`)
-- `$options` (`mixed`), optional
+- `$data` (`string`)
+- `$options` (`mixed`), default `[]`, optional
 
 **Returns**: `mixed`
 

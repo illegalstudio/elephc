@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_key_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_key_exists.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays/key_exists.rs`:22](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays/key_exists.rs#L22) (`lower_array_key_exists`)
 - **Function symbol**: `lower_array_key_exists()`
 

@@ -24,11 +24,11 @@ mod binary;
 mod libm;
 mod random;
 
-pub(super) use binary::{lower_fdiv, lower_fmod, lower_intdiv, lower_pow};
-pub(super) use libm::{
+pub(crate) use binary::{lower_fdiv, lower_fmod, lower_intdiv, lower_pow};
+pub(crate) use libm::{
     lower_atan2, lower_deg2rad, lower_hypot, lower_log, lower_rad2deg, lower_unary_libm,
 };
-pub(super) use random::{lower_rand, lower_random_int};
+pub(crate) use random::{lower_rand, lower_random_int};
 
 const CLAMP_MIN_NAN_MESSAGE: &str = "clamp(): Argument #2 ($min) must not be NAN";
 const CLAMP_MAX_NAN_MESSAGE: &str = "clamp(): Argument #3 ($max) must not be NAN";
@@ -40,7 +40,7 @@ const CLAMP_VALUE_SLOT: usize = 32;
 const CLAMP_STACK_BYTES: usize = 48;
 
 /// Lowers `abs()` for concrete integer-like and floating operands.
-pub(super) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "abs", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.load_value_to_result(value)?.codegen_repr() {
@@ -67,17 +67,17 @@ pub(super) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
 }
 
 /// Lowers `floor()` for concrete integer-like and floating operands.
-pub(super) fn lower_floor(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_floor(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_float_rounding_builtin(ctx, inst, "floor", "frintm", 1)
 }
 
 /// Lowers `ceil()` for concrete integer-like and floating operands.
-pub(super) fn lower_ceil(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ceil(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_float_rounding_builtin(ctx, inst, "ceil", "frintp", 2)
 }
 
 /// Lowers numeric `clamp(value, min, max)` calls with PHP-compatible bound checks.
-pub(super) fn lower_clamp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_clamp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "clamp", 3)?;
     match inst.result_php_type.codegen_repr() {
         PhpType::Int => lower_int_clamp(ctx, inst)?,
@@ -94,7 +94,7 @@ pub(super) fn lower_clamp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `sqrt()` for concrete integer-like and floating operands.
-pub(super) fn lower_sqrt(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_sqrt(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "sqrt", 1)?;
     let value = expect_operand(inst, 0)?;
     load_numeric_as_float(ctx, value, "sqrt")?;
@@ -110,7 +110,7 @@ pub(super) fn lower_sqrt(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 }
 
 /// Lowers `is_nan()` by checking whether the normalized float is unordered with itself.
-pub(super) fn lower_is_nan(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_nan(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_nan", 1)?;
     let value = expect_operand(inst, 0)?;
     load_numeric_as_float(ctx, value, "is_nan")?;
@@ -129,7 +129,7 @@ pub(super) fn lower_is_nan(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `is_infinite()` by comparing the normalized float against +/- infinity.
-pub(super) fn lower_is_infinite(
+pub(crate) fn lower_is_infinite(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -166,7 +166,7 @@ pub(super) fn lower_is_infinite(
 }
 
 /// Lowers `is_finite()` by rejecting NaN and both infinities.
-pub(super) fn lower_is_finite(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_finite(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_finite", 1)?;
     let value = expect_operand(inst, 0)?;
     load_numeric_as_float(ctx, value, "is_finite")?;
@@ -183,7 +183,7 @@ pub(super) fn lower_is_finite(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `round()` for concrete integer-like and floating operands.
-pub(super) fn lower_round(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_round(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "round expected 1 or 2 args, got {}",
@@ -201,7 +201,7 @@ pub(super) fn lower_round(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers numeric `min()` and `max()` over concrete integer-like or float operands.
-pub(super) fn lower_min_max(
+pub(crate) fn lower_min_max(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     want_max: bool,
@@ -231,6 +231,22 @@ pub(super) fn lower_min_max(
                 min_max_name(want_max),
                 other
             )))
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `pi()` as the same data-section float constant used by the legacy backend.
+pub(crate) fn lower_pi(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "pi", 0)?;
+    let label = ctx.data.add_float(std::f64::consts::PI);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.adrp("x9", &label);                                     // load the page address that contains the M_PI floating constant
+            ctx.emitter.ldr_lo12("d0", "x9", &label);                          // load the M_PI floating constant into the floating result register
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("movsd xmm0, QWORD PTR [rip + {}]", label)); // load the M_PI floating constant into the floating result register
         }
     }
     store_if_result(ctx, inst)

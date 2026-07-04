@@ -2,14 +2,14 @@
 title: "stream_socket_client() — internals"
 description: "Compiler internals for stream_socket_client(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 215
+  order: 217
 ---
 
 ## `stream_socket_client()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_socket_client.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_client.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2397](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2397) (`lower_stream_socket_client`)
 - **Function symbol**: `lower_stream_socket_client()`
 
@@ -27,13 +27,12 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function stream_socket_client(string $address, int $error_code, int $error_message, string $timeout, float $flags): mixed
+function stream_socket_client(string $address): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 5 arguments.
-- **By-reference parameters**: `$error_code`, `$error_message`.
+- **Arity**: takes exactly 1 argument.
 
 ## Cross-references
 

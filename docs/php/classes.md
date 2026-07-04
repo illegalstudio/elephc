@@ -94,8 +94,7 @@ Classes implementing `ArrayAccess` can use PHP subscript syntax:
 `unset($obj[$key])` dispatches to `offsetUnset()`.
 
 `Serializable` is intentionally not provided: it is deprecated since
-PHP 8.1. Use `__serialize` / `__unserialize` magic methods instead
-(when those land).
+PHP 8.1. Use the `__serialize` / `__unserialize` magic methods instead.
 
 ### Built-in SPL containers and storage iterators
 

@@ -1,6 +1,6 @@
 ---
 title: "get_resource_type()"
-description: "Lowers `get_resource_type(resource)` to elephc's current resource type label."
+description: "Returns the type of a resource."
 sidebar:
   order: 412
 ---
@@ -11,7 +11,7 @@ sidebar:
 function get_resource_type(resource $resource): string
 ```
 
-Lowers `get_resource_type(resource)` to elephc's current resource type label.
+Returns the type of a resource.
 
 **Parameters**:
 - `$resource` (`resource`)

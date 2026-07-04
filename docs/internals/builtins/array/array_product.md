@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_product.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_product.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:56](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L56) (`lower_array_product`)
 - **Function symbol**: `lower_array_product()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_product(array $array): float
+function array_product(array $array): int
 ```
 
 ## What the type checker enforces

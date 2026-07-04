@@ -2,14 +2,14 @@
 title: "class_get_attributes() — internals"
 description: "Compiler internals for class_get_attributes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 68
+  order: 70
 ---
 
 ## `class_get_attributes()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/system/class_get_attributes.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/class_get_attributes.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/attributes.rs`:68](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/attributes.rs#L68) (`lower_class_get_attributes`)
 - **Function symbol**: `lower_class_get_attributes()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function class_get_attributes(string $class_name): mixed
+function class_get_attributes(string $class_name): array
 ```
 
 ## What the type checker enforces

@@ -3,7 +3,8 @@
 //! Provides contextual typing for callback `$matches` arrays before closure body inference.
 //!
 //! Called from:
-//! - `crate::types::checker::builtins::callables::check_builtin()`.
+//! - `crate::builtins::callables::preg_replace_callback` (the builtin registry home) and
+//!   `crate::types::checker::builtins::callables::check_preg_replace_callback_first_class_call`.
 //!
 //! Key details:
 //! - Untyped callback parameters must infer as `array<string>` so `$matches[0]`
@@ -152,7 +153,7 @@ fn contextual_closure_sig(
 /// expressions, synthesizes an `array<string>` type for the `$matches` callback
 /// parameter, and delegates to `check_known_callable_call` to verify the closure
 /// signature. Returns `PhpType::Str` on success.
-pub(super) fn check(
+pub(crate) fn check(
     checker: &mut Checker,
     args: &[Expr],
     span: crate::span::Span,
