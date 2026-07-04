@@ -354,6 +354,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_types.insert(name.to_string(), ty);
     }
 
+    /// Returns `true` if a local slot has already been declared for `name`.
+    pub(crate) fn has_local_slot(&self, name: &str) -> bool {
+        self.local_slots.contains_key(name)
+    }
+
     /// Declares a local slot if it does not already exist.
     pub(crate) fn declare_local(&mut self, name: &str, php_type: PhpType) -> LocalSlotId {
         self.declare_local_with_kind(name, php_type, LocalKind::PhpLocal)

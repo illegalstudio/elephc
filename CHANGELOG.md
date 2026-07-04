@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed undefined-variable compound assignments (issue #370): `$x += 1`, `$x -= 1`, `$x *= 5`, and `$y .= "..."` now treat the missing target as PHP `null`/`0`/`""` with a single warning instead of failing during type checking or reading uninitialized stack storage. Null-coalescing assignment (`??=`) remains warning-free and now also works correctly when used as an expression, such as `echo ($z ??= 42)`.
 - Fixed enum type resolution in class member positions: enum names can now be used as declared property types and constructor-promoted property types without failing early with "Unknown type" during the class schema pass.
 - Fixed the Linux x86_64 `strtotime()` weekday-modifier scanner: `next Mon`, `last Fri`, and similar modifier + weekday forms now pass the remaining input length capped at 16 bytes to the keyword matcher, matching the ARM64 path and avoiding a fragile fixed-width scan into the zero-padded lowercase buffer tail.
 

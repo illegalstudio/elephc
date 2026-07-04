@@ -16,7 +16,8 @@ mod stmt;
 mod types;
 
 pub use expr::{
-    CallableTarget, CastType, Expr, ExprKind, InstanceOfTarget, MagicConstant, StaticReceiver,
+    is_compound_assignment_self_read, CallableTarget, CastType, Expr, ExprKind, InstanceOfTarget,
+    MagicConstant, StaticReceiver,
 };
 pub use ffi::{CType, ExternField, ExternParam, PackedField};
 pub use operators::BinOp;

@@ -21,8 +21,8 @@ use crate::ir_lower::effects_lookup;
 use crate::ir_lower::function;
 use crate::names::{php_symbol_key, property_hook_get_method, Name};
 use crate::parser::ast::{
-    BinOp, CallableTarget, CastType, Expr, ExprKind, InstanceOfTarget, MagicConstant,
-    StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
+    is_compound_assignment_self_read, BinOp, CallableTarget, CastType, Expr, ExprKind,
+    InstanceOfTarget, MagicConstant, StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
 };
 use crate::span::Span;
 use crate::types::checker::builtins::canonical_builtin_function_name;
@@ -1421,6 +1421,14 @@ fn lower_assignment_expr(
         ExprKind::Variable(name) => Some(name.as_str()),
         _ => None,
     };
+    if let Some(name) = assigned_name {
+        if is_compound_assignment_self_read(value, name, expr.span) && !ctx.has_local_slot(name) {
+            let null_value = ctx.builder.emit_const_null();
+            let null_lowered = LoweredValue { value: null_value, ir_type: IrType::I64 };
+            ctx.store_local(name, null_lowered, PhpType::Void, Some(expr.span));
+            ctx.mark_local_initialized(name);
+        }
+    }
     let static_callable = assigned_name.and_then(|_| static_callable_binding_for_expr(ctx, value));
     let fiber_start_sig =
         assigned_name.and_then(|_| crate::ir_lower::fibers::start_sig_for_expr(ctx, value));
