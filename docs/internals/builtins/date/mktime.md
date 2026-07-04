@@ -2,14 +2,14 @@
 title: "mktime() — internals"
 description: "Compiler internals for mktime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 93
+  order: 95
 ---
 
 ## `mktime()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/system/mktime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/mktime.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:140](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L140) (`lower_mktime`)
 - **Function symbol**: `lower_mktime()`
 

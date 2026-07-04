@@ -2,14 +2,14 @@
 title: "fdiv() — internals"
 description: "Compiler internals for fdiv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 244
+  order: 246
 ---
 
 ## `fdiv()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/math/fdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/fdiv.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/binary.rs`:60](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/binary.rs#L60) (`lower_fdiv`)
 - **Function symbol**: `lower_fdiv()`
 

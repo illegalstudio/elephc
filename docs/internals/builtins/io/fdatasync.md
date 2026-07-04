@@ -2,14 +2,14 @@
 title: "fdatasync() — internals"
 description: "Compiler internals for fdatasync(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 153
+  order: 155
 ---
 
 ## `fdatasync()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/fdatasync.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fdatasync.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3304](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3304) (`lower_fdatasync`)
 - **Function symbol**: `lower_fdatasync()`
 

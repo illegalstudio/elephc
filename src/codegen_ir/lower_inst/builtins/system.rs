@@ -19,7 +19,7 @@ use super::super::super::context::FunctionContext;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
 /// Lowers `date(format, timestamp?)` through the shared formatter runtime helper.
-pub(super) fn lower_date(
+pub(crate) fn lower_date(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -30,7 +30,7 @@ pub(super) fn lower_date(
 ///
 /// Identical argument marshalling to `date()`, but dispatches to `__rt_gmdate`, which formats
 /// the instant in UTC regardless of the active default timezone.
-pub(super) fn lower_gmdate(
+pub(crate) fn lower_gmdate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -67,7 +67,7 @@ fn lower_date_like(
 ///
 /// Takes no arguments; `__rt_date_default_timezone_get` returns the stored timezone
 /// identifier (or the literal `"UTC"` when none was set) in the string-result registers.
-pub(super) fn lower_date_default_timezone_get(
+pub(crate) fn lower_date_default_timezone_get(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -81,7 +81,7 @@ pub(super) fn lower_date_default_timezone_get(
 /// Materializes the identifier string into the registers the helper reads (ptr/len in
 /// `x1`/`x2` on ARM64, `rax`/`rdx` on x86_64), then `__rt_date_default_timezone_set`
 /// applies it via libc `putenv`+`tzset` and returns PHP `true` in the integer-result register.
-pub(super) fn lower_date_default_timezone_set(
+pub(crate) fn lower_date_default_timezone_set(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -108,7 +108,7 @@ pub(super) fn lower_date_default_timezone_set(
 /// "0.NNNNNNNN sec" string on the stack and persists it; `Mixed` (non-literal flag)
 /// marshals the flag and calls `__rt_microtime_mixed`, which branches at runtime and
 /// boxes either the string or the float.
-pub(super) fn lower_microtime(
+pub(crate) fn lower_microtime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -137,7 +137,7 @@ pub(super) fn lower_microtime(
 }
 
 /// Lowers `mktime(hour, minute, second, month, day, year)` through the runtime helper.
-pub(super) fn lower_mktime(
+pub(crate) fn lower_mktime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -148,7 +148,7 @@ pub(super) fn lower_mktime(
 ///
 /// Identical six-integer argument marshalling, but dispatches to `__rt_gmmktime`, which
 /// interprets the broken-down date/time as UTC (`timegm`) instead of local time.
-pub(super) fn lower_gmmktime(
+pub(crate) fn lower_gmmktime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -160,7 +160,7 @@ pub(super) fn lower_gmmktime(
 /// Marshals the three integers into the leading ABI argument registers (unboxing any boxed
 /// `Mixed`/`Union` argument), then calls `__rt_checkdate`, which returns PHP `true`/`false` in the
 /// integer result register for a valid/invalid date.
-pub(super) fn lower_checkdate(
+pub(crate) fn lower_checkdate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -180,7 +180,7 @@ pub(super) fn lower_checkdate(
 /// `Mixed`/`Union` argument is unboxed) into the integer result register where `__rt_getdate`
 /// reads it, then boxes the returned associative-array hash pointer into a `Mixed` cell — the same
 /// representation `stat`/`getdate` use, so the checker types the result `Mixed`.
-pub(super) fn lower_getdate(
+pub(crate) fn lower_getdate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -217,7 +217,7 @@ fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
 /// two values are staged in scratch (the flag may unbox a `Mixed`, clobbering the timestamp) and
 /// reloaded into their distinct registers with no intervening call, then the returned hash pointer
 /// is boxed into a `Mixed` associative-array cell like `getdate`.
-pub(super) fn lower_localtime(
+pub(crate) fn lower_localtime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -244,7 +244,7 @@ pub(super) fn lower_localtime(
 /// an already-boxed `Mixed` result — a boxed `[sec, nsec]` array when the flag is `0`/false, or a
 /// boxed nanosecond integer when truthy — so no post-call boxing is needed. Unlike the timestamp
 /// builtins the omitted-argument default is `0` (array form), not the `-1` current-time sentinel.
-pub(super) fn lower_hrtime(
+pub(crate) fn lower_hrtime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -261,7 +261,7 @@ pub(super) fn lower_hrtime(
 /// 0 = "read current" when omitted) goes into the first integer argument register;
 /// the routine returns the resulting status as an int. PHP semantics (read vs set,
 /// return-previous) live in the bridge's `elephc_web_set_status`.
-pub(super) fn lower_http_response_code(
+pub(crate) fn lower_http_response_code(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -286,7 +286,7 @@ pub(super) fn lower_http_response_code(
 /// to scratch first (their evaluation may call helpers that clobber the string
 /// registers), then the line string is loaded and the staged ints reloaded into
 /// arg2/arg3. All PHP `header()` behavior lives in the bridge (`elephc_web_header`).
-pub(super) fn lower_header(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_header(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "header", 1, 3)?;
     let line = expect_operand(inst, 0)?;
     emit_scratch_reserve(ctx, 16);
@@ -470,7 +470,7 @@ fn emit_load_scratch_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, offset: us
 }
 
 /// Lowers `sleep(seconds)` through the target's C library symbol.
-pub(super) fn lower_sleep(
+pub(crate) fn lower_sleep(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -484,7 +484,7 @@ pub(super) fn lower_sleep(
 /// a `Mixed` integer, so `=== false`, `=== -1`, and `echo` all observe the distinct results.
 /// Supports PHP's optional `$baseTimestamp`. (The `__elephc_strtotime_raw` alias keeps the plain
 /// `-1` integer shape for the synthetic `DateTime` internals.)
-pub(super) fn lower_strtotime(
+pub(crate) fn lower_strtotime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -540,7 +540,7 @@ fn emit_box_strtotime_int_or_false(ctx: &mut FunctionContext<'_>) {
 /// Backs the synthetic `DateTime` constructor and `modify()`. Marshals the same runtime ABI
 /// as `strtotime`, but maps the `i64::MIN` parse-failure sentinel to `-1` so callers store the
 /// timestamp directly as the legacy `-1` in-object failure value.
-pub(super) fn lower_elephc_strtotime_raw(
+pub(crate) fn lower_elephc_strtotime_raw(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -612,7 +612,7 @@ fn emit_strtotime_sentinel_to_minus_one(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Lowers `time()` through the shared wall-clock runtime helper.
-pub(super) fn lower_time(
+pub(crate) fn lower_time(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -622,7 +622,7 @@ pub(super) fn lower_time(
 }
 
 /// Lowers `usleep(microseconds)` through the target's C library symbol.
-pub(super) fn lower_usleep(
+pub(crate) fn lower_usleep(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -642,7 +642,7 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 }
 
 /// Lowers `getenv(name)` through the target-aware environment lookup helper.
-pub(super) fn lower_getenv(
+pub(crate) fn lower_getenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -654,7 +654,7 @@ pub(super) fn lower_getenv(
 }
 
 /// Lowers `putenv(assignment)` by copying the environment string into persistent heap storage.
-pub(super) fn lower_putenv(
+pub(crate) fn lower_putenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -669,7 +669,7 @@ pub(super) fn lower_putenv(
 }
 
 /// Lowers `php_uname(mode?)` through the target-aware uname runtime helper.
-pub(super) fn lower_php_uname(
+pub(crate) fn lower_php_uname(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -687,7 +687,7 @@ pub(super) fn lower_php_uname(
 }
 
 /// Lowers `exec(command)` by capturing shell stdout through the shared runtime helper.
-pub(super) fn lower_exec(
+pub(crate) fn lower_exec(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -695,7 +695,7 @@ pub(super) fn lower_exec(
 }
 
 /// Lowers `shell_exec(command)` by capturing shell stdout through the shared runtime helper.
-pub(super) fn lower_shell_exec(
+pub(crate) fn lower_shell_exec(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -703,7 +703,7 @@ pub(super) fn lower_shell_exec(
 }
 
 /// Lowers `system(command)` through libc `system()` and returns the legacy empty string result.
-pub(super) fn lower_system(
+pub(crate) fn lower_system(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -711,7 +711,7 @@ pub(super) fn lower_system(
 }
 
 /// Lowers `passthru(command)` through libc `system()` for direct stdout passthrough.
-pub(super) fn lower_passthru(
+pub(crate) fn lower_passthru(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

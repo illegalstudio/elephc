@@ -1,6 +1,6 @@
 ---
 title: "arsort()"
-description: "Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper."
+description: "Sorts an array in descending order and maintains index association."
 sidebar:
   order: 47
 ---
@@ -8,14 +8,13 @@ sidebar:
 ## arsort()
 
 ```php
-function arsort(array $array, int $flags): bool
+function arsort(array $array): bool
 ```
 
-Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper.
+Sorts an array in descending order and maintains index association.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`)
 
 **Returns**: `bool`
 

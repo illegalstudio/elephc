@@ -2,14 +2,14 @@
 title: "readline() — internals"
 description: "Compiler internals for readline(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 309
+  order: 306
 ---
 
 ## `readline()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/readline.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/readline.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:310](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L310) (`lower_readline`)
 - **Function symbol**: `lower_readline()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function readline(string $prompt): mixed
+function readline(string $prompt = null): mixed
 ```
 
 ## What the type checker enforces

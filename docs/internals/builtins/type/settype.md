@@ -2,14 +2,14 @@
 title: "settype() — internals"
 description: "Compiler internals for settype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 430
+  order: 427
 ---
 
 ## `settype()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/types/settype.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/settype.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/types.rs`:25](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/types.rs#L25) (`lower_settype`)
 - **Function symbol**: `lower_settype()`
 

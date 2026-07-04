@@ -1,6 +1,6 @@
 ---
 title: "lcfirst()"
-description: "Lowers `lcfirst()` by copying the string and lowercasing the first ASCII byte."
+description: "Lowercases the first character of a string."
 sidebar:
   order: 363
 ---
@@ -11,7 +11,7 @@ sidebar:
 function lcfirst(string $string): string
 ```
 
-Lowers `lcfirst()` by copying the string and lowercasing the first ASCII byte.
+Lowercases the first character of a string.
 
 **Parameters**:
 - `$string` (`string`)

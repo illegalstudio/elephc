@@ -1,6 +1,6 @@
 ---
 title: "array_uintersect()"
-description: "Lowers `array_uintersect()`: keeps first-array elements equal (per comparator) to some second-array element."
+description: "Computes the intersection of arrays using a callback comparator."
 sidebar:
   order: 41
 ---
@@ -8,17 +8,17 @@ sidebar:
 ## array_uintersect()
 
 ```php
-function array_uintersect(array $array1, array $array2, callable $callback): mixed
+function array_uintersect(array $array1, array $array2, callable $callback): array
 ```
 
-Lowers `array_uintersect()`: keeps first-array elements equal (per comparator) to some second-array element.
+Computes the intersection of arrays using a callback comparator.
 
 **Parameters**:
 - `$array1` (`array`)
 - `$array2` (`array`)
 - `$callback` (`callable`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

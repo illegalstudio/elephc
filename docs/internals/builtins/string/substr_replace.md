@@ -2,14 +2,14 @@
 title: "substr_replace() — internals"
 description: "Compiler internals for substr_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 399
+  order: 396
 ---
 
 ## `substr_replace()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/substr_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/substr_replace.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:730](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L730) (`lower_substr_replace`)
 - **Function symbol**: `lower_substr_replace()`
 
@@ -27,7 +27,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function substr_replace(string $string, string $replace, int $offset, int $length): string
+function substr_replace(string $string, string $replace, int $offset, int $length = null): string
 ```
 
 ## What the type checker enforces

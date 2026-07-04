@@ -2,14 +2,14 @@
 title: "floor() — internals"
 description: "Compiler internals for floor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 245
+  order: 247
 ---
 
 ## `floor()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/math/floor.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/floor.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/math.rs`:70](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math.rs#L70) (`lower_floor`)
 - **Function symbol**: `lower_floor()`
 

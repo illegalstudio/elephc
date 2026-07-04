@@ -1,8 +1,8 @@
 ---
 title: "pi()"
-description: "Lowers `pi()` as the same data-section float constant used by the legacy backend."
+description: "Gets value of pi."
 sidebar:
-  order: 258
+  order: 260
 ---
 
 ## pi()
@@ -11,7 +11,7 @@ sidebar:
 function pi(): float
 ```
 
-Lowers `pi()` as the same data-section float constant used by the legacy backend.
+Gets value of pi.
 
 **Parameters**: none.
 

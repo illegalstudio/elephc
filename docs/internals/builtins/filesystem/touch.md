@@ -2,14 +2,14 @@
 title: "touch() — internals"
 description: "Compiler internals for touch(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 148
+  order: 150
 ---
 
 ## `touch()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/touch.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/touch.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4523](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4523) (`lower_touch`)
 - **Function symbol**: `lower_touch()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function touch(string $filename, int $mtime, int $atime): bool
+function touch(string $filename, int $mtime = null, int $atime = null): bool
 ```
 
 ## What the type checker enforces

@@ -2,14 +2,14 @@
 title: "ptr_write_string() — internals"
 description: "Compiler internals for ptr_write_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 302
+  order: 299
 ---
 
 ## `ptr_write_string()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/pointers/ptr_write_string.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_write_string.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/pointers.rs`:171](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/pointers.rs#L171) (`lower_ptr_write_string`)
 - **Function symbol**: `lower_ptr_write_string()`
 

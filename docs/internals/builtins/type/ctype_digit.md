@@ -2,14 +2,14 @@
 title: "ctype_digit() — internals"
 description: "Compiler internals for ctype_digit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 411
+  order: 408
 ---
 
 ## `ctype_digit()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/ctype_digit.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ctype_digit.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/ctype.rs`:25](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/ctype.rs#L25) (`lower_ctype_digit`)
 - **Function symbol**: `lower_ctype_digit()`
 

@@ -2,14 +2,14 @@
 title: "gzuncompress() — internals"
 description: "Compiler internals for gzuncompress(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 349
+  order: 346
 ---
 
 ## `gzuncompress()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/gzuncompress.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/gzuncompress.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:457](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L457) (`lower_gzuncompress`)
 - **Function symbol**: `lower_gzuncompress()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function gzuncompress(string $data, int $max_length): string
+function gzuncompress(string $data, int $max_length = 0): mixed
 ```
 
 ## What the type checker enforces

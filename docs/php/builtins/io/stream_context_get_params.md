@@ -1,8 +1,8 @@
 ---
 title: "stream_context_get_params()"
-description: "Lowers `stream_context_get_params(context)` to an empty associative hash."
+description: "Retrieves parameters from the specified stream context."
 sidebar:
-  order: 192
+  order: 194
 ---
 
 ## stream_context_get_params()
@@ -11,7 +11,7 @@ sidebar:
 function stream_context_get_params(resource $context): array
 ```
 
-Lowers `stream_context_get_params(context)` to an empty associative hash.
+Retrieves parameters from the specified stream context.
 
 **Parameters**:
 - `$context` (`resource`)

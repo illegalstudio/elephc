@@ -2,14 +2,14 @@
 title: "hex2bin() — internals"
 description: "Compiler internals for hex2bin(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 358
+  order: 355
 ---
 
 ## `hex2bin()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/hex2bin.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hex2bin.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
 - **Function symbol**: `lower_unary_string_runtime()`
 

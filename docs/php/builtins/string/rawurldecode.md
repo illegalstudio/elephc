@@ -1,6 +1,6 @@
 ---
 title: "rawurldecode()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Decodes an RFC 3986 percent-encoded string without treating '+' as a space."
 sidebar:
   order: 371
 ---
@@ -11,7 +11,7 @@ sidebar:
 function rawurldecode(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Decodes an RFC 3986 percent-encoded string without treating '+' as a space.
 
 **Parameters**:
 - `$string` (`string`)

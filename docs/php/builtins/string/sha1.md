@@ -1,6 +1,6 @@
 ---
 title: "sha1()"
-description: "Lowers `sha1(data, binary?)` through the shared crypto-backed runtime helper."
+description: "Calculates the SHA-1 hash of a string."
 sidebar:
   order: 374
 ---
@@ -8,14 +8,14 @@ sidebar:
 ## sha1()
 
 ```php
-function sha1(string $string, bool $binary): string
+function sha1(string $string, bool $binary = false): string
 ```
 
-Lowers `sha1(data, binary?)` through the shared crypto-backed runtime helper.
+Calculates the SHA-1 hash of a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$binary` (`bool`), optional
+- `$binary` (`bool`), default `false`, optional
 
 **Returns**: `string`
 

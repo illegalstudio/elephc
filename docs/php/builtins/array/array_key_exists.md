@@ -1,6 +1,6 @@
 ---
 title: "array_key_exists()"
-description: "Lowers `array_key_exists()` for indexed arrays and associative arrays."
+description: "Checks if the given key or index exists in the array."
 sidebar:
   order: 18
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_key_exists(string $key, array $array): bool
 ```
 
-Lowers `array_key_exists()` for indexed arrays and associative arrays.
+Checks if the given key or index exists in the array.
 
 **Parameters**:
 - `$key` (`string`)

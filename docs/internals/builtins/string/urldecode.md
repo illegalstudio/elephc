@@ -2,14 +2,14 @@
 title: "urldecode() — internals"
 description: "Compiler internals for urldecode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 403
+  order: 400
 ---
 
 ## `urldecode()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/urldecode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/urldecode.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
 - **Function symbol**: `lower_unary_string_runtime()`
 

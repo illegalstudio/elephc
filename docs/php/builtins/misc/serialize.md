@@ -1,6 +1,6 @@
 ---
 title: "serialize()"
-description: "Lowers `serialize($value)` into the shared serialize runtime helper."
+description: "Generates a storable representation of a value."
 sidebar:
   order: 281
 ---
@@ -11,7 +11,7 @@ sidebar:
 function serialize(mixed $value): string
 ```
 
-Lowers `serialize($value)` into the shared serialize runtime helper.
+Generates a storable representation of a value.
 
 **Parameters**:
 - `$value` (`mixed`)

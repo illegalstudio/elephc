@@ -2,14 +2,14 @@
 title: "fgetcsv() — internals"
 description: "Compiler internals for fgetcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 157
+  order: 159
 ---
 
 ## `fgetcsv()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/fgetcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fgetcsv.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2993](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2993) (`lower_fgetcsv`)
 - **Function symbol**: `lower_fgetcsv()`
 
@@ -27,12 +27,12 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function fgetcsv(resource $stream, int $length, string $separator, string $enclosure, string $escape): array
+function fgetcsv(resource $stream, int $length = null, string $separator = ','): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 3–5 arguments (2 optional).
+- **Arity**: takes 1–3 arguments (2 optional).
 
 ## Cross-references
 

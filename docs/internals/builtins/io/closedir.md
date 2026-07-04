@@ -2,14 +2,14 @@
 title: "closedir() — internals"
 description: "Compiler internals for closedir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 151
+  order: 153
 ---
 
 ## `closedir()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/closedir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/closedir.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3572](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3572) (`lower_closedir`)
 - **Function symbol**: `lower_closedir()`
 

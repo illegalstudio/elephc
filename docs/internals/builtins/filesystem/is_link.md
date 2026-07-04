@@ -2,14 +2,14 @@
 title: "is_link() — internals"
 description: "Compiler internals for is_link(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 123
+  order: 125
 ---
 
 ## `is_link()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/is_link.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_link.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5640](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5640) (`lower_is_link`)
 - **Function symbol**: `lower_is_link()`
 

@@ -2,14 +2,14 @@
 title: "abs() — internals"
 description: "Compiler internals for abs(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 233
+  order: 235
 ---
 
 ## `abs()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/math/abs.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/abs.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/math.rs`:43](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math.rs#L43) (`lower_abs`)
 - **Function symbol**: `lower_abs()`
 

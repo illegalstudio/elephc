@@ -2,14 +2,14 @@
 title: "iterator_count() — internals"
 description: "Compiler internals for iterator_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 320
+  order: 317
 ---
 
 ## `iterator_count()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/spl/iterator_count.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/iterator_count.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:236](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L236) (`lower_iterator_count`)
 - **Function symbol**: `lower_iterator_count()`
 

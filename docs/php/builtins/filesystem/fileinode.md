@@ -1,8 +1,8 @@
 ---
 title: "fileinode()"
-description: "Lowers `fileinode(path)` and boxes the runtime integer-or-false result."
+description: "Gets file inode."
 sidebar:
-  order: 110
+  order: 112
 ---
 
 ## fileinode()
@@ -11,7 +11,7 @@ sidebar:
 function fileinode(string $filename): mixed
 ```
 
-Lowers `fileinode(path)` and boxes the runtime integer-or-false result.
+Gets file inode.
 
 **Parameters**:
 - `$filename` (`string`)

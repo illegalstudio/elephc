@@ -2,14 +2,14 @@
 title: "explode() — internals"
 description: "Compiler internals for explode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 344
+  order: 341
 ---
 
 ## `explode()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/explode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/explode.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:151](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L151) (`lower_explode`)
 - **Function symbol**: `lower_explode()`
 
@@ -27,7 +27,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function explode(string $separator, string $string, int $limit): array
+function explode(string $separator, string $string, int $limit = PHP_INT_MAX): array
 ```
 
 ## What the type checker enforces

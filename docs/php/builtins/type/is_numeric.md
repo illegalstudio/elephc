@@ -1,6 +1,6 @@
 ---
 title: "is_numeric()"
-description: "Lowers `is_numeric()` for concrete scalar values."
+description: "Checks whether a variable is a number or a numeric string."
 sidebar:
   order: 422
 ---
@@ -11,7 +11,7 @@ sidebar:
 function is_numeric(mixed $value): bool
 ```
 
-Lowers `is_numeric()` for concrete scalar values.
+Checks whether a variable is a number or a numeric string.
 
 **Parameters**:
 - `$value` (`mixed`)

@@ -120,13 +120,13 @@ pub(crate) fn runtime_callable_cases(
                 &case_sig,
                 &[],
                 &[],
-                CallableDescriptorInvocation::named(CallableDescriptorShape::Builtin, *name),
+                CallableDescriptorInvocation::named(CallableDescriptorShape::Builtin, name),
                 invoker_label.as_deref(),
             );
             cases.push(RuntimeCallableCase {
                 label,
                 descriptor_label,
-                php_name: Some((*name).to_string()),
+                php_name: Some(name.to_string()),
                 sig: case_sig,
                 captures: Vec::new(),
                 has_invoker: invoker_label.is_some(),
@@ -550,24 +550,261 @@ pub(crate) fn runtime_instance_method_case(
 
 /// Provides the Runtime builtin wrapper excluded helper used by the callable dispatch module.
 ///
-/// `__elephc_mktime_raw` / `__elephc_gmmktime_raw` are internal escape hatches that the
-/// `mktime`/`gmmktime` procedural-alias rewriter and synthetic DateTime bodies call directly.
-/// They are lowered inline by the active EIR backend (`__rt_mktime` / `__rt_gmmktime`) and have no
-/// standalone `fn_` symbol, but the deferred-closure wrapper body emitted here is lowered by the
-/// frozen legacy direct backend, which does not know these names and would emit an unresolved
-/// `bl _fn_<name>` reference. They are never invoked dynamically, so excluding them from the
-/// dynamic-call descriptor table is both safe and semantically correct.
+/// `__elephc_mktime_raw` / `__elephc_gmmktime_raw` / `__elephc_strtotime_raw` are internal
+/// escape hatches that the procedural-alias rewriter and synthetic DateTime bodies call directly.
+/// They are lowered inline by the active EIR backend and have no standalone `fn_` symbol; the
+/// deferred-closure wrapper body emitted here is lowered by the frozen legacy direct backend,
+/// which does not know these names and would emit an unresolved `bl _fn_<name>` reference.
+/// They are never invoked dynamically, so excluding them from the dynamic-call descriptor table
+/// is both safe and semantically correct.
 fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
     matches!(
         name,
-        "iterator_apply" | "preg_replace_callback"
-            | "__elephc_mktime_raw" | "__elephc_gmmktime_raw"
+        // call_user_func / call_user_func_array had no pre-migration first-class-callable wrapper:
+        // first_class_callable_builtin_sig / general_first_class_callable_builtin_sig returned
+        // None for them (they were not in either table), so no wrapper was emitted. Registering
+        // them in the builtin registry makes first_class_callable_builtin_sig return Some, which
+        // would newly emit a deferred-closure wrapper; excluding them here restores the exact
+        // pre-migration (no-wrapper) behaviour — this is provably behaviour-neutral.
+        // A generic string-callable wrapper cannot dispatch a variadic/array-spread callback
+        // builtin correctly. Direct calls and EIR first-class-callable use still work through
+        // the EIR path.
+        "call_user_func" | "call_user_func_array"
+            | "iterator_apply" | "preg_replace_callback"
+            | "__elephc_mktime_raw" | "__elephc_gmmktime_raw" | "__elephc_strtotime_raw"
             // serialize/unserialize are EIR-only builtins with no legacy-backend
             // emitter, so the deferred runtime callable wrapper cannot dispatch them
             // (it would emit a `_fn_serialize` user-function reference). Exclude them
             // from runtime string-callable dispatch; direct and first-class-callable
             // use still work through the EIR path.
             | "serialize" | "unserialize"
+            // array_merge / array_merge_recursive have a registry sig of
+            // variadic(&[], "arrays") — 0 regular params, 1 variadic.  The wrapper
+            // body emitted by function_wrapper_body() is therefore
+            // `array_merge(...$arrays)`, a single spread argument.  The frozen legacy
+            // emitter (src/codegen/builtins/arrays/array_merge.rs) expects exactly two
+            // positional array args and unconditionally indexes args[1], causing an
+            // index-out-of-bounds panic.  Before these builtins were migrated into the
+            // registry first_class_callable_builtin_sig returned None for them, so no
+            // wrapper was emitted.  Excluding them here restores that pre-migration
+            // behaviour: direct calls and EIR first-class-callable use are unaffected.
+            | "array_merge" | "array_merge_recursive"
+            // gzcompress / gzdeflate / gzinflate / gzuncompress are zlib-backed
+            // builtins whose legacy emitters (src/codegen/builtins/strings/gz*.rs)
+            // emit inline calls to compress2 / compressBound / uncompress /
+            // inflateInit2_ etc.  The type-checker adds -lz only when one of these
+            // builtins appears in user code; a wrapper-only reference is not detected,
+            // so any program that triggers string-callable dispatch without calling
+            // gz* directly fails to link.  Before these builtins were migrated into
+            // the registry first_class_callable_builtin_sig returned None for them,
+            // so no wrapper was emitted.  Excluding them restores that behaviour.
+            | "gzcompress" | "gzdeflate" | "gzinflate" | "gzuncompress"
+            // The following builtins have no frozen legacy-backend emitter in
+            // src/codegen/builtins/arrays/; they are EIR-only.  When the wrapper
+            // body emitted by function_wrapper_body() calls any of them, the legacy
+            // backend falls through to a user-function-call path and emits an
+            // unresolved _fn_<name> reference that the linker cannot satisfy.
+            // Before these builtins were migrated into the registry
+            // first_class_callable_builtin_sig returned None for them, so no wrapper
+            // was emitted.  Excluding them restores that pre-migration behaviour.
+            | "array_diff_assoc" | "array_intersect_assoc"
+            | "array_is_list"
+            | "array_key_first" | "array_key_last"
+            | "array_multisort"
+            | "array_replace" | "array_replace_recursive"
+            // array_find / array_any / array_all / array_udiff / array_uintersect are
+            // EIR-only builtins with no frozen legacy-backend emitter in
+            // src/codegen/builtins/arrays/. When the wrapper body emitted by
+            // function_wrapper_body() calls any of them, the legacy backend falls
+            // through to a user-function-call path and emits an unresolved _fn_<name>
+            // reference that the linker cannot satisfy.  Before these builtins were
+            // migrated into the registry first_class_callable_builtin_sig returned
+            // None for them, so no wrapper was emitted.  Excluding them restores that
+            // pre-migration behaviour: direct calls and EIR first-class-callable use
+            // still work through the EIR path.
+            | "array_find" | "array_any" | "array_all"
+            | "array_udiff" | "array_uintersect"
+            // array_walk_recursive is an EIR-only builtin with no frozen legacy-backend
+            // emitter in src/codegen/builtins/arrays/. When the wrapper body emitted by
+            // function_wrapper_body() calls it, the legacy backend falls through to a
+            // user-function-call path and emits an unresolved _fn_array_walk_recursive
+            // reference that the linker cannot satisfy. Before this builtin was migrated
+            // into the registry first_class_callable_builtin_sig returned None for it, so
+            // no wrapper was emitted. Excluding it restores that pre-migration behaviour:
+            // direct calls and EIR first-class-callable use still work through the EIR path.
+            | "array_walk_recursive"
+            // These 11 pointer builtins had no pre-migration first-class-callable wrapper:
+            // first_class_callable_builtin_sig returned None for them (they are not in
+            // general_first_class_callable_builtin_sig), so no wrapper was emitted.
+            // Excluding them restores that pre-migration behaviour — this is provably
+            // behaviour-neutral. Pointer builtins are FFI compiler extensions where
+            // string-name callable dispatch is not a supported surface; ptr() requires a
+            // Variable argument and ptr_sizeof() requires a StringLiteral argument, making
+            // generic wrapper dispatch semantically incorrect. Direct calls and EIR
+            // first-class-callable use still work through the EIR path.
+            | "ptr" | "ptr_null" | "ptr_is_null" | "ptr_sizeof" | "ptr_offset"
+            | "ptr_get" | "ptr_set"
+            | "ptr_read8" | "ptr_read32" | "ptr_write8" | "ptr_write32"
+            // These 9 system builtins had no pre-migration first-class-callable wrapper:
+            // first_class_callable_builtin_sig / general_first_class_callable_builtin_sig
+            // returned None for them, so no wrapper was emitted. Excluding them restores
+            // that pre-migration behaviour — this is provably behaviour-neutral. `define`
+            // additionally requires a StringLiteral first argument, making a generic
+            // runtime wrapper semantically incorrect (same rationale as ptr_sizeof).
+            // Direct calls and EIR first-class-callable use still work through the EIR path.
+            | "getenv" | "putenv" | "http_response_code" | "header"
+            | "exec" | "shell_exec" | "system" | "passthru" | "define"
+            // These 3 class-attribute reflection builtins had no pre-migration
+            // first-class-callable wrapper: general_first_class_callable_builtin_sig
+            // returned None for them, so no wrapper was emitted. Excluding them restores
+            // that pre-migration behaviour. They also require StringLiteral arguments
+            // (compile-time string-literal class/attribute names), making generic
+            // string-name callable dispatch semantically incorrect.
+            // Direct calls and EIR first-class-callable use still work through the EIR path.
+            | "class_attribute_names" | "class_attribute_args" | "class_get_attributes"
+            // preg_match / preg_match_all / preg_replace / preg_split had no pre-migration
+            // first-class-callable wrapper: general_first_class_callable_builtin_sig returned
+            // None for them (they are not in that table), so no wrapper was emitted.
+            // Excluding them restores that pre-migration behaviour.  preg_match additionally
+            // has a by-ref `$matches` parameter that is semantically incorrect to drive through
+            // a generic string-callable wrapper body.  Direct calls and EIR first-class-callable
+            // use still work through the EIR path.
+            | "preg_match" | "preg_match_all" | "preg_replace" | "preg_split"
+            // These 4 io builtins had no pre-migration first-class-callable wrapper:
+            // general_first_class_callable_builtin_sig returned None for them (they are not
+            // in that table), so no wrapper was emitted. Excluding them restores that
+            // pre-migration behaviour — this is provably behaviour-neutral. `var_dump` and
+            // `print_r` additionally return void, making a deferred-closure wrapper
+            // semantically unhelpful. `realpath_cache_get` and `realpath_cache_size` take
+            // zero arguments, making a parameterised wrapper redundant.
+            // Direct calls and EIR first-class-callable use still work through the EIR path.
+            | "var_dump" | "print_r" | "realpath_cache_get" | "realpath_cache_size"
+            // These 4 io batch B builtins had no pre-migration first-class-callable wrapper:
+            // general_first_class_callable_builtin_sig returned None for them (they are not
+            // in that table), so no wrapper was emitted. Excluding them restores that
+            // pre-migration behaviour — this is provably behaviour-neutral. `disk_free_space`
+            // and `disk_total_space` use an unrelated float-return calling convention.
+            // `clearstatcache` returns void. `fstat` takes a stream resource argument that
+            // is unsuited to generic string-callable dispatch. Direct calls and EIR
+            // first-class-callable use still work through the EIR path.
+            | "disk_free_space" | "disk_total_space" | "clearstatcache" | "fstat"
+            // These 13 io batch C1 filesystem builtins had no pre-migration
+            // first-class-callable wrapper: general_first_class_callable_builtin_sig
+            // returned None for them (they are not in that table), so no wrapper was
+            // emitted. Registering them in the builtin registry makes
+            // first_class_callable_builtin_sig return Some, which would newly emit a
+            // deferred-closure wrapper; excluding them here restores the exact
+            // pre-migration (no-wrapper) behaviour and is provably behaviour-neutral.
+            // Direct calls and EIR first-class-callable use still work through the EIR
+            // path. (The remaining C1 builtins — file_get_contents, hash_file, file,
+            // getcwd, tempnam, sys_get_temp_dir, chmod, chown, chgrp, touch, symlink,
+            // link, readlink — were already FCC-wrapped pre-migration and stay enabled.)
+            | "file_put_contents" | "copy" | "rename" | "unlink" | "mkdir" | "rmdir"
+            | "chdir" | "scandir" | "glob" | "lchown" | "lchgrp" | "umask" | "readfile"
+            // These 14 io batch D1 file-handle builtins had no pre-migration
+            // first-class-callable wrapper: general_first_class_callable_builtin_sig
+            // returned None for them (they are not in that table), so no wrapper was
+            // emitted. Registering them in the builtin registry makes
+            // first_class_callable_builtin_sig return Some, which would newly emit a
+            // deferred-closure wrapper; excluding them here restores the exact
+            // pre-migration (no-wrapper) behaviour and is provably behaviour-neutral.
+            // They take stream resource arguments or variadic args unsuited to a
+            // generic string-callable wrapper. Direct calls and EIR first-class-callable
+            // use still work through the EIR path. (ftruncate is kept enabled — it was
+            // already in general_first_class_callable_builtin_sig pre-migration.)
+            | "fopen" | "fclose" | "fread" | "fwrite" | "fprintf" | "vfprintf"
+            | "fscanf" | "fgets" | "feof" | "fseek" | "ftell" | "rewind"
+            | "fgetc" | "fpassthru"
+            // These 10 io batch D2 builtins had no pre-migration first-class-callable
+            // wrapper: general_first_class_callable_builtin_sig returned None for them
+            // (they are not in that table), so no wrapper was emitted. Registering them
+            // in the builtin registry makes first_class_callable_builtin_sig return Some,
+            // which would newly emit a deferred-closure wrapper; excluding them here
+            // restores the exact pre-migration (no-wrapper) behaviour and is provably
+            // behaviour-neutral. These builtins take stream/dir-handle/by-ref/spread
+            // arguments that are unsuited to a generic string-callable wrapper. Direct
+            // calls and EIR first-class-callable use still work through the EIR path.
+            // (fsync, fflush, fdatasync, readline are kept enabled — they were already
+            // in general_first_class_callable_builtin_sig pre-migration.)
+            | "fgetcsv" | "fputcsv" | "flock" | "tmpfile"
+            | "popen" | "pclose"
+            | "opendir" | "readdir" | "closedir" | "rewinddir"
+            // These 18 io batch E stream context/filter/wrapper/bucket builtins had no
+            // pre-migration first-class-callable wrapper: general_first_class_callable_builtin_sig
+            // returned None for them (they are not in that table), so no wrapper was emitted.
+            // Registering them in the builtin registry makes first_class_callable_builtin_sig
+            // return Some, which would newly emit a deferred-closure wrapper; excluding them here
+            // restores the exact pre-migration (no-wrapper) behaviour and is provably
+            // behaviour-neutral. These builtins take stream resources, stream contexts, or
+            // brigade objects unsuited to a generic string-callable wrapper. Direct calls and
+            // EIR first-class-callable use still work through the EIR path.
+            | "stream_context_create" | "stream_context_get_default" | "stream_context_set_default"
+            | "stream_context_set_option" | "stream_context_set_params"
+            | "stream_context_get_options" | "stream_context_get_params"
+            | "stream_filter_append" | "stream_filter_prepend" | "stream_filter_remove"
+            | "stream_filter_register"
+            | "stream_bucket_make_writeable" | "stream_bucket_new"
+            | "stream_bucket_append" | "stream_bucket_prepend"
+            | "stream_wrapper_register" | "stream_wrapper_unregister" | "stream_wrapper_restore"
+            // These 17 io batch F stream get/set/misc builtins had no pre-migration
+            // first-class-callable wrapper: general_first_class_callable_builtin_sig
+            // returned None for them (they are not in that table), so no wrapper was emitted.
+            // Registering them in the builtin registry makes first_class_callable_builtin_sig
+            // return Some, which would newly emit a deferred-closure wrapper; excluding them here
+            // restores the exact pre-migration (no-wrapper) behaviour and is provably
+            // behaviour-neutral. These builtins take stream resources or reference parameters
+            // unsuited to a generic string-callable wrapper. Direct calls and EIR
+            // first-class-callable use still work through the EIR path.
+            | "stream_is_local" | "stream_resolve_include_path" | "stream_select"
+            | "stream_set_chunk_size" | "stream_set_read_buffer" | "stream_set_write_buffer"
+            | "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers"
+            | "stream_isatty" | "stream_supports_lock" | "stream_set_blocking"
+            | "stream_set_timeout" | "stream_get_line" | "stream_get_meta_data"
+            | "stream_get_contents" | "stream_copy_to_stream"
+            // These 18 io batch G stream socket/network builtins had no pre-migration
+            // first-class-callable wrapper: general_first_class_callable_builtin_sig
+            // returned None for them (they are not in that table), so no wrapper was emitted.
+            // Registering them in the builtin registry makes first_class_callable_builtin_sig
+            // return Some, which would newly emit a deferred-closure wrapper; excluding them here
+            // restores the exact pre-migration (no-wrapper) behaviour and is provably
+            // behaviour-neutral. These builtins take stream resources, socket resources, or
+            // by-ref parameters unsuited to a generic string-callable wrapper. Direct calls and
+            // EIR first-class-callable use still work through the EIR path.
+            | "stream_socket_server" | "stream_socket_client" | "stream_socket_accept"
+            | "stream_socket_enable_crypto" | "stream_socket_sendto" | "stream_socket_recvfrom"
+            | "stream_socket_get_name" | "stream_socket_pair" | "stream_socket_shutdown"
+            | "fsockopen" | "pfsockopen"
+            | "gethostname" | "gethostbyname" | "gethostbyaddr"
+            | "getprotobyname" | "getprotobynumber"
+            | "getservbyname" | "getservbyport"
+            // These 8 types-batch builtins had no pre-migration first-class-callable wrapper:
+            // general_first_class_callable_builtin_sig returned None for them (they were not in
+            // that table), so no wrapper was emitted. Registering them in the builtin registry
+            // makes first_class_callable_builtin_sig return Some, which would newly emit a
+            // deferred-closure wrapper; excluding them here restores the exact pre-migration
+            // (no-wrapper) behaviour and is provably behaviour-neutral. `settype` additionally
+            // takes a by-ref first argument that is semantically incorrect to drive through a
+            // generic string-callable wrapper body. Direct calls and EIR first-class-callable
+            // use still work through the EIR path.
+            | "is_array" | "is_object" | "is_scalar" | "is_callable" | "is_resource"
+            | "get_resource_type" | "get_resource_id"
+            | "settype"
+            // These 16 class-reflection builtins had no pre-migration first-class-callable wrapper:
+            // first_class_callable_builtin_sig / general_first_class_callable_builtin_sig returned
+            // None for them (they are not in either table), so no wrapper was emitted. Registering
+            // them in the builtin registry makes first_class_callable_builtin_sig return Some, which
+            // would newly emit a deferred-closure wrapper; excluding them here restores the exact
+            // pre-migration (no-wrapper) behaviour and is provably behaviour-neutral. Several of
+            // them also require literal string arguments (class/interface/function names that must be
+            // compile-time string literals), making generic string-callable dispatch semantically
+            // incorrect. Direct calls and EIR first-class-callable use still work through the EIR
+            // path.
+            | "class_alias" | "class_exists" | "interface_exists" | "trait_exists" | "enum_exists"
+            | "class_implements" | "class_parents" | "class_uses"
+            | "get_class" | "get_parent_class"
+            | "is_a" | "is_subclass_of"
+            | "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits"
+            | "function_exists"
     )
 }
 

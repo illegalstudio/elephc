@@ -1,6 +1,6 @@
 ---
 title: "ctype_digit()"
-description: "Lowers `ctype_digit(string)` by checking every byte against the ASCII digit range."
+description: "Checks if all characters in the string are digits."
 sidebar:
   order: 408
 ---
@@ -11,7 +11,7 @@ sidebar:
 function ctype_digit(string $text): bool
 ```
 
-Lowers `ctype_digit(string)` by checking every byte against the ASCII digit range.
+Checks if all characters in the string are digits.
 
 **Parameters**:
 - `$text` (`string`)

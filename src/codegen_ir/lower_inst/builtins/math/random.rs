@@ -18,7 +18,7 @@ use super::super::super::super::context::FunctionContext;
 use super::super::{expect_operand, store_if_result};
 
 /// Lowers `rand()` and `mt_rand()` with either zero args or an inclusive range.
-pub(in crate::codegen_ir::lower_inst::builtins) fn lower_rand(
+pub(crate) fn lower_rand(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -37,7 +37,7 @@ pub(in crate::codegen_ir::lower_inst::builtins) fn lower_rand(
 }
 
 /// Lowers `random_int()` over an inclusive integer range.
-pub(in crate::codegen_ir::lower_inst::builtins) fn lower_random_int(
+pub(crate) fn lower_random_int(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

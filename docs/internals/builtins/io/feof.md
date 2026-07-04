@@ -2,14 +2,14 @@
 title: "feof() — internals"
 description: "Compiler internals for feof(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 154
+  order: 156
 ---
 
 ## `feof()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/feof.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/feof.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3121](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3121) (`lower_feof`)
 - **Function symbol**: `lower_feof()`
 

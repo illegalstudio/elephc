@@ -2,14 +2,14 @@
 title: "fgets() — internals"
 description: "Compiler internals for fgets(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 158
+  order: 160
 ---
 
 ## `fgets()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/fgets.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fgets.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2967](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2967) (`lower_fgets`)
 - **Function symbol**: `lower_fgets()`
 
@@ -27,12 +27,12 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function fgets(resource $stream, int $length): mixed
+function fgets(resource $stream): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes exactly 1 argument.
 
 ## Cross-references
 

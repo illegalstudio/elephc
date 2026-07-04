@@ -2,14 +2,14 @@
 title: "str_pad() — internals"
 description: "Compiler internals for str_pad(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 383
+  order: 380
 ---
 
 ## `str_pad()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/str_pad.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_pad.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:818](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L818) (`lower_str_pad`)
 - **Function symbol**: `lower_str_pad()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function str_pad(string $string, int $length, string $pad_string, int $pad_type): string
+function str_pad(string $string, int $length, string $pad_string = ' ', int $pad_type = 1): string
 ```
 
 ## What the type checker enforces

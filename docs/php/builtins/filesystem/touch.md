@@ -1,22 +1,22 @@
 ---
 title: "touch()"
-description: "Lowers `touch(path, mtime?, atime?)` through the target-aware runtime helper."
+description: "Sets access and modification time of a file."
 sidebar:
-  order: 148
+  order: 150
 ---
 
 ## touch()
 
 ```php
-function touch(string $filename, int $mtime, int $atime): bool
+function touch(string $filename, int $mtime = null, int $atime = null): bool
 ```
 
-Lowers `touch(path, mtime?, atime?)` through the target-aware runtime helper.
+Sets access and modification time of a file.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$mtime` (`int`), optional
-- `$atime` (`int`), optional
+- `$mtime` (`int`), default `null`, optional
+- `$atime` (`int`), default `null`, optional
 
 **Returns**: `bool`
 

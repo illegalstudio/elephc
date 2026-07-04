@@ -29,7 +29,7 @@ enum ClassLikeTarget {
 }
 
 /// Lowers `class_implements()`, `class_parents()`, and `class_uses()` from static metadata.
-pub(super) fn lower_class_relation(
+pub(crate) fn lower_class_relation(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,

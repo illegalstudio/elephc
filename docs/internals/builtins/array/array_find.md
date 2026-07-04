@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_find.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_find.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1526](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1526) (`lower_array_find`)
 - **Function symbol**: `lower_array_find()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_find(array $array, mixed $callback): mixed
+function array_find(mixed $array, mixed $callback): mixed
 ```
 
 ## What the type checker enforces

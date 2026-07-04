@@ -9,8 +9,11 @@
 //! - Assignment checking must distinguish value writes, by-reference mutation, nullable access, and declared property contracts.
 
 use crate::errors::CompileError;
+use crate::errors::CompileWarning;
 use crate::names::{php_symbol_key, Name};
-use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, TypeExpr};
+use crate::parser::ast::{
+    is_compound_assignment_self_read, CallableTarget, Expr, ExprKind, StaticReceiver, TypeExpr,
+};
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
 
@@ -105,6 +108,26 @@ pub(super) fn check_assign(
     // disagree with the lowering (it routes on the index's runtime IR type) and
     // produce a spurious `AssocArray -> Array(Mixed)` backend error.
     checker.foreach_key_locals.remove(name);
+
+    // PHP allows compound assignment on an undefined variable (`$x += 1`),
+    // treating the undefined variable as null/0 with a warning. The parser
+    // lowers `$x += 1` to `Assign { name: "x", value: BinaryOp { left:
+    // Variable("x"), op: Add, right: 1 } }`. When `$x` is not in `env`, the
+    // inference of the BinaryOp would fail with "Undefined variable: $x".
+    // Inject the variable as Void (null) so inference treats it as 0/null,
+    // matching PHP semantics. `??=` is exempt: null-coalesce is designed to
+    // handle undefined variables without warning.
+    if !env.contains_key(name) && is_compound_assignment_self_read(value, name, span) {
+        let is_null_coalesce = matches!(&value.kind, ExprKind::NullCoalesce { .. });
+        env.insert(name.to_string(), PhpType::Void);
+        if !is_null_coalesce {
+            checker.warnings.push(CompileWarning {
+                span,
+                message: format!("Undefined variable: ${} (treated as null)", name),
+            });
+        }
+    }
+
     let null_coalesce_default = null_coalesce_assignment_default(name, value);
     let saved_self_ref_ty = if env.contains_key(name) && closure_captures_name_by_ref(value, name) {
         Some(env.insert(name.to_string(), PhpType::Callable))

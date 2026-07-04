@@ -662,9 +662,13 @@ echo is_callable($stat) ? "yes" : "no";
     );
 }
 
-/// Verifies first-class callable dispatch fixes preserve legacy backend behavior.
+/// Verifies first-class-callable dispatch (`fn(...)`) preserves legacy backend behavior.
+///
+/// Split out of a former mega-test: string-callable fixtures each emit the full runtime
+/// builtin-wrapper dispatch table (~3s to assemble/link), so bundling all callable forms in
+/// one `#[test]` pushed it past nextest's 60s per-test timeout on slower macOS CI runners.
 #[test]
-fn parity_function_first_class_callable_dispatch() {
+fn parity_first_class_callable_dispatch() {
     assert_backend_parity(
         "function_fcc_call_user_func",
         r#"<?php
@@ -721,33 +725,6 @@ echo (EirDirectFcc::hit(...))(3);
         &[],
     );
     assert_backend_parity(
-        "direct_string_callable_expr_call",
-        r#"<?php
-function eir_direct_string_add(int $value): int {
-    return $value + 1;
-}
-echo ("eir_direct_string_add")(4);
-"#,
-        &[],
-    );
-}
-
-/// Verifies stored callable dispatch fixes preserve legacy backend behavior.
-#[test]
-fn parity_function_stored_callable_dispatch() {
-    assert_backend_parity(
-        "assignment_expression_callable_call",
-        r#"<?php
-function eir_assign_call_add(int $value): int {
-    return $value + 1;
-}
-echo ($fn = eir_assign_call_add(...))(4);
-echo "|";
-echo ($name = "eir_assign_call_add")(5);
-"#,
-        &[],
-    );
-    assert_backend_parity(
         "stored_first_class_callable_variable_call",
         r#"<?php
 function eir_stored_fcc_add(int $value): int {
@@ -799,6 +776,35 @@ echo call_user_func($stat, 5);
 "#,
         &[],
     );
+}
+
+/// Verifies compile-time-constant string-callable dispatch preserves legacy backend behavior.
+///
+/// Split from `parity_first_class_callable_dispatch` for the per-test timeout reason noted there.
+#[test]
+fn parity_string_callable_dispatch() {
+    assert_backend_parity(
+        "direct_string_callable_expr_call",
+        r#"<?php
+function eir_direct_string_add(int $value): int {
+    return $value + 1;
+}
+echo ("eir_direct_string_add")(4);
+"#,
+        &[],
+    );
+    assert_backend_parity(
+        "assignment_expression_callable_call",
+        r#"<?php
+function eir_assign_call_add(int $value): int {
+    return $value + 1;
+}
+echo ($fn = eir_assign_call_add(...))(4);
+echo "|";
+echo ($name = "eir_assign_call_add")(5);
+"#,
+        &[],
+    );
     assert_backend_parity(
         "stored_string_callable_dispatch",
         r#"<?php
@@ -826,9 +832,14 @@ echo preg_replace_callback("/[A-Z]/", $regex, "AB");
     );
 }
 
-/// Verifies runtime-resolved callable dispatch fixes preserve legacy backend behavior.
+/// Verifies runtime (non-constant) string-callable *direct* dispatch (`$fn(...)`) matches legacy.
+///
+/// The heaviest fixtures: the callee is only known at runtime, so BOTH backends emit the full
+/// string→function dispatch table (~3s each to assemble/link). Kept to two cases (0-arg and
+/// 1-arg runs of the same program) so the test stays well under nextest's 60s per-test timeout on
+/// slower macOS CI runners.
 #[test]
-fn parity_function_runtime_callable_dispatch() {
+fn parity_runtime_string_callable_direct_dispatch() {
     assert_backend_parity(
         "runtime_string_callable_direct_call_first",
         r#"<?php
@@ -857,6 +868,14 @@ echo $fn(4);
 "#,
         &["extra"],
     );
+}
+
+/// Verifies runtime (non-constant) string-callable *expression* dispatch (`(...)(...)`) matches legacy.
+///
+/// Same heavy runtime dispatch table as `parity_runtime_string_callable_direct_dispatch`; kept
+/// separate for the per-test timeout reason noted there.
+#[test]
+fn parity_runtime_string_callable_expr_dispatch() {
     assert_backend_parity(
         "runtime_string_callable_expr_call_first",
         r#"<?php
@@ -883,6 +902,13 @@ echo ($argc === 1 ? "eir_runtime_expr_left" : "eir_runtime_expr_right")(4);
 "#,
         &["extra"],
     );
+}
+
+/// Verifies the function-pipe (`|>`) operator with a runtime callable preserves legacy behavior.
+///
+/// Split from `parity_first_class_callable_dispatch` for the per-test timeout reason noted there.
+#[test]
+fn parity_runtime_callable_pipe_dispatch() {
     assert_backend_parity(
         "runtime_function_pipe_call_first",
         r#"<?php

@@ -2,14 +2,14 @@
 title: "stream_context_set_default() — internals"
 description: "Compiler internals for stream_context_set_default(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 193
+  order: 195
 ---
 
 ## `stream_context_set_default()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_context_set_default.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_set_default.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1088](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1088) (`lower_stream_context_set_default`)
 - **Function symbol**: `lower_stream_context_set_default()`
 

@@ -1,8 +1,8 @@
 ---
 title: "stream_supports_lock()"
-description: "Lowers `stream_supports_lock(stream)` as true after resource unboxing."
+description: "Tells whether the stream supports locking."
 sidebar:
-  order: 223
+  order: 225
 ---
 
 ## stream_supports_lock()
@@ -11,7 +11,7 @@ sidebar:
 function stream_supports_lock(resource $stream): bool
 ```
 
-Lowers `stream_supports_lock(stream)` as true after resource unboxing.
+Tells whether the stream supports locking.
 
 **Parameters**:
 - `$stream` (`resource`)

@@ -1,8 +1,8 @@
 ---
 title: "stream_socket_pair()"
-description: "Lowers `stream_socket_pair(domain, type, protocol)` and boxes `array|false`."
+description: "Creates a pair of connected, indistinguishable socket streams."
 sidebar:
-  order: 218
+  order: 220
 ---
 
 ## stream_socket_pair()
@@ -11,7 +11,7 @@ sidebar:
 function stream_socket_pair(int $domain, int $type, int $protocol): mixed
 ```
 
-Lowers `stream_socket_pair(domain, type, protocol)` and boxes `array|false`.
+Creates a pair of connected, indistinguishable socket streams.
 
 **Parameters**:
 - `$domain` (`int`)

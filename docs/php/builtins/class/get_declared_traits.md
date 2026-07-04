@@ -1,8 +1,8 @@
 ---
 title: "get_declared_traits()"
-description: "get_declared_traits() — class builtin supported by Elephc."
+description: "Returns an array of all declared traits."
 sidebar:
-  order: 77
+  order: 79
 ---
 
 ## get_declared_traits()
@@ -11,7 +11,7 @@ sidebar:
 function get_declared_traits(): array
 ```
 
-`get_declared_traits()` is a class builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Returns an array of all declared traits.
 
 **Parameters**: none.
 
@@ -24,4 +24,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `get_declared_traits` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/get_declared_traits.md).
 

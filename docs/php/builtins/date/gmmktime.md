@@ -1,8 +1,8 @@
 ---
 title: "gmmktime()"
-description: "Lowers `gmmktime(...)`: the UTC counterpart of `mktime()`."
+description: "Returns the Unix timestamp for a GMT date."
 sidebar:
-  order: 89
+  order: 91
 ---
 
 ## gmmktime()
@@ -11,7 +11,7 @@ sidebar:
 function gmmktime(int $hour, int $minute, int $second, int $month, int $day, int $year): int
 ```
 
-Lowers `gmmktime(...)`: the UTC counterpart of `mktime()`.
+Returns the Unix timestamp for a GMT date.
 
 **Parameters**:
 - `$hour` (`int`)

@@ -1,8 +1,8 @@
 ---
 title: "fflush()"
-description: "Lowers `fflush(stream)` through the shared fd flush runtime helper."
+description: "Flushes the output to a file."
 sidebar:
-  order: 155
+  order: 157
 ---
 
 ## fflush()
@@ -11,7 +11,7 @@ sidebar:
 function fflush(resource $stream): bool
 ```
 
-Lowers `fflush(stream)` through the shared fd flush runtime helper.
+Flushes the output to a file.
 
 **Parameters**:
 - `$stream` (`resource`)

@@ -2,14 +2,14 @@
 title: "class_alias() — internals"
 description: "Compiler internals for class_alias(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 64
+  order: 66
 ---
 
 ## `class_alias()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/callables/class_alias.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/class_alias.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/types.rs`:41](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/types.rs#L41) (`lower_class_alias`)
 - **Function symbol**: `lower_class_alias()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function class_alias(string $class, string $alias, bool $autoload): bool
+function class_alias(string $class, string $alias, bool $autoload = true): bool
 ```
 
 ## What the type checker enforces

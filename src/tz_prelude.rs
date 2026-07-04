@@ -57,8 +57,12 @@ function timezone_abbreviations_list() {
 /// declarations only (extern block + functions), which are hoisted, so prepending
 /// does not change top-level execution order. It is static and tested, so a
 /// tokenize/parse failure is a compiler bug and panics rather than degrading.
-pub fn inject_if_used(program: Program) -> Program {
-    if !detect::program_uses_tz_introspection(&program) {
+///
+/// `force` (set by `--with-tz`) bypasses the usage scan so the timezone surface
+/// is always injected, making it available even when auto-detection would not see
+/// the usage.
+pub fn inject_if_used(program: Program, force: bool) -> Program {
+    if !force && !detect::program_uses_tz_introspection(&program) {
         return program;
     }
     let tokens = crate::lexer::tokenize(TZ_PRELUDE_SRC).expect("tz prelude must tokenize");

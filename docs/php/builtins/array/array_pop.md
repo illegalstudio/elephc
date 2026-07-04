@@ -1,6 +1,6 @@
 ---
 title: "array_pop()"
-description: "Lowers `array_pop()` for indexed arrays by mutating length and boxing `T|null` as Mixed."
+description: "Pops the element off the end of array."
 sidebar:
   order: 27
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_pop(array $array): mixed
 ```
 
-Lowers `array_pop()` for indexed arrays by mutating length and boxing `T|null` as Mixed.
+Pops the element off the end of array.
 
 **Parameters**:
 - `$array` (`array`), passed by reference

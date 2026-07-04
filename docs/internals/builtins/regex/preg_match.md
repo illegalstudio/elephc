@@ -2,14 +2,14 @@
 title: "preg_match() — internals"
 description: "Compiler internals for preg_match(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 314
+  order: 311
 ---
 
 ## `preg_match()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/system/preg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_match.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/regex.rs`:28](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/regex.rs#L28) (`lower_preg_match`)
 - **Function symbol**: `lower_preg_match()`
 
@@ -27,7 +27,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function preg_match(string $pattern, string $subject, array $matches): int
+function preg_match(string $pattern, string $subject, array $matches = []): int
 ```
 
 ## What the type checker enforces

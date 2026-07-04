@@ -1,8 +1,8 @@
 ---
 title: "pow()"
-description: "Lowers `pow()` for concrete integer-like and floating operands."
+description: "Exponential expression."
 sidebar:
-  order: 259
+  order: 261
 ---
 
 ## pow()
@@ -11,7 +11,7 @@ sidebar:
 function pow(float $num, float $exponent): float
 ```
 
-Lowers `pow()` for concrete integer-like and floating operands.
+Exponential expression.
 
 **Parameters**:
 - `$num` (`float`)

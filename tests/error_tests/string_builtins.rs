@@ -117,19 +117,33 @@ fn test_error_str_replace_wrong_args() {
 /// Verifies that `sprintf()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_sprintf_no_args() {
-    expect_error("<?php sprintf();", "sprintf() requires at least 1 argument");
+    expect_error("<?php sprintf();", "sprintf() takes at least 1 argument");
 }
 
 /// Verifies that `printf()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_printf_no_args() {
-    expect_error("<?php printf();", "printf() requires at least 1 argument");
+    expect_error("<?php printf();", "printf() takes at least 1 argument");
 }
 
 /// Verifies that `ord()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_ord_wrong_args() {
     expect_error("<?php ord();", "ord() takes exactly 1 argument");
+}
+
+/// Verifies that a pure-data registry builtin (`ord`) infers argument types so that
+/// an undefined variable passed as an argument produces the correct diagnostic.
+///
+/// This is a regression test for Fix B: before the fix, the registry-first dispatch
+/// branch skipped `infer_type` for builtins with no check hook, so undefined-variable
+/// errors were silently dropped.
+#[test]
+fn test_error_ord_undefined_variable_arg() {
+    expect_error(
+        "<?php ord($undeclared);",
+        "Undefined variable: $undeclared",
+    );
 }
 
 /// Verifies that `explode()` with only one argument produces the correct arity error.
@@ -287,25 +301,25 @@ fn test_error_inet_pton_wrong_args() {
 /// Verifies the invalid-call diagnostic for error gzcompress wrong args.
 #[test]
 fn test_error_gzcompress_wrong_args() {
-    expect_error("<?php gzcompress();", "gzcompress() expects 1 or 2 arguments");
+    expect_error("<?php gzcompress();", "gzcompress() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error gzuncompress wrong args.
 #[test]
 fn test_error_gzuncompress_wrong_args() {
-    expect_error("<?php gzuncompress();", "gzuncompress() expects 1 or 2 arguments");
+    expect_error("<?php gzuncompress();", "gzuncompress() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error gzdeflate wrong args.
 #[test]
 fn test_error_gzdeflate_wrong_args() {
-    expect_error("<?php gzdeflate();", "gzdeflate() expects 1 or 2 arguments");
+    expect_error("<?php gzdeflate();", "gzdeflate() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error gzinflate wrong args.
 #[test]
 fn test_error_gzinflate_wrong_args() {
-    expect_error("<?php gzinflate();", "gzinflate() expects 1 or 2 arguments");
+    expect_error("<?php gzinflate();", "gzinflate() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error vsprintf wrong args.

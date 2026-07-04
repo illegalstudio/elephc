@@ -1,6 +1,6 @@
 ---
 title: "implode()"
-description: "Lowers `implode(glue, array)` by selecting the string or integer array helper."
+description: "Joins array elements into a single string using a separator."
 sidebar:
   order: 359
 ---
@@ -8,14 +8,14 @@ sidebar:
 ## implode()
 
 ```php
-function implode(string $separator, array $array): string
+function implode(string $separator, array $array = null): string
 ```
 
-Lowers `implode(glue, array)` by selecting the string or integer array helper.
+Joins array elements into a single string using a separator.
 
 **Parameters**:
 - `$separator` (`string`)
-- `$array` (`array`), optional
+- `$array` (`array`), default `null`, optional
 
 **Returns**: `string`
 
