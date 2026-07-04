@@ -543,3 +543,84 @@ check(1.5);
     );
     assert_eq!(out, "bool(true)\nbool(false)\n");
 }
+
+/// Regression: loose equality with a Mixed NaN payload must preserve PHP's
+/// unordered-float rule. `NAN == 1` is false and `NAN != 1` is true, including
+/// on x86_64 where unordered `ucomisd` comparisons set ZF.
+#[test]
+fn test_loose_eq_mixed_nan_vs_int() {
+    let out = compile_and_run(
+        r#"<?php
+function check($m) {
+    var_dump($m == 1);
+    var_dump($m != 1);
+}
+check(NAN);
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\n");
+}
+
+/// Regression: loose equality with a Mixed string payload must use PHP
+/// numeric-string rules instead of `atof`-style casts. Non-numeric strings are
+/// not equal to numbers, while numeric strings compare by parsed numeric value.
+#[test]
+fn test_loose_eq_mixed_string_vs_number_uses_numeric_string_rules() {
+    let out = compile_and_run(
+        r#"<?php
+function check($m) {
+    var_dump($m == 0);
+    var_dump($m == 0.0);
+    var_dump($m != 0);
+    var_dump($m == 1.5);
+}
+check("abc");
+check("1.5");
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\n"
+    );
+}
+
+/// Regression: loose equality between a Mixed boolean and a number compares by
+/// PHP truthiness, not by comparing `true` as `1.0`.
+#[test]
+fn test_loose_eq_mixed_bool_vs_number_uses_truthiness() {
+    let out = compile_and_run(
+        r#"<?php
+function check_true($m) {
+    var_dump($m == 2);
+    var_dump($m == 0.5);
+    var_dump($m == 0);
+}
+function check_false($m) {
+    var_dump($m == 0.0);
+    var_dump($m == 1);
+}
+check_true(true);
+check_false(false);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\n"
+    );
+}
+
+/// Regression: Mixed array payloads are not loosely equal to numeric operands.
+#[test]
+fn test_loose_eq_mixed_array_vs_number_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+function check($m) {
+    var_dump($m == 0);
+    var_dump($m != 1.0);
+}
+check([]);
+check([1]);
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\nbool(false)\nbool(true)\n");
+}
