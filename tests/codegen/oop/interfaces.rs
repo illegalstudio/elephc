@@ -209,3 +209,13 @@ echo $product->name;
     );
     assert_eq!(out, "widget");
 }
+
+/// EC-4 (#487): PHP 8.3+ static interface methods. An interface may declare a `static` method;
+/// an implementing class satisfies it with a static method, dispatched by class. Byte-parity.
+#[test]
+fn test_static_interface_method() {
+    let out = compile_and_run(
+        "<?php declare(strict_types=1); interface Previewable { public static function previews(): array; } final class C implements Previewable { public static function previews(): array { return ['a', 'b', 'c']; } } echo implode(',', C::previews());",
+    );
+    assert_eq!(out, "a,b,c");
+}
