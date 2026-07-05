@@ -11,6 +11,7 @@
 //! - Missing include emits a warning and returns false; missing require is fatal.
 
 use super::*;
+use crate::parse_cache::parse_fragment_cached;
 
 /// Evaluates nested `eval(...)` calls against the current materialized scope.
 pub(super) fn eval_nested_eval(
@@ -24,8 +25,8 @@ pub(super) fn eval_nested_eval(
     };
     let code = eval_expr(code, context, scope, values)?;
     let code = values.string_bytes(code)?;
-    let program = parse_fragment(&code).map_err(EvalParseError::status)?;
-    execute_program_with_context(context, &program, scope, values)
+    let program = parse_fragment_cached(&code).map_err(EvalParseError::status)?;
+    execute_program_with_context(context, program.as_ref(), scope, values)
 }
 
 /// Evaluates an eval-fragment include or require expression.
@@ -140,7 +141,7 @@ fn eval_execute_include_code(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let program = parse_fragment(code).map_err(EvalParseError::status)?;
+    let program = parse_fragment_cached(code).map_err(EvalParseError::status)?;
     let previous = context.call_site();
     let file = path.to_string_lossy().into_owned();
     let dir = path

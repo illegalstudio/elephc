@@ -20,6 +20,7 @@ pub mod interpreter;
 mod json_validate;
 mod lexer;
 pub mod lower;
+mod parse_cache;
 pub mod parser;
 pub mod runtime_hooks;
 pub mod scope;

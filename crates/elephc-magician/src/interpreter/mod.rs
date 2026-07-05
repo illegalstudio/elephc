@@ -48,6 +48,7 @@ use crate::eval_ir::{
     EvalTraitAdaptation, EvalUnaryOp, EvalVisibility,
 };
 use crate::json_validate::{self, JsonParseError, JsonParseErrorKind, JsonValue};
+#[cfg(test)]
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;

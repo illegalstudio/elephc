@@ -18,7 +18,7 @@ use crate::errors::EvalStatus;
 use crate::eval_ir;
 #[cfg(not(test))]
 use crate::interpreter;
-use crate::parser;
+use crate::parse_cache;
 #[cfg(not(test))]
 use crate::runtime_hooks::ElephcRuntimeOps;
 use std::slice;
@@ -72,12 +72,12 @@ unsafe fn execute_eval_inner(
     } else {
         slice::from_raw_parts(code_ptr, code_len)
     };
-    let program = match parser::parse_fragment(code) {
+    let program = match parse_cache::parse_fragment_cached(code) {
         Ok(program) => program,
         Err(err) => return err.status().code(),
     };
     clear_result(out);
-    execute_parsed_eval(ctx, scope, &program, out)
+    execute_parsed_eval(ctx, scope, program.as_ref(), out)
 }
 
 /// Executes a parsed eval program in production builds using elephc runtime hooks.
