@@ -236,7 +236,7 @@ pub(super) fn lower_hash_spread(ctx: &mut FunctionContext<'_>, inst: &Instructio
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, dest)?;
     }
-    ctx.writeback_global_array_source(dest)?;
+    ctx.writeback_symbol_array_source(dest)?;
     Ok(())
 }
 

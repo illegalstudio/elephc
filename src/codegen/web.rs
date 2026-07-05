@@ -64,6 +64,23 @@ impl LabelGen {
     }
 }
 
+/// Declares the `.comm` storage for every request superglobal so both reset
+/// routines can reference each `_eir_global_*` symbol even when the program (or
+/// the usage-gated prelude, B1) never loads or stores that superglobal.
+///
+/// The reset routines iterate `superglobals::SUPERGLOBALS` unconditionally and
+/// emit a load of each symbol (guarded so a null slot is skipped). Without a
+/// storage declaration for an unreferenced superglobal, that load is a dangling
+/// reference and the link fails. `add_comm` is idempotent per symbol (deduped),
+/// so this is a no-op for superglobals the body already stored. All slots are
+/// pointer-sized (`AssocArray` codegen repr), matching the store path's sizing.
+pub(super) fn declare_superglobal_storage(data: &mut DataSection) {
+    let size = superglobals::superglobal_type().codegen_repr().stack_size().max(8);
+    for name in superglobals::SUPERGLOBALS {
+        data.add_comm(ir_global_symbol(name), size);
+    }
+}
+
 /// Emits the `__rt_web_reset` routine for the module.
 ///
 /// Always emitted in `--web` builds (even with zero statics) so the handler's
@@ -124,12 +141,25 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
 /// long-lived state), so releasing them per request would destroy state the
 /// next request still needs.
 ///
+/// `env_persistent` (true only for the trampoline `--web-worker` mode) makes the
+/// routine skip `$_ENV`: in that mode `$_ENV` is built once at boot and must
+/// survive every request, so releasing/zeroing it here would destroy it. In
+/// `--web-worker=script` and classic `--web` (which also emits this routine only
+/// so the shared Rust worker-loop symbol links) `env_persistent` is false and
+/// `$_ENV` is reset like every other request superglobal, because those modes
+/// re-fill it per request and would otherwise leak the previous request's hash.
+///
 /// Called from:
 /// - `crate::codegen_ir::block_emit::emit_module()`, after every function is
 ///   emitted, when `web_worker` is true.
 /// - The trampoline `elephc_worker_handle_request` calls this label via
 ///   `bl/call __rt_web_worker_request_reset`.
-pub(super) fn emit_web_worker_request_reset(emitter: &mut Emitter, _module: &Module, _data: &DataSection) {
+pub(super) fn emit_web_worker_request_reset(
+    emitter: &mut Emitter,
+    _module: &Module,
+    _data: &DataSection,
+    env_persistent: bool,
+) {
     if emitter.target.arch == Arch::AArch64 {
         emitter.raw(".align 2");
     }
@@ -141,8 +171,12 @@ pub(super) fn emit_web_worker_request_reset(emitter: &mut Emitter, _module: &Mod
     let mut labels = LabelGen::new("__rt_web_worker_reset");
     // Only the request superglobals and concat offset are reset per request.
     // Function static locals and static class properties persist for the
-    // worker lifetime and are intentionally left untouched here.
+    // worker lifetime and are intentionally left untouched here. `$_ENV` is
+    // skipped when it is a persistent boot-time snapshot (trampoline mode).
     for name in superglobals::SUPERGLOBALS {
+        if env_persistent && *name == "_ENV" {
+            continue;
+        }
         emit_superglobal_reset(emitter, &ir_global_symbol(name), &mut labels);
     }
     emit_concat_offset_reset(emitter);

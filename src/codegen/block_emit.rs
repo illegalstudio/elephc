@@ -121,8 +121,18 @@ pub(super) fn emit_module(
     // reset is emitted (statics persist for the worker lifetime); in classic web
     // mode the full reset (statics + superglobals + concat) is emitted.
     if web {
+        // Ensure every request superglobal has `.comm` storage before the reset
+        // routines reference all of them. With usage-gated superglobal fills (B1),
+        // a program may never load/store some superglobals, so their storage would
+        // otherwise be undeclared and the reset's reference would fail to link.
+        super::web::declare_superglobal_storage(data);
+        // `$_ENV` persists across requests only in trampoline `--web-worker` mode,
+        // where it is built once at boot; script mode re-fills it per request (via
+        // the classic inline prelude) and classic `--web` emits this routine only
+        // as a link stub, so both reset `$_ENV` like any other superglobal.
+        let env_persistent = web_worker && !web_worker_script;
         if web_worker || web_worker_script {
-            super::web::emit_web_worker_request_reset(emitter, module, data);
+            super::web::emit_web_worker_request_reset(emitter, module, data, env_persistent);
         } else {
             // Classic --web emits its full per-request reset AND the worker
             // request-reset routine. The classic runtime never calls the latter,
@@ -130,7 +140,7 @@ pub(super) fn emit_module(
             // reference to `__rt_web_worker_request_reset` into every --web binary,
             // so the symbol must exist even in classic builds to link.
             super::web::emit_web_reset(emitter, module, data);
-            super::web::emit_web_worker_request_reset(emitter, module, data);
+            super::web::emit_web_worker_request_reset(emitter, module, data, env_persistent);
         }
     }
     Ok(())

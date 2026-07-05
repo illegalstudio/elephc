@@ -359,7 +359,7 @@ pub(super) fn lower_array_elem_addr(
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
-    ctx.writeback_global_array_source(array)?;
+    ctx.writeback_symbol_array_source(array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => emit_array_elem_addr_result_aarch64(ctx, array, index, elem_size)?,
         Arch::X86_64 => emit_array_elem_addr_result_x86_64(ctx, array, index, elem_size)?,

@@ -307,6 +307,11 @@ pub(crate) fn enter_worker_loop() -> ! {
                 std::process::exit(1);
             }
         };
+        // Connection-serving config is identical for every connection, so build the
+        // hyper HTTP/1 builder once and reuse it (serve_connection takes &self).
+        let mut http = http1::Builder::new();
+        http.timer(TokioTimer::new())
+            .header_read_timeout(Duration::from_secs(30));
         loop {
             if max_requests > 0 && SERVED.load(Ordering::Relaxed) >= max_requests {
                 break;
@@ -315,34 +320,41 @@ pub(crate) fn enter_worker_loop() -> ! {
                 Ok(pair) => pair,
                 Err(_) => continue,
             };
+            // Disable Nagle: worker-mode responses are small and written in one
+            // shot, so Nagle/delayed-ACK interaction would add latency to
+            // keep-alive round-trips. Best-effort (matches classic --web).
+            let _ = stream.set_nodelay(true);
             let io = TokioIo::new(stream);
-            tokio::task::spawn_local(http1::Builder::new()
-                .timer(TokioTimer::new())
-                .header_read_timeout(Duration::from_secs(30))
+            tokio::task::spawn_local(http
                 .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| async move {
                     let started = Instant::now();
                     let method = req.method().as_str().to_string();
                     let uri = req.uri().to_string();
                     let path = req.uri().path().to_string();
                     let query = req.uri().query().unwrap_or("").to_string();
-                    let protocol = format!("{:?}", req.version());
+                    let protocol = crate::worker::version_str(req.version());
                     let log_method_path = if access_log { Some((method.clone(), path.clone())) } else { None };
                     let accepts_gzip = gzip
                         && req.headers().get(hyper::header::ACCEPT_ENCODING).is_some_and(|v| {
                             v.to_str().map(|s| s.to_ascii_lowercase().contains("gzip")).unwrap_or(false)
                         });
-                    let headers: Vec<(String, String)> = req
+                    // Collect headers straight into their final (name, value, php_name)
+                    // CString form, so no intermediate owned (String, String) copy is
+                    // made per request and the $_SERVER key is precomputed in Rust.
+                    let headers: Vec<(CString, CString, CString)> = req
                         .headers()
                         .iter()
-                        .map(|(n, v)| (n.as_str().to_string(), String::from_utf8_lossy(v.as_bytes()).into_owned()))
+                        .map(|(n, v)| request_state::request_header_cstrings(n.as_str(), v.as_bytes()))
                         .collect();
+                    // Keep the collected body as `Bytes` (no `.to_vec()` copy): it is
+                    // stored directly and exposed to PHP by pointer.
                     let collected = if max_body == 0 {
-                        req.into_body().collect().await.map(|c| c.to_bytes().to_vec()).map_err(|_| ())
+                        req.into_body().collect().await.map(|c| c.to_bytes()).map_err(|_| ())
                     } else {
                         Limited::new(req.into_body(), max_body)
                             .collect()
                             .await
-                            .map(|c| c.to_bytes().to_vec())
+                            .map(|c| c.to_bytes())
                             .map_err(|_| ())
                     };
                     let body = match collected {

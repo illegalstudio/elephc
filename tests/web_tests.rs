@@ -1580,6 +1580,36 @@ fn web_worker_handler_calls_user_fn() {
     assert!(r2.ends_with("hi"), "second request: {:?}", r2);
 }
 
+/// Verifies B2 (`$_ENV` built once per worker) in trampoline `--web-worker`
+/// mode: the process environment is read at boot and persists across requests
+/// rather than being rebuilt per request. A worker spawned with `B2_ENV_VAR`
+/// set in its environment must return that value on two successive requests.
+/// The second request is the real assertion: the per-request worker reset must
+/// leave the boot-built `$_ENV` intact (if it wrongly zeroed it, request two
+/// would read `MISSING`). The env var is injected only into the spawned child,
+/// not the test process, to avoid racing parallel tests.
+#[test]
+fn web_worker_env_persists_across_requests() {
+    let dir = make_test_dir("ww_env_once");
+    let src = "<?php elephc_worker_register(function () {\n    echo 'env=' . ($_ENV['B2_ENV_VAR'] ?? 'MISSING');\n});\n";
+    let bin = compile_web_worker(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = Command::new(&bin)
+        .arg("--listen").arg(&addr)
+        .arg("--workers").arg("1")
+        .env("B2_ENV_VAR", "persisted")
+        .spawn()
+        .expect("failed to spawn web-worker server");
+    wait_until_ready(&addr);
+    let r1 = http_get(&addr, "/");
+    let r2 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("env=persisted"), "first request $_ENV: {:?}", r1);
+    assert!(r2.ends_with("env=persisted"), "second request $_ENV (persisted): {:?}", r2);
+}
+
 /// Verifies the worker-mode persistence invariant for a function `static`
 /// array: a `static $s = []` inside `cache()` accumulates `'e'` entries
 /// across requests within one worker. Three sequential requests must see

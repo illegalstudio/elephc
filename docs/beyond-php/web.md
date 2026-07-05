@@ -83,6 +83,15 @@ every request and readable inside any function scope (no `global` needed):
 - **`php://input`** — `file_get_contents('php://input')` returns the raw request
   body (e.g. a JSON payload). An empty body returns `false`.
 
+Only the superglobals your program actually references are built each request:
+the compiler detects which of `$_SERVER`, `$_GET`, `$_POST`, `$_FILES`,
+`$_COOKIE`, `$_REQUEST`, and `$_ENV` appear in the program (including inside
+included and autoloaded files) and skips the per-request work for the rest. This
+is transparent — a superglobal you never read is one you cannot observe — so it
+only saves time; a program that reads all of them behaves exactly as before.
+Superglobals that depend on others are pulled in automatically (`$_REQUEST` builds
+`$_GET` and `$_POST`; `$_POST` and `$_COOKIE` build `$_SERVER`).
+
 ```php
 <?php
 echo "Hello, " . ($_GET['name'] ?? 'world') . "!\n";
@@ -203,6 +212,11 @@ Within a single worker process, persistent state **survives across requests**:
 - **Function `static` locals** — retain their value across requests.
 - **Static class properties** — retain their value across requests.
 - **Global variables** — retain their value across requests.
+- **`$_ENV`** — read from the process environment **once at boot** and kept for
+  the worker's lifetime. The environment is fixed at fork, so re-reading it per
+  request would be wasted work; a mutation to `$_ENV` during a request therefore
+  persists into the next request in this mode (unlike classic `--web`). Read
+  `getenv()` if you need the live process environment.
 
 This is the opposite of classic `--web`, which resets all of the above per
 request. A boot-heavy application (framework bootstrap, DI container build,
@@ -213,9 +227,6 @@ Request-scoped state still resets per request:
 
 - **`$_SERVER`, `$_GET`, `$_POST`, `$_COOKIE`, `$_REQUEST`, `$_FILES`** — are
   rebuilt fresh per request (same as classic `--web`).
-- **`$_ENV`** — rebuilt fresh per request from the process environment
-  (contents are identical across requests unless the process environment
-  changes; mutations made during a request do not leak into the next).
 - **`php://input`** — returns the current request's raw body.
 - **`$argc` / `$argv`** — not populated (as in classic `--web`).
 
