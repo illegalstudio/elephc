@@ -12,7 +12,8 @@
 //!   key normalizes and routes through `__rt_hash_get` if the array has already
 //!   been promoted to hash storage (kind 3). A string key on pure indexed
 //!   storage returns `Mixed(null)` with an undefined-key warning, matching PHP.
-//! - The result is always a boxed `Mixed` pointer in x0 (caller owns it).
+//! - Inputs are array pointer, normalized key pair, and a warning flag. The
+//!   result is always a boxed `Mixed` pointer in x0 (caller owns it).
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -32,14 +33,16 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     //   [sp, #0]  = array_ptr
     //   [sp, #8]  = key_lo
     //   [sp, #16] = key_hi
-    //   [sp, #24] = saved x29
-    //   [sp, #32] = saved x30
-    emitter.instruction("sub sp, sp, #48");                                     // reserve frame: 3 inputs + saved fp/lr (16-byte aligned)
-    emitter.instruction("stp x29, x30, [sp, #24]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #24");                                    // establish a helper frame pointer
+    //   [sp, #24] = warn_on_missing
+    //   [sp, #32] = saved x29
+    //   [sp, #40] = saved x30
+    emitter.instruction("sub sp, sp, #64");                                     // reserve frame: 4 inputs + saved fp/lr (16-byte aligned)
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish a helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the incoming array pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the key low word
     emitter.instruction("str x2, [sp, #16]");                                   // save the key high word (sentinel)
+    emitter.instruction("str x3, [sp, #24]");                                   // save whether missing keys should emit PHP warnings
 
     emitter.instruction("cbz x0, __rt_array_get_mixed_key_null");               // null array → Mixed(null)
 
@@ -77,16 +80,16 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // typed indexed slots use one payload word except strings
     emitter.instruction("mov x0, x13");                                         // x0 = runtime value_type tag for the boxed result
     emitter.instruction("bl __rt_mixed_from_value");                             // box the typed indexed-array element into a Mixed cell
-    emitter.instruction("ldp x29, x30, [sp, #24]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                      // release the local frame
+    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                      // release the local frame
     emitter.instruction("ret");                                                  // return Mixed* in x0
 
     emitter.label("__rt_array_get_mixed_key_indexed_boxed");
     emitter.instruction("ldr x0, [x10, x12, lsl #3]");                            // load the boxed Mixed pointer from the indexed slot
     emitter.instruction("cbz x0, __rt_array_get_mixed_key_null");                // empty slot → null Mixed
     emitter.instruction("bl __rt_incref");                                       // retain the stored Mixed cell so the caller owns the returned result
-    emitter.instruction("ldp x29, x30, [sp, #24]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                      // release the local frame
+    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                      // release the local frame
     emitter.instruction("ret");                                                  // return Mixed* in x0
 
     emitter.label("__rt_array_get_mixed_key_indexed_string");
@@ -96,8 +99,8 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [x10, #8]");                                   // load string length from the selected slot
     emitter.instruction("mov x0, #1");                                          // x0 = string runtime value_type tag
     emitter.instruction("bl __rt_mixed_from_value");                             // box the string indexed-array element into a Mixed cell
-    emitter.instruction("ldp x29, x30, [sp, #24]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                      // release the local frame
+    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                      // release the local frame
     emitter.instruction("ret");                                                  // return Mixed* in x0
 
     emitter.label("__rt_array_get_mixed_key_indexed_null");
@@ -105,40 +108,62 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #0");                                          // value_lo = 0 for null
     emitter.instruction("mov x2, #0");                                          // value_hi = 0 for null
     emitter.instruction("bl __rt_mixed_from_value");                             // box the null indexed-array element into a Mixed cell
-    emitter.instruction("ldp x29, x30, [sp, #24]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                      // release the local frame
+    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                      // release the local frame
     emitter.instruction("ret");                                                  // return Mixed* in x0
 
     emitter.label("__rt_array_get_mixed_key_int_missing");
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the warn-on-missing flag
+    emitter.instruction("cbz x9, __rt_array_get_mixed_key_null");               // silent reads skip undefined-key warnings
     emitter.instruction("ldr x0, [sp, #8]");                                     // reload the missing integer key for the PHP warning
     emitter.instruction("bl __rt_warn_undefined_array_key_int");                 // emit or suppress the undefined-array-key warning
     emitter.instruction("b __rt_array_get_mixed_key_null");                      // return boxed Mixed(null) after the warning
 
-    // -- string key on indexed storage: PHP returns null (warning omitted: no string-key warning helper exists yet) --
+    // -- string key on indexed storage: PHP returns null and may warn --
     emitter.label("__rt_array_get_mixed_key_string_on_indexed");
-    emitter.instruction("b __rt_array_get_mixed_key_null");                      // return boxed Mixed(null) for a string key on indexed storage
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the warn-on-missing flag
+    emitter.instruction("cbz x9, __rt_array_get_mixed_key_null");               // silent reads skip undefined-key warnings
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the missing string key pointer
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the missing string key length
+    emitter.instruction("bl __rt_warn_undefined_array_key_str");                // emit or suppress the undefined string-key warning
+    emitter.instruction("b __rt_array_get_mixed_key_null");                     // return boxed Mixed(null) for a string key on indexed storage
 
     // -- hash storage: delegate to __rt_hash_get ---
     emitter.label("__rt_array_get_mixed_key_hash");
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = key_lo
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = key_hi
     emitter.instruction("bl __rt_hash_get");                                     // x0=found, x1=value_lo, x2=value_hi, x3=value_tag
-    emitter.instruction("cbz x0, __rt_array_get_mixed_key_null");                // miss → null
+    emitter.instruction("cbz x0, __rt_array_get_mixed_key_hash_missing");        // miss → optional warning + null
     emitter.instruction("cmp x3, #7");                                           // is the hash entry already a boxed Mixed?
     emitter.instruction("b.ne __rt_array_get_mixed_key_hash_box");               // no → box (lo, hi, tag) into a fresh Mixed cell
     emitter.instruction("mov x0, x1");                                           // yes → move the stored Mixed cell into the return register
     emitter.instruction("bl __rt_incref");                                       // retain the stored Mixed cell so the caller owns the returned result
-    emitter.instruction("ldp x29, x30, [sp, #24]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                      // release the local frame
+    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                      // release the local frame
     emitter.instruction("ret");                                                  // return Mixed* in x0
     emitter.label("__rt_array_get_mixed_key_hash_box");
     emitter.instruction("mov x0, x3");                                          // x0 = value_tag (mixed_from_value first arg)
     emitter.instruction("mov x1, x1");                                          // x1 = value_lo (already in place)
     emitter.instruction("mov x2, x2");                                          // x2 = value_hi (already in place)
     emitter.instruction("bl __rt_mixed_from_value");                             // box the hash entry into a Mixed cell
-    emitter.instruction("ldp x29, x30, [sp, #24]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                      // release the local frame
+    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                      // release the local frame
     emitter.instruction("ret");                                                  // return Mixed* in x0
+
+    emitter.label("__rt_array_get_mixed_key_hash_missing");
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the warn-on-missing flag
+    emitter.instruction("cbz x9, __rt_array_get_mixed_key_null");               // silent reads skip undefined-key warnings
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload key_hi to distinguish integer and string keys
+    emitter.instruction("cmn x11, #1");                                         // check whether the missing hash key is integer-keyed
+    emitter.instruction("b.eq __rt_array_get_mixed_key_hash_missing_int");       // integer keys use the decimal warning helper
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the missing string key pointer
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the missing string key length
+    emitter.instruction("bl __rt_warn_undefined_array_key_str");                // emit or suppress the undefined string-key warning
+    emitter.instruction("b __rt_array_get_mixed_key_null");                     // return boxed Mixed(null) after the string-key warning
+    emitter.label("__rt_array_get_mixed_key_hash_missing_int");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the missing integer key
+    emitter.instruction("bl __rt_warn_undefined_array_key_int");                // emit or suppress the undefined integer-key warning
+    emitter.instruction("b __rt_array_get_mixed_key_null");                     // return boxed Mixed(null) after the integer-key warning
 
     // -- return Mixed(null) ---
     emitter.label("__rt_array_get_mixed_key_null");
@@ -146,8 +171,8 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #0");                                          // value_lo = 0 for null
     emitter.instruction("mov x2, #0");                                          // value_hi = 0 for null
     emitter.instruction("bl __rt_mixed_from_value");                             // box null into a Mixed cell
-    emitter.instruction("ldp x29, x30, [sp, #24]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                      // release the local frame
+    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                      // release the local frame
     emitter.instruction("ret");                                                  // return Mixed* in x0
 }
 
@@ -161,12 +186,14 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 8]  = array_ptr
     //   [rbp - 16] = key_lo
     //   [rbp - 24] = key_hi
+    //   [rbp - 32] = warn_on_missing
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish helper frame pointer
     emitter.instruction("sub rsp, 32");                                         // reserve 32 bytes for locals (16-byte aligned)
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the incoming array pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the key low word
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the key high word (sentinel)
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save whether missing keys should emit PHP warnings
 
     emitter.instruction("test rdi, rdi");                                       // null array check
     emitter.instruction("je __rt_array_get_mixed_key_null");                    // null array → Mixed(null)
@@ -186,7 +213,7 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_array_get_mixed_key_string_on_indexed");      // string key on indexed storage → warn + null
 
     // -- integer key on indexed storage: inline bounds-checked read --
-    emitter.instruction("mov r12, QWORD PTR [rbp - 16]");                      // r12 = key_lo (int index)
+    emitter.instruction("mov r12, QWORD PTR [rbp - 16]");                       // r12 = key_lo (int index)
     emitter.instruction("mov r9, QWORD PTR [rdi]");                             // r9 = array length (header offset 0)
     emitter.instruction("test r12, r12");                                       // negative index → null
     emitter.instruction("js __rt_array_get_mixed_key_int_missing");             // warn and return null for a negative indexed-array key
@@ -240,21 +267,30 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
     emitter.label("__rt_array_get_mixed_key_int_missing");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                      // reload the missing integer key for the PHP warning
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the warn-on-missing flag
+    emitter.instruction("test r10, r10");                                       // should this read emit undefined-key warnings?
+    emitter.instruction("jz __rt_array_get_mixed_key_null");                    // silent reads skip undefined-key warnings
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the missing integer key for the PHP warning
     emitter.instruction("call __rt_warn_undefined_array_key_int");              // emit or suppress the undefined-array-key warning
     emitter.instruction("jmp __rt_array_get_mixed_key_null");                   // return boxed Mixed(null) after the warning
 
-    // -- string key on indexed storage: PHP returns null (warning omitted: no string-key warning helper exists yet) --
+    // -- string key on indexed storage: PHP returns null and may warn --
     emitter.label("__rt_array_get_mixed_key_string_on_indexed");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the warn-on-missing flag
+    emitter.instruction("test r10, r10");                                       // should this read emit undefined-key warnings?
+    emitter.instruction("jz __rt_array_get_mixed_key_null");                    // silent reads skip undefined-key warnings
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the missing string key pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the missing string key length
+    emitter.instruction("call __rt_warn_undefined_array_key_str");              // emit or suppress the undefined string-key warning
     emitter.instruction("jmp __rt_array_get_mixed_key_null");                   // return boxed Mixed(null) for a string key on indexed storage
 
     // -- hash storage: delegate to __rt_hash_get ---
     emitter.label("__rt_array_get_mixed_key_hash");
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                      // rsi = key_lo
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                      // rdx = key_hi
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // rsi = key_lo
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = key_hi
     emitter.instruction("call __rt_hash_get");                                  // rax=found, rsi=value_lo, rdx=value_hi, rcx=value_tag
     emitter.instruction("test rax, rax");                                       // miss → null
-    emitter.instruction("je __rt_array_get_mixed_key_null");                    // return null on miss
+    emitter.instruction("je __rt_array_get_mixed_key_hash_missing");            // miss → optional warning + null
     emitter.instruction("cmp rcx, 7");                                          // is the hash entry already a boxed Mixed?
     emitter.instruction("jne __rt_array_get_mixed_key_hash_box");               // no → box (lo, hi, tag) into a fresh Mixed cell
     emitter.instruction("mov rax, rsi");                                        // yes → move the stored Mixed cell into the return register
@@ -270,6 +306,22 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
+
+    emitter.label("__rt_array_get_mixed_key_hash_missing");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the warn-on-missing flag
+    emitter.instruction("test r10, r10");                                       // should this read emit undefined-key warnings?
+    emitter.instruction("jz __rt_array_get_mixed_key_null");                    // silent reads skip undefined-key warnings
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload key_hi to distinguish integer and string keys
+    emitter.instruction("cmp r11, -1");                                         // check whether the missing hash key is integer-keyed
+    emitter.instruction("je __rt_array_get_mixed_key_hash_missing_int");        // integer keys use the decimal warning helper
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the missing string key pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the missing string key length
+    emitter.instruction("call __rt_warn_undefined_array_key_str");              // emit or suppress the undefined string-key warning
+    emitter.instruction("jmp __rt_array_get_mixed_key_null");                   // return boxed Mixed(null) after the string-key warning
+    emitter.label("__rt_array_get_mixed_key_hash_missing_int");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the missing integer key
+    emitter.instruction("call __rt_warn_undefined_array_key_int");              // emit or suppress the undefined integer-key warning
+    emitter.instruction("jmp __rt_array_get_mixed_key_null");                   // return boxed Mixed(null) after the integer-key warning
 
     // -- return Mixed(null) ---
     emitter.label("__rt_array_get_mixed_key_null");

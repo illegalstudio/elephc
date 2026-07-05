@@ -92,7 +92,7 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.label("__rt_hash_spread_key_scan_done");
     emitter.instruction("cbz x7, __rt_hash_spread_key_zero");                   // destinations with no integer keys start reindexing at zero
     emitter.instruction("add x8, x8, #1");                                      // start reindexing after the largest observed integer key
-    emitter.instruction("b __rt_hash_spread_key_init");
+    emitter.instruction("b __rt_hash_spread_key_init");                         // continue with the initialized automatic integer key
     emitter.label("__rt_hash_spread_key_zero");
     emitter.instruction("mov x8, #0");                                          // first automatic integer key is zero
     emitter.label("__rt_hash_spread_key_init");
@@ -243,7 +243,7 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r9, r9");                                         // did the scan observe any integer keys?
     emitter.instruction("je __rt_hash_spread_x86_key_zero");                    // destinations with no integer keys start reindexing at zero
     emitter.instruction("add rax, 1");                                          // start reindexing after the largest observed integer key
-    emitter.instruction("jmp __rt_hash_spread_x86_key_init");
+    emitter.instruction("jmp __rt_hash_spread_x86_key_init");                   // continue with the initialized automatic integer key
     emitter.label("__rt_hash_spread_x86_key_zero");
     emitter.instruction("xor eax, eax");                                        // first automatic integer key is zero
     emitter.label("__rt_hash_spread_x86_key_init");

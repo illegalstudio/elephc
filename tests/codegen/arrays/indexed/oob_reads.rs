@@ -94,6 +94,56 @@ fn test_empty_array_string_key_null_coalesce() {
     assert_eq!(out, "x");
 }
 
+/// Regression for #350: null coalescing on a missing string key must not emit
+/// PHP's undefined-key warning.
+#[test]
+fn test_empty_array_string_key_null_coalesce_suppresses_warning() {
+    let out = compile_and_run_capture("<?php $a = []; echo ($a['k'] ?? 'x');");
+    assert!(out.success);
+    assert_eq!(out.stdout, "x");
+    assert_eq!(out.stderr, "");
+}
+
+/// Verifies direct string-key reads on indexed storage emit PHP's undefined-key
+/// warning while still materializing the null fallback value.
+#[test]
+fn test_empty_array_string_key_direct_read_warns() {
+    let out = compile_and_run_capture("<?php $a = []; echo '[' . $a['k'] . ']';");
+    assert!(out.success);
+    assert_eq!(out.stdout, "[]");
+    assert!(out.stderr.contains("Warning: Undefined array key \"k\""));
+}
+
+/// Verifies mixed-typed integer keys on indexed storage still warn on direct
+/// misses while returning the null fallback value.
+#[test]
+fn test_indexed_mixed_integer_key_direct_read_warns() {
+    let out = compile_and_run_capture("<?php $a = [1]; $k = 5; echo '[' . $a[$k] . ']';");
+    assert!(out.success);
+    assert_eq!(out.stdout, "[]");
+    assert!(out.stderr.contains("Warning: Undefined array key 5"));
+}
+
+/// Regression for #357: null keys on indexed-array reads normalize to the empty
+/// string and are accepted by the EIR backend.
+#[test]
+fn test_indexed_null_key_null_coalesce() {
+    let out = compile_and_run_capture("<?php $a = [1, 2]; echo ($a[null] ?? 'fallback');");
+    assert!(out.success);
+    assert_eq!(out.stdout, "fallback");
+    assert_eq!(out.stderr, "");
+}
+
+/// Verifies integer indexed-array misses under `??` do not emit undefined-key
+/// warnings; only direct reads should warn.
+#[test]
+fn test_indexed_oob_null_coalesce_suppresses_warning() {
+    let out = compile_and_run_capture("<?php $a = [1]; echo ($a[5] ?? 'fallback');");
+    assert!(out.success);
+    assert_eq!(out.stdout, "fallback");
+    assert_eq!(out.stderr, "");
+}
+
 /// Regression for #350: isset() on an empty array with a string key.
 #[test]
 fn test_empty_array_string_key_isset() {

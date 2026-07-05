@@ -263,7 +263,7 @@ fn lower_nullsafe_postfix_segment(
             ))
         }
         PostfixSegment::Array { expr, index } => {
-            Some(lower_array_access_from_value(ctx, current, index, expr))
+            Some(lower_array_access_from_value(ctx, current, index, expr, true))
         }
         PostfixSegment::ExprCall { expr, args } => {
             Some(lower_expr_call_from_value(ctx, current, args, expr))

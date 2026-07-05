@@ -1103,7 +1103,7 @@ fn lower_null_coalesce(
     default: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let value = lower_expr(ctx, value);
+    let value = lower_null_coalesce_value(ctx, value);
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![value.value],
@@ -1150,6 +1150,15 @@ fn lower_null_coalesce(
         value_reachable,
     ));
     take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Lowers the value side of `??`, suppressing only undefined-offset warnings
+/// from the top-level array read while preserving index/receiver evaluation.
+fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value: &Expr) -> LoweredValue {
+    if let ExprKind::ArrayAccess { array, index } = &value.kind {
+        return lower_array_access_with_missing_warning(ctx, array, index, value, false);
+    }
+    lower_expr(ctx, value)
 }
 
 /// Returns the materialized result type for a null-coalesce merge.
@@ -2081,7 +2090,7 @@ fn lower_native_isset_offset_probe_from_value(
             )
         }
         _ => {
-            let read_value = lower_array_access_from_value(ctx, array_value, index, expr);
+            let read_value = lower_array_access_from_value(ctx, array_value, index, expr, false);
             emit_builtin_call_value(ctx, "isset", vec![read_value.value], PhpType::Int, expr.span)
         }
     }
@@ -6917,12 +6926,29 @@ fn lower_match(
 }
 
 /// Lowers array, hash, string, or ArrayAccess indexing.
-fn lower_array_access(ctx: &mut LoweringContext<'_, '_>, array: &Expr, index: &Expr, expr: &Expr) -> LoweredValue {
+fn lower_array_access(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    lower_array_access_with_missing_warning(ctx, array, index, expr, true)
+}
+
+/// Lowers array, hash, string, or ArrayAccess indexing with configurable
+/// undefined-offset warning behavior for native indexed-array reads.
+fn lower_array_access_with_missing_warning(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> LoweredValue {
     let array_value = lower_expr(ctx, array);
     if value_is_nullable(ctx, array_value.value) {
-        return lower_nullable_array_access(ctx, array_value, index, expr);
+        return lower_nullable_array_access(ctx, array_value, index, expr, warn_on_missing);
     }
-    lower_array_access_from_value(ctx, array_value, index, expr)
+    lower_array_access_from_value(ctx, array_value, index, expr, warn_on_missing)
 }
 
 /// Lowers array access once the receiver is already evaluated.
@@ -6931,6 +6957,7 @@ fn lower_array_access_from_value(
     array_value: LoweredValue,
     index: &Expr,
     expr: &Expr,
+    warn_on_missing: bool,
 ) -> LoweredValue {
     let mut index_value = lower_expr(ctx, index);
     let op = match array_value.ir_type {
@@ -6938,11 +6965,19 @@ fn lower_array_access_from_value(
             let index_ty = index_expr_key_type(ctx, index);
             if index_ty == PhpType::Int {
                 index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
-                Op::ArrayGet
+                if warn_on_missing {
+                    Op::ArrayGet
+                } else {
+                    Op::ArrayGetSilent
+                }
             } else {
                 // String or Mixed key on indexed storage: use the mixed-key
                 // runtime read path (mirrors Op::ArraySetMixedKey for writes).
-                Op::ArrayGetMixedKey
+                if warn_on_missing {
+                    Op::ArrayGetMixedKey
+                } else {
+                    Op::ArrayGetMixedKeySilent
+                }
             }
         }
         IrType::Heap(IrHeapKind::Hash) => Op::HashGet,
@@ -6970,6 +7005,7 @@ fn lower_nullable_array_access(
     array_value: LoweredValue,
     index: &Expr,
     expr: &Expr,
+    warn_on_missing: bool,
 ) -> LoweredValue {
     let is_null = ctx.emit_value(
         Op::IsNull,
@@ -6998,7 +7034,7 @@ fn lower_nullable_array_access(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(read_block);
-    let read_value = lower_array_access_from_value(ctx, array_value, index, expr);
+    let read_value = lower_array_access_from_value(ctx, array_value, index, expr, warn_on_missing);
     store_value_into_temp(ctx, &temp_name, result_type, read_value, expr.span);
     branch_to(ctx, merge);
 
@@ -7022,7 +7058,7 @@ fn array_access_result_type(
 ) -> PhpType {
     match op {
         Op::StrCharAt => PhpType::Str,
-        Op::ArrayGet => match ctx.builder.value_php_type(array).codegen_repr() {
+        Op::ArrayGet | Op::ArrayGetSilent => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::Array(elem_ty) => {
                 array_access_element_result_type(normalize_value_php_type(*elem_ty))
             }
@@ -7039,7 +7075,7 @@ fn array_access_result_type(
             _ => fallback_expr_type(expr),
         },
         Op::RuntimeCall => array_access_runtime_call_result_type(ctx, array, expr),
-        Op::ArrayGetMixedKey => PhpType::Mixed,
+        Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent => PhpType::Mixed,
         _ => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
             _ => fallback_expr_type(expr),
