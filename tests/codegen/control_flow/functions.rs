@@ -123,3 +123,14 @@ fn test_strict_false_guard_narrowing() {
     );
     assert_eq!(out, "42:7");
 }
+
+/// EC-8 (#491): `if ($x === null) { throw; } return $x;` narrows a nullable value to non-null
+/// after the divergent guard (elephc models `?T`'s null as Void), so `?string`→string and
+/// `?self`→self. Byte-parity vs PHP 8.5.
+#[test]
+fn test_strict_null_guard_narrowing() {
+    let out = compile_and_run(
+        "<?php declare(strict_types=1); function req(?string $x): string { if ($x === null) { throw new \\Exception('no'); } return $x; } echo req('hi');",
+    );
+    assert_eq!(out, "hi");
+}

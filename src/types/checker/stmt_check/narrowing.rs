@@ -174,6 +174,9 @@ fn guard_var_and_type(cond: &Expr) -> Option<(String, PhpType)> {
             };
             match lit {
                 ExprKind::BoolLiteral(false) => Some((var.clone(), PhpType::Bool)),
+                // `$x === null`: strip the null-ish member (elephc models a `?T` value's null as
+                // Void), e.g. `?self` / self|null → self after `if ($x === null) { throw; }`.
+                ExprKind::Null => Some((var.clone(), PhpType::Void)),
                 _ => None,
             }
         }
