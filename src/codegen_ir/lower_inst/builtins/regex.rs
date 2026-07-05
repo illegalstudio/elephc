@@ -48,6 +48,21 @@ pub(crate) fn lower_preg_match(
     super::store_if_result(ctx, inst)
 }
 
+/// Lowers `mb_ereg_match(pattern, subject)` — a start-anchored regex match returning bool.
+/// The bare (delimiter-less) pattern + subject go to the shared regex-arg loader, then the
+/// dedicated `__rt_mb_ereg_match` helper (which anchors at offset 0 via `rm_so == 0`).
+pub(crate) fn lower_mb_ereg_match(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "mb_ereg_match", 2)?;
+    let pattern = super::expect_operand(inst, 0)?;
+    let subject = super::expect_operand(inst, 1)?;
+    load_pattern_and_subject(ctx, pattern, subject)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mb_ereg_match");
+    super::store_if_result(ctx, inst)
+}
+
 /// Lowers `preg_match_all(pattern, subject)` through the shared regex runtime helper.
 pub(crate) fn lower_preg_match_all(
     ctx: &mut FunctionContext<'_>,
