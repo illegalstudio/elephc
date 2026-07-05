@@ -313,8 +313,9 @@ fn has_override_attribute(method: &ClassMethod) -> bool {
 }
 
 /// Returns `true` if any interface implemented by the class (directly or
-/// transitively via parent interfaces) declares the method. Uses
-/// `class.implements` because `apply_methods` runs before `collect_interfaces`
+/// transitively via parent interfaces) declares the method — instance OR PHP 8.3+
+/// static (a `#[\Override]` on a static interface-method implementation is valid).
+/// Uses `class.implements` because `apply_methods` runs before `collect_interfaces`
 /// has populated `state.interfaces`.
 fn interface_declares_method(
     checker: &Checker,
@@ -330,7 +331,7 @@ fn interface_declares_method(
         let Some(info) = checker.interfaces.get(&name) else {
             continue;
         };
-        if info.methods.contains_key(method_key) {
+        if info.methods.contains_key(method_key) || info.static_methods.contains_key(method_key) {
             return true;
         }
         queue.extend(info.parents.iter().cloned());

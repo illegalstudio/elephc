@@ -219,3 +219,14 @@ fn test_static_interface_method() {
     );
     assert_eq!(out, "a,b,c");
 }
+
+/// EC-9 (#492): `#[\Override]` on a static interface-method implementation is valid
+/// (the override target is the interface's static method, matched via InterfaceInfo.static_methods).
+/// Byte-parity vs PHP 8.5.
+#[test]
+fn test_override_on_static_interface_method() {
+    let out = compile_and_run(
+        "<?php declare(strict_types=1); interface Previewable { public static function previews(): array; } final class C implements Previewable { #[\\Override] public static function previews(): array { return ['a', 'b']; } } echo implode(',', C::previews());",
+    );
+    assert_eq!(out, "a,b");
+}
