@@ -113,3 +113,13 @@ fn test_function_no_args() {
 }
 
 // --- Logical operators ---
+
+/// EC-8 (#491): `if ($x === false) { throw; } return $x;` narrows an `int|false` value to `int`
+/// after the divergent guard, so the `: int` return matches. Byte-parity vs PHP 8.5.
+#[test]
+fn test_strict_false_guard_narrowing() {
+    let out = compile_and_run(
+        "<?php declare(strict_types=1); final class G { public static function requireInt(int|false $v): int { if ($v === false) { throw new \\RuntimeException('no'); } return $v; } } echo G::requireInt(42), ':', G::requireInt(7);",
+    );
+    assert_eq!(out, "42:7");
+}

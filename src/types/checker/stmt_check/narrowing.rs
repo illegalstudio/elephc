@@ -15,7 +15,7 @@
 //! - Conservative: a concrete (non-union, non-mixed) type is left unchanged, and an empty narrowing
 //!   result falls back to the original type, so valid code is never narrowed away to `Never`.
 
-use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -162,6 +162,20 @@ fn guard_var_and_type(cond: &Expr) -> Option<(String, PhpType)> {
                 return None;
             };
             Some((var.clone(), PhpType::Object(class.as_str().to_string())))
+        }
+        // `$var === false` / `false === $var`: narrow to Bool in the then-branch; the else-branch
+        // (guard false) strips the false-ish Bool member (e.g. int|false → int). Enables the common
+        // `if ($x === false) { throw; } return $x;` guard (ward-http StreamGuards::requireInt etc.).
+        ExprKind::BinaryOp { left, op: BinOp::StrictEq, right } => {
+            let (var, lit) = match (&left.kind, &right.kind) {
+                (ExprKind::Variable(v), _) => (v, &right.kind),
+                (_, ExprKind::Variable(v)) => (v, &left.kind),
+                _ => return None,
+            };
+            match lit {
+                ExprKind::BoolLiteral(false) => Some((var.clone(), PhpType::Bool)),
+                _ => None,
+            }
         }
         _ => None,
     }
