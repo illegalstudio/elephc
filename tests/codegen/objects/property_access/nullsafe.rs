@@ -59,7 +59,7 @@ echo $without->profile?->name ?? "none";
 /// as opposed to explicitly set to null. Fixture: User with uninitialized
 /// typed property ?Profile $profile (no default, not set in __construct).
 /// After issue #339 the guard throws a catchable Error; without a try/catch
-/// the uncaught-exception path terminates with a generic fatal diagnostic.
+/// the no-handler fast path still reports the specific fatal diagnostic.
 #[test]
 fn test_nullsafe_property_access_does_not_suppress_uninitialized_typed_property() {
     let err = compile_and_run_expect_failure(
@@ -75,7 +75,7 @@ echo $without?->profile?->name ?? "none";
 "#,
     );
     assert!(
-        err.contains("Fatal error: uncaught exception"),
+        err.contains("Fatal error: Typed property User::$profile must not be accessed before initialization"),
         "{err}"
     );
 }

@@ -253,7 +253,7 @@ echo Box::$value;
 /// Verifies that a nullable typed static property with an explicit `= null` default
 /// is considered initialized (`is_null()` returns true), and that a typed static
 /// property without a default remains uninitialized and throws a catchable Error;
-/// without a try/catch the uncaught-exception path terminates with a generic
+/// without a try/catch the no-handler fast path still reports the specific
 /// fatal diagnostic (issue #339).
 #[test]
 fn test_nullable_static_property_default_null_is_initialized() {
@@ -278,7 +278,7 @@ echo WithoutDefault::$value;
 "#,
     );
     assert!(
-        err.contains("Fatal error: uncaught exception"),
+        err.contains("Fatal error: Typed static property WithoutDefault::$value must not be accessed before initialization"),
         "{err}"
     );
 }

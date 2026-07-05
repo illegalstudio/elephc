@@ -4993,7 +4993,7 @@ fn emit_uninitialized_typed_property_guard(
 /// Constructs an `Error` object with the diagnostic message, publishes it to
 /// `_exc_value`, and branches to `__rt_throw_current` so surrounding try/catch
 /// blocks can observe and catch it. When no handler is registered, the uncaught
-/// path prints the fatal diagnostic and exits, preserving the old behavior.
+/// fast path prints the specific fatal diagnostic and exits, preserving the old behavior.
 fn emit_uninitialized_typed_property_fatal(
     ctx: &mut FunctionContext<'_>,
     slot: &PropertySlot,
@@ -5001,6 +5001,13 @@ fn emit_uninitialized_typed_property_fatal(
     let message = format!(
         "Typed property {}::${} must not be accessed before initialization",
         slot.class_name, slot.property
+    );
+    let fatal_message = format!("Fatal error: {}\n", message);
+    let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
+    emit_uninitialized_typed_property_uncaught_fatal_if_no_handler(
+        ctx,
+        &fatal_label,
+        fatal_len,
     );
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
@@ -5041,6 +5048,38 @@ fn emit_uninitialized_typed_property_fatal(
             ctx.emitter.instruction("jmp __rt_throw_current");                    // enter the standard exception unwinder
         }
     }
+}
+
+/// Emits a no-handler fast path that preserves the specific typed-property fatal text.
+fn emit_uninitialized_typed_property_uncaught_fatal_if_no_handler(
+    ctx: &mut FunctionContext<'_>,
+    fatal_label: &str,
+    fatal_len: usize,
+) {
+    let throw_label = ctx.next_label("typed_property_throw");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_exc_handler_top", 0);
+            ctx.emitter.instruction(&format!("cbnz x9, {}", throw_label));      // keep typed-property errors catchable when a handler is active
+            abi::emit_symbol_address(ctx.emitter, "x1", fatal_label);          // load the specific uninitialized typed-property fatal text
+            ctx.emitter.instruction(&format!("mov x2, #{}", fatal_len));        // pass the fatal diagnostic byte length to write()
+            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the uninitialized typed-property fatal
+            ctx.emitter.syscall(4);
+            abi::emit_exit(ctx.emitter, 1);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_exc_handler_top", 0);
+            ctx.emitter.instruction("test r10, r10");                           // is there an active handler that can catch the Error?
+            ctx.emitter.instruction(&format!("jne {}", throw_label));           // keep typed-property errors catchable when a handler is active
+            abi::emit_symbol_address(ctx.emitter, "rsi", fatal_label);          // load the specific uninitialized typed-property fatal text
+            ctx.emitter.instruction(&format!("mov edx, {}", fatal_len));        // pass the fatal diagnostic byte length to write()
+            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the uninitialized typed-property fatal
+            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall
+            ctx.emitter.instruction("syscall");                                 // write the specific uninitialized typed-property fatal diagnostic
+            abi::emit_exit(ctx.emitter, 1);
+        }
+    }
+    ctx.emitter.label(&throw_label);
 }
 
 /// Normalizes the tested value into an object pointer or null for dynamic `instanceof`.

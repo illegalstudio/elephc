@@ -257,25 +257,41 @@ echo '|' . count($a);
     assert_eq!(out, "12|3");
 }
 
-/// Verifies that `foreach` by value over an indexed array passed via an
-/// `iterable` parameter also snapshots the length, so appended elements are
-/// not visited (issue #381).
+/// Verifies that `foreach` by reference over an indexed array visits elements
+/// appended during iteration. PHP keeps by-reference iteration live against the
+/// current array length, unlike by-value iteration (issue #381 guard).
 #[test]
-fn test_foreach_iterable_does_not_visit_appended_elements() {
+fn test_foreach_by_reference_visits_appended_elements() {
     let out = compile_and_run(
         r#"<?php
-function dump(iterable $items): void {
-    foreach ($items as $v) {
-        echo $v;
-    }
-}
 $a = [1, 2];
-foreach ($a as $v) {
+foreach ($a as &$v) {
     echo $v;
     if ($v === 1) $a[] = 3;
 }
 echo '|' . count($a);
 "#,
     );
-    assert_eq!(out, "12|3");
+    assert_eq!(out, "123|3");
+}
+
+/// Verifies that `foreach` by value over a heterogeneous indexed array also
+/// snapshots the length through the dynamic indexed-array iterator path, so
+/// appended elements are not visited (issue #381).
+#[test]
+fn test_foreach_mixed_array_does_not_visit_appended_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [1, "2"];
+foreach ($items as $v) {
+    echo $v;
+    if ($v === 1) $items[] = 3;
+}
+echo '|';
+foreach ($items as $v) {
+    echo $v;
+}
+"#,
+    );
+    assert_eq!(out, "12|123");
 }

@@ -514,10 +514,11 @@ bug — only the indexed-array fast path does.
    `IterNext` lowering, so an uninitialized length slot is never read on
    those paths).
 
-5. **By-reference foreach**: PHP's `foreach ($a as &$v)` *does* snapshot
-   the count too (appends are not visited, same as by-value). The by-ref
-   path uses the same `IterStart`/`IterNext` ops, so the fix applies
-   automatically. Verify with a test.
+5. **By-reference foreach**: PHP's `foreach ($a as &$v)` does **not** use the
+   by-value length snapshot for indexed arrays; appended elements remain
+   visible to the live iteration. Preserve that by making `IterNext` consult
+   the `IterStart` by-ref flag and read the live array length on indexed by-ref
+   paths. Verify with a regression test.
 
 **No EIR-op change**, no `src/ir_lower/stmt/mod.rs` change. The EIR
 `Op::IterStart`/`Op::IterNext` keep their existing operand lists; the
@@ -533,7 +534,7 @@ this in the PR description anyway.)
 |---|---|---|---|
 | 1 | `$a=[1,2]; foreach($a as $v){echo $v; if($v===1)$a[]=3;} echo '|'.count($a);` | `12\|3` | Issue #381 exact |
 | 2 | `$a=[1,2,3]; foreach($a as $v){echo $v; $a[]=9;} echo '|'.count($a);` | `123\|6` | Multiple appends |
-| 3 | `$a=[1,2]; foreach($a as &$v){echo $v; if($v===1)$a[]=3;} echo '|'.count($a);` | `12\|3` | By-ref foreach snapshot |
+| 3 | `$a=[1,2]; foreach($a as &$v){echo $v; if($v===1)$a[]=3;} echo '|'.count($a);` | `123\|3` | By-ref foreach live length |
 | 4 | `$a=range(1,1000); $c=0; foreach($a as $v){$c++; $a[]=$v;} echo $c;` | `1000` | Large loop with appends, exact count |
 | 5 | `$a=[1,2,3]; foreach($a as $k=>$v){echo "$k=$v,"; $a[]=$k;} echo count($a);` | `0=1,1=2,2=3,6` | Key+value foreach with appends |
 | 6 | `$a=['a'=>1,'b'=>2]; foreach($a as $k=>$v){echo "$k=$v,"; $a['c']=3;} echo count($a);` | `a=1,b=2,3` | Hash foreach (already correct, lock in) |
