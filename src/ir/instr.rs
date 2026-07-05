@@ -245,6 +245,7 @@ pub enum Op {
     ArrayLen,
     HashLen,
     ArrayGet,
+    ArrayGetSilent,
     HashGet,
     ArrayIsset,
     HashIsset,
@@ -262,8 +263,11 @@ pub enum Op {
     HashUnion,
     ArrayHashUnion,
     HashArrayUnion,
+    HashSpread,
     ArrayToHash,
     ArraySetMixedKey,
+    ArrayGetMixedKey,
+    ArrayGetMixedKeySilent,
     ArrayKeyExists,
     OffsetExists,
     OffsetUnset,
@@ -401,11 +405,12 @@ impl Op {
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
                 E::ALLOC_HEAP
             }
-            MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGet | HashGet
+            MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGetSilent | HashGet
             | ArrayIsset | HashIsset | BufferGet | BufferLen | PackedFieldGet | PtrRead
             | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
             }
+            ArrayGet => E::READS_HEAP | E::MAY_FATAL | E::MAY_WARN,
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
             | HashCloneShallow => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet | LoadPropRefCell => {
@@ -417,9 +422,12 @@ impl Op {
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             ArraySetMixedKey => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            ArrayGetMixedKey => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::MAY_WARN,
+            ArrayGetMixedKeySilent => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
             ArrayUnion | HashUnion | ArrayHashUnion | HashArrayUnion | ArrayToHash => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
+            HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
             | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed | DynamicPropGet | NullsafePropGet
             | NullsafeMethodCall | MethodLookup | MethodCall | StaticMethodCall
@@ -563,6 +571,7 @@ impl Op {
             ArrayLen => "array_len",
             HashLen => "hash_len",
             ArrayGet => "array_get",
+            ArrayGetSilent => "array_get_silent",
             HashGet => "hash_get",
             ArrayIsset => "array_isset",
             HashIsset => "hash_isset",
@@ -580,8 +589,11 @@ impl Op {
             HashUnion => "hash_union",
             ArrayHashUnion => "array_hash_union",
             HashArrayUnion => "hash_array_union",
+            HashSpread => "hash_spread",
             ArrayToHash => "array_to_hash",
-        ArraySetMixedKey => "array_set_mixed_key",
+            ArraySetMixedKey => "array_set_mixed_key",
+            ArrayGetMixedKey => "array_get_mixed_key",
+            ArrayGetMixedKeySilent => "array_get_mixed_key_silent",
             ArrayKeyExists => "array_key_exists",
             OffsetExists => "offset_exists",
             OffsetUnset => "offset_unset",

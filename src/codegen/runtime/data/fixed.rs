@@ -241,6 +241,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _diag_fopen_failed_msg\n_diag_fopen_failed_msg:\n    .ascii \"Warning: fopen(): Failed to open stream\\n\"\n");
     out.push_str(".globl _diag_define_already_defined_msg\n_diag_define_already_defined_msg:\n    .ascii \"Warning: define(): Constant already defined\\n\"\n");
     out.push_str(".globl _diag_undefined_array_key_prefix\n_diag_undefined_array_key_prefix:\n    .ascii \"Warning: Undefined array key \"\n");
+    out.push_str(".globl _diag_undefined_array_key_quote\n_diag_undefined_array_key_quote:\n    .ascii \"\\\"\"\n");
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _fiber_msg_already_started\n_fiber_msg_already_started:\n    .ascii \"Cannot start a fiber that has already been started\"\n");
     out.push_str(".globl _fiber_msg_not_suspended\n_fiber_msg_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");

@@ -179,12 +179,13 @@ impl Checker {
                     }
                     PhpType::Array(elem_ty) => {
                         if normalized_idx_ty != PhpType::Int {
-                            return Err(CompileError::new(
-                                expr.span,
-                                "Array index must be integer",
-                            ));
+                            // PHP allows string keys on indexed arrays: the array
+                            // promotes to hash at runtime. Return the element type
+                            // widened to Mixed so ?? / isset / reads type-check.
+                            Ok(PhpType::Mixed)
+                        } else {
+                            Ok(*elem_ty.clone())
                         }
-                        Ok(*elem_ty.clone())
                     }
                     PhpType::AssocArray { value, .. } => {
                         // Assoc arrays accept string or int keys
@@ -216,11 +217,12 @@ impl Checker {
                                 PhpType::Array(elem_ty) => {
                                     saw_indexable_member = true;
                                     if normalized_idx_ty != PhpType::Int {
-                                        first_index_error =
-                                            first_index_error.or(Some("Array index must be integer"));
-                                        continue;
+                                        // String key on indexed array: PHP promotes
+                                        // to hash at runtime; element may be Mixed.
+                                        result_members.push(PhpType::Mixed);
+                                    } else {
+                                        result_members.push(*elem_ty.clone());
                                     }
-                                    result_members.push(*elem_ty.clone());
                                 }
                                 PhpType::AssocArray { value, .. } => {
                                     saw_indexable_member = true;

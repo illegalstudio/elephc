@@ -792,8 +792,14 @@ pub(crate) fn emit_normalized_hash_key(
         PhpType::Str => {
             abi::emit_call_label(emitter, "__rt_hash_normalize_key");           // normalize numeric-string array keys to their integer PHP form
         }
+        // PHP normalizes a null array key to the empty string "", so emit it as
+        // a zero-length string key (key_hi = 0 signals a string key).
+        PhpType::Void | PhpType::Never => {
+            emit_empty_string_hash_key(emitter, data);
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             let string_key = ctx.next_label("mixed_hash_key_string");
+            let null_key = ctx.next_label("mixed_hash_key_null");
             let scalar_key = ctx.next_label("mixed_hash_key_scalar");
             let done = ctx.next_label("mixed_hash_key_done");
             match emitter.target.arch {
@@ -801,6 +807,8 @@ pub(crate) fn emit_normalized_hash_key(
                     emitter.instruction("bl __rt_mixed_unbox");                 // decode the boxed key before normalizing it for hash storage
                     emitter.instruction("cmp x0, #1");                          // string mixed keys need PHP numeric-string normalization
                     emitter.instruction(&format!("b.eq {}", string_key));       // route string keys through the normal hash-key helper
+                    emitter.instruction("cmp x0, #8");                          // null mixed keys normalize to the empty string like PHP
+                    emitter.instruction(&format!("b.eq {}", null_key));          // route null keys to the empty-string key path
                     emitter.instruction("cmp x0, #0");                          // integer mixed keys are already scalar hash keys
                     emitter.instruction(&format!("b.eq {}", scalar_key));       // keep integer keys as integer hash keys
                     emitter.instruction("cmp x0, #3");                          // boolean mixed keys normalize like integer keys
@@ -809,6 +817,9 @@ pub(crate) fn emit_normalized_hash_key(
                     emitter.label(&scalar_key);
                     emitter.instruction("mov x2, #-1");                         // key_hi sentinel marks scalar mixed keys as integers
                     emitter.instruction(&format!("b {}", done));                // skip the string-key normalization path
+                    emitter.label(&null_key);
+                    emit_empty_string_hash_key_aarch64(emitter, data);          // null normalizes to the empty string "" hash key
+                    emitter.instruction(&format!("b {}", done));               // skip the string-key normalization path
                     emitter.label(&string_key);
                     emitter.instruction("bl __rt_hash_normalize_key");          // normalize string mixed keys to PHP int/string hash keys
                     emitter.label(&done);
@@ -817,6 +828,8 @@ pub(crate) fn emit_normalized_hash_key(
                     emitter.instruction("call __rt_mixed_unbox");               // decode the boxed key before normalizing it for hash storage
                     emitter.instruction("cmp rax, 1");                          // string mixed keys need PHP numeric-string normalization
                     emitter.instruction(&format!("je {}", string_key));         // route string keys through the normal hash-key helper
+                    emitter.instruction("cmp rax, 8");                          // null mixed keys normalize to the empty string like PHP
+                    emitter.instruction(&format!("je {}", null_key));           // route null keys to the empty-string key path
                     emitter.instruction("cmp rax, 0");                          // integer mixed keys are already scalar hash keys
                     emitter.instruction(&format!("je {}", scalar_key));         // keep integer keys as integer hash keys
                     emitter.instruction("cmp rax, 3");                          // boolean mixed keys normalize like integer keys
@@ -824,6 +837,9 @@ pub(crate) fn emit_normalized_hash_key(
                     emitter.instruction("xor eax, eax");                        // unsupported mixed key tags fall back to integer key zero
                     emitter.instruction("mov rdx, -1");                         // key_hi sentinel marks fallback mixed keys as integers
                     emitter.instruction(&format!("jmp {}", done));              // skip the string-key normalization path
+                    emitter.label(&null_key);
+                    emit_empty_string_hash_key_x86_64(emitter, data);           // null normalizes to the empty string "" hash key
+                    emitter.instruction(&format!("jmp {}", done));             // skip the string-key normalization path
                     emitter.label(&scalar_key);
                     emitter.instruction("mov rax, rdi");                        // publish the unboxed scalar payload as key_lo
                     emitter.instruction("mov rdx, -1");                         // key_hi sentinel marks scalar mixed keys as integers
@@ -859,4 +875,30 @@ pub(super) fn align16(n: usize) -> usize {
 /// multiple instructions on the target architecture.
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
     abi::emit_load_int_immediate(emitter, reg, value);                          // materialize the immediate through the shared target-aware helper
+}
+
+/// Emits the shared empty-string constant as a hash key pair for the active target.
+///
+/// PHP normalizes a null array key to the empty string `""`, which is a string
+/// key: the low word holds the empty-string pointer and the high word is 0
+/// (the string-key marker, distinct from the integer-key sentinel `-1`).
+fn emit_empty_string_hash_key(emitter: &mut Emitter, data: &mut DataSection) {
+    match emitter.target.arch {
+        Arch::AArch64 => emit_empty_string_hash_key_aarch64(emitter, data),
+        Arch::X86_64 => emit_empty_string_hash_key_x86_64(emitter, data),
+    }
+}
+
+/// Emits the shared empty-string constant as the AArch64 hash key pair `x1`/`x2`.
+fn emit_empty_string_hash_key_aarch64(emitter: &mut Emitter, data: &mut DataSection) {
+    let (label, len) = data.add_string(b"");
+    abi::emit_symbol_address(emitter, "x1", &label);
+    abi::emit_load_int_immediate(emitter, "x2", len as i64);
+}
+
+/// Emits the shared empty-string constant as the x86_64 hash key pair `rax`/`rdx`.
+fn emit_empty_string_hash_key_x86_64(emitter: &mut Emitter, data: &mut DataSection) {
+    let (label, len) = data.add_string(b"");
+    abi::emit_symbol_address(emitter, "rax", &label);
+    abi::emit_load_int_immediate(emitter, "rdx", len as i64);
 }

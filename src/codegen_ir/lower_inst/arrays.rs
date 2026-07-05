@@ -206,15 +206,23 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
 }
 
 /// Lowers an indexed-array element read with PHP null-sentinel fallback on misses.
-pub(super) fn lower_array_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(super) fn lower_array_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    warn_on_missing: bool,
+) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let index = expect_operand(inst, 1)?;
     let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
     require_array_get_result(&elem_ty, inst)?;
     let result_ty = inst.result_php_type.codegen_repr();
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_array_get_aarch64(ctx, inst, array, index, &elem_ty, &result_ty),
-        Arch::X86_64 => lower_array_get_x86_64(ctx, inst, array, index, &elem_ty, &result_ty),
+        Arch::AArch64 => {
+            lower_array_get_aarch64(ctx, inst, array, index, &elem_ty, &result_ty, warn_on_missing)
+        }
+        Arch::X86_64 => {
+            lower_array_get_x86_64(ctx, inst, array, index, &elem_ty, &result_ty, warn_on_missing)
+        }
     }
 }
 
@@ -276,6 +284,47 @@ pub(super) fn lower_array_set_mixed_key(
     // instead would leave the result SSA value unmaterialized, and the later
     // EIR `store_local <result>` would read an uninitialized slot back into the
     // destination local (clobbering it with garbage on every write).
+    store_if_result(ctx, inst)
+}
+
+/// Reads a mixed-key (string or int) element from an indexed array local via the
+/// `__rt_array_get_mixed_key` runtime helper. Returns a boxed `Mixed` cell;
+/// missing keys yield `Mixed(null)`.
+pub(super) fn lower_array_get_mixed_key(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    warn_on_missing: bool,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    require_indexed_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
+    let key_ty = ctx.value_php_type(key)?.codegen_repr();
+    if !matches!(
+        key_ty,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Str | PhpType::Void | PhpType::Never
+    ) {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_get_mixed_key key PHP type {:?}",
+            key_ty
+        )));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_load_int_immediate(ctx.emitter, "x3", if warn_on_missing { 1 } else { 0 });
+        }
+        Arch::X86_64 => {
+            super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(array, "rdi")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", if warn_on_missing { 1 } else { 0 });
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_get_mixed_key");
     store_if_result(ctx, inst)
 }
 
@@ -416,6 +465,7 @@ fn lower_array_get_aarch64(
     index: ValueId,
     elem_ty: &PhpType,
     result_ty: &PhpType,
+    warn_on_missing: bool,
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let len_reg = abi::secondary_scratch_reg(ctx.emitter);
@@ -433,7 +483,9 @@ fn lower_array_get_aarch64(
     emit_array_get_in_bounds_aarch64(ctx, array_reg, result_reg, elem_ty, result_ty)?;
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the null fallback after a successful indexed-array read
     ctx.emitter.label(&null_label);
-    emit_undefined_array_key_warning(ctx);
+    if warn_on_missing {
+        emit_undefined_array_key_warning(ctx);
+    }
     emit_array_get_null_fallback(ctx, result_ty);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
@@ -492,6 +544,7 @@ fn lower_array_get_x86_64(
     index: ValueId,
     elem_ty: &PhpType,
     result_ty: &PhpType,
+    warn_on_missing: bool,
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let len_reg = abi::secondary_scratch_reg(ctx.emitter);
@@ -509,7 +562,9 @@ fn lower_array_get_x86_64(
     emit_array_get_in_bounds_x86_64(ctx, array_reg, result_reg, elem_ty, result_ty)?;
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the null fallback after a successful indexed-array read
     ctx.emitter.label(&null_label);
-    emit_undefined_array_key_warning(ctx);
+    if warn_on_missing {
+        emit_undefined_array_key_warning(ctx);
+    }
     emit_array_get_null_fallback(ctx, result_ty);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)

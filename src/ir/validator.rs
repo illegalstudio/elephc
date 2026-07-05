@@ -406,8 +406,10 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         HashUnion => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)"),
         ArrayHashUnion => check_array_hash_union(function, inst_id, inst),
         HashArrayUnion => check_hash_array_union(function, inst_id, inst),
-        ArrayLen | ArrayGet | ArrayIsset | ArraySet | ArrayPush | ArrayEnsureUnique
-        | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey => {
+        HashSpread => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)"),
+        ArrayLen | ArrayGet | ArrayGetSilent | ArrayIsset | ArraySet | ArrayPush | ArrayEnsureUnique
+        | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey | ArrayGetMixedKey
+        | ArrayGetMixedKeySilent => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
         }
         MixedArrayAppend => {

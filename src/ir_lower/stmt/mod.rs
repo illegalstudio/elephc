@@ -18,9 +18,9 @@ use crate::ir::{
 use crate::ir_lower::context::{FinallyFrame, LoopCleanup, LoopFrame, LoweredValue, LoweringContext};
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
-    coerce_to_int_at_span, lower_callable_array_for_assignment, lower_closure_for_assignment, lower_expr,
-    static_callable_binding_for_expr, string_op_uses_scratch_storage,
-    type_satisfies_array_access_for_ir,
+    array_access_element_result_type, coerce_to_int_at_span, lower_callable_array_for_assignment,
+    lower_closure_for_assignment, lower_expr, static_callable_binding_for_expr,
+    string_op_uses_scratch_storage, type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
 use crate::parser::ast::{
@@ -2017,10 +2017,20 @@ fn list_unpack_get_op(source_type: IrType) -> Op {
 }
 
 /// Returns the PHP type assigned to each simple list-unpack destination.
+///
+/// Indexed-array reads use `Op::ArrayGet`, whose runtime OOB fallback produces a
+/// null in the result shape (tagged scalar or sentinel). To preserve that null
+/// for `??` and `IsNull`, the destination type is widened the same way as a
+/// direct array index read (see `array_access_element_result_type`). Without
+/// this widening an `Array(Int)` element would lower to `PhpType::Int`, whose
+/// null fallback is the in-band `NULL_SENTINEL` i64, and `$b ?? 'n'` would see
+/// a non-null integer instead of null for missing keys (#337).
 fn list_unpack_item_type(ctx: &LoweringContext<'_, '_>, source: crate::ir::ValueId) -> PhpType {
     let item_type = match ctx.builder.value_php_type(source).codegen_repr() {
-        PhpType::Array(elem_ty) => *elem_ty,
-        PhpType::AssocArray { value, .. } => *value,
+        PhpType::Array(elem_ty) => array_access_element_result_type(elem_ty.codegen_repr()),
+        PhpType::AssocArray { value, .. } => {
+            array_access_element_result_type(value.codegen_repr())
+        }
         _ => PhpType::Mixed,
     };
     normalize_materialized_element_type(item_type)
