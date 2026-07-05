@@ -94,6 +94,15 @@ fn test_new_parent_returns_instance_of_parent_class() {
     assert_eq!(out, "base");
 }
 
+/// Verifies `new self`, `new static`, and `new parent` work without constructor parentheses.
+#[test]
+fn test_new_relative_receivers_without_constructor_parentheses() {
+    let out = compile_and_run(
+        "<?php\nclass Base {\n    public function who(): string { return \"base\"; }\n    public static function makeStatic() { return new static; }\n}\nclass Child extends Base {\n    public function who(): string { return \"child\"; }\n    public static function makeSelf() { return new self; }\n    public static function makeParent() { return new parent; }\n}\necho Child::makeSelf()->who(), \"|\", Child::makeStatic()->who(), \"|\", Child::makeParent()->who();\n",
+    );
+    assert_eq!(out, "child|child|base");
+}
+
 /// Verifies `new self()` passes constructor arguments correctly.
 #[test]
 fn test_new_self_with_constructor_args() {
