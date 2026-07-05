@@ -180,11 +180,11 @@ fn emit_weekdays_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 112], rdi");                      // save weekday cursor before match
     emitter.instruction("lea rdi, [rbp - 64]");                                 // candidate ptr = lc16 base
     abi::emit_symbol_address(emitter, "rsi", "_strtotime_keyword_tab");         // keyword table base
-    emitter.instruction("mov rcx, r10");                                        // copy end
-    emitter.instruction("mov r11, QWORD PTR [rbp - 80]");                       // reload original ptr
-    emitter.instruction("add r11, rax");                                        // add modifier-consumed
-    // Compute remaining: end - (orig_ptr + modifier_consumed + ws_skipped) — simpler: pass len-capped
-    emitter.instruction("mov rcx, 16");                                         // cap to 16
+    emitter.instruction("mov rcx, r10");                                        // rcx = end
+    emitter.instruction("sub rcx, QWORD PTR [rsp + 112]");                      // rcx = remaining = end - cursor
+    emitter.instruction("mov r8, 16");                                          // cap to lc16 size
+    emitter.instruction("cmp rcx, r8");                                         // remaining > 16 ?
+    emitter.instruction("cmovae rcx, r8");                                      // rcx = min(remaining, 16)
     emitter.instruction("call __rt_strtotime_match_word_linux_x86_64");         // rax = consumed, rdx = kind
 
     emitter.instruction("test rax, rax");                                       // matched ?

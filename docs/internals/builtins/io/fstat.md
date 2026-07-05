@@ -2,14 +2,14 @@
 title: "fstat() — internals"
 description: "Compiler internals for fstat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 170
+  order: 172
 ---
 
 ## `fstat()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/fstat.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fstat.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5539](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5539) (`lower_fstat`)
 - **Function symbol**: `lower_fstat()`
 
@@ -36,4 +36,3 @@ function fstat(resource $stream): mixed
 ## Cross-references
 
 - [User reference for `fstat()`](../../../php/builtins/io/fstat.md)
-

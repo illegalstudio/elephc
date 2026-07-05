@@ -1,8 +1,8 @@
 ---
 title: "disk_total_space()"
-description: "Lowers `disk_total_space(path)` through the shared disk-space runtime helper."
+description: "Returns the total size of a filesystem or disk partition."
 sidebar:
-  order: 105
+  order: 107
 ---
 
 ## disk_total_space()
@@ -11,7 +11,7 @@ sidebar:
 function disk_total_space(string $directory): float
 ```
 
-Lowers `disk_total_space(path)` through the shared disk-space runtime helper.
+Returns the total size of a filesystem or disk partition.
 
 **Parameters**:
 - `$directory` (`string`)

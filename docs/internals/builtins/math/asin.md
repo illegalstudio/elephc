@@ -2,17 +2,21 @@
 title: "asin() — internals"
 description: "Compiler internals for asin(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 235
+  order: 237
 ---
 
 ## `asin()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/math/asin.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/asin.rs)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/libm.rs`:22](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/libm.rs#L22) (`lower_unary_libm`)
+- **Function symbol**: `lower_unary_libm()`
 
+
+### Lowering notes
+
+- Lowers a one-argument libm builtin such as `sin()`, `cos()`, or `exp()`.
 
 ## Runtime helpers
 
@@ -31,4 +35,3 @@ function asin(float $num): float
 ## Cross-references
 
 - [User reference for `asin()`](../../../php/builtins/math/asin.md)
-

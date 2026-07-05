@@ -335,7 +335,7 @@ fn preg_match_output_var(arg: &Expr) -> Option<&String> {
 /// lowers through `HashUnset`. Only plain `$var[$key]` targets on a currently-packed array are
 /// affected; associative arrays, objects, and non-variable receivers are left unchanged.
 fn promote_indexed_local_for_element_unset(arg: &Expr, env: &mut TypeEnv) {
-    let ExprKind::ArrayAccess { array, .. } = &arg.kind else {
+    let ExprKind::ArrayAccess { array, index, .. } = &arg.kind else {
         return;
     };
     let ExprKind::Variable(name) = &array.kind else {
@@ -344,11 +344,25 @@ fn promote_indexed_local_for_element_unset(arg: &Expr, env: &mut TypeEnv) {
     let Some(PhpType::Array(elem_ty)) = env.get(name).cloned() else {
         return;
     };
+    let idx_ty = crate::types::array_keys::normalized_array_key_type(
+        index,
+        super::super::syntactic::infer_expr_type_syntactic(index),
+    );
+    let key_ty = if idx_ty == PhpType::Int {
+        PhpType::Int
+    } else {
+        PhpType::Mixed
+    };
+    let value_ty = if *elem_ty == PhpType::Never {
+        PhpType::Mixed
+    } else {
+        *elem_ty
+    };
     env.insert(
         name.clone(),
         PhpType::AssocArray {
-            key: Box::new(PhpType::Int),
-            value: elem_ty,
+            key: Box::new(key_ty),
+            value: Box::new(value_ty),
         },
     );
 }

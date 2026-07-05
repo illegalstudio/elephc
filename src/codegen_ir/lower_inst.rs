@@ -38,7 +38,7 @@ use super::{CodegenIrError, Result};
 mod arithmetic;
 mod arrays;
 mod buffers;
-mod builtins;
+pub(crate) mod builtins;
 mod callables;
 mod comparisons;
 mod conversions;
@@ -73,6 +73,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ConstNull => lower_const_null(ctx, &inst),
         Op::ConstStr => strings::lower_const_str(ctx, &inst),
         Op::ConstClassName => strings::lower_const_class_name(ctx, &inst),
+        Op::LoadCalledClassId => strings::lower_load_called_class_id(ctx, &inst),
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
         Op::UnsetLocal => lower_unset_local(ctx, &inst),
@@ -133,10 +134,14 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StrPersist => strings::lower_str_persist(ctx, &inst),
         Op::ArrayNew => arrays::lower_array_new(ctx, &inst),
         Op::ArrayLen => arrays::lower_array_len(ctx, &inst),
-        Op::ArrayGet => arrays::lower_array_get(ctx, &inst),
+        Op::ArrayGet => arrays::lower_array_get(ctx, &inst, true),
+        Op::ArrayGetSilent => arrays::lower_array_get(ctx, &inst, false),
         Op::ArrayIsset => builtins::lower_array_isset(ctx, &inst),
+        Op::ArrayElemAddr => arrays::lower_array_elem_addr(ctx, &inst),
         Op::ArraySet => arrays::lower_array_set(ctx, &inst),
         Op::ArraySetMixedKey => arrays::lower_array_set_mixed_key(ctx, &inst),
+        Op::ArrayGetMixedKey => arrays::lower_array_get_mixed_key(ctx, &inst, true),
+        Op::ArrayGetMixedKeySilent => arrays::lower_array_get_mixed_key(ctx, &inst, false),
         Op::ArrayPush => arrays::lower_array_push(ctx, &inst),
         Op::MixedArrayAppend => arrays::lower_mixed_array_append(ctx, &inst),
         Op::ArrayUnion => arrays::lower_array_union(ctx, &inst),
@@ -150,6 +155,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
         Op::HashUnion => hashes::lower_hash_union(ctx, &inst),
         Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, &inst),
+        Op::HashSpread => hashes::lower_hash_spread(ctx, &inst),
         Op::IterStart => iterators::lower_iter_start(ctx, &inst),
         Op::IterNext => iterators::lower_iter_next(ctx, &inst),
         Op::IterCurrentKey => iterators::lower_iter_current_key(ctx, &inst),
@@ -5269,6 +5275,10 @@ fn materialize_ref_arg_address(
     if local_ref_arg_source(ctx, value).is_ok() {
         return materialize_local_ref_arg_address(ctx, value);
     }
+    if value_is_array_element_address(ctx, value)? {
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+        return Ok(());
+    }
     materialize_temporary_ref_arg_cell(ctx, value, param_ty)
 }
 
@@ -5396,6 +5406,21 @@ fn materialize_local_ref_arg_address(
         abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
     }
     Ok(())
+}
+
+/// Returns true when a value already holds a direct pointer to an array element slot.
+fn value_is_array_element_address(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    Ok(inst_ref.op == Op::ArrayElemAddr)
 }
 
 /// Describes a local operand used as a by-reference call argument.

@@ -73,3 +73,12 @@ foreach ($extended as $v) {
     echo $v . " ";
 }
 echo "\n";
+
+// Spread of associative arrays: string keys are preserved, integer keys are reindexed
+$config = ['host' => 'localhost', 'port' => 8080];
+$defaults = ['host' => '0.0.0.0', 'timeout' => 30];
+$merged_config = [...$defaults, ...$config];
+foreach ($merged_config as $key => $value) {
+    echo $key . "=" . $value . " ";
+}
+echo "\n";

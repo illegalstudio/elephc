@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_diff_assoc.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_diff_assoc.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1347](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1347) (`lower_array_diff_assoc`)
 - **Function symbol**: `lower_array_diff_assoc()`
 
@@ -38,4 +38,3 @@ function array_diff_assoc(array $array, ...$arrays): mixed
 ## Cross-references
 
 - [User reference for `array_diff_assoc()`](../../../php/builtins/array/array_diff_assoc.md)
-

@@ -2,7 +2,7 @@
 title: "unset() — internals"
 description: "Compiler internals for unset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 286
+  order: 283
 ---
 
 ## `unset()` — internals
@@ -36,4 +36,3 @@ function unset(mixed $var, ...$vars): void
 ## Cross-references
 
 - [User reference for `unset()`](../../../php/builtins/misc/unset.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "is_file()"
-description: "Lowers `is_file(path)` through the target-aware runtime stat helper."
+description: "Tells whether the filename is a regular file."
 sidebar:
-  order: 122
+  order: 124
 ---
 
 ## is_file()
@@ -11,7 +11,7 @@ sidebar:
 function is_file(string $filename): bool
 ```
 
-Lowers `is_file(path)` through the target-aware runtime stat helper.
+Tells whether the filename is a regular file.
 
 **Parameters**:
 - `$filename` (`string`)

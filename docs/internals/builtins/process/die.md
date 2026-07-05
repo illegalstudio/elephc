@@ -2,7 +2,7 @@
 title: "die() — internals"
 description: "Compiler internals for die(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 303
+  order: 300
 ---
 
 ## `die()` — internals
@@ -31,4 +31,3 @@ function die(int $status): void
 ## Cross-references
 
 - [User reference for `die()`](../../../php/builtins/process/die.md)
-

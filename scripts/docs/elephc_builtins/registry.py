@@ -1268,98 +1268,6 @@ RETURN_TYPE_OVERRIDES: Dict[str, str] = {
 }
 
 
-# Hand-curated by-reference parameter overrides. signatures.rs does not always
-# mark parameters that PHP passes by reference; these overrides make the
-# generated docs match the actual PHP calling convention.
-REF_PARAM_OVERRIDES: Dict[str, List[bool]] = {
-    "exec": [False, True, True],
-    "is_callable": [False, False, True],
-    "passthru": [False, True],
-    "preg_match_all": [False, False, True],
-    "preg_replace": [False, False, False, False, True],
-    "preg_replace_callback": [False, False, False, False, True, False],
-    "str_ireplace": [False, False, False, True],
-    "str_replace": [False, False, False, True],
-    "system": [False, True],
-    "stream_socket_client": [False, True, True, False, False],
-    "stream_socket_server": [False, True, True],
-}
-
-
-# Hand-curated optional-parameter overrides. Each entry is a list parallel to
-# the parameter list: None = required, string = optional with that PHP default.
-OPTIONAL_PARAM_OVERRIDES: Dict[str, List[Optional[str]]] = {
-    "file_put_contents": [None, None, "0", "null"],
-    "fputcsv": [None, None, "','", "'\"'", "'\\\\'", "'\\n'"],
-    "hash": [None, None, "false", "[]"],
-    "hash_file": [None, None, "false", "[]"],
-    "hash_init": [None, "0", "''", "[]"],
-    "is_callable": [None, "false", "null"],
-    "phpversion": ["null"],
-    "preg_replace": [None, None, None, "-1", "null"],
-    "preg_replace_callback": [None, None, None, "-1", "null", "0"],
-    "print_r": [None, "false"],
-    "rmdir": [None, "null"],
-}
-
-
-# Hand-curated parameter-name overrides. signatures.rs sometimes uses generic
-# names like `value`; these match the PHP manual names.
-PARAM_NAME_OVERRIDES: Dict[str, List[Optional[str]]] = {
-    "array_chunk": [None, None, "preserve_keys"],
-    "array_column": [None, None, "index_key"],
-    "array_keys": [None, "filter_value", "strict"],
-    "array_rand": [None, "num"],
-    "array_reverse": [None, "preserve_keys"],
-    "array_slice": [None, None, None, "preserve_keys"],
-    "array_splice": [None, None, None, "replacement"],
-    "array_unique": [None, "flags"],
-    "array_walk": [None, None, "arg"],
-    "arsort": [None, "flags"],
-    "asort": [None, "flags"],
-    "base64_decode": [None, "strict"],
-    "exec": [None, "output", "result_code"],
-    "fgetcsv": [None, None, None, "enclosure", "escape"],
-    "fgets": [None, "length"],
-    "fwrite": [None, None, "length"],
-    "getenv": [None, "local_only"],
-    "glob": [None, "flags"],
-    "html_entity_decode": [None, "flags", "encoding"],
-    "htmlentities": [None, "flags", "encoding", "double_encode"],
-    "htmlspecialchars": [None, "flags", "encoding", "double_encode"],
-    "is_callable": [None, "syntax_only"],
-    "krsort": [None, "flags"],
-    "ksort": [None, "flags"],
-    "mkdir": [None, "permissions", "recursive", "context"],
-    "nl2br": [None, "use_xhtml"],
-    "passthru": [None, "result_code"],
-    "preg_replace": [None, None, None, "limit"],
-    "preg_replace_callback": [None, None, None, "limit"],
-    "range": [None, None, "step"],
-    "rename": [None, None, "context"],
-    "rsort": [None, "flags"],
-    "scandir": [None, "sorting_order", "context"],
-    "sort": [None, "flags"],
-    "stream_context_get_options": ["stream_or_context"],
-    "stream_filter_append": [None, "filter_name", "mode"],
-    "stream_filter_prepend": [None, "filter_name", "mode"],
-    "stream_socket_client": [None, "error_code", "error_message", "timeout", "flags"],
-    "stream_socket_server": [None, "error_code", "error_message"],
-    "system": [None, "result_code"],
-    "fputcsv": [None, None, None, None, "escape", "eol"],
-    "gzcompress": [None, None, "encoding"],
-    "gzdeflate": [None, None, "encoding"],
-    "hash": [None, None, None, "options"],
-    "hash_file": [None, None, None, "options"],
-    "hash_init": [None, None, None, "options"],
-    "is_callable": [None, "syntax_only", "callable_name"],
-    "phpversion": ["extension"],
-    "preg_replace": [None, None, None, "limit", "count"],
-    "preg_replace_callback": [None, None, None, "limit", "count", "flags"],
-    "rmdir": [None, "context"],
-}
-
-
 # Hand-curated one-line descriptions for the user-facing pages. When a
 # builtin has no override here, the renderer falls back to the first line of
 # the lowering function's `///` doc comment, if available.
@@ -1401,14 +1309,4 @@ INTERNAL_NOTES: Dict[str, List[str]] = {
         "Internal helper used by the built-in Phar / PharData support to change archive compression.",
         "Calls the native PHAR compression-control bridge and returns whether the update succeeded.",
     ],
-}
-
-
-# Hand-curated variadic overrides. signatures.rs says `fixed(&["value"])`
-# for these but PHP actually accepts any number of arguments.
-# Note: printf/sprintf/fprintf are already variadic in signatures.rs,
-# so they do not need an override.
-VARIADIC_OVERRIDES: Dict[str, str] = {
-    "var_dump": "values",
-    "print_r": "values",
 }

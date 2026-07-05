@@ -2,17 +2,21 @@
 title: "is_float() — internals"
 description: "Compiler internals for is_float(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 421
+  order: 418
 ---
 
 ## `is_float()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/types/is_float.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_float.rs)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:737](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L737) (`lower_static_type_predicate`)
+- **Function symbol**: `lower_static_type_predicate()`
 
+
+### Lowering notes
+
+- Lowers a static `is_*` predicate for concrete non-Mixed values.
 
 ## Runtime helpers
 
@@ -31,4 +35,3 @@ function is_float(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_float()`](../../../php/builtins/type/is_float.md)
-

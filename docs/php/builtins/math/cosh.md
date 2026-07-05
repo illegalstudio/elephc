@@ -1,8 +1,8 @@
 ---
 title: "cosh()"
-description: "cosh() — math builtin supported by Elephc."
+description: "Returns the hyperbolic cosine of a number."
 sidebar:
-  order: 241
+  order: 243
 ---
 
 ## cosh()
@@ -11,7 +11,7 @@ sidebar:
 function cosh(float $num): float
 ```
 
-`cosh()` is a math builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Returns the hyperbolic cosine of a number.
 
 **Parameters**:
 - `$num` (`float`)
@@ -25,4 +25,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `cosh` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/cosh.md).
 

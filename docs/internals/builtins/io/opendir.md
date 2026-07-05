@@ -2,14 +2,14 @@
 title: "opendir() — internals"
 description: "Compiler internals for opendir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 183
+  order: 185
 ---
 
 ## `opendir()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/opendir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/opendir.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3547](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3547) (`lower_opendir`)
 - **Function symbol**: `lower_opendir()`
 
@@ -38,4 +38,3 @@ function opendir(string $directory): mixed
 ## Cross-references
 
 - [User reference for `opendir()`](../../../php/builtins/io/opendir.md)
-

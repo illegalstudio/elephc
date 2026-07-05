@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_intersect_assoc.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_intersect_assoc.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1352](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1352) (`lower_array_intersect_assoc`)
 - **Function symbol**: `lower_array_intersect_assoc()`
 
@@ -40,4 +40,3 @@ function array_intersect_assoc(array $array, ...$arrays): mixed
 ## Cross-references
 
 - [User reference for `array_intersect_assoc()`](../../../php/builtins/array/array_intersect_assoc.md)
-

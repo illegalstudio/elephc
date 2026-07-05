@@ -2,14 +2,14 @@
 title: "fprintf() — internals"
 description: "Compiler internals for fprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 165
+  order: 167
 ---
 
 ## `fprintf()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/fprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fprintf.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2862](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2862) (`lower_fprintf`)
 - **Function symbol**: `lower_fprintf()`
 
@@ -37,4 +37,3 @@ function fprintf(resource $stream, string $format, ...$values): int
 ## Cross-references
 
 - [User reference for `fprintf()`](../../../php/builtins/io/fprintf.md)
-

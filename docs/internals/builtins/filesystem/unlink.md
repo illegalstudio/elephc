@@ -2,14 +2,14 @@
 title: "unlink() — internals"
 description: "Compiler internals for unlink(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 150
+  order: 152
 ---
 
 ## `unlink()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/unlink.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/unlink.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4407](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4407) (`lower_unlink`)
 - **Function symbol**: `lower_unlink()`
 
@@ -38,4 +38,3 @@ function unlink(string $filename): bool
 ## Cross-references
 
 - [User reference for `unlink()`](../../../php/builtins/filesystem/unlink.md)
-

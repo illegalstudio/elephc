@@ -94,8 +94,7 @@ Classes implementing `ArrayAccess` can use PHP subscript syntax:
 `unset($obj[$key])` dispatches to `offsetUnset()`.
 
 `Serializable` is intentionally not provided: it is deprecated since
-PHP 8.1. Use `__serialize` / `__unserialize` magic methods instead
-(when those land).
+PHP 8.1. Use the `__serialize` / `__unserialize` magic methods instead.
 
 ### Built-in SPL containers and storage iterators
 
@@ -219,6 +218,8 @@ final class InvoiceNumber {
 - `final` properties, which can be read normally but cannot be redeclared by subclasses
 - Static properties with `public static`, `protected static`, or `private static`, including typed static properties
 - `readonly class` makes all instance properties readonly; static properties stay mutable
+
+Statically-known access violations — calling a `private`/`protected` method from an inaccessible scope, or writing a `readonly` property outside its declaring constructor — raise a catchable `Error` exception at runtime, matching PHP. Without a `try`/`catch` handler the exception is a fatal uncaught exit.
 
 ```php
 <?php

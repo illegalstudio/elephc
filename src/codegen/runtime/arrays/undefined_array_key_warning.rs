@@ -1,6 +1,6 @@
 //! Purpose:
-//! Emits the runtime warning helper for undefined integer array keys.
-//! Formats the missing key value while preserving concat scratch state.
+//! Emits runtime warning helpers for undefined integer and string array keys.
+//! Formats missing key values while preserving concat scratch state where needed.
 //!
 //! Called from:
 //! - `crate::codegen::runtime::emitters::emit_runtime()`.
@@ -14,12 +14,14 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
 const UNDEFINED_ARRAY_KEY_PREFIX_LEN: usize = "Warning: Undefined array key ".len();
+const UNDEFINED_ARRAY_KEY_QUOTE_LEN: usize = "\"".len();
 const UNDEFINED_ARRAY_KEY_SUFFIX_LEN: usize = "\n".len();
 
 /// Emits `__rt_warn_undefined_array_key_int` for the active target.
 pub fn emit_undefined_array_key_warning(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_undefined_array_key_warning_x86_64(emitter);
+        emit_undefined_array_key_string_warning_x86_64(emitter);
         return;
     }
 
@@ -58,6 +60,8 @@ pub fn emit_undefined_array_key_warning(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the runtime warning frame
     emitter.instruction("ret");                                                 // return to the array-miss caller
+
+    emit_undefined_array_key_string_warning_aarch64(emitter);
 }
 
 /// Emits the x86_64 implementation of `__rt_warn_undefined_array_key_int`.
@@ -87,6 +91,86 @@ fn emit_undefined_array_key_warning_x86_64(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the formatted missing-key value
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the pre-warning concat cursor
     abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // restore concat scratch state for surrounding expressions
+
+    // -- emit suffix --
+    abi::emit_symbol_address(emitter, "rdi", "_diag_undefined_array_key_suffix");
+    emitter.instruction(&format!("mov esi, {}", UNDEFINED_ARRAY_KEY_SUFFIX_LEN)); // pass the undefined-key warning suffix length
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the undefined-key warning suffix
+
+    // -- restore stack frame --
+    emitter.instruction("mov rsp, rbp");                                        // release the runtime warning frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the array-miss caller
+}
+
+/// Emits the ARM64 implementation of `__rt_warn_undefined_array_key_str`.
+fn emit_undefined_array_key_string_warning_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: undefined_array_key_string_warning ---");
+    emitter.label_global("__rt_warn_undefined_array_key_str");
+
+    // -- set up stack frame --
+    emitter.instruction("sub sp, sp, #48");                                     // reserve saved string key and frame linkage
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable runtime warning frame
+    emitter.instruction("str x1, [sp, #0]");                                    // save the missing string key pointer across warning fragments
+    emitter.instruction("str x2, [sp, #8]");                                    // save the missing string key length across warning fragments
+
+    // -- emit prefix --
+    abi::emit_symbol_address(emitter, "x1", "_diag_undefined_array_key_prefix");
+    emitter.instruction(&format!("mov x2, #{}", UNDEFINED_ARRAY_KEY_PREFIX_LEN)); // pass the undefined-key warning prefix length
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the undefined-key warning prefix
+
+    // -- emit quoted string key --
+    abi::emit_symbol_address(emitter, "x1", "_diag_undefined_array_key_quote");
+    emitter.instruction(&format!("mov x2, #{}", UNDEFINED_ARRAY_KEY_QUOTE_LEN)); // pass the opening quote length
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the opening quote
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the missing string key pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the missing string key length
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the missing string key bytes
+    abi::emit_symbol_address(emitter, "x1", "_diag_undefined_array_key_quote");
+    emitter.instruction(&format!("mov x2, #{}", UNDEFINED_ARRAY_KEY_QUOTE_LEN)); // pass the closing quote length
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the closing quote
+
+    // -- emit suffix --
+    abi::emit_symbol_address(emitter, "x1", "_diag_undefined_array_key_suffix");
+    emitter.instruction(&format!("mov x2, #{}", UNDEFINED_ARRAY_KEY_SUFFIX_LEN)); // pass the undefined-key warning suffix length
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the undefined-key warning suffix
+
+    // -- restore stack frame --
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the runtime warning frame
+    emitter.instruction("ret");                                                 // return to the array-miss caller
+}
+
+/// Emits the x86_64 implementation of `__rt_warn_undefined_array_key_str`.
+fn emit_undefined_array_key_string_warning_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: undefined_array_key_string_warning ---");
+    emitter.label_global("__rt_warn_undefined_array_key_str");
+
+    // -- set up stack frame --
+    emitter.instruction("push rbp");                                            // save the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable runtime warning frame
+    emitter.instruction("sub rsp, 32");                                         // reserve saved key pointer and length while keeping calls aligned
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the missing string key pointer across warning fragments
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the missing string key length across warning fragments
+
+    // -- emit prefix --
+    abi::emit_symbol_address(emitter, "rdi", "_diag_undefined_array_key_prefix");
+    emitter.instruction(&format!("mov esi, {}", UNDEFINED_ARRAY_KEY_PREFIX_LEN)); // pass the undefined-key warning prefix length
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the undefined-key warning prefix
+
+    // -- emit quoted string key --
+    abi::emit_symbol_address(emitter, "rdi", "_diag_undefined_array_key_quote");
+    emitter.instruction(&format!("mov esi, {}", UNDEFINED_ARRAY_KEY_QUOTE_LEN)); // pass the opening quote length
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the opening quote
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the missing string key pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the missing string key length
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the missing string key bytes
+    abi::emit_symbol_address(emitter, "rdi", "_diag_undefined_array_key_quote");
+    emitter.instruction(&format!("mov esi, {}", UNDEFINED_ARRAY_KEY_QUOTE_LEN)); // pass the closing quote length
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the closing quote
 
     // -- emit suffix --
     abi::emit_symbol_address(emitter, "rdi", "_diag_undefined_array_key_suffix");

@@ -1,8 +1,8 @@
 ---
 title: "stream_filter_remove()"
-description: "Lowers `stream_filter_remove(filter)` and clears both direction tables for the fd."
+description: "Removes a filter from a stream."
 sidebar:
-  order: 198
+  order: 200
 ---
 
 ## stream_filter_remove()
@@ -11,7 +11,7 @@ sidebar:
 function stream_filter_remove(resource $stream_filter): bool
 ```
 
-Lowers `stream_filter_remove(filter)` and clears both direction tables for the fd.
+Removes a filter from a stream.
 
 **Parameters**:
 - `$stream_filter` (`resource`)

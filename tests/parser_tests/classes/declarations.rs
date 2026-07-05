@@ -80,6 +80,24 @@ fn test_parse_new_object_no_parens() {
     }
 }
 
+/// Verifies that `<?php $o = new $cls(1, 2);` parses dynamic instantiation into
+/// `ExprKind::NewDynamic` whose `name_expr` is the class-name variable, with the
+/// constructor argument list captured.
+#[test]
+fn test_parse_new_dynamic_object() {
+    let stmts = parse_source("<?php $o = new $cls(1, 2);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewDynamic { name_expr, args } => {
+                assert_eq!(name_expr.kind, ExprKind::Variable("cls".to_string()));
+                assert_eq!(args.len(), 2);
+            }
+            _ => panic!("Expected NewDynamic"),
+        },
+        _ => panic!("Expected Assign"),
+    }
+}
+
 /// Verifies that `<?php class Child extends Base { ... }` parses to `ClassDecl` with the
 /// extends name set and the subclass body (method count, name) correctly captured.
 #[test]

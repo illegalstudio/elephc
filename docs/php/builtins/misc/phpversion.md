@@ -8,13 +8,12 @@ sidebar:
 ## phpversion()
 
 ```php
-function phpversion(string $extension = null): string
+function phpversion(): string
 ```
 
 Returns the current PHP version information.
 
-**Parameters**:
-- `$extension` (`string`), default `null`, optional
+**Parameters**: none.
 
 **Returns**: `string`
 

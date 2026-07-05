@@ -1,22 +1,22 @@
 ---
 title: "in_array()"
-description: "Lowers `in_array()` for indexed arrays with scalar or string payloads."
+description: "Checks if a value exists in an array."
 sidebar:
-  order: 50
+  order: 52
 ---
 
 ## in_array()
 
 ```php
-function in_array(mixed $needle, array $haystack, bool $strict): mixed
+function in_array(mixed $needle, array $haystack, bool $strict = false): mixed
 ```
 
-Lowers `in_array()` for indexed arrays with scalar or string payloads.
+Checks if a value exists in an array.
 
 **Parameters**:
 - `$needle` (`mixed`)
 - `$haystack` (`array`)
-- `$strict` (`bool`), optional
+- `$strict` (`bool`), default `false`, optional
 
 **Returns**: `mixed`
 

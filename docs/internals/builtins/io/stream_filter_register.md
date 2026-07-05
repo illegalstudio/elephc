@@ -2,14 +2,14 @@
 title: "stream_filter_register() — internals"
 description: "Compiler internals for stream_filter_register(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 197
+  order: 199
 ---
 
 ## `stream_filter_register()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_filter_register.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_filter_register.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1521](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1521) (`lower_stream_filter_register`)
 - **Function symbol**: `lower_stream_filter_register()`
 
@@ -36,4 +36,3 @@ function stream_filter_register(string $filter_name, string $class): bool
 ## Cross-references
 
 - [User reference for `stream_filter_register()`](../../../php/builtins/io/stream_filter_register.md)
-

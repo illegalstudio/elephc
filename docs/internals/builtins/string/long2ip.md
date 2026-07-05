@@ -2,14 +2,14 @@
 title: "long2ip() — internals"
 description: "Compiler internals for long2ip(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 367
+  order: 364
 ---
 
 ## `long2ip()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/long2ip.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/long2ip.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:476](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L476) (`lower_long2ip`)
 - **Function symbol**: `lower_long2ip()`
 
@@ -37,4 +37,3 @@ function long2ip(int $ip): string
 ## Cross-references
 
 - [User reference for `long2ip()`](../../../php/builtins/string/long2ip.md)
-

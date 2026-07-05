@@ -250,6 +250,8 @@ pub(super) fn lower_loose_eq(
         emit_numeric_string_loose_eq(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
     } else if float_numeric_comparable(&lhs_ty, &rhs_ty) {
         emit_float_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
+    } else if mixed_numeric_comparable(&lhs_ty, &rhs_ty) {
+        emit_mixed_numeric_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
     } else if loose_intish_comparable(&lhs_ty, &rhs_ty) {
         let compare_truthiness = lhs_ty == PhpType::Bool || rhs_ty == PhpType::Bool;
         emit_intish_compare(ctx, lhs, rhs, is_equal, compare_truthiness)?;
@@ -292,6 +294,174 @@ fn string_numeric_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
 fn float_numeric_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
     let numeric = |ty: &PhpType| matches!(ty, PhpType::Int | PhpType::Float);
     (*lhs_ty == PhpType::Float || *rhs_ty == PhpType::Float) && numeric(lhs_ty) && numeric(rhs_ty)
+}
+
+/// Returns true when loose equality involves a `Mixed` operand and a numeric
+/// (`Int`/`Float`) operand. Runtime tags still decide the exact PHP rule:
+/// float/int/null payloads compare numerically, strings use numeric-string
+/// parsing, booleans compare by truthiness, and arrays/objects/resources are
+/// not equal to numbers.
+fn mixed_numeric_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
+    let numeric = |ty: &PhpType| matches!(ty, PhpType::Int | PhpType::Float);
+    let one_mixed = *lhs_ty == PhpType::Mixed || *rhs_ty == PhpType::Mixed;
+    let one_numeric = numeric(lhs_ty) || numeric(rhs_ty);
+    one_mixed && one_numeric
+}
+
+/// Emits loose equality for a `Mixed` vs numeric (`Int`/`Float`) pair using
+/// the runtime Mixed tag before choosing the comparison rule.
+fn emit_mixed_numeric_compare(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    lhs_ty: &PhpType,
+    rhs: ValueId,
+    rhs_ty: &PhpType,
+    is_equal: bool,
+) -> Result<()> {
+    let (mixed_value, numeric_value, numeric_ty) = if *lhs_ty == PhpType::Mixed {
+        (lhs, rhs, rhs_ty)
+    } else {
+        (rhs, lhs, lhs_ty)
+    };
+    let float_reg = abi::float_result_reg(ctx.emitter);
+    load_numeric_to_float_reg(ctx, numeric_value, numeric_ty, float_reg)?;
+    abi::emit_push_float_reg(ctx.emitter, float_reg);
+    ctx.load_value_to_result(mixed_value)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+
+    let string_label = ctx.next_label("mixed_numeric_string");
+    let bool_label = ctx.next_label("mixed_numeric_bool");
+    let non_scalar_label = ctx.next_label("mixed_numeric_non_scalar");
+    let done_label = ctx.next_label("mixed_numeric_done");
+    emit_mixed_numeric_tag_dispatch(ctx, &string_label, &bool_label, &non_scalar_label);
+
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+    emit_compare_current_float_with_saved_numeric(ctx, is_equal);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&string_label);
+    emit_mixed_numeric_string_compare(ctx, is_equal, &done_label);
+
+    ctx.emitter.label(&bool_label);
+    emit_mixed_numeric_bool_compare(ctx, is_equal);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&non_scalar_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    emit_bool_literal(ctx, !is_equal);
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Branches from a Mixed-vs-number loose comparison to tag-specific rules.
+fn emit_mixed_numeric_tag_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    string_label: &str,
+    bool_label: &str,
+    non_scalar_label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // check whether the mixed payload is a string
+            ctx.emitter.instruction(&format!("b.eq {}", string_label));         // use PHP numeric-string comparison for string payloads
+            ctx.emitter.instruction("cmp x0, #3");                              // check whether the mixed payload is a boolean
+            ctx.emitter.instruction(&format!("b.eq {}", bool_label));           // use PHP truthiness comparison for boolean payloads
+            ctx.emitter.instruction("cmp x0, #4");                              // check whether the mixed payload is an indexed array
+            ctx.emitter.instruction(&format!("b.eq {}", non_scalar_label));     // arrays are never loosely equal to numeric operands
+            ctx.emitter.instruction("cmp x0, #5");                              // check whether the mixed payload is an associative array
+            ctx.emitter.instruction(&format!("b.eq {}", non_scalar_label));     // hashes are never loosely equal to numeric operands
+            ctx.emitter.instruction("cmp x0, #6");                              // check whether the mixed payload is an object
+            ctx.emitter.instruction(&format!("b.eq {}", non_scalar_label));     // objects are never loosely equal to numeric operands
+            ctx.emitter.instruction("cmp x0, #9");                              // check whether the mixed payload is a resource
+            ctx.emitter.instruction(&format!("b.eq {}", non_scalar_label));     // resources are never loosely equal to numeric operands
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // check whether the mixed payload is a string
+            ctx.emitter.instruction(&format!("je {}", string_label));           // use PHP numeric-string comparison for string payloads
+            ctx.emitter.instruction("cmp rax, 3");                              // check whether the mixed payload is a boolean
+            ctx.emitter.instruction(&format!("je {}", bool_label));             // use PHP truthiness comparison for boolean payloads
+            ctx.emitter.instruction("cmp rax, 4");                              // check whether the mixed payload is an indexed array
+            ctx.emitter.instruction(&format!("je {}", non_scalar_label));       // arrays are never loosely equal to numeric operands
+            ctx.emitter.instruction("cmp rax, 5");                              // check whether the mixed payload is an associative array
+            ctx.emitter.instruction(&format!("je {}", non_scalar_label));       // hashes are never loosely equal to numeric operands
+            ctx.emitter.instruction("cmp rax, 6");                              // check whether the mixed payload is an object
+            ctx.emitter.instruction(&format!("je {}", non_scalar_label));       // objects are never loosely equal to numeric operands
+            ctx.emitter.instruction("cmp rax, 9");                              // check whether the mixed payload is a resource
+            ctx.emitter.instruction(&format!("je {}", non_scalar_label));       // resources are never loosely equal to numeric operands
+        }
+    }
+}
+
+/// Compares the current float result against the saved numeric operand.
+fn emit_compare_current_float_with_saved_numeric(ctx: &mut FunctionContext<'_>, is_equal: bool) {
+    let sec_reg = secondary_float_reg(ctx.emitter.target.arch);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("fmov {}, d0", sec_reg));          // preserve the mixed numeric payload as the right comparison operand
+            abi::emit_pop_float_reg(ctx.emitter, "d0");
+            ctx.emitter.instruction(&format!("fcmp d0, {}", sec_reg));          // compare the numeric operand against the mixed numeric payload
+            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize equality as boolean
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("movsd {}, xmm0", sec_reg));       // preserve the mixed numeric payload as the right comparison operand
+            abi::emit_pop_float_reg(ctx.emitter, "xmm0");
+            ctx.emitter.instruction(&format!("ucomisd xmm0, {}", sec_reg));     // compare the numeric operand against the mixed numeric payload
+            emit_x86_64_float_equality_result(ctx, is_equal);
+            ctx.emitter.instruction("movzx rax, al");                           // widen the mixed numeric equality byte into the result register
+        }
+    }
+}
+
+/// Compares an unboxed Mixed string payload against the saved numeric operand.
+fn emit_mixed_numeric_string_compare(
+    ctx: &mut FunctionContext<'_>,
+    is_equal: bool,
+    done_label: &str,
+) {
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rax, rdi");                                // move the unboxed string pointer into the string result register
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
+    let false_label = ctx.next_label("mixed_numeric_string_false");
+    let saved_float_reg = secondary_float_reg(ctx.emitter.target.arch);
+    abi::emit_pop_float_reg(ctx.emitter, saved_float_reg);
+    emit_branch_if_current_flag_false(ctx, &false_label);
+    emit_compare_saved_float_with_parsed_string(ctx);
+    emit_float_bool_from_flags(ctx, is_equal);
+    abi::emit_jump(ctx.emitter, done_label);
+    ctx.emitter.label(&false_label);
+    emit_bool_literal(ctx, !is_equal);
+    abi::emit_jump(ctx.emitter, done_label);
+}
+
+/// Compares a Mixed boolean payload against the saved numeric operand by PHP truthiness.
+fn emit_mixed_numeric_bool_compare(ctx: &mut FunctionContext<'_>, is_equal: bool) {
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    let float_reg = abi::float_result_reg(ctx.emitter);
+    abi::emit_pop_float_reg(ctx.emitter, float_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("fcmp d0, #0.0");                           // compare the numeric operand against PHP false
+            ctx.emitter.instruction("cset x0, ne");                             // materialize numeric truthiness, treating NaN as truthy
+            ctx.emitter.instruction("cmp x0, x1");                              // compare numeric truthiness with the mixed boolean payload
+            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize boolean loose equality
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize a zero float for numeric truthiness
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the numeric operand against PHP false
+            ctx.emitter.instruction("setne al");                                // mark nonzero numeric operands as truthy
+            ctx.emitter.instruction("setp r10b");                               // mark unordered NaN operands as truthy
+            ctx.emitter.instruction("or al, r10b");                             // merge nonzero and unordered truthiness
+            ctx.emitter.instruction("movzx rax, al");                           // widen numeric truthiness into the result register
+            ctx.emitter.instruction("cmp rax, rdi");                            // compare numeric truthiness with the mixed boolean payload
+            ctx.emitter.instruction(&format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize boolean loose equality
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean equality byte into the result register
+        }
+    }
 }
 
 /// Emits loose equality for bool/string operands using PHP truthiness rules.

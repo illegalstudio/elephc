@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_search.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_search.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1710](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1710) (`lower_array_search`)
 - **Function symbol**: `lower_array_search()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function array_search(mixed $needle, array $haystack, bool $strict): mixed
+function array_search(mixed $needle, array $haystack, bool $strict = false): mixed
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function array_search(mixed $needle, array $haystack, bool $strict): mixed
 ## Cross-references
 
 - [User reference for `array_search()`](../../../php/builtins/array/array_search.md)
-

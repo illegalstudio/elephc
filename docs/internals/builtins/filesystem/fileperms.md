@@ -2,14 +2,14 @@
 title: "fileperms() — internals"
 description: "Compiler internals for fileperms(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 113
+  order: 115
 ---
 
 ## `fileperms()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/fileperms.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fileperms.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5484](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5484) (`lower_fileperms`)
 - **Function symbol**: `lower_fileperms()`
 
@@ -39,4 +39,3 @@ function fileperms(string $filename): mixed
 ## Cross-references
 
 - [User reference for `fileperms()`](../../../php/builtins/filesystem/fileperms.md)
-

@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_is_list.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_is_list.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1144](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1144) (`lower_array_is_list`)
 - **Function symbol**: `lower_array_is_list()`
 
@@ -40,4 +40,3 @@ function array_is_list(mixed $array): bool
 ## Cross-references
 
 - [User reference for `array_is_list()`](../../../php/builtins/array/array_is_list.md)
-

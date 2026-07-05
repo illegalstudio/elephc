@@ -608,6 +608,15 @@ fn test_error_array_find_wrong_args() {
     );
 }
 
+/// Verifies that array_any() with a single argument reports an arity error.
+#[test]
+fn test_error_array_any_wrong_args() {
+    expect_error(
+        "<?php function f($x) { return true; } array_any([1, 2]);",
+        "array_any() takes exactly 2 arguments",
+    );
+}
+
 /// Verifies that array_all() rejects a non-array first argument.
 #[test]
 fn test_error_array_all_non_array() {

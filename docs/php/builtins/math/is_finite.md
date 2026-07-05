@@ -1,8 +1,8 @@
 ---
 title: "is_finite()"
-description: "Lowers `is_finite()` by rejecting NaN and both infinities."
+description: "Checks whether a float is finite."
 sidebar:
-  order: 249
+  order: 251
 ---
 
 ## is_finite()
@@ -11,7 +11,7 @@ sidebar:
 function is_finite(float $num): bool
 ```
 
-Lowers `is_finite()` by rejecting NaN and both infinities.
+Checks whether a float is finite.
 
 **Parameters**:
 - `$num` (`float`)

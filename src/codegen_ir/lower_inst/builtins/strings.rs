@@ -73,7 +73,7 @@ pub(super) enum SprintfSpecCat {
 }
 
 /// Lowers a one-argument string builtin that directly delegates to a runtime helper.
-pub(super) fn lower_unary_string_runtime(
+pub(crate) fn lower_unary_string_runtime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -85,7 +85,7 @@ pub(super) fn lower_unary_string_runtime(
 }
 
 /// Lowers `grapheme_strrev()` and boxes its `string|false` result as `Mixed`.
-pub(super) fn lower_grapheme_strrev(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_grapheme_strrev(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "grapheme_strrev")?;
     abi::emit_call_label(ctx.emitter, "__rt_grapheme_strrev");
     box_grapheme_strrev_result(ctx);
@@ -93,7 +93,7 @@ pub(super) fn lower_grapheme_strrev(ctx: &mut FunctionContext<'_>, inst: &Instru
 }
 
 /// Lowers `ucfirst()` by copying the string and uppercasing the first ASCII byte.
-pub(super) fn lower_ucfirst(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ucfirst(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "ucfirst")?;
     abi::emit_call_label(ctx.emitter, "__rt_strcopy");
     emit_first_char_case_adjust(ctx, "ucfirst", 97, 122, FirstCharAdjust::Uppercase);
@@ -101,7 +101,7 @@ pub(super) fn lower_ucfirst(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `lcfirst()` by copying the string and lowercasing the first ASCII byte.
-pub(super) fn lower_lcfirst(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_lcfirst(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "lcfirst")?;
     abi::emit_call_label(ctx.emitter, "__rt_strcopy");
     emit_first_char_case_adjust(ctx, "lcfirst", 65, 90, FirstCharAdjust::Lowercase);
@@ -109,7 +109,7 @@ pub(super) fn lower_lcfirst(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `trim()`/`ltrim()`/`rtrim()`/`chop()` for default and explicit masks.
-pub(super) fn lower_trim_like(
+pub(crate) fn lower_trim_like(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -136,7 +136,7 @@ pub(super) fn lower_trim_like(
 }
 
 /// Lowers a two-argument string builtin that directly delegates to a runtime helper.
-pub(super) fn lower_binary_string_runtime(
+pub(crate) fn lower_binary_string_runtime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -148,7 +148,7 @@ pub(super) fn lower_binary_string_runtime(
 }
 
 /// Lowers `explode(delimiter, string)` into the shared string-array splitter helper.
-pub(super) fn lower_explode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_explode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let cleanups = plan_split_string_temp_cleanups(ctx, inst)?;
     if !cleanups.is_empty() {
         abi::emit_reserve_temporary_stack(ctx.emitter, cleanups.bytes);
@@ -160,7 +160,7 @@ pub(super) fn lower_explode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `sscanf(string, format)` into the shared scanner helper.
-pub(super) fn lower_sscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_sscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() < 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "sscanf expected at least 2 args, got {}",
@@ -173,7 +173,7 @@ pub(super) fn lower_sscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `str_split(string, length?)` into the fixed-width string-array splitter.
-pub(super) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "str_split expected 1 or 2 args, got {}",
@@ -189,7 +189,7 @@ pub(super) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `implode(glue, array)` by selecting the string or integer array helper.
-pub(super) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "implode expected 2 args, got {}",
@@ -206,7 +206,7 @@ pub(super) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `hash(algo, data, binary?)` through the shared runtime digest dispatcher.
-pub(super) fn lower_hash(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_hash(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() < 2 || inst.operands.len() > 3 {
         return Err(CodegenIrError::invalid_module(format!(
             "hash expected 2 or 3 args, got {}",
@@ -225,7 +225,7 @@ pub(super) fn lower_hash(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 }
 
 /// Lowers `hash_hmac(algo, data, key, binary?)` through the shared HMAC runtime dispatcher.
-pub(super) fn lower_hash_hmac(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_hash_hmac(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() < 3 || inst.operands.len() > 4 {
         return Err(CodegenIrError::invalid_module(format!(
             "hash_hmac expected 3 or 4 args, got {}",
@@ -244,14 +244,14 @@ pub(super) fn lower_hash_hmac(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `hash_equals(known, user)` through the timing-safe runtime compare helper.
-pub(super) fn lower_hash_equals(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_hash_equals(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_binary_string_args(ctx, inst, "hash_equals")?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_equals");
     store_if_result(ctx, inst)
 }
 
 /// Lowers `hash_algos()` through the runtime algorithm-list builder.
-pub(super) fn lower_hash_algos(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_hash_algos(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if !inst.operands.is_empty() {
         return Err(CodegenIrError::invalid_module(format!(
             "hash_algos expected 0 args, got {}",
@@ -263,7 +263,7 @@ pub(super) fn lower_hash_algos(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `hash_init(algo)` and returns a boxed HashContext resource.
-pub(super) fn lower_hash_init(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_hash_init(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "hash_init", 1)?;
     load_string_arg_to_regs(ctx, inst, 0, "hash_init", string_ptr_reg(ctx), string_len_reg(ctx))?;
     crate::codegen::builtins::hash_crypto::publish_elephc_crypto_function_pointers(
@@ -274,7 +274,7 @@ pub(super) fn lower_hash_init(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `hash_update(context, data)` through the incremental hash runtime helper.
-pub(super) fn lower_hash_update(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_hash_update(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "hash_update", 2)?;
     let context = expect_operand(inst, 0)?;
     super::io::load_stream_fd_to_result(ctx, context, "hash_update")?;
@@ -299,7 +299,7 @@ pub(super) fn lower_hash_update(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Lowers `hash_final(context, binary?)` through the incremental hash finalizer.
-pub(super) fn lower_hash_final(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_hash_final(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "hash_final expected 1 or 2 args, got {}",
@@ -330,7 +330,7 @@ pub(super) fn lower_hash_final(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `hash_copy(context)` through the incremental hash clone helper.
-pub(super) fn lower_hash_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_hash_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "hash_copy", 1)?;
     let context = expect_operand(inst, 0)?;
     super::io::load_stream_fd_to_result(ctx, context, "hash_copy")?;
@@ -345,19 +345,19 @@ pub(super) fn lower_hash_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `crc32(string)` through the shared checksum runtime helper.
-pub(super) fn lower_crc32(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_crc32(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "crc32")?;
     abi::emit_call_label(ctx.emitter, "__rt_crc32");
     store_if_result(ctx, inst)
 }
 
 /// Lowers `md5(data, binary?)` through the shared crypto-backed runtime helper.
-pub(super) fn lower_md5(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_md5(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_fixed_hash(ctx, inst, "md5", "__rt_md5")
 }
 
 /// Lowers `sha1(data, binary?)` through the shared crypto-backed runtime helper.
-pub(super) fn lower_sha1(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_sha1(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_fixed_hash(ctx, inst, "sha1", "__rt_sha1")
 }
 
@@ -399,7 +399,7 @@ fn lower_fixed_hash(
 }
 
 /// Lowers `gzcompress(data, level?)` through inline zlib `compress2` calls.
-pub(super) fn lower_gzcompress(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_gzcompress(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "gzcompress expected 1 or 2 args, got {}",
@@ -415,7 +415,7 @@ pub(super) fn lower_gzcompress(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `gzdeflate(data, level?)` through inline raw-DEFLATE zlib calls.
-pub(super) fn lower_gzdeflate(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_gzdeflate(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "gzdeflate expected 1 or 2 args, got {}",
@@ -433,7 +433,7 @@ pub(super) fn lower_gzdeflate(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `gzinflate(data, max_length?)` and boxes zlib failures as PHP false.
-pub(super) fn lower_gzinflate(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_gzinflate(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "gzinflate expected 1 or 2 args, got {}",
@@ -454,7 +454,7 @@ pub(super) fn lower_gzinflate(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `gzuncompress(data, max_length?)` and boxes zlib failures as PHP false.
-pub(super) fn lower_gzuncompress(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_gzuncompress(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "gzuncompress expected 1 or 2 args, got {}",
@@ -473,7 +473,7 @@ pub(super) fn lower_gzuncompress(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Lowers `long2ip(value)` through the IPv4 formatting runtime helper.
-pub(super) fn lower_long2ip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_long2ip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "long2ip", 1)?;
     let value = expect_operand(inst, 0)?;
     load_as_int(ctx, value, "long2ip")?;
@@ -485,7 +485,7 @@ pub(super) fn lower_long2ip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `ip2long(string)` and boxes invalid-address results as PHP false.
-pub(super) fn lower_ip2long(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ip2long(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "ip2long")?;
     move_string_result_to_c_abi_pair(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_ip2long");
@@ -494,7 +494,7 @@ pub(super) fn lower_ip2long(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `inet_ntop()` and `inet_pton()` and boxes invalid-address results as PHP false.
-pub(super) fn lower_inet(
+pub(crate) fn lower_inet(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -508,26 +508,26 @@ pub(super) fn lower_inet(
 }
 
 /// Lowers `sprintf(format, values...)` by packing variadic records for `__rt_sprintf`.
-pub(super) fn lower_sprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_sprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     emit_sprintf_runtime_call(ctx, inst, "sprintf")?;
     store_if_result(ctx, inst)
 }
 
 /// Lowers `printf(format, values...)` as `sprintf()` followed by stdout emission.
-pub(super) fn lower_printf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_printf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     emit_sprintf_runtime_call(ctx, inst, "printf")?;
     emit_printf_write_result(ctx);
     store_if_result(ctx, inst)
 }
 
 /// Lowers `vsprintf(format, values)` through the array-to-sprintf runtime bridge.
-pub(super) fn lower_vsprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_vsprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     emit_vsprintf_runtime_call(ctx, inst, "vsprintf")?;
     store_if_result(ctx, inst)
 }
 
 /// Lowers `vprintf(format, values)` as `vsprintf()` followed by stdout emission.
-pub(super) fn lower_vprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_vprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     emit_vsprintf_runtime_call(ctx, inst, "vprintf")?;
     emit_printf_write_result(ctx);
     store_if_result(ctx, inst)
@@ -679,7 +679,7 @@ fn emit_vsprintf_runtime_call(
 }
 
 /// Lowers `str_contains()` through `strpos()` and converts found positions to bool.
-pub(super) fn lower_str_contains(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_str_contains(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_binary_string_args(ctx, inst, "str_contains")?;
     abi::emit_call_label(ctx.emitter, "__rt_strpos");
     match ctx.emitter.target.arch {
@@ -697,7 +697,7 @@ pub(super) fn lower_str_contains(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed.
-pub(super) fn lower_string_position(
+pub(crate) fn lower_string_position(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -710,7 +710,7 @@ pub(super) fn lower_string_position(
 }
 
 /// Lowers `substr(string, offset, length?)` with target-local pointer arithmetic.
-pub(super) fn lower_substr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_substr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() < 2 || inst.operands.len() > 3 {
         return Err(CodegenIrError::invalid_module(format!(
             "substr expected 2 or 3 args, got {}",
@@ -727,7 +727,7 @@ pub(super) fn lower_substr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `substr_replace(string, replacement, start, length?)`.
-pub(super) fn lower_substr_replace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_substr_replace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() < 3 || inst.operands.len() > 4 {
         return Err(CodegenIrError::invalid_module(format!(
             "substr_replace expected 3 or 4 args, got {}",
@@ -743,7 +743,7 @@ pub(super) fn lower_substr_replace(ctx: &mut FunctionContext<'_>, inst: &Instruc
 }
 
 /// Lowers `str_repeat(string, times)` through the shared runtime helper.
-pub(super) fn lower_str_repeat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_str_repeat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "str_repeat expected 2 args, got {}",
@@ -759,7 +759,7 @@ pub(super) fn lower_str_repeat(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `strstr(haystack, needle)` by searching and returning the matching suffix.
-pub(super) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "strstr expected 2 args, got {}",
@@ -777,7 +777,7 @@ pub(super) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `str_replace()`/`str_ireplace()` with three string operands.
-pub(super) fn lower_string_replace(
+pub(crate) fn lower_string_replace(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -799,7 +799,7 @@ pub(super) fn lower_string_replace(
 }
 
 /// Lowers `wordwrap(string, width?, break?, cut?)` through the shared runtime helper.
-pub(super) fn lower_wordwrap(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_wordwrap(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 4 {
         return Err(CodegenIrError::invalid_module(format!(
             "wordwrap expected 1 to 4 args, got {}",
@@ -815,7 +815,7 @@ pub(super) fn lower_wordwrap(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 }
 
 /// Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper.
-pub(super) fn lower_str_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_str_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() < 2 || inst.operands.len() > 4 {
         return Err(CodegenIrError::invalid_module(format!(
             "str_pad expected 2 to 4 args, got {}",
@@ -831,7 +831,7 @@ pub(super) fn lower_str_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `ord()` by returning the first byte of a string or zero for empty input.
-pub(super) fn lower_ord(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ord(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "ord")?;
     let empty_label = ctx.next_label("ord_empty");
     let done_label = ctx.next_label("ord_done");
@@ -855,7 +855,7 @@ pub(super) fn lower_ord(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
 }
 
 /// Lowers `chr()` by converting an integer code point into a one-byte string.
-pub(super) fn lower_chr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_chr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 1 {
         return Err(CodegenIrError::invalid_module(format!(
             "chr expected 1 arg, got {}",
@@ -872,7 +872,7 @@ pub(super) fn lower_chr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
 }
 
 /// Lowers `number_format()` by arranging its runtime helper arguments.
-pub(super) fn lower_number_format(
+pub(crate) fn lower_number_format(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

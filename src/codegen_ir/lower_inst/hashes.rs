@@ -209,6 +209,36 @@ pub(super) fn lower_hash_array_union(ctx: &mut FunctionContext<'_>, inst: &Instr
     store_if_result(ctx, inst)
 }
 
+/// Lowers associative-array spread (`[...$source]`) into a hash destination through the shared
+/// runtime helper. The helper reindexes integer-keyed source entries to fresh sequential keys
+/// derived from the destination's current largest integer key, preserves string keys, and
+/// overwrites duplicate destination entries. The possibly-reallocated destination pointer is
+/// written back to the destination operand's SSA slot and source local, mirroring `lower_hash_set`.
+pub(super) fn lower_hash_spread(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let dest = expect_operand(inst, 0)?;
+    let source = expect_operand(inst, 1)?;
+    require_hash(ctx.value_php_type(dest)?, inst)?;
+    require_hash(ctx.value_php_type(source)?, inst)?;
+    let source_local = source_load_local_slot(ctx, dest)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(dest, "x0")?;
+            ctx.load_value_to_reg(source, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(dest, "rdi")?;
+            ctx.load_value_to_reg(source, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_spread");
+    ctx.store_result_value(dest)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, dest)?;
+    }
+    ctx.writeback_global_array_source(dest)?;
+    Ok(())
+}
+
 /// Lowers an associative-array lookup for AArch64 targets.
 fn lower_hash_get_aarch64(
     ctx: &mut FunctionContext<'_>,
@@ -434,6 +464,12 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
             Ok(())
         }
+        // PHP null normalizes to the empty string "" as an array key, so it is
+        // emitted as a zero-length string key (key_hi = 0 signals a string key).
+        PhpType::Void | PhpType::Never => {
+            emit_empty_string_hash_key_aarch64(ctx);
+            Ok(())
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             materialize_mixed_hash_key_aarch64(ctx, key)
         }
@@ -464,6 +500,12 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
             Ok(())
         }
+        // PHP null normalizes to the empty string "" as an array key, so it is
+        // emitted as a zero-length string key (rdx = 0 signals a string key).
+        PhpType::Void | PhpType::Never => {
+            emit_empty_string_hash_key_x86_64(ctx);
+            Ok(())
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             materialize_mixed_hash_key_x86_64(ctx, key)
         }
@@ -480,12 +522,15 @@ fn materialize_mixed_hash_key_aarch64(
     key: ValueId,
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
+    let null_key = ctx.next_label("mixed_hash_key_null");
     let scalar_key = ctx.next_label("mixed_hash_key_scalar");
     let done = ctx.next_label("mixed_hash_key_done");
     ctx.load_value_to_reg(key, "x0")?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     ctx.emitter.instruction("cmp x0, #1");                                      // string mixed keys need PHP numeric-string normalization
     ctx.emitter.instruction(&format!("b.eq {}", string_key));                   // route string keys through the normal hash-key helper
+    ctx.emitter.instruction("cmp x0, #8");                                      // null mixed keys normalize to the empty string like PHP
+    ctx.emitter.instruction(&format!("b.eq {}", null_key));                     // route null keys to the empty-string key path
     ctx.emitter.instruction("cmp x0, #0");                                      // integer mixed keys are already scalar hash keys
     ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep integer keys as integer hash keys
     ctx.emitter.instruction("cmp x0, #3");                                      // boolean mixed keys normalize like integer keys
@@ -494,6 +539,9 @@ fn materialize_mixed_hash_key_aarch64(
     ctx.emitter.label(&scalar_key);
     ctx.emitter.instruction("mov x2, #-1");                                     // key_hi sentinel marks scalar mixed keys as integers
     ctx.emitter.instruction(&format!("b {}", done));                            // skip string-key normalization after scalar selection
+    ctx.emitter.label(&null_key);
+    emit_empty_string_hash_key_aarch64(ctx);                                   // null normalizes to the empty string "" hash key
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the string-key normalization path
     ctx.emitter.label(&string_key);
     abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
     ctx.emitter.label(&done);
@@ -506,12 +554,15 @@ fn materialize_mixed_hash_key_x86_64(
     key: ValueId,
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
+    let null_key = ctx.next_label("mixed_hash_key_null");
     let scalar_key = ctx.next_label("mixed_hash_key_scalar");
     let done = ctx.next_label("mixed_hash_key_done");
     ctx.load_value_to_reg(key, "rax")?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     ctx.emitter.instruction("cmp rax, 1");                                      // string mixed keys need PHP numeric-string normalization
     ctx.emitter.instruction(&format!("je {}", string_key));                     // route string keys through the normal hash-key helper
+    ctx.emitter.instruction("cmp rax, 8");                                      // null mixed keys normalize to the empty string like PHP
+    ctx.emitter.instruction(&format!("je {}", null_key));                      // route null keys to the empty-string key path
     ctx.emitter.instruction("cmp rax, 0");                                      // integer mixed keys are already scalar hash keys
     ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep integer keys as integer hash keys
     ctx.emitter.instruction("cmp rax, 3");                                      // boolean mixed keys normalize like integer keys
@@ -519,6 +570,9 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction("xor esi, esi");                                    // unsupported mixed key tags fall back to integer key zero
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks fallback mixed keys as integers
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after fallback selection
+    ctx.emitter.label(&null_key);
+    emit_empty_string_hash_key_x86_64(ctx);                                    // null normalizes to the empty string "" hash key
+    ctx.emitter.instruction(&format!("jmp {}", done));                         // skip the string-key normalization path
     ctx.emitter.label(&scalar_key);
     ctx.emitter.instruction("mov rsi, rdi");                                    // publish the unboxed scalar payload as key_lo
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks scalar mixed keys as integers
@@ -529,6 +583,27 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction("mov rsi, rax");                                    // move normalized key_lo into the hash-set ABI register
     ctx.emitter.label(&done);
     Ok(())
+}
+
+/// Emits the shared empty-string constant as an AArch64 hash key pair (key_lo, key_hi).
+///
+/// PHP normalizes a null array key to the empty string `""`, which is a string
+/// key: `key_lo` holds the empty-string pointer, `key_hi` is 0 (string-key marker).
+fn emit_empty_string_hash_key_aarch64(ctx: &mut FunctionContext<'_>) {
+    let (label, len) = ctx.data.add_string(b"");
+    abi::emit_symbol_address(ctx.emitter, "x1", &label);
+    abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+}
+
+/// Emits the shared empty-string constant as an x86_64 hash key pair (key_lo, key_hi).
+///
+/// PHP normalizes a null array key to the empty string `""`, which is a string
+/// key: `rsi` holds the empty-string pointer, `rdx` is 0 (string-key marker).
+fn emit_empty_string_hash_key_x86_64(ctx: &mut FunctionContext<'_>) {
+    let (label, len) = ctx.data.add_string(b"");
+    abi::emit_symbol_address(ctx.emitter, "rax", &label);
+    abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+    ctx.emitter.instruction("mov rsi, rax");                                    // move the empty-string pointer into the hash ABI key low word
 }
 
 /// Materializes an EIR value as the hash-set value payload for AArch64.

@@ -2,14 +2,14 @@
 title: "stream_is_local() — internals"
 description: "Compiler internals for stream_is_local(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 205
+  order: 207
 ---
 
 ## `stream_is_local()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_is_local.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_is_local.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2103](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2103) (`lower_stream_is_local`)
 - **Function symbol**: `lower_stream_is_local()`
 
@@ -35,4 +35,3 @@ function stream_is_local(resource $stream): bool
 ## Cross-references
 
 - [User reference for `stream_is_local()`](../../../php/builtins/io/stream_is_local.md)
-

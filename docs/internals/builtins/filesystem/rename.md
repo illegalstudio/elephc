@@ -2,14 +2,14 @@
 title: "rename() — internals"
 description: "Compiler internals for rename(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 140
+  order: 142
 ---
 
 ## `rename()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/rename.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/rename.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4448](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4448) (`lower_rename`)
 - **Function symbol**: `lower_rename()`
 
@@ -28,14 +28,13 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function rename(string $from, string $to, mixed $context): bool
+function rename(string $from, string $to): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
+- **Arity**: takes exactly 2 arguments.
 
 ## Cross-references
 
 - [User reference for `rename()`](../../../php/builtins/filesystem/rename.md)
-

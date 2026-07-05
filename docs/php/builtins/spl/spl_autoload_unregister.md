@@ -1,6 +1,6 @@
 ---
 title: "spl_autoload_unregister()"
-description: "Lowers autoload registration stubs by preserving arg effects and returning true."
+description: "Unregister given function as __autoload() implementation."
 sidebar:
   order: 324
 ---
@@ -11,7 +11,7 @@ sidebar:
 function spl_autoload_unregister(callable $callback): bool
 ```
 
-Lowers autoload registration stubs by preserving arg effects and returning true.
+Unregister given function as __autoload() implementation.
 
 **Parameters**:
 - `$callback` (`callable`)

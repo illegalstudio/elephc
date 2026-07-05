@@ -2,7 +2,7 @@
 title: "buffer_len() — internals"
 description: "Compiler internals for buffer_len(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 63
+  order: 65
 ---
 
 ## `buffer_len()` — internals
@@ -35,4 +35,3 @@ function buffer_len(buffer $buffer): int
 ## Cross-references
 
 - [User reference for `buffer_len()`](../../../php/builtins/buffer/buffer_len.md)
-

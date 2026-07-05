@@ -28,6 +28,7 @@ const ITER_VALUE_LO_OFFSET_DELTA: usize = 32;
 const ITER_VALUE_HI_OFFSET_DELTA: usize = 40;
 const ITER_VALUE_TAG_OFFSET_DELTA: usize = 48;
 const ITER_VALUE_ADDR_OFFSET_DELTA: usize = 56;
+const ITER_SNAPSHOT_LEN_OFFSET_DELTA: usize = 64;
 
 enum IteratorSourceKind {
     Indexed { elem: PhpType },
@@ -105,6 +106,9 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     abi::emit_load_int_immediate(ctx.emitter, result_reg, initial_cursor);
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+    if !by_ref && matches!(source_kind, IteratorSourceKind::Indexed { .. }) {
+        snapshot_indexed_array_length(ctx, offset);
+    }
     match source_kind {
         IteratorSourceKind::Object { class_name, .. } => {
             emit_object_iterator_method_call(ctx, offset, &class_name, "rewind")?;
@@ -121,17 +125,18 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
 pub(super) fn lower_iter_next(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let iterator = expect_operand(inst, 0)?;
     let offset = ctx.value_frame_offset(iterator)?;
+    let by_ref = iterator_is_by_ref(ctx, iterator, inst)?;
     match iterator_source_kind(ctx, iterator, inst)? {
         IteratorSourceKind::Indexed { .. } => match ctx.emitter.target.arch {
-            Arch::AArch64 => lower_indexed_iter_next_aarch64(ctx, offset),
-            Arch::X86_64 => lower_indexed_iter_next_x86_64(ctx, offset),
+            Arch::AArch64 => lower_indexed_iter_next_aarch64(ctx, offset, by_ref),
+            Arch::X86_64 => lower_indexed_iter_next_x86_64(ctx, offset, by_ref),
         },
         IteratorSourceKind::Hash => match ctx.emitter.target.arch {
             Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset),
             Arch::X86_64 => lower_hash_iter_next_x86_64(ctx, offset),
         },
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
-            lower_dynamic_iter_next(ctx, offset)?;
+            lower_dynamic_iter_next(ctx, offset, by_ref)?;
         }
         IteratorSourceKind::Object { class_name, .. } => {
             lower_object_iter_next(ctx, offset, &class_name)?;
@@ -285,6 +290,9 @@ fn initialize_dynamic_iterable_iterator(
         store_iter_source_to_origin_if_local(ctx, offset, source)?;
     }
     store_iterator_cursor(ctx, offset, -1);
+    if !by_ref {
+        snapshot_indexed_array_length(ctx, offset);
+    }
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&hash_case);
@@ -327,6 +335,9 @@ fn initialize_dynamic_mixed_iterator(
         store_mixed_payload_low_as_iterator_source(ctx, offset);
     }
     store_iterator_cursor(ctx, offset, -1);
+    if !by_ref {
+        snapshot_indexed_array_length(ctx, offset);
+    }
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&hash_case);
@@ -608,7 +619,11 @@ fn bind_dynamic_current_value_ref(
 }
 
 /// Lowers dynamic iterator advancement by dispatching to the concrete heap layout.
-fn lower_dynamic_iter_next(ctx: &mut FunctionContext<'_>, offset: usize) -> Result<()> {
+fn lower_dynamic_iter_next(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    by_ref: bool,
+) -> Result<()> {
     let indexed_case = ctx.next_label("iter_next_dyn_indexed");
     let hash_case = ctx.next_label("iter_next_dyn_hash");
     let object_case = ctx.next_label("iter_next_dyn_object");
@@ -618,8 +633,8 @@ fn lower_dynamic_iter_next(ctx: &mut FunctionContext<'_>, offset: usize) -> Resu
 
     ctx.emitter.label(&indexed_case);
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_indexed_iter_next_aarch64(ctx, offset),
-        Arch::X86_64 => lower_indexed_iter_next_x86_64(ctx, offset),
+        Arch::AArch64 => lower_indexed_iter_next_aarch64(ctx, offset, by_ref),
+        Arch::X86_64 => lower_indexed_iter_next_x86_64(ctx, offset, by_ref),
     }
     abi::emit_jump(ctx.emitter, &done);
 
@@ -813,6 +828,17 @@ fn store_iterator_cursor(ctx: &mut FunctionContext<'_>, offset: usize, cursor: i
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, cursor);
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+}
+
+/// Snapshots the indexed-array length into the iterator state so `IterNext` compares
+/// against the original length rather than re-reading it each iteration. PHP snapshots
+/// the array length at loop entry, so elements appended during iteration are not visited.
+fn snapshot_indexed_array_length(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let array_reg = abi::int_result_reg(ctx.emitter);
+    let len_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+    abi::store_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
 }
 
 /// Boxes a concrete iterator method result when the EIR result slot expects `Mixed`.
@@ -1180,18 +1206,30 @@ pub(super) fn lower_iter_end(_ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Emits AArch64 cursor advancement for a stack-resident indexed-array iterator.
-fn lower_indexed_iter_next_aarch64(ctx: &mut FunctionContext<'_>, offset: usize) {
-    let array_reg = "x12";
+///
+/// By-value foreach compares against the snapshotted entry length, while by-reference
+/// foreach reads the live array length so appended elements are visited like PHP.
+fn lower_indexed_iter_next_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    by_ref: bool,
+) {
     let index_reg = abi::secondary_scratch_reg(ctx.emitter);
     let len_reg = abi::tertiary_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     let done_label = ctx.next_label("iter_next_done");
 
-    abi::load_at_offset_scratch(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA, "x9");
     abi::load_at_offset(ctx.emitter, index_reg, offset - ITER_CURSOR_OFFSET_DELTA);
     ctx.emitter.instruction(&format!("add {}, {}, #1", index_reg, index_reg));  // advance to the candidate indexed-array offset
-    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
-    ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));        // compare the candidate offset against the array length
+    if by_ref {
+        let array_reg = abi::int_result_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+        abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+        ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));    // compare the candidate offset against the live array length
+    } else {
+        abi::load_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
+        ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));    // compare the candidate offset against the snapshotted array length
+    }
     ctx.emitter.instruction(&format!("cset {}, lt", result_reg));               // materialize whether another element is available
     ctx.emitter.instruction(&format!("b.ge {}", done_label));                   // leave the cursor unchanged once iteration reaches the end
     abi::store_at_offset(ctx.emitter, index_reg, offset - ITER_CURSOR_OFFSET_DELTA);
@@ -1199,18 +1237,30 @@ fn lower_indexed_iter_next_aarch64(ctx: &mut FunctionContext<'_>, offset: usize)
 }
 
 /// Emits x86_64 cursor advancement for a stack-resident indexed-array iterator.
-fn lower_indexed_iter_next_x86_64(ctx: &mut FunctionContext<'_>, offset: usize) {
-    let array_reg = abi::symbol_scratch_reg(ctx.emitter);
+///
+/// By-value foreach compares against the snapshotted entry length, while by-reference
+/// foreach reads the live array length so appended elements are visited like PHP.
+fn lower_indexed_iter_next_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    by_ref: bool,
+) {
     let index_reg = abi::secondary_scratch_reg(ctx.emitter);
     let len_reg = abi::tertiary_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     let done_label = ctx.next_label("iter_next_done");
 
-    abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, index_reg, offset - ITER_CURSOR_OFFSET_DELTA);
     ctx.emitter.instruction(&format!("add {}, 1", index_reg));                  // advance to the candidate indexed-array offset
-    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
-    ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));        // compare the candidate offset against the array length
+    if by_ref {
+        let array_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+        abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+        ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));    // compare the candidate offset against the live array length
+    } else {
+        abi::load_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
+        ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));    // compare the candidate offset against the snapshotted array length
+    }
     ctx.emitter.instruction("setl al");                                         // materialize whether another element is available in the low result byte
     ctx.emitter.instruction(&format!("movzx {}, al", result_reg));              // widen the availability flag into the integer result register
     ctx.emitter.instruction(&format!("jge {}", done_label));                    // leave the cursor unchanged once iteration reaches the end
@@ -1553,12 +1603,36 @@ fn iterator_source_type(
     ctx.value_php_type(source)
 }
 
+/// Returns true when an iterator handle came from a by-reference `IterStart`.
+fn iterator_is_by_ref(
+    ctx: &FunctionContext<'_>,
+    iterator: ValueId,
+    inst: &Instruction,
+) -> Result<bool> {
+    let iter_start = iterator_start_instruction(ctx, iterator, inst)?;
+    Ok(iter_start_is_by_ref(iter_start))
+}
+
 /// Returns the source operand for an iterator handle, rejecting malformed EIR.
 fn iterator_source_value(
     ctx: &FunctionContext<'_>,
     iterator: ValueId,
     inst: &Instruction,
 ) -> Result<ValueId> {
+    let iter_start = iterator_start_instruction(ctx, iterator, inst)?;
+    iter_start
+        .operands
+        .first()
+        .copied()
+        .ok_or_else(|| CodegenIrError::invalid_module("iter_start missing source operand".to_string()))
+}
+
+/// Returns the `IterStart` instruction that produced an iterator handle.
+fn iterator_start_instruction<'a>(
+    ctx: &'a FunctionContext<'_>,
+    iterator: ValueId,
+    inst: &Instruction,
+) -> Result<&'a Instruction> {
     let value = ctx
         .function
         .value(iterator)
@@ -1580,11 +1654,7 @@ fn iterator_source_value(
             iter_start.op.name()
         )));
     }
-    iter_start
-        .operands
-        .first()
-        .copied()
-        .ok_or_else(|| CodegenIrError::invalid_module("iter_start missing source operand".to_string()))
+    Ok(iter_start)
 }
 
 /// Classifies iterator sources whose storage layouts are handled here.
@@ -1656,7 +1726,7 @@ fn object_iterator_source(
             let iterator_class = iterator_class.trim_start_matches('\\').to_string();
             if ctx.module.interface_infos.contains_key(&iterator_class) {
                 IteratorSourceKind::Interface {
-                    interface_name: iterator_class,
+                    interface_name: iterator_return_interface_dispatch_name(ctx, &iterator_class),
                     aggregate_class_name: Some(class_name.to_string()),
                 }
             } else {
@@ -1670,6 +1740,21 @@ fn object_iterator_source(
             class_name: class_name.to_string(),
             aggregate_class_name: None,
         },
+    }
+}
+
+/// Returns the interface whose method slots should drive an IteratorAggregate result.
+fn iterator_return_interface_dispatch_name(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+) -> String {
+    if interface_name == "Traversable"
+        || (interface_extends_interface(ctx, interface_name, "Traversable")
+            && !interface_extends_interface(ctx, interface_name, "Iterator"))
+    {
+        "Iterator".to_string()
+    } else {
+        interface_name.to_string()
     }
 }
 

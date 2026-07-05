@@ -1,8 +1,8 @@
 ---
 title: "stream_wrapper_unregister()"
-description: "Lowers `stream_wrapper_unregister(protocol)`."
+description: "Unregisters a previously registered URL wrapper."
 sidebar:
-  order: 226
+  order: 228
 ---
 
 ## stream_wrapper_unregister()
@@ -11,7 +11,7 @@ sidebar:
 function stream_wrapper_unregister(string $protocol): bool
 ```
 
-Lowers `stream_wrapper_unregister(protocol)`.
+Unregisters a previously registered URL wrapper.
 
 **Parameters**:
 - `$protocol` (`string`)

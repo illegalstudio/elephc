@@ -19,7 +19,7 @@ use super::super::super::super::context::FunctionContext;
 use super::super::{expect_operand, store_if_result};
 
 /// Lowers a one-argument libm builtin such as `sin()`, `cos()`, or `exp()`.
-pub(in crate::codegen_ir::lower_inst::builtins) fn lower_unary_libm(
+pub(crate) fn lower_unary_libm(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -32,7 +32,7 @@ pub(in crate::codegen_ir::lower_inst::builtins) fn lower_unary_libm(
 }
 
 /// Lowers `atan2()` using the C ABI argument order `y, x`.
-pub(in crate::codegen_ir::lower_inst::builtins) fn lower_atan2(
+pub(crate) fn lower_atan2(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -40,7 +40,7 @@ pub(in crate::codegen_ir::lower_inst::builtins) fn lower_atan2(
 }
 
 /// Lowers `hypot()` using the C ABI argument order `x, y`.
-pub(in crate::codegen_ir::lower_inst::builtins) fn lower_hypot(
+pub(crate) fn lower_hypot(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -48,7 +48,7 @@ pub(in crate::codegen_ir::lower_inst::builtins) fn lower_hypot(
 }
 
 /// Lowers `log()` in one-argument and base-changing two-argument forms.
-pub(in crate::codegen_ir::lower_inst::builtins) fn lower_log(
+pub(crate) fn lower_log(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -72,7 +72,7 @@ pub(in crate::codegen_ir::lower_inst::builtins) fn lower_log(
 }
 
 /// Lowers `deg2rad()` by multiplying with `PI / 180`.
-pub(in crate::codegen_ir::lower_inst::builtins) fn lower_deg2rad(
+pub(crate) fn lower_deg2rad(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -80,7 +80,7 @@ pub(in crate::codegen_ir::lower_inst::builtins) fn lower_deg2rad(
 }
 
 /// Lowers `rad2deg()` by multiplying with `180 / PI`.
-pub(in crate::codegen_ir::lower_inst::builtins) fn lower_rad2deg(
+pub(crate) fn lower_rad2deg(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

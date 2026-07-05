@@ -45,6 +45,36 @@ elephc app.php --framework Cocoa --framework Metal
 automatically; the flags above are for libraries not already named in the source.
 See [FFI & Extern](../beyond-php/extern.md).
 
+## Bridge crates and `--with-CRATE`
+
+Some optional features are implemented as Rust *bridge crates* (`staticlib`
+archives) that elephc links into the program: `pdo` (database access), `tls`
+(`https://`/`ftps://` streams), `crypto` (the `hash()`/`md5()`/`sha1()` family),
+`phar` (Phar archives), `tz` (timezone introspection), `image` (GD/Imagick image
+processing), and `web` (the `--web` server).
+
+By default a bridge is linked **only when the program uses it** — using a hash
+function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
+referencing `PDO` pulls in `pdo`, and so on. Programs that do not use a feature
+never link its crate, so binaries stay small.
+
+`--with-CRATE` force-enables a bridge regardless of that auto-detection. It
+force-links the staticlib (whole-archived, so it is retained even if no symbol
+references it) and, for crates whose PHP surface comes from an injected prelude
+(`pdo`, `tz`, `image`), force-injects that prelude so the classes/functions are
+available. This is useful when a program reaches a feature through indirection
+that detection cannot see. The flag is repeatable:
+
+```bash
+elephc app.php --with-pdo
+elephc app.php --with-crypto --with-tls
+```
+
+`--with-web` is an alias for [`--web`](../beyond-php/web.md) (the full server
+mode, which owns the program entry point). An unknown crate name is rejected with
+the list of valid crates. Forcing a crate increases binary size, since the whole
+archive is included.
+
 ## Heap size
 
 The compiled program uses a fixed-size runtime heap, **8 MB** by default. Programs

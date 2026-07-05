@@ -1,6 +1,6 @@
 ---
 title: "intval()"
-description: "Lowers `intval()` for concrete scalar operands."
+description: "Returns the integer value of a variable."
 sidebar:
   order: 414
 ---
@@ -8,14 +8,13 @@ sidebar:
 ## intval()
 
 ```php
-function intval(mixed $value, int $base): int
+function intval(mixed $value): int
 ```
 
-Lowers `intval()` for concrete scalar operands.
+Returns the integer value of a variable.
 
 **Parameters**:
 - `$value` (`mixed`)
-- `$base` (`int`)
 
 **Returns**: `int`
 

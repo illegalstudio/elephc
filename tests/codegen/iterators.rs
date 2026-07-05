@@ -141,6 +141,35 @@ foreach (new Aggregate() as $v) { echo $v; }
     assert_eq!(out, "012");
 }
 
+/// Regression for #385: `IteratorAggregate::getIterator()` may declare the
+/// marker `Traversable` return type, but foreach must dispatch through the
+/// concrete Iterator methods implemented by the returned object.
+#[test]
+fn test_foreach_iterator_aggregate_returning_traversable_interface() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $current;
+    private int $end;
+    public function __construct(int $start, int $end) {
+        $this->current = $start;
+        $this->end = $end;
+    }
+    public function rewind(): void {}
+    public function valid(): bool { return $this->current < $this->end; }
+    public function current(): int { return $this->current; }
+    public function key(): int { return $this->current; }
+    public function next(): void { $this->current = $this->current + 1; }
+}
+class Aggregate implements IteratorAggregate {
+    public function getIterator(): Traversable { return new Range(0, 3); }
+}
+foreach (new Aggregate() as $v) { echo $v; }
+"#,
+    );
+    assert_eq!(out, "012");
+}
+
 /// Tests foreach with a function parameter typed as Iterator (interface). Verifies
 /// dispatch correctly calls rewind/valid/current/key/next on the concrete Range
 /// object passed at runtime and that key() result is used for $k.

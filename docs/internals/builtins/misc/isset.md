@@ -2,7 +2,7 @@
 title: "isset() — internals"
 description: "Compiler internals for isset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 280
+  order: 277
 ---
 
 ## `isset()` — internals
@@ -36,4 +36,3 @@ function isset(mixed $var, ...$vars): bool
 ## Cross-references
 
 - [User reference for `isset()`](../../../php/builtins/misc/isset.md)
-

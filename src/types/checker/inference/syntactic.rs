@@ -345,7 +345,10 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     key_ty,
                     normalized_array_key_type(key, infer_expr_type_syntactic(key)),
                 );
-                value_ty = wider_type_syntactic(&value_ty, &infer_expr_type_syntactic(value));
+                value_ty = merge_array_literal_element_type_syntactic(
+                    value_ty,
+                    infer_expr_type_syntactic(value),
+                );
             }
             PhpType::AssocArray {
                 key: Box::new(key_ty),
@@ -480,6 +483,69 @@ mod tests {
                 key: Box::new(PhpType::Int),
                 value: Box::new(PhpType::Mixed),
             })
+        );
+    }
+
+    /// Builds an `ArrayLiteralAssoc` expression from `(key, value)` pairs for inference tests.
+    fn assoc_literal(entries: Vec<(Expr, Expr)>) -> Expr {
+        Expr::new(
+            ExprKind::ArrayLiteralAssoc(entries),
+            crate::span::Span::dummy(),
+        )
+    }
+
+    /// Regression for issue #413: an associative literal with divergent value types must infer a
+    /// `Mixed` value slot instead of widening `Int`+`Str` to `Str` (which rejected `prop_set`).
+    #[test]
+    fn test_syntactic_assoc_literal_heterogeneous_values_are_mixed() {
+        let ty = infer_expr_type_syntactic(&assoc_literal(vec![
+            (Expr::string_lit("n"), Expr::int_lit(1)),
+            (Expr::string_lit("s"), Expr::string_lit("hi")),
+        ]));
+
+        assert_eq!(
+            ty,
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }
+        );
+    }
+
+    /// Verifies that a homogeneous associative literal keeps its concrete value type rather than
+    /// being widened to `Mixed`, so the fix does not over-box uniform payloads.
+    #[test]
+    fn test_syntactic_assoc_literal_homogeneous_values_stay_concrete() {
+        let ty = infer_expr_type_syntactic(&assoc_literal(vec![
+            (Expr::string_lit("a"), Expr::string_lit("x")),
+            (Expr::string_lit("b"), Expr::string_lit("y")),
+        ]));
+
+        assert_eq!(
+            ty,
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Str),
+            }
+        );
+    }
+
+    /// Verifies that three-way `Int`/`Str`/`Float` values collapse to `Mixed` instead of the
+    /// scalar-coercion widening (`Int`+`Float` → `Float`) that would drop the string member.
+    #[test]
+    fn test_syntactic_assoc_literal_three_way_values_are_mixed() {
+        let ty = infer_expr_type_syntactic(&assoc_literal(vec![
+            (Expr::string_lit("a"), Expr::int_lit(1)),
+            (Expr::string_lit("b"), Expr::string_lit("x")),
+            (Expr::string_lit("c"), Expr::float_lit(1.5)),
+        ]));
+
+        assert_eq!(
+            ty,
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }
         );
     }
 }

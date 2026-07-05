@@ -469,3 +469,158 @@ echo ($i == $m ? "y" : "n"), ($m == $i ? "y" : "n"), ($i == $h["n"] ? "y" : "n")
     );
     assert_eq!(out, "yyyn");
 }
+
+/// Regression for #397: loose equality with a Mixed operand holding a float
+/// must not truncate the float to int before comparison. `1.5 == 1` must be
+/// false, `1.5 == 1.5` must be true.
+#[test]
+fn test_loose_eq_mixed_float_vs_int() {
+    let out = compile_and_run(
+        r#"<?php
+function check($m) {
+    var_dump($m == 1);
+    var_dump($m == 1.5);
+    var_dump($m == 2);
+}
+check(1.5);
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\nbool(false)\n");
+}
+
+/// Regression for #397: switch with a Mixed subject holding a float must use
+/// loose equality, not integer truncation. `switch(1.5) { case 1: ...; case
+/// 1.5: ... }` must match `case 1.5`.
+#[test]
+fn test_switch_mixed_float_subject() {
+    let out = compile_and_run(
+        r#"<?php
+function classify($x) {
+    switch ($x) {
+        case 1:   return "int-one";
+        case 1.5: return "onefive";
+        default:  return "other";
+    }
+}
+echo classify(1.5), "\n";
+"#,
+    );
+    assert_eq!(out, "onefive\n");
+}
+
+/// Regression for #397: switch with a Mixed subject holding an int must still
+/// match int cases correctly (no regression from the Mixed routing change).
+#[test]
+fn test_switch_mixed_int_subject() {
+    let out = compile_and_run(
+        r#"<?php
+function classify($x) {
+    switch ($x) {
+        case 1:   return "int-one";
+        case 1.5: return "onefive";
+        default:  return "other";
+    }
+}
+echo classify(1), "\n";
+echo classify(2), "\n";
+"#,
+    );
+    assert_eq!(out, "int-one\nother\n");
+}
+
+/// Regression for #397: `!=` (LooseNotEq) with a Mixed float operand must
+/// also avoid truncation. `1.5 != 1` must be true.
+#[test]
+fn test_loose_neq_mixed_float_vs_int() {
+    let out = compile_and_run(
+        r#"<?php
+function check($m) {
+    var_dump($m != 1);
+    var_dump($m != 1.5);
+}
+check(1.5);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\n");
+}
+
+/// Regression: loose equality with a Mixed NaN payload must preserve PHP's
+/// unordered-float rule. `NAN == 1` is false and `NAN != 1` is true, including
+/// on x86_64 where unordered `ucomisd` comparisons set ZF.
+#[test]
+fn test_loose_eq_mixed_nan_vs_int() {
+    let out = compile_and_run(
+        r#"<?php
+function check($m) {
+    var_dump($m == 1);
+    var_dump($m != 1);
+}
+check(NAN);
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\n");
+}
+
+/// Regression: loose equality with a Mixed string payload must use PHP
+/// numeric-string rules instead of `atof`-style casts. Non-numeric strings are
+/// not equal to numbers, while numeric strings compare by parsed numeric value.
+#[test]
+fn test_loose_eq_mixed_string_vs_number_uses_numeric_string_rules() {
+    let out = compile_and_run(
+        r#"<?php
+function check($m) {
+    var_dump($m == 0);
+    var_dump($m == 0.0);
+    var_dump($m != 0);
+    var_dump($m == 1.5);
+}
+check("abc");
+check("1.5");
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\n"
+    );
+}
+
+/// Regression: loose equality between a Mixed boolean and a number compares by
+/// PHP truthiness, not by comparing `true` as `1.0`.
+#[test]
+fn test_loose_eq_mixed_bool_vs_number_uses_truthiness() {
+    let out = compile_and_run(
+        r#"<?php
+function check_true($m) {
+    var_dump($m == 2);
+    var_dump($m == 0.5);
+    var_dump($m == 0);
+}
+function check_false($m) {
+    var_dump($m == 0.0);
+    var_dump($m == 1);
+}
+check_true(true);
+check_false(false);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\n"
+    );
+}
+
+/// Regression: Mixed array payloads are not loosely equal to numeric operands.
+#[test]
+fn test_loose_eq_mixed_array_vs_number_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+function check($m) {
+    var_dump($m == 0);
+    var_dump($m != 1.0);
+}
+check([]);
+check([1]);
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\nbool(false)\nbool(true)\n");
+}

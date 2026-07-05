@@ -151,16 +151,6 @@ fn test_error_private_access() {
     );
 }
 
-/// Verifies the error diagnostic for readonly assign.
-#[test]
-fn test_error_readonly_assign() {
-    // readonly property may only be assigned during construction.
-    expect_error(
-        "<?php class User { public readonly $id; public function __construct($id) { $this->id = $id; } } $u = new User(1); $u->id = 2;",
-        "Cannot assign to readonly property outside constructor: User::id",
-    );
-}
-
 /// Verifies the error diagnostic for typed property rejects invalid default.
 #[test]
 fn test_error_typed_property_rejects_invalid_default() {
@@ -631,16 +621,6 @@ fn test_error_class_cannot_extend_interface() {
 }
 
 // --- Date/time error tests ---
-
-/// Verifies the error diagnostic for readonly class property is implicitly readonly.
-#[test]
-fn test_error_readonly_class_property_is_implicitly_readonly() {
-    // inside a readonly class, instance properties are implicitly readonly.
-    expect_error(
-        "<?php readonly class User { public $id; public function __construct($id) { $this->id = $id; } } $u = new User(1); $u->id = 2;",
-        "Cannot assign to readonly property outside constructor: User::id",
-    );
-}
 
 /// Verifies the error diagnostic for readonly class cannot extend non readonly parent.
 #[test]

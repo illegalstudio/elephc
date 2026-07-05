@@ -18,14 +18,16 @@ use crate::ir::{
 use crate::ir_lower::context::{FinallyFrame, LoopCleanup, LoopFrame, LoweredValue, LoweringContext};
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
-    coerce_to_int_at_span, lower_callable_array_for_assignment, lower_closure_for_assignment, lower_expr,
-    static_callable_binding_for_expr, string_op_uses_scratch_storage,
-    type_satisfies_array_access_for_ir,
+    array_access_element_result_type, coerce_to_int_at_span, lower_callable_array_for_assignment,
+    lower_closure_for_assignment, lower_expr, static_callable_binding_for_expr,
+    string_op_uses_scratch_storage, type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
-use crate::parser::ast::{CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::parser::ast::{
+    is_compound_assignment_self_read, CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
+};
 use crate::span::Span;
-use crate::types::PhpType;
+use crate::types::{PhpType, ThrowAccessKind};
 
 /// Lowers one AST statement into the current EIR insertion block.
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
@@ -212,6 +214,18 @@ fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) {
 
 /// Lowers a plain PHP local assignment.
 fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
+    // PHP allows compound assignment on an undefined variable (`$x += 1`),
+    // treating the undefined variable as null/0 with a warning. The type
+    // checker injects the variable as `Void` and emits a warning. At the
+    // lowering level, we must initialize the local slot to null/0 before
+    // the compound read so the runtime does not read garbage from the stack.
+    if is_compound_assignment_self_read(value, name, span) && !ctx.has_local_slot(name) {
+        let null_value = ctx.builder.emit_const_null();
+        let null_lowered = LoweredValue { value: null_value, ir_type: IrType::I64 };
+        ctx.store_local(name, null_lowered, PhpType::Void, Some(span));
+        ctx.mark_local_initialized(name);
+    }
+
     // A by-reference `Closure::bind(fn &() => $this->prop, $obj, $obj)` assigned to a variable is
     // tracked as a static callable, like a closure literal, so a later `$b()` lowers to a direct
     // call that carries the property's reference-cell pointer instead of boxing it.
@@ -1278,9 +1292,15 @@ fn lower_dynamic_switch_dispatch(
     default_block: BlockId,
 ) {
     let subject_is_str = subject.ir_type == IrType::Str;
-    // Non-string subjects are coerced to an integer once and reused by the ICmp path.
-    let int_subject =
-        if subject_is_str { None } else { Some(coerce_to_int(ctx, subject, None)) };
+    let subject_is_mixed = matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Mixed));
+    // Non-string, non-Mixed subjects are coerced to an integer once and reused by the ICmp path.
+    // Mixed subjects must use loose equality for every case because the runtime tag may be
+    // float, string, bool, etc. — coercing to int would truncate a float (issue #397).
+    let int_subject = if subject_is_str || subject_is_mixed {
+        None
+    } else {
+        Some(coerce_to_int(ctx, subject, None))
+    };
     for ((case_exprs, _), case_block) in cases.iter().zip(blocks) {
         for case_expr in case_exprs {
             let case_value = lower_expr(ctx, case_expr);
@@ -1288,7 +1308,9 @@ fn lower_dynamic_switch_dispatch(
             // collapses every case to `0 == 0`, and coercing a float to int would
             // truncate the subject (so `switch (1.5) { case 1.5; }` would wrongly
             // match `case 1`). The cheap ICmp fast path stays for integer-like pairs.
+            // Mixed subjects must always use loose equality (tag-aware comparison).
             let use_loose_eq = subject_is_str
+                || subject_is_mixed
                 || case_value.ir_type == IrType::Str
                 || float_loose_eq_pair(subject.ir_type, case_value.ir_type);
             let matched = if use_loose_eq {
@@ -1878,6 +1900,76 @@ fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId)
     ctx.builder.terminate(Terminator::Throw { value });
 }
 
+/// Lowers a statically-decided access violation as a catchable `Error` throw.
+///
+/// Builds a synthetic `new Error($message)` expression at `span`, lowers it to an
+/// EIR object value, then terminates the current block with a throw. Mirrors PHP,
+/// which raises these conditions as catchable `Error` exceptions instead of fatal
+/// compile-time rejections. Used in statement positions where no value is needed.
+pub(crate) fn lower_throw_access_error(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: Span,
+) {
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let error_expr = Expr::new(
+        ExprKind::NewObject {
+            class_name: crate::names::Name::unqualified("Error"),
+            args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
+        },
+        span,
+    );
+    let error_value = crate::ir_lower::expr::lower_expr(ctx, &error_expr);
+    terminate_throw(ctx, error_value.value);
+}
+
+/// Lowers a statically-decided access violation as a catchable `Error` throw in
+/// expression position and returns a placeholder null value.
+///
+/// Builds a synthetic `new Error($message)` expression at `span`, lowers it to an
+/// EIR object value, emits `Op::ThrowException`, then returns a null placeholder so
+/// the surrounding expression lowering keeps producing well-formed EIR after the
+/// (unreachable) throw.
+pub(crate) fn lower_throw_access_error_expr(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: Span,
+) -> LoweredValue {
+    let error_expr = Expr::new(
+        ExprKind::NewObject {
+            class_name: crate::names::Name::unqualified("Error"),
+            args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
+        },
+        span,
+    );
+    let error_value = crate::ir_lower::expr::lower_expr(ctx, &error_expr);
+    ctx.emit_void(
+        Op::ThrowException,
+        vec![error_value.value],
+        None,
+        Op::ThrowException.default_effects(),
+        Some(span),
+    );
+    LoweredValue {
+        value: ctx
+            .builder
+            .emit_with_effects(
+                Op::ConstNull,
+                Vec::new(),
+                None,
+                IrType::I64,
+                PhpType::Void,
+                Ownership::NonHeap,
+                Op::ConstNull.default_effects(),
+                Some(span),
+            )
+            .expect("const_null produces a value"),
+        ir_type: IrType::I64,
+    }
+}
+
 /// Returns how many inner loop cleanups a multi-level branch skips.
 fn loop_cleanup_count_for_branch(level: usize) -> usize {
     level.max(1).saturating_sub(1)
@@ -1995,10 +2087,20 @@ fn list_unpack_get_op(source_type: IrType) -> Op {
 }
 
 /// Returns the PHP type assigned to each simple list-unpack destination.
+///
+/// Indexed-array reads use `Op::ArrayGet`, whose runtime OOB fallback produces a
+/// null in the result shape (tagged scalar or sentinel). To preserve that null
+/// for `??` and `IsNull`, the destination type is widened the same way as a
+/// direct array index read (see `array_access_element_result_type`). Without
+/// this widening an `Array(Int)` element would lower to `PhpType::Int`, whose
+/// null fallback is the in-band `NULL_SENTINEL` i64, and `$b ?? 'n'` would see
+/// a non-null integer instead of null for missing keys (#337).
 fn list_unpack_item_type(ctx: &LoweringContext<'_, '_>, source: crate::ir::ValueId) -> PhpType {
     let item_type = match ctx.builder.value_php_type(source).codegen_repr() {
-        PhpType::Array(elem_ty) => *elem_ty,
-        PhpType::AssocArray { value, .. } => *value,
+        PhpType::Array(elem_ty) => array_access_element_result_type(elem_ty.codegen_repr()),
+        PhpType::AssocArray { value, .. } => {
+            array_access_element_result_type(value.codegen_repr())
+        }
         _ => PhpType::Mixed,
     };
     normalize_materialized_element_type(item_type)
@@ -2054,9 +2156,29 @@ fn lower_property_assign(
     value: &Expr,
     span: Span,
 ) {
+    // A statically-decided readonly-property write outside the declaring
+    // constructor raises a catchable `Error` in PHP rather than a compile-time
+    // error, but the object and RHS expressions must still be evaluated first.
+    let throw_access_message = ctx.throw_access_sites.get(&span).and_then(|info| {
+        if let ThrowAccessKind::ReadonlyProperty { class_name, property } = &info.kind {
+            Some(format!("Cannot modify readonly property {}::${}", class_name, property))
+        } else {
+            None
+        }
+    });
     let object = lower_expr(ctx, object);
     let value_expr = value;
     let lowered_value = lower_expr(ctx, value_expr);
+    if let Some(message) = throw_access_message {
+        if ctx.value_is_owning_temporary(object) {
+            crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+        }
+        if ctx.value_is_owning_temporary(lowered_value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, lowered_value, Some(span));
+        }
+        lower_throw_access_error(ctx, &message, span);
+        return;
+    }
     let value = contextualize_property_array_assignment(
         ctx,
         object.value,

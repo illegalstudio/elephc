@@ -1,0 +1,45 @@
+//! Purpose:
+//! Home of the PHP `fdatasync` builtin: its declaration, type-check hook, and lowering.
+//!
+//! Called from:
+//! - The builtin registry (declaration), the type checker (check hook), and the EIR
+//!   backend (lower hook), all via `crate::builtins::registry`.
+//!
+//! Key details:
+//! - `check` validates the `stream` argument is a stream resource and returns `Bool`.
+//! - Arguments are pre-inferred by the registry before the hook runs.
+//! - `lower` is a thin wrapper over `io::lower_fdatasync` in the EIR backend.
+
+use crate::builtins::spec::BuiltinCheckCtx;
+use crate::codegen_ir::context::FunctionContext;
+use crate::codegen_ir::CodegenIrError;
+use crate::errors::CompileError;
+use crate::ir::Instruction;
+use crate::types::PhpType;
+
+builtin! {
+    name: "fdatasync",
+    area: Io,
+    params: [stream: Mixed],
+    returns: Bool,
+    check: check,
+    lower: lower,
+    summary: "Synchronizes data (but not meta-data) to file.",
+    php_manual: "function.fdatasync",
+}
+
+/// Validates the stream argument is a stream resource and returns `Bool`.
+fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    crate::types::checker::builtins::io::common::ensure_stream_resource(
+        cx.checker,
+        cx.name,
+        &cx.args[0],
+        cx.env,
+    )?;
+    Ok(PhpType::Bool)
+}
+
+/// Lowers a `fdatasync` call by dispatching to the shared io emitter.
+fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
+    crate::codegen_ir::lower_inst::builtins::io::lower_fdatasync(ctx, inst)
+}

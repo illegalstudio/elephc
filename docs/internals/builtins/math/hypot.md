@@ -2,14 +2,14 @@
 title: "hypot() — internals"
 description: "Compiler internals for hypot(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 247
+  order: 249
 ---
 
 ## `hypot()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/math/hypot.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/hypot.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/libm.rs`:43](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/libm.rs#L43) (`lower_hypot`)
 - **Function symbol**: `lower_hypot()`
 
@@ -35,4 +35,3 @@ function hypot(float $x, float $y): float
 ## Cross-references
 
 - [User reference for `hypot()`](../../../php/builtins/math/hypot.md)
-

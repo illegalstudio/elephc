@@ -2,14 +2,14 @@
 title: "is_writeable() — internals"
 description: "Compiler internals for is_writeable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 126
+  order: 128
 ---
 
 ## `is_writeable()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/is_writeable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_writeable.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5624](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5624) (`lower_is_writeable`)
 - **Function symbol**: `lower_is_writeable()`
 
@@ -38,4 +38,3 @@ function is_writeable(string $filename): bool
 ## Cross-references
 
 - [User reference for `is_writeable()`](../../../php/builtins/filesystem/is_writeable.md)
-

@@ -1,6 +1,6 @@
 ---
 title: "array_intersect()"
-description: "Lowers `array_intersect()` for two compatible indexed arrays with pointer-sized payload slots."
+description: "Computes the intersection of arrays."
 sidebar:
   order: 14
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_intersect(array $array, ...$arrays): array
 ```
 
-Lowers `array_intersect()` for two compatible indexed arrays with pointer-sized payload slots.
+Computes the intersection of arrays.
 
 **Parameters**:
 - `$array` (`array`)

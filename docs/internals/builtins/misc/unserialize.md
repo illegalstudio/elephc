@@ -2,14 +2,14 @@
 title: "unserialize() — internals"
 description: "Compiler internals for unserialize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 285
+  order: 282
 ---
 
 ## `unserialize()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/system/unserialize.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/unserialize.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/serialize.rs`:164](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/serialize.rs#L164) (`lower_unserialize`)
 - **Function symbol**: `lower_unserialize()`
 
@@ -31,7 +31,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function unserialize(mixed $data, mixed $options): mixed
+function unserialize(string $data, mixed $options = []): mixed
 ```
 
 ## What the type checker enforces
@@ -41,4 +41,3 @@ function unserialize(mixed $data, mixed $options): mixed
 ## Cross-references
 
 - [User reference for `unserialize()`](../../../php/builtins/misc/unserialize.md)
-

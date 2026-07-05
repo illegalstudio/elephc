@@ -2,14 +2,14 @@
 title: "stream_get_transports() — internals"
 description: "Compiler internals for stream_get_transports(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 203
+  order: 205
 ---
 
 ## `stream_get_transports()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_get_transports.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_transports.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1477](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1477) (`lower_stream_get_transports`)
 - **Function symbol**: `lower_stream_get_transports()`
 
@@ -35,4 +35,3 @@ function stream_get_transports(): array
 ## Cross-references
 
 - [User reference for `stream_get_transports()`](../../../php/builtins/io/stream_get_transports.md)
-

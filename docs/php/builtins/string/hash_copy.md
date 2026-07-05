@@ -1,6 +1,6 @@
 ---
 title: "hash_copy()"
-description: "Lowers `hash_copy(context)` through the incremental hash clone helper."
+description: "Copies the state of an incremental hashing context."
 sidebar:
   order: 349
 ---
@@ -11,7 +11,7 @@ sidebar:
 function hash_copy(resource $context): mixed
 ```
 
-Lowers `hash_copy(context)` through the incremental hash clone helper.
+Copies the state of an incremental hashing context.
 
 **Parameters**:
 - `$context` (`resource`)

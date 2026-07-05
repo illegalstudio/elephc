@@ -1,6 +1,6 @@
 ---
 title: "spl_classes()"
-description: "Lowers `spl_classes()` to the static compiler-shipped SPL/core type snapshot."
+description: "Return available SPL classes."
 sidebar:
   order: 325
 ---
@@ -11,7 +11,7 @@ sidebar:
 function spl_classes(): array
 ```
 
-Lowers `spl_classes()` to the static compiler-shipped SPL/core type snapshot.
+Return available SPL classes.
 
 **Parameters**: none.
 
