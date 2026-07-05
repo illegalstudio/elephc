@@ -36,4 +36,3 @@ function ftell(resource $stream): int
 ## Cross-references
 
 - [User reference for `ftell()`](../../../php/builtins/io/ftell.md)
-

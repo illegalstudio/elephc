@@ -40,4 +40,3 @@ function array_is_list(mixed $array): bool
 ## Cross-references
 
 - [User reference for `array_is_list()`](../../../php/builtins/array/array_is_list.md)
-

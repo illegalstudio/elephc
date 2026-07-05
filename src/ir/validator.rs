@@ -348,7 +348,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
     use Op::*;
     match inst.op {
         ConstI64 | ConstBool | ConstNull => check_count(inst_id, inst, 0, "0"),
-        ConstF64 | ConstStr | ConstClassName | ConstEnumCase | DataAddr | ArrayNew | HashNew
+        ConstF64 | ConstStr | ConstClassName | ConstEnumCase | LoadCalledClassId | DataAddr | ArrayNew | HashNew
         | CallableArrayNew | GeneratorNew | InvokerRefArg
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark

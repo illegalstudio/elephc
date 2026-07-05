@@ -35,4 +35,3 @@ function is_null(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_null()`](../../../php/builtins/type/is_null.md)
-

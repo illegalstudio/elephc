@@ -35,4 +35,3 @@ function stream_context_create(array $options = null, array $params = null): mix
 ## Cross-references
 
 - [User reference for `stream_context_create()`](../../../php/builtins/io/stream_context_create.md)
-

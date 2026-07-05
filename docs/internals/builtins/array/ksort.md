@@ -40,4 +40,3 @@ function ksort(array $array): bool
 ## Cross-references
 
 - [User reference for `ksort()`](../../../php/builtins/array/ksort.md)
-

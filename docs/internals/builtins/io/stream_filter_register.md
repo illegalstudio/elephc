@@ -36,4 +36,3 @@ function stream_filter_register(string $filter_name, string $class): bool
 ## Cross-references
 
 - [User reference for `stream_filter_register()`](../../../php/builtins/io/stream_filter_register.md)
-

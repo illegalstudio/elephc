@@ -45,4 +45,3 @@ function microtime(bool $as_float = false): mixed
 ## Cross-references
 
 - [User reference for `microtime()`](../../../php/builtins/date/microtime.md)
-

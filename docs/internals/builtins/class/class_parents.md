@@ -35,4 +35,3 @@ function class_parents(mixed $object_or_class, bool $autoload = true): mixed
 ## Cross-references
 
 - [User reference for `class_parents()`](../../../php/builtins/class/class_parents.md)
-

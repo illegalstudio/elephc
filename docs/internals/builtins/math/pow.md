@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/pow.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/pow.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/binary.rs`:114](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/binary.rs#L114) (`lower_pow`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/binary.rs`:121](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/binary.rs#L121) (`lower_pow`)
 - **Function symbol**: `lower_pow()`
 
 
@@ -35,4 +35,3 @@ function pow(float $num, float $exponent): float
 ## Cross-references
 
 - [User reference for `pow()`](../../../php/builtins/math/pow.md)
-

@@ -40,4 +40,3 @@ function rmdir(string $directory): bool
 ## Cross-references
 
 - [User reference for `rmdir()`](../../../php/builtins/filesystem/rmdir.md)
-

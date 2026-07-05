@@ -37,4 +37,3 @@ function array_unique(array $array): array
 ## Cross-references
 
 - [User reference for `array_unique()`](../../../php/builtins/array/array_unique.md)
-

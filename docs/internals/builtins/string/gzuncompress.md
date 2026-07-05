@@ -36,4 +36,3 @@ function gzuncompress(string $data, int $max_length = 0): mixed
 ## Cross-references
 
 - [User reference for `gzuncompress()`](../../../php/builtins/string/gzuncompress.md)
-

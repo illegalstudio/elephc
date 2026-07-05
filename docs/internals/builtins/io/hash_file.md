@@ -35,4 +35,3 @@ function hash_file(string $algo, string $filename, bool $binary = false): mixed
 ## Cross-references
 
 - [User reference for `hash_file()`](../../../php/builtins/io/hash_file.md)
-

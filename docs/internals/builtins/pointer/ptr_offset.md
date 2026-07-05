@@ -35,4 +35,3 @@ function ptr_offset(pointer $pointer, int $offset): mixed
 ## Cross-references
 
 - [User reference for `ptr_offset()`](../../../php/builtins/pointer/ptr_offset.md)
-

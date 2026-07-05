@@ -37,4 +37,3 @@ function urlencode(string $string): string
 ## Cross-references
 
 - [User reference for `urlencode()`](../../../php/builtins/string/urlencode.md)
-

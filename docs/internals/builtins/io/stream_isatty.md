@@ -36,4 +36,3 @@ function stream_isatty(resource $stream): bool
 ## Cross-references
 
 - [User reference for `stream_isatty()`](../../../php/builtins/io/stream_isatty.md)
-

@@ -36,4 +36,3 @@ function array_product(array $array): int
 ## Cross-references
 
 - [User reference for `array_product()`](../../../php/builtins/array/array_product.md)
-

@@ -37,4 +37,3 @@ function stream_resolve_include_path(string $filename): mixed
 ## Cross-references
 
 - [User reference for `stream_resolve_include_path()`](../../../php/builtins/io/stream_resolve_include_path.md)
-

@@ -35,4 +35,3 @@ function define(string $constant_name, mixed $value): bool
 ## Cross-references
 
 - [User reference for `define()`](../../../php/builtins/misc/define.md)
-

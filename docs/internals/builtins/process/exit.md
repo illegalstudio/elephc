@@ -31,4 +31,3 @@ function exit(int $status): void
 ## Cross-references
 
 - [User reference for `exit()`](../../../php/builtins/process/exit.md)
-

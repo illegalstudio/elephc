@@ -38,4 +38,3 @@ function array_merge(...$arrays): array
 ## Cross-references
 
 - [User reference for `array_merge()`](../../../php/builtins/array/array_merge.md)
-

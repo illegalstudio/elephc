@@ -35,4 +35,3 @@ function tanh(float $num): float
 ## Cross-references
 
 - [User reference for `tanh()`](../../../php/builtins/math/tanh.md)
-

@@ -36,4 +36,3 @@ function lcfirst(string $string): string
 ## Cross-references
 
 - [User reference for `lcfirst()`](../../../php/builtins/string/lcfirst.md)
-

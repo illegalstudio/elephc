@@ -37,4 +37,3 @@ function fgetc(resource $stream): mixed
 ## Cross-references
 
 - [User reference for `fgetc()`](../../../php/builtins/io/fgetc.md)
-

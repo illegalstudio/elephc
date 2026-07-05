@@ -39,4 +39,3 @@ function filegroup(string $filename): mixed
 ## Cross-references
 
 - [User reference for `filegroup()`](../../../php/builtins/filesystem/filegroup.md)
-

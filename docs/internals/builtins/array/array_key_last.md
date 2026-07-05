@@ -37,4 +37,3 @@ function array_key_last(array $array): mixed
 ## Cross-references
 
 - [User reference for `array_key_last()`](../../../php/builtins/array/array_key_last.md)
-

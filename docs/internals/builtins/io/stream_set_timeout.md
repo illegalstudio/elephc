@@ -35,4 +35,3 @@ function stream_set_timeout(resource $stream, int $seconds, int $microseconds = 
 ## Cross-references
 
 - [User reference for `stream_set_timeout()`](../../../php/builtins/io/stream_set_timeout.md)
-

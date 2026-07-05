@@ -37,4 +37,3 @@ function hash_algos(): array
 ## Cross-references
 
 - [User reference for `hash_algos()`](../../../php/builtins/string/hash_algos.md)
-

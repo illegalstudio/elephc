@@ -37,4 +37,3 @@ function array_sum(array $array): int
 ## Cross-references
 
 - [User reference for `array_sum()`](../../../php/builtins/array/array_sum.md)
-

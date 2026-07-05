@@ -36,4 +36,3 @@ function fstat(resource $stream): mixed
 ## Cross-references
 
 - [User reference for `fstat()`](../../../php/builtins/io/fstat.md)
-

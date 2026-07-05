@@ -35,4 +35,3 @@ function chmod(string $filename, int $permissions): bool
 ## Cross-references
 
 - [User reference for `chmod()`](../../../php/builtins/filesystem/chmod.md)
-

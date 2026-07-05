@@ -35,4 +35,3 @@ function stream_socket_sendto(resource $socket, string $data, int $flags = 0, st
 ## Cross-references
 
 - [User reference for `stream_socket_sendto()`](../../../php/builtins/io/stream_socket_sendto.md)
-

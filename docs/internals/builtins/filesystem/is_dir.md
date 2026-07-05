@@ -38,4 +38,3 @@ function is_dir(string $filename): bool
 ## Cross-references
 
 - [User reference for `is_dir()`](../../../php/builtins/filesystem/is_dir.md)
-

@@ -35,4 +35,3 @@ function array_reverse(array $array): array
 ## Cross-references
 
 - [User reference for `array_reverse()`](../../../php/builtins/array/array_reverse.md)
-

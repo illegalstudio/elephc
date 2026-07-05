@@ -37,4 +37,3 @@ function array_unshift(array $array, ...$values): int
 ## Cross-references
 
 - [User reference for `array_unshift()`](../../../php/builtins/array/array_unshift.md)
-

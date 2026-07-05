@@ -38,4 +38,3 @@ function array_diff_assoc(array $array, ...$arrays): mixed
 ## Cross-references
 
 - [User reference for `array_diff_assoc()`](../../../php/builtins/array/array_diff_assoc.md)
-

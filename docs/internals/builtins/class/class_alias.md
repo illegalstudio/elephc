@@ -35,4 +35,3 @@ function class_alias(string $class, string $alias, bool $autoload = true): bool
 ## Cross-references
 
 - [User reference for `class_alias()`](../../../php/builtins/class/class_alias.md)
-

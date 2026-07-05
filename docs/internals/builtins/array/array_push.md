@@ -37,4 +37,3 @@ function array_push(array $array, ...$values): void
 ## Cross-references
 
 - [User reference for `array_push()`](../../../php/builtins/array/array_push.md)
-

@@ -35,4 +35,3 @@ function stream_get_contents(resource $stream, int $length = null, int $offset =
 ## Cross-references
 
 - [User reference for `stream_get_contents()`](../../../php/builtins/io/stream_get_contents.md)
-

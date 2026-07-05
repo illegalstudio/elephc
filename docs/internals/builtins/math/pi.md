@@ -35,4 +35,3 @@ function pi(): float
 ## Cross-references
 
 - [User reference for `pi()`](../../../php/builtins/math/pi.md)
-

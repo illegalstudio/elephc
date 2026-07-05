@@ -35,4 +35,3 @@ function array_chunk(array $array, int $length): array
 ## Cross-references
 
 - [User reference for `array_chunk()`](../../../php/builtins/array/array_chunk.md)
-

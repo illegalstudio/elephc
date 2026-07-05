@@ -41,4 +41,3 @@ function header(string $header, bool $replace = true, int $response_code = 0): v
 ## Cross-references
 
 - [User reference for `header()`](../../../php/builtins/misc/header.md)
-

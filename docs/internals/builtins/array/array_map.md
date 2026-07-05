@@ -36,4 +36,3 @@ function array_map(callable $callback, array $array, ...$arrays): array
 ## Cross-references
 
 - [User reference for `array_map()`](../../../php/builtins/array/array_map.md)
-

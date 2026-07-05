@@ -35,4 +35,3 @@ function sqrt(float $num): float
 ## Cross-references
 
 - [User reference for `sqrt()`](../../../php/builtins/math/sqrt.md)
-

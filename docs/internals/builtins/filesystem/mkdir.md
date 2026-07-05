@@ -40,4 +40,3 @@ function mkdir(string $directory): bool
 ## Cross-references
 
 - [User reference for `mkdir()`](../../../php/builtins/filesystem/mkdir.md)
-

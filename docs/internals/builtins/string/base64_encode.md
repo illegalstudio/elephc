@@ -37,4 +37,3 @@ function base64_encode(string $string): string
 ## Cross-references
 
 - [User reference for `base64_encode()`](../../../php/builtins/string/base64_encode.md)
-

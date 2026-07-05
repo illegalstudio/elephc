@@ -36,4 +36,3 @@ function getservbyport(int $port, string $protocol): mixed
 ## Cross-references
 
 - [User reference for `getservbyport()`](../../../php/builtins/io/getservbyport.md)
-

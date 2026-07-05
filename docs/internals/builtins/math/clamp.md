@@ -35,4 +35,3 @@ function clamp(int $value, int $min, int $max): mixed
 ## Cross-references
 
 - [User reference for `clamp()`](../../../php/builtins/math/clamp.md)
-

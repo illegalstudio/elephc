@@ -38,4 +38,3 @@ function hash_equals(string $known_string, string $user_string): bool
 ## Cross-references
 
 - [User reference for `hash_equals()`](../../../php/builtins/string/hash_equals.md)
-

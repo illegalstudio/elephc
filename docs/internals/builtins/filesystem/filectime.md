@@ -39,4 +39,3 @@ function filectime(string $filename): mixed
 ## Cross-references
 
 - [User reference for `filectime()`](../../../php/builtins/filesystem/filectime.md)
-

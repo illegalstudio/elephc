@@ -37,4 +37,3 @@ function ucwords(string $string, string $separators = ' \t\r\n\x0c\x0b'): string
 ## Cross-references
 
 - [User reference for `ucwords()`](../../../php/builtins/string/ucwords.md)
-

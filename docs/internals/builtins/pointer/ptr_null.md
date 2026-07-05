@@ -35,4 +35,3 @@ function ptr_null(): mixed
 ## Cross-references
 
 - [User reference for `ptr_null()`](../../../php/builtins/pointer/ptr_null.md)
-

@@ -39,4 +39,3 @@ function fileperms(string $filename): mixed
 ## Cross-references
 
 - [User reference for `fileperms()`](../../../php/builtins/filesystem/fileperms.md)
-

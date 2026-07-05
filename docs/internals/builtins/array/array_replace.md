@@ -38,4 +38,3 @@ function array_replace(array $array, array $replacements): mixed
 ## Cross-references
 
 - [User reference for `array_replace()`](../../../php/builtins/array/array_replace.md)
-

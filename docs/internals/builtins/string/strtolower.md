@@ -37,4 +37,3 @@ function strtolower(string $string): string
 ## Cross-references
 
 - [User reference for `strtolower()`](../../../php/builtins/string/strtolower.md)
-

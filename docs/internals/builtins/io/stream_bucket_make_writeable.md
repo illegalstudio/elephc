@@ -36,4 +36,3 @@ function stream_bucket_make_writeable(mixed $brigade): mixed
 ## Cross-references
 
 - [User reference for `stream_bucket_make_writeable()`](../../../php/builtins/io/stream_bucket_make_writeable.md)
-

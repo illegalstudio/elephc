@@ -36,4 +36,3 @@ function stream_socket_pair(int $domain, int $type, int $protocol): mixed
 ## Cross-references
 
 - [User reference for `stream_socket_pair()`](../../../php/builtins/io/stream_socket_pair.md)
-

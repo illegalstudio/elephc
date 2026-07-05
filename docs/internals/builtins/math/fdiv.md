@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/fdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/fdiv.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/binary.rs`:60](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/binary.rs#L60) (`lower_fdiv`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/binary.rs`:67](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/binary.rs#L67) (`lower_fdiv`)
 - **Function symbol**: `lower_fdiv()`
 
 
@@ -35,4 +35,3 @@ function fdiv(float $num1, float $num2): float
 ## Cross-references
 
 - [User reference for `fdiv()`](../../../php/builtins/math/fdiv.md)
-

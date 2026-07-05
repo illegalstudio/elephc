@@ -36,4 +36,3 @@ function getprotobynumber(int $protocol): mixed
 ## Cross-references
 
 - [User reference for `getprotobynumber()`](../../../php/builtins/io/getprotobynumber.md)
-

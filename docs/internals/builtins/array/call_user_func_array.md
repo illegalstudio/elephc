@@ -37,4 +37,3 @@ function call_user_func_array(callable $callback, array $args): mixed
 ## Cross-references
 
 - [User reference for `call_user_func_array()`](../../../php/builtins/array/call_user_func_array.md)
-

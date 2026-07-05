@@ -37,4 +37,3 @@ function strrev(string $string): string
 ## Cross-references
 
 - [User reference for `strrev()`](../../../php/builtins/string/strrev.md)
-

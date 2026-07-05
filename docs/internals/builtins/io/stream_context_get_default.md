@@ -35,4 +35,3 @@ function stream_context_get_default(array $options = null): mixed
 ## Cross-references
 
 - [User reference for `stream_context_get_default()`](../../../php/builtins/io/stream_context_get_default.md)
-

@@ -36,4 +36,3 @@ function getenv(string $name): mixed
 ## Cross-references
 
 - [User reference for `getenv()`](../../../php/builtins/filesystem/getenv.md)
-

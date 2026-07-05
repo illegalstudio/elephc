@@ -39,4 +39,3 @@ function symlink(string $target, string $link): bool
 ## Cross-references
 
 - [User reference for `symlink()`](../../../php/builtins/filesystem/symlink.md)
-

@@ -37,4 +37,3 @@ function is_scalar(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_scalar()`](../../../php/builtins/type/is_scalar.md)
-

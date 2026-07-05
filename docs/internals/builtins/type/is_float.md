@@ -35,4 +35,3 @@ function is_float(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_float()`](../../../php/builtins/type/is_float.md)
-

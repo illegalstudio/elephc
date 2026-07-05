@@ -42,4 +42,3 @@ function strtotime(string $datetime, int $baseTimestamp = null): mixed
 ## Cross-references
 
 - [User reference for `strtotime()`](../../../php/builtins/date/strtotime.md)
-

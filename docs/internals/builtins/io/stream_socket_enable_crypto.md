@@ -35,4 +35,3 @@ function stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto
 ## Cross-references
 
 - [User reference for `stream_socket_enable_crypto()`](../../../php/builtins/io/stream_socket_enable_crypto.md)
-

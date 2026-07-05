@@ -36,4 +36,3 @@ function str_pad(string $string, int $length, string $pad_string = ' ', int $pad
 ## Cross-references
 
 - [User reference for `str_pad()`](../../../php/builtins/string/str_pad.md)
-

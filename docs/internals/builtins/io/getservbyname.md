@@ -36,4 +36,3 @@ function getservbyname(string $service, string $protocol): mixed
 ## Cross-references
 
 - [User reference for `getservbyname()`](../../../php/builtins/io/getservbyname.md)
-

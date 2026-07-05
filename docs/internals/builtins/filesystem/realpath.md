@@ -36,4 +36,3 @@ function realpath(string $path): mixed
 ## Cross-references
 
 - [User reference for `realpath()`](../../../php/builtins/filesystem/realpath.md)
-

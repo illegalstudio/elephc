@@ -37,4 +37,3 @@ function array_intersect_key(array $array, ...$arrays): array
 ## Cross-references
 
 - [User reference for `array_intersect_key()`](../../../php/builtins/array/array_intersect_key.md)
-

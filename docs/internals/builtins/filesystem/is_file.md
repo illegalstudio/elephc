@@ -38,4 +38,3 @@ function is_file(string $filename): bool
 ## Cross-references
 
 - [User reference for `is_file()`](../../../php/builtins/filesystem/is_file.md)
-

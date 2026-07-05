@@ -35,4 +35,3 @@ function gzinflate(string $data, int $max_length = 0): mixed
 ## Cross-references
 
 - [User reference for `gzinflate()`](../../../php/builtins/string/gzinflate.md)
-

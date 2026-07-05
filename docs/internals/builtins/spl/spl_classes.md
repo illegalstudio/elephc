@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/spl_classes.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_classes.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:205](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L205) (`lower_spl_classes`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:206](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L206) (`lower_spl_classes`)
 - **Function symbol**: `lower_spl_classes()`
 
 
@@ -36,4 +36,3 @@ function spl_classes(): array
 ## Cross-references
 
 - [User reference for `spl_classes()`](../../../php/builtins/spl/spl_classes.md)
-

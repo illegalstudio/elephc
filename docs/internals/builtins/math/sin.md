@@ -35,4 +35,3 @@ function sin(float $num): float
 ## Cross-references
 
 - [User reference for `sin()`](../../../php/builtins/math/sin.md)
-

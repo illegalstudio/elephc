@@ -35,4 +35,3 @@ function stream_get_line(resource $stream, int $length, string $ending = ''): st
 ## Cross-references
 
 - [User reference for `stream_get_line()`](../../../php/builtins/io/stream_get_line.md)
-

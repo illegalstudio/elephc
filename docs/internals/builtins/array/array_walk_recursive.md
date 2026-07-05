@@ -39,4 +39,3 @@ function array_walk_recursive(array $array, callable $callback): void
 ## Cross-references
 
 - [User reference for `array_walk_recursive()`](../../../php/builtins/array/array_walk_recursive.md)
-

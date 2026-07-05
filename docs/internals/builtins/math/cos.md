@@ -35,4 +35,3 @@ function cos(float $num): float
 ## Cross-references
 
 - [User reference for `cos()`](../../../php/builtins/math/cos.md)
-

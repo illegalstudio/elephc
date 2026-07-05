@@ -35,4 +35,3 @@ function class_uses(mixed $object_or_class, bool $autoload = true): mixed
 ## Cross-references
 
 - [User reference for `class_uses()`](../../../php/builtins/class/class_uses.md)
-

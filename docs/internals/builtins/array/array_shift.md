@@ -36,4 +36,3 @@ function array_shift(array $array): mixed
 ## Cross-references
 
 - [User reference for `array_shift()`](../../../php/builtins/array/array_shift.md)
-

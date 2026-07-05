@@ -35,4 +35,3 @@ function strrpos(string $haystack, string $needle, int $offset = 0): mixed
 ## Cross-references
 
 - [User reference for `strrpos()`](../../../php/builtins/string/strrpos.md)
-

@@ -38,4 +38,3 @@ function filetype(string $filename): mixed
 ## Cross-references
 
 - [User reference for `filetype()`](../../../php/builtins/filesystem/filetype.md)
-

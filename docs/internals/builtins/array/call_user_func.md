@@ -38,4 +38,3 @@ function call_user_func(callable $callback, ...$args): mixed
 ## Cross-references
 
 - [User reference for `call_user_func()`](../../../php/builtins/array/call_user_func.md)
-

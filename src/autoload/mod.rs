@@ -44,6 +44,7 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "DomainException",
     "EmptyIterator",
     "Error",
+    "ArithmeticError",
     "Exception",
     "Fiber",
     "FiberError",

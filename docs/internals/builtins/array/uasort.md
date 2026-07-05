@@ -37,4 +37,3 @@ function uasort(array $array, callable $callback): bool
 ## Cross-references
 
 - [User reference for `uasort()`](../../../php/builtins/array/uasort.md)
-

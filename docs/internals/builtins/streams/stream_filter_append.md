@@ -35,4 +35,3 @@ function stream_filter_append(resource $stream, string $filtername, int $read_wr
 ## Cross-references
 
 - [User reference for `stream_filter_append()`](../../../php/builtins/streams/stream_filter_append.md)
-

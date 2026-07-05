@@ -42,4 +42,3 @@ function array_diff(array $array, ...$arrays): array
 ## Cross-references
 
 - [User reference for `array_diff()`](../../../php/builtins/array/array_diff.md)
-

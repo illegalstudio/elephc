@@ -599,6 +599,7 @@ fn collect_emitted_class_names(
         "Error",
         "TypeError",
         "ValueError",
+        "ArithmeticError",
         "Exception",
         "LogicException",
         "RuntimeException",

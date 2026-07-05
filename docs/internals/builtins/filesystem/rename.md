@@ -38,4 +38,3 @@ function rename(string $from, string $to): bool
 ## Cross-references
 
 - [User reference for `rename()`](../../../php/builtins/filesystem/rename.md)
-

@@ -36,4 +36,3 @@ function fsockopen(string $hostname, int $port, int $error_code = null, string $
 ## Cross-references
 
 - [User reference for `fsockopen()`](../../../php/builtins/streams/fsockopen.md)
-

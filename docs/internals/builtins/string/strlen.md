@@ -36,4 +36,3 @@ function strlen(string $string): int
 ## Cross-references
 
 - [User reference for `strlen()`](../../../php/builtins/string/strlen.md)
-

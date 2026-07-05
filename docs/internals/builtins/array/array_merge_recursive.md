@@ -39,4 +39,3 @@ function array_merge_recursive(...$arrays): array
 ## Cross-references
 
 - [User reference for `array_merge_recursive()`](../../../php/builtins/array/array_merge_recursive.md)
-

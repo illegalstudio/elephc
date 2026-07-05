@@ -39,4 +39,3 @@ function fileatime(string $filename): mixed
 ## Cross-references
 
 - [User reference for `fileatime()`](../../../php/builtins/filesystem/fileatime.md)
-

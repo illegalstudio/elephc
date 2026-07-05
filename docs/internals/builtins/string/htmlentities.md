@@ -37,4 +37,3 @@ function htmlentities(string $string): string
 ## Cross-references
 
 - [User reference for `htmlentities()`](../../../php/builtins/string/htmlentities.md)
-

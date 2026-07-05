@@ -41,4 +41,3 @@ function hrtime(bool $as_number = false): mixed
 ## Cross-references
 
 - [User reference for `hrtime()`](../../../php/builtins/date/hrtime.md)
-

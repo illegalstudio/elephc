@@ -37,4 +37,3 @@ function feof(resource $stream): bool
 ## Cross-references
 
 - [User reference for `feof()`](../../../php/builtins/io/feof.md)
-

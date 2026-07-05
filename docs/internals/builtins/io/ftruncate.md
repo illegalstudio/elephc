@@ -35,4 +35,3 @@ function ftruncate(resource $stream, int $size): bool
 ## Cross-references
 
 - [User reference for `ftruncate()`](../../../php/builtins/io/ftruncate.md)
-

@@ -36,4 +36,3 @@ function inet_pton(string $ip): mixed
 ## Cross-references
 
 - [User reference for `inet_pton()`](../../../php/builtins/string/inet_pton.md)
-

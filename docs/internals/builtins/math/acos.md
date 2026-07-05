@@ -35,4 +35,3 @@ function acos(float $num): float
 ## Cross-references
 
 - [User reference for `acos()`](../../../php/builtins/math/acos.md)
-

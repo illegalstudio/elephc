@@ -37,4 +37,3 @@ function stripslashes(string $string): string
 ## Cross-references
 
 - [User reference for `stripslashes()`](../../../php/builtins/string/stripslashes.md)
-

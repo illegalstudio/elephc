@@ -35,4 +35,3 @@ function enum_exists(string $enum, bool $autoload = true): bool
 ## Cross-references
 
 - [User reference for `enum_exists()`](../../../php/builtins/class/enum_exists.md)
-

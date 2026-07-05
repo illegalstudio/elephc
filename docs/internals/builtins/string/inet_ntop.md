@@ -36,4 +36,3 @@ function inet_ntop(string $ip): mixed
 ## Cross-references
 
 - [User reference for `inet_ntop()`](../../../php/builtins/string/inet_ntop.md)
-

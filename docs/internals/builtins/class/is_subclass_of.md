@@ -35,4 +35,3 @@ function is_subclass_of(mixed $object_or_class, string $class, bool $allow_strin
 ## Cross-references
 
 - [User reference for `is_subclass_of()`](../../../php/builtins/class/is_subclass_of.md)
-

@@ -36,4 +36,3 @@ function popen(string $command, string $mode): mixed
 ## Cross-references
 
 - [User reference for `popen()`](../../../php/builtins/process/popen.md)
-

@@ -35,4 +35,3 @@ function is_iterable(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_iterable()`](../../../php/builtins/type/is_iterable.md)
-

@@ -35,4 +35,3 @@ function is_nan(float $num): bool
 ## Cross-references
 
 - [User reference for `is_nan()`](../../../php/builtins/math/is_nan.md)
-

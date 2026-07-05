@@ -36,4 +36,3 @@ function disk_total_space(string $directory): float
 ## Cross-references
 
 - [User reference for `disk_total_space()`](../../../php/builtins/filesystem/disk_total_space.md)
-

@@ -35,4 +35,3 @@ function stream_context_set_params(resource $context, array $params): bool
 ## Cross-references
 
 - [User reference for `stream_context_set_params()`](../../../php/builtins/io/stream_context_set_params.md)
-

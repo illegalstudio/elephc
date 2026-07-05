@@ -35,4 +35,3 @@ function round(float $num, int $precision = 0): float
 ## Cross-references
 
 - [User reference for `round()`](../../../php/builtins/math/round.md)
-

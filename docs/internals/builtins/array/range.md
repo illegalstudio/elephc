@@ -37,4 +37,3 @@ function range(mixed $start, mixed $end): array
 ## Cross-references
 
 - [User reference for `range()`](../../../php/builtins/array/range.md)
-

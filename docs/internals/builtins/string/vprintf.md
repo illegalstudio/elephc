@@ -36,4 +36,3 @@ function vprintf(string $format, array $values): int
 ## Cross-references
 
 - [User reference for `vprintf()`](../../../php/builtins/string/vprintf.md)
-

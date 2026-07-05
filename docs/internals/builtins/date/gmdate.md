@@ -39,4 +39,3 @@ function gmdate(string $format, int $timestamp = null): string
 ## Cross-references
 
 - [User reference for `gmdate()`](../../../php/builtins/date/gmdate.md)
-

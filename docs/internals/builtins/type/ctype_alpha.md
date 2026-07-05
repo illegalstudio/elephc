@@ -35,4 +35,3 @@ function ctype_alpha(string $text): bool
 ## Cross-references
 
 - [User reference for `ctype_alpha()`](../../../php/builtins/type/ctype_alpha.md)
-

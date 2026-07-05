@@ -36,4 +36,3 @@ function hash_init(string $algo, int $flags = 0, string $key = ''): mixed
 ## Cross-references
 
 - [User reference for `hash_init()`](../../../php/builtins/string/hash_init.md)
-

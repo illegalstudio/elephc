@@ -37,4 +37,3 @@ function array_all(mixed $array, mixed $callback): bool
 ## Cross-references
 
 - [User reference for `array_all()`](../../../php/builtins/array/array_all.md)
-

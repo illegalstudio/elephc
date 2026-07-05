@@ -35,4 +35,3 @@ function stream_set_chunk_size(resource $stream, int $size): int
 ## Cross-references
 
 - [User reference for `stream_set_chunk_size()`](../../../php/builtins/io/stream_set_chunk_size.md)
-

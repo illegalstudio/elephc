@@ -36,4 +36,3 @@ function stream_select(array $read, array $write, array $except, int $seconds, i
 ## Cross-references
 
 - [User reference for `stream_select()`](../../../php/builtins/io/stream_select.md)
-

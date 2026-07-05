@@ -36,4 +36,3 @@ function str_starts_with(string $haystack, string $needle): bool
 ## Cross-references
 
 - [User reference for `str_starts_with()`](../../../php/builtins/string/str_starts_with.md)
-

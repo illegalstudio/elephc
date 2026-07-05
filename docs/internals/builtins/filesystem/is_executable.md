@@ -39,4 +39,3 @@ function is_executable(string $filename): bool
 ## Cross-references
 
 - [User reference for `is_executable()`](../../../php/builtins/filesystem/is_executable.md)
-

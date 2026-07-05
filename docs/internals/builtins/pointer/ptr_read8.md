@@ -35,4 +35,3 @@ function ptr_read8(pointer $pointer): int
 ## Cross-references
 
 - [User reference for `ptr_read8()`](../../../php/builtins/pointer/ptr_read8.md)
-

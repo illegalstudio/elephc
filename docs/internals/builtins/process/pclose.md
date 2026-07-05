@@ -36,4 +36,3 @@ function pclose(resource $handle): int
 ## Cross-references
 
 - [User reference for `pclose()`](../../../php/builtins/process/pclose.md)
-

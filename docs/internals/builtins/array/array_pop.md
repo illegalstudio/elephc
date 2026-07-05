@@ -38,4 +38,3 @@ function array_pop(array $array): mixed
 ## Cross-references
 
 - [User reference for `array_pop()`](../../../php/builtins/array/array_pop.md)
-

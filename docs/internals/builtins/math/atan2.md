@@ -35,4 +35,3 @@ function atan2(float $y, float $x): float
 ## Cross-references
 
 - [User reference for `atan2()`](../../../php/builtins/math/atan2.md)
-

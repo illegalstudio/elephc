@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/iterator_to_array.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/iterator_to_array.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:265](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L265) (`lower_iterator_to_array`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:266](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L266) (`lower_iterator_to_array`)
 - **Function symbol**: `lower_iterator_to_array()`
 
 
@@ -35,4 +35,3 @@ function iterator_to_array(traversable $iterator, bool $preserve_keys = true): a
 ## Cross-references
 
 - [User reference for `iterator_to_array()`](../../../php/builtins/spl/iterator_to_array.md)
-

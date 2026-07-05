@@ -36,4 +36,3 @@ function chr(int $codepoint): string
 ## Cross-references
 
 - [User reference for `chr()`](../../../php/builtins/string/chr.md)
-

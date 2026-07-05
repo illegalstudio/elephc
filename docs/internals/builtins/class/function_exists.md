@@ -40,4 +40,3 @@ function function_exists(string $function): bool
 ## Cross-references
 
 - [User reference for `function_exists()`](../../../php/builtins/class/function_exists.md)
-

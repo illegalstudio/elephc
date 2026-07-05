@@ -36,4 +36,3 @@ function max(mixed $value, ...$values): mixed
 ## Cross-references
 
 - [User reference for `max()`](../../../php/builtins/math/max.md)
-

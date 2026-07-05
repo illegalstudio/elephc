@@ -122,6 +122,13 @@ fn emit_late_static_class_id_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) ->
     ))
 }
 
+/// Lowers `Op::LoadCalledClassId` by reading the late-static class id into the int result register.
+pub(super) fn lower_load_called_class_id(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let reg = abi::int_result_reg(ctx.emitter);
+    emit_late_static_class_id_to_reg(ctx, reg)?;
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a string concatenation by loading both string pairs into `__rt_concat`'s ABI.
 pub(super) fn lower_str_concat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;

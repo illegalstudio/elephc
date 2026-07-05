@@ -35,4 +35,3 @@ function array_key_exists(string $key, array $array): bool
 ## Cross-references
 
 - [User reference for `array_key_exists()`](../../../php/builtins/array/array_key_exists.md)
-

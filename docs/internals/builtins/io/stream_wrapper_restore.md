@@ -35,4 +35,3 @@ function stream_wrapper_restore(string $protocol): bool
 ## Cross-references
 
 - [User reference for `stream_wrapper_restore()`](../../../php/builtins/io/stream_wrapper_restore.md)
-

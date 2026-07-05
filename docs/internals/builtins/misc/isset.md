@@ -36,4 +36,3 @@ function isset(mixed $var, ...$vars): bool
 ## Cross-references
 
 - [User reference for `isset()`](../../../php/builtins/misc/isset.md)
-

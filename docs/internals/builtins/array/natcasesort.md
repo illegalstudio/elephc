@@ -38,4 +38,3 @@ function natcasesort(array $array): bool
 ## Cross-references
 
 - [User reference for `natcasesort()`](../../../php/builtins/array/natcasesort.md)
-

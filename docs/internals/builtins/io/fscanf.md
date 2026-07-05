@@ -38,4 +38,3 @@ function fscanf(resource $stream, string $format, ...$vars): array
 ## Cross-references
 
 - [User reference for `fscanf()`](../../../php/builtins/io/fscanf.md)
-

@@ -37,4 +37,3 @@ function hash_hmac(string $algo, string $data, string $key, bool $binary = false
 ## Cross-references
 
 - [User reference for `hash_hmac()`](../../../php/builtins/string/hash_hmac.md)
-

@@ -36,4 +36,3 @@ function substr(string $string, int $offset, int $length = null): string
 ## Cross-references
 
 - [User reference for `substr()`](../../../php/builtins/string/substr.md)
-

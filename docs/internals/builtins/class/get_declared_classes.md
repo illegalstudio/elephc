@@ -35,4 +35,3 @@ function get_declared_classes(): array
 ## Cross-references
 
 - [User reference for `get_declared_classes()`](../../../php/builtins/class/get_declared_classes.md)
-

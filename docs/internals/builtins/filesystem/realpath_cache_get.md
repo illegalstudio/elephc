@@ -35,4 +35,3 @@ function realpath_cache_get(): array
 ## Cross-references
 
 - [User reference for `realpath_cache_get()`](../../../php/builtins/filesystem/realpath_cache_get.md)
-

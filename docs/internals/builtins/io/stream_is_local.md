@@ -35,4 +35,3 @@ function stream_is_local(resource $stream): bool
 ## Cross-references
 
 - [User reference for `stream_is_local()`](../../../php/builtins/io/stream_is_local.md)
-

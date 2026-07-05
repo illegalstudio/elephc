@@ -37,4 +37,3 @@ function wordwrap(string $string, int $width = 75, string $break = '\n', bool $c
 ## Cross-references
 
 - [User reference for `wordwrap()`](../../../php/builtins/string/wordwrap.md)
-

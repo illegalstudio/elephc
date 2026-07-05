@@ -36,4 +36,3 @@ function system(string $command): string
 ## Cross-references
 
 - [User reference for `system()`](../../../php/builtins/process/system.md)
-

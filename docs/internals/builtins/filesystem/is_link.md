@@ -39,4 +39,3 @@ function is_link(string $filename): bool
 ## Cross-references
 
 - [User reference for `is_link()`](../../../php/builtins/filesystem/is_link.md)
-

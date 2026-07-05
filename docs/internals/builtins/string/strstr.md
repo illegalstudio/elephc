@@ -35,4 +35,3 @@ function strstr(string $haystack, string $needle, bool $before_needle = false): 
 ## Cross-references
 
 - [User reference for `strstr()`](../../../php/builtins/string/strstr.md)
-

@@ -35,4 +35,3 @@ function asin(float $num): float
 ## Cross-references
 
 - [User reference for `asin()`](../../../php/builtins/math/asin.md)
-

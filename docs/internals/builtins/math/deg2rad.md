@@ -35,4 +35,3 @@ function deg2rad(float $num): float
 ## Cross-references
 
 - [User reference for `deg2rad()`](../../../php/builtins/math/deg2rad.md)
-

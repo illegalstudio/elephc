@@ -35,4 +35,3 @@ function ord(string $character): int
 ## Cross-references
 
 - [User reference for `ord()`](../../../php/builtins/string/ord.md)
-

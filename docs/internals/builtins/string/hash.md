@@ -36,4 +36,3 @@ function hash(string $algo, string $data, bool $binary = false): string
 ## Cross-references
 
 - [User reference for `hash()`](../../../php/builtins/string/hash.md)
-

@@ -35,4 +35,3 @@ function shell_exec(string $command): string
 ## Cross-references
 
 - [User reference for `shell_exec()`](../../../php/builtins/process/shell_exec.md)
-

@@ -37,4 +37,3 @@ function file_get_contents(string $filename): mixed
 ## Cross-references
 
 - [User reference for `file_get_contents()`](../../../php/builtins/io/file_get_contents.md)
-

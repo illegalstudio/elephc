@@ -35,4 +35,3 @@ function class_get_attributes(string $class_name): array
 ## Cross-references
 
 - [User reference for `class_get_attributes()`](../../../php/builtins/class/class_get_attributes.md)
-

@@ -36,4 +36,3 @@ function fopen(string $filename, string $mode, bool $use_include_path = false, m
 ## Cross-references
 
 - [User reference for `fopen()`](../../../php/builtins/io/fopen.md)
-

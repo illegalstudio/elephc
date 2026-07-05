@@ -35,4 +35,3 @@ function get_resource_type(resource $resource): string
 ## Cross-references
 
 - [User reference for `get_resource_type()`](../../../php/builtins/type/get_resource_type.md)
-

@@ -36,4 +36,3 @@ function putenv(string $assignment): bool
 ## Cross-references
 
 - [User reference for `putenv()`](../../../php/builtins/filesystem/putenv.md)
-

@@ -43,4 +43,3 @@ function rsort(array $array): bool
 ## Cross-references
 
 - [User reference for `rsort()`](../../../php/builtins/array/rsort.md)
-

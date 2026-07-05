@@ -35,4 +35,3 @@ function stream_set_read_buffer(resource $stream, int $size): int
 ## Cross-references
 
 - [User reference for `stream_set_read_buffer()`](../../../php/builtins/io/stream_set_read_buffer.md)
-

@@ -35,4 +35,3 @@ function random_int(int $min, int $max): int
 ## Cross-references
 
 - [User reference for `random_int()`](../../../php/builtins/math/random_int.md)
-

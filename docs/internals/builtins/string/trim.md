@@ -35,4 +35,3 @@ function trim(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): strin
 ## Cross-references
 
 - [User reference for `trim()`](../../../php/builtins/string/trim.md)
-

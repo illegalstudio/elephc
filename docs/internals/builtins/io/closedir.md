@@ -39,4 +39,3 @@ function closedir(resource $dir_handle): void
 ## Cross-references
 
 - [User reference for `closedir()`](../../../php/builtins/io/closedir.md)
-

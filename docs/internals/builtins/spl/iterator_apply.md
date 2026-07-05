@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/iterator_apply.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/iterator_apply.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:289](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L289) (`lower_iterator_apply`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:290](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L290) (`lower_iterator_apply`)
 - **Function symbol**: `lower_iterator_apply()`
 
 
@@ -35,4 +35,3 @@ function iterator_apply(traversable $iterator, callable $callback, array $args =
 ## Cross-references
 
 - [User reference for `iterator_apply()`](../../../php/builtins/spl/iterator_apply.md)
-

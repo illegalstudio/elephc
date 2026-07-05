@@ -37,4 +37,3 @@ function scandir(string $directory): array
 ## Cross-references
 
 - [User reference for `scandir()`](../../../php/builtins/filesystem/scandir.md)
-

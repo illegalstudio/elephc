@@ -37,4 +37,3 @@ function rewinddir(resource $dir_handle): void
 ## Cross-references
 
 - [User reference for `rewinddir()`](../../../php/builtins/io/rewinddir.md)
-

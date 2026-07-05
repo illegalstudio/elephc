@@ -36,4 +36,3 @@ function readline(string $prompt = null): mixed
 ## Cross-references
 
 - [User reference for `readline()`](../../../php/builtins/process/readline.md)
-

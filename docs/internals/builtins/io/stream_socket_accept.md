@@ -37,4 +37,3 @@ function stream_socket_accept(resource $socket, float $timeout = null, string $p
 ## Cross-references
 
 - [User reference for `stream_socket_accept()`](../../../php/builtins/io/stream_socket_accept.md)
-

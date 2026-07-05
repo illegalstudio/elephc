@@ -37,4 +37,3 @@ function fgetcsv(resource $stream, int $length = null, string $separator = ','):
 ## Cross-references
 
 - [User reference for `fgetcsv()`](../../../php/builtins/io/fgetcsv.md)
-

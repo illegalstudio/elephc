@@ -38,4 +38,3 @@ function preg_match(string $pattern, string $subject, array $matches = []): int
 ## Cross-references
 
 - [User reference for `preg_match()`](../../../php/builtins/regex/preg_match.md)
-

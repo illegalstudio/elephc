@@ -35,4 +35,3 @@ function ptr(mixed $value): mixed
 ## Cross-references
 
 - [User reference for `ptr()`](../../../php/builtins/pointer/ptr.md)
-

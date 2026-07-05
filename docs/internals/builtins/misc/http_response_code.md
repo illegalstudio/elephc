@@ -40,4 +40,3 @@ function http_response_code(int $response_code = 0): int
 ## Cross-references
 
 - [User reference for `http_response_code()`](../../../php/builtins/misc/http_response_code.md)
-

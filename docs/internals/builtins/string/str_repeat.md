@@ -36,4 +36,3 @@ function str_repeat(string $string, int $times): string
 ## Cross-references
 
 - [User reference for `str_repeat()`](../../../php/builtins/string/str_repeat.md)
-

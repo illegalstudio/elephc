@@ -37,4 +37,3 @@ function explode(string $separator, string $string, int $limit = PHP_INT_MAX): a
 ## Cross-references
 
 - [User reference for `explode()`](../../../php/builtins/string/explode.md)
-

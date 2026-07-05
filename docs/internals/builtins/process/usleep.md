@@ -36,4 +36,3 @@ function usleep(int $microseconds): void
 ## Cross-references
 
 - [User reference for `usleep()`](../../../php/builtins/process/usleep.md)
-

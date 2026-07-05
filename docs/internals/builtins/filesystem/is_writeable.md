@@ -38,4 +38,3 @@ function is_writeable(string $filename): bool
 ## Cross-references
 
 - [User reference for `is_writeable()`](../../../php/builtins/filesystem/is_writeable.md)
-

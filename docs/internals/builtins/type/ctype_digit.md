@@ -35,4 +35,3 @@ function ctype_digit(string $text): bool
 ## Cross-references
 
 - [User reference for `ctype_digit()`](../../../php/builtins/type/ctype_digit.md)
-

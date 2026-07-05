@@ -37,4 +37,3 @@ function strtoupper(string $string): string
 ## Cross-references
 
 - [User reference for `strtoupper()`](../../../php/builtins/string/strtoupper.md)
-

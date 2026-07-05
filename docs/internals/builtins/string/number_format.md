@@ -36,4 +36,3 @@ function number_format(float $num, int $decimals = 0, string $decimal_separator 
 ## Cross-references
 
 - [User reference for `number_format()`](../../../php/builtins/string/number_format.md)
-

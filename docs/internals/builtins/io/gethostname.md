@@ -38,4 +38,3 @@ function gethostname(): string
 ## Cross-references
 
 - [User reference for `gethostname()`](../../../php/builtins/io/gethostname.md)
-

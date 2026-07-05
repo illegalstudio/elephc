@@ -37,4 +37,3 @@ function ip2long(string $ip): mixed
 ## Cross-references
 
 - [User reference for `ip2long()`](../../../php/builtins/string/ip2long.md)
-

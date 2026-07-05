@@ -35,4 +35,3 @@ function in_array(mixed $needle, array $haystack, bool $strict = false): mixed
 ## Cross-references
 
 - [User reference for `in_array()`](../../../php/builtins/array/in_array.md)
-

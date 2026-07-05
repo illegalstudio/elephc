@@ -41,4 +41,3 @@ function serialize(mixed $value): string
 ## Cross-references
 
 - [User reference for `serialize()`](../../../php/builtins/misc/serialize.md)
-

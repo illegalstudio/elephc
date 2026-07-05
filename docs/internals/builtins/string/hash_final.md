@@ -36,4 +36,3 @@ function hash_final(resource $context, bool $binary = false): string
 ## Cross-references
 
 - [User reference for `hash_final()`](../../../php/builtins/string/hash_final.md)
-

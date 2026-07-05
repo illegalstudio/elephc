@@ -35,4 +35,3 @@ function is_a(object $object_or_class, string $class, bool $allow_string = false
 ## Cross-references
 
 - [User reference for `is_a()`](../../../php/builtins/class/is_a.md)
-

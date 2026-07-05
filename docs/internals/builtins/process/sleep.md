@@ -36,4 +36,3 @@ function sleep(int $seconds): int
 ## Cross-references
 
 - [User reference for `sleep()`](../../../php/builtins/process/sleep.md)
-

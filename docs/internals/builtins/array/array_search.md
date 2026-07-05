@@ -35,4 +35,3 @@ function array_search(mixed $needle, array $haystack, bool $strict = false): mix
 ## Cross-references
 
 - [User reference for `array_search()`](../../../php/builtins/array/array_search.md)
-

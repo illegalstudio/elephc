@@ -37,4 +37,3 @@ function html_entity_decode(string $string): string
 ## Cross-references
 
 - [User reference for `html_entity_decode()`](../../../php/builtins/string/html_entity_decode.md)
-

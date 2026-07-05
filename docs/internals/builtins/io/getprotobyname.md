@@ -36,4 +36,3 @@ function getprotobyname(string $protocol): mixed
 ## Cross-references
 
 - [User reference for `getprotobyname()`](../../../php/builtins/io/getprotobyname.md)
-

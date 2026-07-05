@@ -35,4 +35,3 @@ function cosh(float $num): float
 ## Cross-references
 
 - [User reference for `cosh()`](../../../php/builtins/math/cosh.md)
-

@@ -35,4 +35,3 @@ function gzcompress(string $data, int $level = -1): string
 ## Cross-references
 
 - [User reference for `gzcompress()`](../../../php/builtins/string/gzcompress.md)
-

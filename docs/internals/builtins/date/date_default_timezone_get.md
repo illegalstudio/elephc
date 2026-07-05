@@ -39,4 +39,3 @@ function date_default_timezone_get(): string
 ## Cross-references
 
 - [User reference for `date_default_timezone_get()`](../../../php/builtins/date/date_default_timezone_get.md)
-

@@ -36,4 +36,3 @@ function time(): int
 ## Cross-references
 
 - [User reference for `time()`](../../../php/builtins/date/time.md)
-

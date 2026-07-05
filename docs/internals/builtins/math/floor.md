@@ -35,4 +35,3 @@ function floor(float $num): float
 ## Cross-references
 
 - [User reference for `floor()`](../../../php/builtins/math/floor.md)
-

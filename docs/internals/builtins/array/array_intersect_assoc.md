@@ -40,4 +40,3 @@ function array_intersect_assoc(array $array, ...$arrays): mixed
 ## Cross-references
 
 - [User reference for `array_intersect_assoc()`](../../../php/builtins/array/array_intersect_assoc.md)
-

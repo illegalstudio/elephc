@@ -36,4 +36,3 @@ function unset(mixed $var, ...$vars): void
 ## Cross-references
 
 - [User reference for `unset()`](../../../php/builtins/misc/unset.md)
-

@@ -35,4 +35,3 @@ function fseek(resource $stream, int $offset, int $whence = 0): int
 ## Cross-references
 
 - [User reference for `fseek()`](../../../php/builtins/io/fseek.md)
-

@@ -37,4 +37,3 @@ function sha1(string $string, bool $binary = false): string
 ## Cross-references
 
 - [User reference for `sha1()`](../../../php/builtins/string/sha1.md)
-

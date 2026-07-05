@@ -37,4 +37,3 @@ function base64_decode(string $string): string
 ## Cross-references
 
 - [User reference for `base64_decode()`](../../../php/builtins/string/base64_decode.md)
-

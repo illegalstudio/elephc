@@ -37,4 +37,3 @@ function array_key_first(array $array): mixed
 ## Cross-references
 
 - [User reference for `array_key_first()`](../../../php/builtins/array/array_key_first.md)
-

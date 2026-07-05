@@ -38,4 +38,3 @@ function tmpfile(): mixed
 ## Cross-references
 
 - [User reference for `tmpfile()`](../../../php/builtins/filesystem/tmpfile.md)
-

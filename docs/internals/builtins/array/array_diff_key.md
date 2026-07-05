@@ -38,4 +38,3 @@ function array_diff_key(array $array, ...$arrays): array
 ## Cross-references
 
 - [User reference for `array_diff_key()`](../../../php/builtins/array/array_diff_key.md)
-

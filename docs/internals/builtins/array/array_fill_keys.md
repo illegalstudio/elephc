@@ -35,4 +35,3 @@ function array_fill_keys(array $keys, mixed $value): array
 ## Cross-references
 
 - [User reference for `array_fill_keys()`](../../../php/builtins/array/array_fill_keys.md)
-

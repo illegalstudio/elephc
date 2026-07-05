@@ -35,4 +35,3 @@ function fclose(resource $stream): bool
 ## Cross-references
 
 - [User reference for `fclose()`](../../../php/builtins/io/fclose.md)
-

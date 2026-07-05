@@ -35,4 +35,3 @@ function rewind(resource $stream): bool
 ## Cross-references
 
 - [User reference for `rewind()`](../../../php/builtins/io/rewind.md)
-

@@ -35,4 +35,3 @@ function interface_exists(string $interface, bool $autoload = true): bool
 ## Cross-references
 
 - [User reference for `interface_exists()`](../../../php/builtins/class/interface_exists.md)
-

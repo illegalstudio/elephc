@@ -35,4 +35,3 @@ function stream_context_set_option(resource $context, string $wrapper_or_options
 ## Cross-references
 
 - [User reference for `stream_context_set_option()`](../../../php/builtins/io/stream_context_set_option.md)
-

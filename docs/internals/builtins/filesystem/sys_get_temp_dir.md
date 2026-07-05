@@ -36,4 +36,3 @@ function sys_get_temp_dir(): string
 ## Cross-references
 
 - [User reference for `sys_get_temp_dir()`](../../../php/builtins/filesystem/sys_get_temp_dir.md)
-

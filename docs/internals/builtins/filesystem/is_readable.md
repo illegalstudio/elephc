@@ -38,4 +38,3 @@ function is_readable(string $filename): bool
 ## Cross-references
 
 - [User reference for `is_readable()`](../../../php/builtins/filesystem/is_readable.md)
-

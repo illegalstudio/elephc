@@ -35,4 +35,3 @@ function json_encode(mixed $value, int $flags = 0, int $depth = 512): string
 ## Cross-references
 
 - [User reference for `json_encode()`](../../../php/builtins/json/json_encode.md)
-

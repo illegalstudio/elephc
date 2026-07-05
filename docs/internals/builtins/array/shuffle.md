@@ -37,4 +37,3 @@ function shuffle(array $array): bool
 ## Cross-references
 
 - [User reference for `shuffle()`](../../../php/builtins/array/shuffle.md)
-

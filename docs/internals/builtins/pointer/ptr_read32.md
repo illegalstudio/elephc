@@ -36,4 +36,3 @@ function ptr_read32(pointer $pointer): int
 ## Cross-references
 
 - [User reference for `ptr_read32()`](../../../php/builtins/pointer/ptr_read32.md)
-

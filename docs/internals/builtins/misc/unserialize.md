@@ -41,4 +41,3 @@ function unserialize(string $data, mixed $options = []): mixed
 ## Cross-references
 
 - [User reference for `unserialize()`](../../../php/builtins/misc/unserialize.md)
-

@@ -35,4 +35,3 @@ function stream_bucket_new(resource $stream, string $buffer): mixed
 ## Cross-references
 
 - [User reference for `stream_bucket_new()`](../../../php/builtins/io/stream_bucket_new.md)
-

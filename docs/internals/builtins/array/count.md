@@ -40,4 +40,3 @@ function count(array $value, int $mode = 0): int
 ## Cross-references
 
 - [User reference for `count()`](../../../php/builtins/array/count.md)
-

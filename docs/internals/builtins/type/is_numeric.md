@@ -35,4 +35,3 @@ function is_numeric(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_numeric()`](../../../php/builtins/type/is_numeric.md)
-

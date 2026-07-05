@@ -36,4 +36,3 @@ function is_object(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_object()`](../../../php/builtins/type/is_object.md)
-

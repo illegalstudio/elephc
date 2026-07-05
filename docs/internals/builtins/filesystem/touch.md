@@ -35,4 +35,3 @@ function touch(string $filename, int $mtime = null, int $atime = null): bool
 ## Cross-references
 
 - [User reference for `touch()`](../../../php/builtins/filesystem/touch.md)
-

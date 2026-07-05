@@ -35,4 +35,3 @@ function chop(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): strin
 ## Cross-references
 
 - [User reference for `chop()`](../../../php/builtins/string/chop.md)
-

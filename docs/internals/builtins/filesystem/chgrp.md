@@ -36,4 +36,3 @@ function chgrp(string $filename, string $group): bool
 ## Cross-references
 
 - [User reference for `chgrp()`](../../../php/builtins/filesystem/chgrp.md)
-

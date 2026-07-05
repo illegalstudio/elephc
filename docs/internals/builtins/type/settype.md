@@ -36,4 +36,3 @@ function settype(mixed $var, string $type): bool
 ## Cross-references
 
 - [User reference for `settype()`](../../../php/builtins/type/settype.md)
-

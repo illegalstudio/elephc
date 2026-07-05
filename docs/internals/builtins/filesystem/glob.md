@@ -36,4 +36,3 @@ function glob(string $pattern): array
 ## Cross-references
 
 - [User reference for `glob()`](../../../php/builtins/filesystem/glob.md)
-

@@ -35,4 +35,3 @@ function class_exists(string $class, bool $autoload = true): bool
 ## Cross-references
 
 - [User reference for `class_exists()`](../../../php/builtins/class/class_exists.md)
-

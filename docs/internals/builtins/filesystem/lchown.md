@@ -36,4 +36,3 @@ function lchown(string $filename, string $user): bool
 ## Cross-references
 
 - [User reference for `lchown()`](../../../php/builtins/filesystem/lchown.md)
-

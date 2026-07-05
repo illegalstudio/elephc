@@ -35,4 +35,3 @@ function ptr_write8(pointer $pointer, int $value): void
 ## Cross-references
 
 - [User reference for `ptr_write8()`](../../../php/builtins/pointer/ptr_write8.md)
-

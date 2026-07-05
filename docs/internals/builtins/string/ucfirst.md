@@ -36,4 +36,3 @@ function ucfirst(string $string): string
 ## Cross-references
 
 - [User reference for `ucfirst()`](../../../php/builtins/string/ucfirst.md)
-

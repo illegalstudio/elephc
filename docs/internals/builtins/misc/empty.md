@@ -36,4 +36,3 @@ function empty(mixed $value): bool
 ## Cross-references
 
 - [User reference for `empty()`](../../../php/builtins/misc/empty.md)
-

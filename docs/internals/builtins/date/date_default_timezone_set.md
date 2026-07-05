@@ -42,4 +42,3 @@ function date_default_timezone_set(string $timezoneId): bool
 ## Cross-references
 
 - [User reference for `date_default_timezone_set()`](../../../php/builtins/date/date_default_timezone_set.md)
-

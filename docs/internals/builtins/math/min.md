@@ -36,4 +36,3 @@ function min(mixed $value, ...$values): mixed
 ## Cross-references
 
 - [User reference for `min()`](../../../php/builtins/math/min.md)
-

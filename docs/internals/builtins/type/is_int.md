@@ -35,4 +35,3 @@ function is_int(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_int()`](../../../php/builtins/type/is_int.md)
-

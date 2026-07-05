@@ -36,4 +36,3 @@ function pathinfo(string $path, int $flags = 15): array
 ## Cross-references
 
 - [User reference for `pathinfo()`](../../../php/builtins/filesystem/pathinfo.md)
-

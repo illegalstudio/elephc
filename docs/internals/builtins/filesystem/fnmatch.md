@@ -35,4 +35,3 @@ function fnmatch(string $pattern, string $filename, int $flags = 0): bool
 ## Cross-references
 
 - [User reference for `fnmatch()`](../../../php/builtins/filesystem/fnmatch.md)
-

@@ -36,4 +36,3 @@ function stream_wrapper_unregister(string $protocol): bool
 ## Cross-references
 
 - [User reference for `stream_wrapper_unregister()`](../../../php/builtins/io/stream_wrapper_unregister.md)
-

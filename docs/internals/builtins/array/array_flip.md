@@ -35,4 +35,3 @@ function array_flip(array $array): array
 ## Cross-references
 
 - [User reference for `array_flip()`](../../../php/builtins/array/array_flip.md)
-

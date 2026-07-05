@@ -37,4 +37,3 @@ function fgets(resource $stream): mixed
 ## Cross-references
 
 - [User reference for `fgets()`](../../../php/builtins/io/fgets.md)
-

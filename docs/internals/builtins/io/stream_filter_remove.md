@@ -36,4 +36,3 @@ function stream_filter_remove(resource $stream_filter): bool
 ## Cross-references
 
 - [User reference for `stream_filter_remove()`](../../../php/builtins/io/stream_filter_remove.md)
-

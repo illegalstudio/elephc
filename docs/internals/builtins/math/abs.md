@@ -36,4 +36,3 @@ function abs(int $num): mixed
 ## Cross-references
 
 - [User reference for `abs()`](../../../php/builtins/math/abs.md)
-

@@ -37,4 +37,3 @@ function nl2br(string $string): string
 ## Cross-references
 
 - [User reference for `nl2br()`](../../../php/builtins/string/nl2br.md)
-

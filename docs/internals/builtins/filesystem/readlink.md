@@ -39,4 +39,3 @@ function readlink(string $path): mixed
 ## Cross-references
 
 - [User reference for `readlink()`](../../../php/builtins/filesystem/readlink.md)
-

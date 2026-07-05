@@ -39,4 +39,3 @@ function link(string $target, string $link): bool
 ## Cross-references
 
 - [User reference for `link()`](../../../php/builtins/filesystem/link.md)
-

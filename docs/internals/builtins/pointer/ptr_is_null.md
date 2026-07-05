@@ -35,4 +35,3 @@ function ptr_is_null(pointer $pointer): bool
 ## Cross-references
 
 - [User reference for `ptr_is_null()`](../../../php/builtins/pointer/ptr_is_null.md)
-

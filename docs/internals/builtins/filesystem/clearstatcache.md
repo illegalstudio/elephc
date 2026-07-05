@@ -36,4 +36,3 @@ function clearstatcache(bool $clear_realpath_cache = false, string $filename = '
 ## Cross-references
 
 - [User reference for `clearstatcache()`](../../../php/builtins/filesystem/clearstatcache.md)
-

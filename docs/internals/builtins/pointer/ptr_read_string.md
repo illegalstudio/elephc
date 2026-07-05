@@ -36,4 +36,3 @@ function ptr_read_string(pointer $pointer, int $length): string
 ## Cross-references
 
 - [User reference for `ptr_read_string()`](../../../php/builtins/pointer/ptr_read_string.md)
-

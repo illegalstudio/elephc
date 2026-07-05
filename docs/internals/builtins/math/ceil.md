@@ -35,4 +35,3 @@ function ceil(float $num): float
 ## Cross-references
 
 - [User reference for `ceil()`](../../../php/builtins/math/ceil.md)
-

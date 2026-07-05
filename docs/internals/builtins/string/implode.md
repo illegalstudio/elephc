@@ -35,4 +35,3 @@ function implode(string $separator, array $array = null): string
 ## Cross-references
 
 - [User reference for `implode()`](../../../php/builtins/string/implode.md)
-

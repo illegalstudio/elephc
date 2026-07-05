@@ -39,4 +39,3 @@ function krsort(array $array): bool
 ## Cross-references
 
 - [User reference for `krsort()`](../../../php/builtins/array/krsort.md)
-

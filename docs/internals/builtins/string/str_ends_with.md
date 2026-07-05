@@ -36,4 +36,3 @@ function str_ends_with(string $haystack, string $needle): bool
 ## Cross-references
 
 - [User reference for `str_ends_with()`](../../../php/builtins/string/str_ends_with.md)
-

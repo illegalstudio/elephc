@@ -39,4 +39,3 @@ function crc32(string $string): int
 ## Cross-references
 
 - [User reference for `crc32()`](../../../php/builtins/string/crc32.md)
-

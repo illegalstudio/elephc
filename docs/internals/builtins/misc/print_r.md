@@ -35,4 +35,3 @@ function print_r(mixed $value): void
 ## Cross-references
 
 - [User reference for `print_r()`](../../../php/builtins/misc/print_r.md)
-

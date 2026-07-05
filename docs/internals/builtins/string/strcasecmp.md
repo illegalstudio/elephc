@@ -36,4 +36,3 @@ function strcasecmp(string $string1, string $string2): int
 ## Cross-references
 
 - [User reference for `strcasecmp()`](../../../php/builtins/string/strcasecmp.md)
-

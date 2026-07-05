@@ -37,4 +37,3 @@ function array_filter(array $array, callable $callback = null, int $mode = 0): a
 ## Cross-references
 
 - [User reference for `array_filter()`](../../../php/builtins/array/array_filter.md)
-

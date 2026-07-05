@@ -36,4 +36,3 @@ function preg_replace_callback(string $pattern, callable $callback, string $subj
 ## Cross-references
 
 - [User reference for `preg_replace_callback()`](../../../php/builtins/regex/preg_replace_callback.md)
-

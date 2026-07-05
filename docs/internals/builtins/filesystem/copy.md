@@ -39,4 +39,3 @@ function copy(string $from, string $to): bool
 ## Cross-references
 
 - [User reference for `copy()`](../../../php/builtins/filesystem/copy.md)
-

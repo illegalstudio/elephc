@@ -40,4 +40,3 @@ function checkdate(int $month, int $day, int $year): bool
 ## Cross-references
 
 - [User reference for `checkdate()`](../../../php/builtins/date/checkdate.md)
-

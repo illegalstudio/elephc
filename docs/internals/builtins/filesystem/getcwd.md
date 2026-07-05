@@ -37,4 +37,3 @@ function getcwd(): string
 ## Cross-references
 
 - [User reference for `getcwd()`](../../../php/builtins/filesystem/getcwd.md)
-

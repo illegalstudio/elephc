@@ -35,4 +35,3 @@ function exec(string $command): string
 ## Cross-references
 
 - [User reference for `exec()`](../../../php/builtins/process/exec.md)
-

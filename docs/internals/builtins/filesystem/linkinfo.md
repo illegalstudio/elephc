@@ -39,4 +39,3 @@ function linkinfo(string $path): int
 ## Cross-references
 
 - [User reference for `linkinfo()`](../../../php/builtins/filesystem/linkinfo.md)
-

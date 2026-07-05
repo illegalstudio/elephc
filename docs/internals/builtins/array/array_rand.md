@@ -37,4 +37,3 @@ function array_rand(array $array): int
 ## Cross-references
 
 - [User reference for `array_rand()`](../../../php/builtins/array/array_rand.md)
-

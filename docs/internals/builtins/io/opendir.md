@@ -38,4 +38,3 @@ function opendir(string $directory): mixed
 ## Cross-references
 
 - [User reference for `opendir()`](../../../php/builtins/io/opendir.md)
-

@@ -35,4 +35,3 @@ function strpos(string $haystack, string $needle, int $offset = 0): mixed
 ## Cross-references
 
 - [User reference for `strpos()`](../../../php/builtins/string/strpos.md)
-

@@ -36,4 +36,3 @@ function fflush(resource $stream): bool
 ## Cross-references
 
 - [User reference for `fflush()`](../../../php/builtins/io/fflush.md)
-

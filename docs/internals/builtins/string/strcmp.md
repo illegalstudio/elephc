@@ -36,4 +36,3 @@ function strcmp(string $string1, string $string2): int
 ## Cross-references
 
 - [User reference for `strcmp()`](../../../php/builtins/string/strcmp.md)
-

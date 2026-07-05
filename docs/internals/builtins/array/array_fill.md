@@ -35,4 +35,3 @@ function array_fill(int $start_index, int $count, mixed $value): array
 ## Cross-references
 
 - [User reference for `array_fill()`](../../../php/builtins/array/array_fill.md)
-

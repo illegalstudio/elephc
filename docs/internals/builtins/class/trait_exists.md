@@ -35,4 +35,3 @@ function trait_exists(string $trait, bool $autoload = true): bool
 ## Cross-references
 
 - [User reference for `trait_exists()`](../../../php/builtins/class/trait_exists.md)
-

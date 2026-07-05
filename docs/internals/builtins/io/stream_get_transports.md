@@ -35,4 +35,3 @@ function stream_get_transports(): array
 ## Cross-references
 
 - [User reference for `stream_get_transports()`](../../../php/builtins/io/stream_get_transports.md)
-

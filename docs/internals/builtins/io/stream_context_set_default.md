@@ -35,4 +35,3 @@ function stream_context_set_default(array $options): mixed
 ## Cross-references
 
 - [User reference for `stream_context_set_default()`](../../../php/builtins/io/stream_context_set_default.md)
-

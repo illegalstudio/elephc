@@ -37,4 +37,3 @@ function urldecode(string $string): string
 ## Cross-references
 
 - [User reference for `urldecode()`](../../../php/builtins/string/urldecode.md)
-

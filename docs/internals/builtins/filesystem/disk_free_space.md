@@ -36,4 +36,3 @@ function disk_free_space(string $directory): float
 ## Cross-references
 
 - [User reference for `disk_free_space()`](../../../php/builtins/filesystem/disk_free_space.md)
-

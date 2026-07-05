@@ -37,4 +37,3 @@ function array_walk(array $array, callable $callback): void
 ## Cross-references
 
 - [User reference for `array_walk()`](../../../php/builtins/array/array_walk.md)
-

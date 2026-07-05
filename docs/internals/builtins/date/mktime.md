@@ -38,4 +38,3 @@ function mktime(int $hour, int $minute, int $second, int $month, int $day, int $
 ## Cross-references
 
 - [User reference for `mktime()`](../../../php/builtins/date/mktime.md)
-

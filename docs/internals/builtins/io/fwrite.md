@@ -36,4 +36,3 @@ function fwrite(resource $stream, string $data): int
 ## Cross-references
 
 - [User reference for `fwrite()`](../../../php/builtins/io/fwrite.md)
-

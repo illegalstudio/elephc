@@ -37,4 +37,3 @@ function intval(mixed $value): int
 ## Cross-references
 
 - [User reference for `intval()`](../../../php/builtins/type/intval.md)
-

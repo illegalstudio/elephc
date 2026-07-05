@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/iterator_count.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/iterator_count.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:236](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L236) (`lower_iterator_count`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:237](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L237) (`lower_iterator_count`)
 - **Function symbol**: `lower_iterator_count()`
 
 
@@ -35,4 +35,3 @@ function iterator_count(traversable $iterator): int
 ## Cross-references
 
 - [User reference for `iterator_count()`](../../../php/builtins/spl/iterator_count.md)
-

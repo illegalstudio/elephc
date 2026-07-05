@@ -37,4 +37,3 @@ function sprintf(string $format, ...$values): string
 ## Cross-references
 
 - [User reference for `sprintf()`](../../../php/builtins/string/sprintf.md)
-

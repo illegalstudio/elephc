@@ -35,4 +35,3 @@ function array_pad(array $array, int $length, mixed $value): array
 ## Cross-references
 
 - [User reference for `array_pad()`](../../../php/builtins/array/array_pad.md)
-

@@ -36,4 +36,3 @@ function preg_split(string $pattern, string $subject, int $limit = -1, int $flag
 ## Cross-references
 
 - [User reference for `preg_split()`](../../../php/builtins/regex/preg_split.md)
-

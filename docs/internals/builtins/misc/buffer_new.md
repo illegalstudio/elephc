@@ -31,4 +31,3 @@ function buffer_new(int $length): mixed
 ## Cross-references
 
 - [User reference for `buffer_new()`](../../../php/builtins/misc/buffer_new.md)
-

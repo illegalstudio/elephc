@@ -40,4 +40,3 @@ function array_multisort(array $array1, int $array2): bool
 ## Cross-references
 
 - [User reference for `array_multisort()`](../../../php/builtins/array/array_multisort.md)
-

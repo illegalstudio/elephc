@@ -37,4 +37,3 @@ function stream_set_blocking(resource $stream, bool $enable): bool
 ## Cross-references
 
 - [User reference for `stream_set_blocking()`](../../../php/builtins/io/stream_set_blocking.md)
-

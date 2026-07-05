@@ -35,4 +35,3 @@ function ptr_set(pointer $pointer, mixed $value): void
 ## Cross-references
 
 - [User reference for `ptr_set()`](../../../php/builtins/pointer/ptr_set.md)
-

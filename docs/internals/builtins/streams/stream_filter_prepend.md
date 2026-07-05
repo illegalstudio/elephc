@@ -35,4 +35,3 @@ function stream_filter_prepend(resource $stream, string $filtername, int $read_w
 ## Cross-references
 
 - [User reference for `stream_filter_prepend()`](../../../php/builtins/streams/stream_filter_prepend.md)
-

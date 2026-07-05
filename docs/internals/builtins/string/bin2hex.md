@@ -37,4 +37,3 @@ function bin2hex(string $string): string
 ## Cross-references
 
 - [User reference for `bin2hex()`](../../../php/builtins/string/bin2hex.md)
-

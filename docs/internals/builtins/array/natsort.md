@@ -38,4 +38,3 @@ function natsort(array $array): bool
 ## Cross-references
 
 - [User reference for `natsort()`](../../../php/builtins/array/natsort.md)
-

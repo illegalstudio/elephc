@@ -38,4 +38,3 @@ function md5(string $string, bool $binary = false): string
 ## Cross-references
 
 - [User reference for `md5()`](../../../php/builtins/string/md5.md)
-

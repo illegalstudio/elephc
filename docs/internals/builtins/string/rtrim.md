@@ -35,4 +35,3 @@ function rtrim(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): stri
 ## Cross-references
 
 - [User reference for `rtrim()`](../../../php/builtins/string/rtrim.md)
-

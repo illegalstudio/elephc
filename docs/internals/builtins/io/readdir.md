@@ -39,4 +39,3 @@ function readdir(resource $dir_handle): mixed
 ## Cross-references
 
 - [User reference for `readdir()`](../../../php/builtins/io/readdir.md)
-

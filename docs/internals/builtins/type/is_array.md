@@ -37,4 +37,3 @@ function is_array(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_array()`](../../../php/builtins/type/is_array.md)
-

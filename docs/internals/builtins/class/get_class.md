@@ -35,4 +35,3 @@ function get_class(object $object = null): string
 ## Cross-references
 
 - [User reference for `get_class()`](../../../php/builtins/class/get_class.md)
-

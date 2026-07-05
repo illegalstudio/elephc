@@ -35,4 +35,3 @@ function str_replace(string $search, string $replace, string $subject, int $coun
 ## Cross-references
 
 - [User reference for `str_replace()`](../../../php/builtins/string/str_replace.md)
-

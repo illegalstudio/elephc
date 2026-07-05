@@ -35,4 +35,3 @@ function sinh(float $num): float
 ## Cross-references
 
 - [User reference for `sinh()`](../../../php/builtins/math/sinh.md)
-

@@ -36,4 +36,3 @@ function stream_supports_lock(resource $stream): bool
 ## Cross-references
 
 - [User reference for `stream_supports_lock()`](../../../php/builtins/io/stream_supports_lock.md)
-

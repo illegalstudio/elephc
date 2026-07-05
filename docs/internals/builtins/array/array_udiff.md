@@ -35,4 +35,3 @@ function array_udiff(array $array1, array $array2, callable $callback): array
 ## Cross-references
 
 - [User reference for `array_udiff()`](../../../php/builtins/array/array_udiff.md)
-

@@ -35,4 +35,3 @@ function log(float $num, float $base = 2.718281828459045): float
 ## Cross-references
 
 - [User reference for `log()`](../../../php/builtins/math/log.md)
-

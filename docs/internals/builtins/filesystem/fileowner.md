@@ -38,4 +38,3 @@ function fileowner(string $filename): mixed
 ## Cross-references
 
 - [User reference for `fileowner()`](../../../php/builtins/filesystem/fileowner.md)
-

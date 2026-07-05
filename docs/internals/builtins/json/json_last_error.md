@@ -36,4 +36,3 @@ function json_last_error(): int
 ## Cross-references
 
 - [User reference for `json_last_error()`](../../../php/builtins/json/json_last_error.md)
-

@@ -44,4 +44,3 @@ function sort(array $array): bool
 ## Cross-references
 
 - [User reference for `sort()`](../../../php/builtins/array/sort.md)
-

@@ -37,4 +37,3 @@ function fprintf(resource $stream, string $format, ...$values): int
 ## Cross-references
 
 - [User reference for `fprintf()`](../../../php/builtins/io/fprintf.md)
-

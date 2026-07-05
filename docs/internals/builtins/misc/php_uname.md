@@ -36,4 +36,3 @@ function php_uname(string $mode = 'a'): string
 ## Cross-references
 
 - [User reference for `php_uname()`](../../../php/builtins/misc/php_uname.md)
-

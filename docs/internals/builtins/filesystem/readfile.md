@@ -35,4 +35,3 @@ function readfile(string $filename): mixed
 ## Cross-references
 
 - [User reference for `readfile()`](../../../php/builtins/filesystem/readfile.md)
-

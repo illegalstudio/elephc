@@ -37,4 +37,3 @@ function usort(array $array, callable $callback): bool
 ## Cross-references
 
 - [User reference for `usort()`](../../../php/builtins/array/usort.md)
-

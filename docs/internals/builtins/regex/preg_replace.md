@@ -36,4 +36,3 @@ function preg_replace(string $pattern, string $replacement, string $subject): st
 ## Cross-references
 
 - [User reference for `preg_replace()`](../../../php/builtins/regex/preg_replace.md)
-

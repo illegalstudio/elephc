@@ -35,4 +35,3 @@ function log2(float $num): float
 ## Cross-references
 
 - [User reference for `log2()`](../../../php/builtins/math/log2.md)
-

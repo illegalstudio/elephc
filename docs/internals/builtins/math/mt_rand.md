@@ -36,4 +36,3 @@ function mt_rand(int $min, int $max): int
 ## Cross-references
 
 - [User reference for `mt_rand()`](../../../php/builtins/math/mt_rand.md)
-

@@ -35,4 +35,3 @@ function ptr_get(pointer $pointer): int
 ## Cross-references
 
 - [User reference for `ptr_get()`](../../../php/builtins/pointer/ptr_get.md)
-

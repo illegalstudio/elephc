@@ -40,4 +40,3 @@ function filemtime(string $filename): int
 ## Cross-references
 
 - [User reference for `filemtime()`](../../../php/builtins/filesystem/filemtime.md)
-

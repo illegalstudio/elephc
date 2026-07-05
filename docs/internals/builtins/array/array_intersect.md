@@ -40,4 +40,3 @@ function array_intersect(array $array, ...$arrays): array
 ## Cross-references
 
 - [User reference for `array_intersect()`](../../../php/builtins/array/array_intersect.md)
-

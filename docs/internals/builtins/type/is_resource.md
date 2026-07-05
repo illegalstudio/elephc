@@ -35,4 +35,3 @@ function is_resource(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_resource()`](../../../php/builtins/type/is_resource.md)
-

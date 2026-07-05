@@ -36,4 +36,3 @@ function stream_wrapper_register(string $protocol, string $class, int $flags = 0
 ## Cross-references
 
 - [User reference for `stream_wrapper_register()`](../../../php/builtins/io/stream_wrapper_register.md)
-

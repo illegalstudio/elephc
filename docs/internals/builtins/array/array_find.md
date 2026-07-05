@@ -36,4 +36,3 @@ function array_find(mixed $array, mixed $callback): mixed
 ## Cross-references
 
 - [User reference for `array_find()`](../../../php/builtins/array/array_find.md)
-

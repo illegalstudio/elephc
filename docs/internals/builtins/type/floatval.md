@@ -36,4 +36,3 @@ function floatval(mixed $value): float
 ## Cross-references
 
 - [User reference for `floatval()`](../../../php/builtins/type/floatval.md)
-

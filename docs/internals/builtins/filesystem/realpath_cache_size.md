@@ -35,4 +35,3 @@ function realpath_cache_size(): int
 ## Cross-references
 
 - [User reference for `realpath_cache_size()`](../../../php/builtins/filesystem/realpath_cache_size.md)
-

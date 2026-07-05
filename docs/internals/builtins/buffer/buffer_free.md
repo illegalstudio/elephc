@@ -35,4 +35,3 @@ function buffer_free(buffer $buffer): mixed
 ## Cross-references
 
 - [User reference for `buffer_free()`](../../../php/builtins/buffer/buffer_free.md)
-

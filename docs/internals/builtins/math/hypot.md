@@ -35,4 +35,3 @@ function hypot(float $x, float $y): float
 ## Cross-references
 
 - [User reference for `hypot()`](../../../php/builtins/math/hypot.md)
-

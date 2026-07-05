@@ -35,4 +35,3 @@ function array_keys(array $array): array
 ## Cross-references
 
 - [User reference for `array_keys()`](../../../php/builtins/array/array_keys.md)
-

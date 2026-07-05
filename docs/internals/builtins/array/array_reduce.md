@@ -36,4 +36,3 @@ function array_reduce(array $array, callable $callback, mixed $initial = null): 
 ## Cross-references
 
 - [User reference for `array_reduce()`](../../../php/builtins/array/array_reduce.md)
-

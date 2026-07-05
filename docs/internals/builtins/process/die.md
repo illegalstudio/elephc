@@ -31,4 +31,3 @@ function die(int $status): void
 ## Cross-references
 
 - [User reference for `die()`](../../../php/builtins/process/die.md)
-

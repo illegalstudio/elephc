@@ -35,4 +35,3 @@ function basename(string $path, string $suffix = ''): string
 ## Cross-references
 
 - [User reference for `basename()`](../../../php/builtins/filesystem/basename.md)
-

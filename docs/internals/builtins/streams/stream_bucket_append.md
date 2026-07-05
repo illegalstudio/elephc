@@ -35,4 +35,3 @@ function stream_bucket_append(mixed $brigade, mixed $bucket): void
 ## Cross-references
 
 - [User reference for `stream_bucket_append()`](../../../php/builtins/streams/stream_bucket_append.md)
-

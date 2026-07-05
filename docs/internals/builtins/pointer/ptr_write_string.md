@@ -36,4 +36,3 @@ function ptr_write_string(pointer $pointer, string $string): int
 ## Cross-references
 
 - [User reference for `ptr_write_string()`](../../../php/builtins/pointer/ptr_write_string.md)
-

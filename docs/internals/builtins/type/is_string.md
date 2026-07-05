@@ -35,4 +35,3 @@ function is_string(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_string()`](../../../php/builtins/type/is_string.md)
-

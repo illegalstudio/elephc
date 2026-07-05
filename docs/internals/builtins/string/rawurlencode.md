@@ -37,4 +37,3 @@ function rawurlencode(string $string): string
 ## Cross-references
 
 - [User reference for `rawurlencode()`](../../../php/builtins/string/rawurlencode.md)
-

@@ -35,4 +35,3 @@ function stream_context_get_params(resource $context): array
 ## Cross-references
 
 - [User reference for `stream_context_get_params()`](../../../php/builtins/io/stream_context_get_params.md)
-

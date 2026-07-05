@@ -36,4 +36,3 @@ function fputcsv(resource $stream, array $fields, string $separator = ',', strin
 ## Cross-references
 
 - [User reference for `fputcsv()`](../../../php/builtins/io/fputcsv.md)
-

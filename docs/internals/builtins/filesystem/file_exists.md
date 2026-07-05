@@ -37,4 +37,3 @@ function file_exists(string $filename): bool
 ## Cross-references
 
 - [User reference for `file_exists()`](../../../php/builtins/filesystem/file_exists.md)
-

@@ -36,4 +36,3 @@ function ptr_read16(pointer $pointer): int
 ## Cross-references
 
 - [User reference for `ptr_read16()`](../../../php/builtins/pointer/ptr_read16.md)
-

@@ -37,4 +37,3 @@ function gethostbyname(string $hostname): string
 ## Cross-references
 
 - [User reference for `gethostbyname()`](../../../php/builtins/io/gethostbyname.md)
-

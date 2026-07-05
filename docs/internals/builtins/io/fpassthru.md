@@ -37,4 +37,3 @@ function fpassthru(resource $stream): int
 ## Cross-references
 
 - [User reference for `fpassthru()`](../../../php/builtins/io/fpassthru.md)
-

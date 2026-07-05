@@ -37,4 +37,3 @@ function grapheme_strrev(string $string): mixed
 ## Cross-references
 
 - [User reference for `grapheme_strrev()`](../../../php/builtins/string/grapheme_strrev.md)
-

@@ -36,4 +36,3 @@ function hash_update(resource $context, string $data): bool
 ## Cross-references
 
 - [User reference for `hash_update()`](../../../php/builtins/string/hash_update.md)
-

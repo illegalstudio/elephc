@@ -35,4 +35,3 @@ function buffer_len(buffer $buffer): int
 ## Cross-references
 
 - [User reference for `buffer_len()`](../../../php/builtins/buffer/buffer_len.md)
-

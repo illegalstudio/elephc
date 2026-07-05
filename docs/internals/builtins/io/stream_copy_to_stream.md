@@ -35,4 +35,3 @@ function stream_copy_to_stream(resource $from, resource $to, int $length = null,
 ## Cross-references
 
 - [User reference for `stream_copy_to_stream()`](../../../php/builtins/io/stream_copy_to_stream.md)
-

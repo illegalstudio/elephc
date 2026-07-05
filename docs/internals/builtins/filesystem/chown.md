@@ -36,4 +36,3 @@ function chown(string $filename, string $user): bool
 ## Cross-references
 
 - [User reference for `chown()`](../../../php/builtins/filesystem/chown.md)
-

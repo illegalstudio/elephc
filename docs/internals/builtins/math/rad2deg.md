@@ -35,4 +35,3 @@ function rad2deg(float $num): float
 ## Cross-references
 
 - [User reference for `rad2deg()`](../../../php/builtins/math/rad2deg.md)
-

@@ -35,4 +35,3 @@ function array_column(array $array, string $column_key): array
 ## Cross-references
 
 - [User reference for `array_column()`](../../../php/builtins/array/array_column.md)
-

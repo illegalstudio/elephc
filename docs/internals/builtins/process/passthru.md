@@ -37,4 +37,3 @@ function passthru(string $command): void
 ## Cross-references
 
 - [User reference for `passthru()`](../../../php/builtins/process/passthru.md)
-

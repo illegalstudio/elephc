@@ -36,4 +36,3 @@ function fdatasync(resource $stream): bool
 ## Cross-references
 
 - [User reference for `fdatasync()`](../../../php/builtins/io/fdatasync.md)
-

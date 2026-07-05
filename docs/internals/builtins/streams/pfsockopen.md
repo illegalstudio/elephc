@@ -36,4 +36,3 @@ function pfsockopen(string $hostname, int $port, int $error_code = null, string 
 ## Cross-references
 
 - [User reference for `pfsockopen()`](../../../php/builtins/streams/pfsockopen.md)
-

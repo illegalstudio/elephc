@@ -35,4 +35,3 @@ function array_combine(array $keys, array $values): array
 ## Cross-references
 
 - [User reference for `array_combine()`](../../../php/builtins/array/array_combine.md)
-

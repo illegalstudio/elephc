@@ -37,4 +37,3 @@ function rawurldecode(string $string): string
 ## Cross-references
 
 - [User reference for `rawurldecode()`](../../../php/builtins/string/rawurldecode.md)
-

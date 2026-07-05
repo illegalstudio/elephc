@@ -39,4 +39,3 @@ function hash_copy(resource $context): mixed
 ## Cross-references
 
 - [User reference for `hash_copy()`](../../../php/builtins/string/hash_copy.md)
-

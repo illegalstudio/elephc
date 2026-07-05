@@ -40,4 +40,3 @@ function gmmktime(int $hour, int $minute, int $second, int $month, int $day, int
 ## Cross-references
 
 - [User reference for `gmmktime()`](../../../php/builtins/date/gmmktime.md)
-

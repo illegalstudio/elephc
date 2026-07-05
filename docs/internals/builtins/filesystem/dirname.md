@@ -37,4 +37,3 @@ function dirname(string $path, int $levels = 1): string
 ## Cross-references
 
 - [User reference for `dirname()`](../../../php/builtins/filesystem/dirname.md)
-

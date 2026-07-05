@@ -36,4 +36,3 @@ function umask(int $mask = null): int
 ## Cross-references
 
 - [User reference for `umask()`](../../../php/builtins/filesystem/umask.md)
-

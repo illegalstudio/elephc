@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/spl_autoload.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_autoload.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:150](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L150) (`lower_spl_autoload_void`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:151](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L151) (`lower_spl_autoload_void`)
 - **Function symbol**: `lower_spl_autoload_void()`
 
 
@@ -35,4 +35,3 @@ function spl_autoload(string $class, string $file_extensions = null): void
 ## Cross-references
 
 - [User reference for `spl_autoload()`](../../../php/builtins/spl/spl_autoload.md)
-

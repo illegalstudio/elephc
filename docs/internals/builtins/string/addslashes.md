@@ -37,4 +37,3 @@ function addslashes(string $string): string
 ## Cross-references
 
 - [User reference for `addslashes()`](../../../php/builtins/string/addslashes.md)
-

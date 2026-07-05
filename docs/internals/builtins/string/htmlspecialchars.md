@@ -37,4 +37,3 @@ function htmlspecialchars(string $string): string
 ## Cross-references
 
 - [User reference for `htmlspecialchars()`](../../../php/builtins/string/htmlspecialchars.md)
-

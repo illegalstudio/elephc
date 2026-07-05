@@ -35,4 +35,3 @@ function boolval(mixed $value): bool
 ## Cross-references
 
 - [User reference for `boolval()`](../../../php/builtins/type/boolval.md)
-

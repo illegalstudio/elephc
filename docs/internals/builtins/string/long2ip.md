@@ -37,4 +37,3 @@ function long2ip(int $ip): string
 ## Cross-references
 
 - [User reference for `long2ip()`](../../../php/builtins/string/long2ip.md)
-

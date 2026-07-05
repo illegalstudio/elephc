@@ -35,4 +35,3 @@ function ptr_sizeof(string $type): int
 ## Cross-references
 
 - [User reference for `ptr_sizeof()`](../../../php/builtins/pointer/ptr_sizeof.md)
-

@@ -37,4 +37,3 @@ function hex2bin(string $string): string
 ## Cross-references
 
 - [User reference for `hex2bin()`](../../../php/builtins/string/hex2bin.md)
-

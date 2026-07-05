@@ -37,4 +37,3 @@ function file_put_contents(string $filename, string $data): int
 ## Cross-references
 
 - [User reference for `file_put_contents()`](../../../php/builtins/io/file_put_contents.md)
-

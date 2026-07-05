@@ -37,4 +37,3 @@ function substr_replace(string $string, string $replace, int $offset, int $lengt
 ## Cross-references
 
 - [User reference for `substr_replace()`](../../../php/builtins/string/substr_replace.md)
-

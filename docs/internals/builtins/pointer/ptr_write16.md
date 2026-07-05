@@ -36,4 +36,3 @@ function ptr_write16(pointer $pointer, int $value): void
 ## Cross-references
 
 - [User reference for `ptr_write16()`](../../../php/builtins/pointer/ptr_write16.md)
-

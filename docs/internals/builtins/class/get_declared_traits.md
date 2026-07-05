@@ -35,4 +35,3 @@ function get_declared_traits(): array
 ## Cross-references
 
 - [User reference for `get_declared_traits()`](../../../php/builtins/class/get_declared_traits.md)
-

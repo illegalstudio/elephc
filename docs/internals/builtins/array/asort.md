@@ -42,4 +42,3 @@ function asort(array $array): bool
 ## Cross-references
 
 - [User reference for `asort()`](../../../php/builtins/array/asort.md)
-

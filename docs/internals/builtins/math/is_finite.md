@@ -35,4 +35,3 @@ function is_finite(float $num): bool
 ## Cross-references
 
 - [User reference for `is_finite()`](../../../php/builtins/math/is_finite.md)
-

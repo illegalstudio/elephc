@@ -36,4 +36,3 @@ function flock(resource $stream, int $operation, bool $would_block = null): bool
 ## Cross-references
 
 - [User reference for `flock()`](../../../php/builtins/io/flock.md)
-

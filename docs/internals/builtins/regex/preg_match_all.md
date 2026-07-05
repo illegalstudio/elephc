@@ -36,4 +36,3 @@ function preg_match_all(string $pattern, string $subject): int
 ## Cross-references
 
 - [User reference for `preg_match_all()`](../../../php/builtins/regex/preg_match_all.md)
-

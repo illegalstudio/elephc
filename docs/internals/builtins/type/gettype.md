@@ -35,4 +35,3 @@ function gettype(mixed $value): string
 ## Cross-references
 
 - [User reference for `gettype()`](../../../php/builtins/type/gettype.md)
-

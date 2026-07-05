@@ -35,4 +35,3 @@ function defined(string $constant_name): bool
 ## Cross-references
 
 - [User reference for `defined()`](../../../php/builtins/misc/defined.md)
-

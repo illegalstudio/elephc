@@ -35,4 +35,3 @@ function array_uintersect(array $array1, array $array2, callable $callback): arr
 ## Cross-references
 
 - [User reference for `array_uintersect()`](../../../php/builtins/array/array_uintersect.md)
-

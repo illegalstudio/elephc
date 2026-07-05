@@ -37,4 +37,3 @@ function lstat(string $filename): mixed
 ## Cross-references
 
 - [User reference for `lstat()`](../../../php/builtins/filesystem/lstat.md)
-

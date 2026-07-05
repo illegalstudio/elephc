@@ -37,4 +37,3 @@ function uksort(array $array, callable $callback): bool
 ## Cross-references
 
 - [User reference for `uksort()`](../../../php/builtins/array/uksort.md)
-

@@ -35,4 +35,3 @@ function stream_get_wrappers(): array
 ## Cross-references
 
 - [User reference for `stream_get_wrappers()`](../../../php/builtins/io/stream_get_wrappers.md)
-

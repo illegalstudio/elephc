@@ -38,4 +38,3 @@ function tempnam(string $directory, string $prefix): string
 ## Cross-references
 
 - [User reference for `tempnam()`](../../../php/builtins/filesystem/tempnam.md)
-

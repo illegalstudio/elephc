@@ -35,4 +35,3 @@ function get_declared_interfaces(): array
 ## Cross-references
 
 - [User reference for `get_declared_interfaces()`](../../../php/builtins/class/get_declared_interfaces.md)
-

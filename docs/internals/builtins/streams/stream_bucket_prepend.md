@@ -35,4 +35,3 @@ function stream_bucket_prepend(mixed $brigade, mixed $bucket): void
 ## Cross-references
 
 - [User reference for `stream_bucket_prepend()`](../../../php/builtins/streams/stream_bucket_prepend.md)
-

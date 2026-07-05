@@ -42,4 +42,3 @@ function localtime(int $timestamp = -1, bool $associative = false): array
 ## Cross-references
 
 - [User reference for `localtime()`](../../../php/builtins/date/localtime.md)
-

@@ -35,4 +35,3 @@ function gzdeflate(string $data, int $level = -1): string
 ## Cross-references
 
 - [User reference for `gzdeflate()`](../../../php/builtins/string/gzdeflate.md)
-

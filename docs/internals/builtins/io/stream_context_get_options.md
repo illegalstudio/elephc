@@ -37,4 +37,3 @@ function stream_context_get_options(resource $context): array
 ## Cross-references
 
 - [User reference for `stream_context_get_options()`](../../../php/builtins/io/stream_context_get_options.md)
-

@@ -36,4 +36,3 @@ function stream_socket_recvfrom(resource $socket, int $length, int $flags = 0, s
 ## Cross-references
 
 - [User reference for `stream_socket_recvfrom()`](../../../php/builtins/io/stream_socket_recvfrom.md)
-

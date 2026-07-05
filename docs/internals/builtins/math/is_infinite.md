@@ -35,4 +35,3 @@ function is_infinite(float $num): bool
 ## Cross-references
 
 - [User reference for `is_infinite()`](../../../php/builtins/math/is_infinite.md)
-

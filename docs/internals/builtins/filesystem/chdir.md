@@ -40,4 +40,3 @@ function chdir(string $directory): bool
 ## Cross-references
 
 - [User reference for `chdir()`](../../../php/builtins/filesystem/chdir.md)
-

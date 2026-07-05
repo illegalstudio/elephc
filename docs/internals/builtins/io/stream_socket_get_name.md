@@ -36,4 +36,3 @@ function stream_socket_get_name(resource $socket, bool $remote): mixed
 ## Cross-references
 
 - [User reference for `stream_socket_get_name()`](../../../php/builtins/io/stream_socket_get_name.md)
-

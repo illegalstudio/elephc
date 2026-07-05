@@ -37,4 +37,3 @@ function gethostbyaddr(string $ip): mixed
 ## Cross-references
 
 - [User reference for `gethostbyaddr()`](../../../php/builtins/io/gethostbyaddr.md)
-

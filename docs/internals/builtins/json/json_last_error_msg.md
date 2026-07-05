@@ -37,4 +37,3 @@ function json_last_error_msg(): string
 ## Cross-references
 
 - [User reference for `json_last_error_msg()`](../../../php/builtins/json/json_last_error_msg.md)
-

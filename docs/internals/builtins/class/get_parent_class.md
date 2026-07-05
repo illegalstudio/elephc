@@ -35,4 +35,3 @@ function get_parent_class(mixed $object_or_class = null): string
 ## Cross-references
 
 - [User reference for `get_parent_class()`](../../../php/builtins/class/get_parent_class.md)
-

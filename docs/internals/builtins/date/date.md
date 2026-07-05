@@ -37,4 +37,3 @@ function date(string $format, int $timestamp = null): string
 ## Cross-references
 
 - [User reference for `date()`](../../../php/builtins/date/date.md)
-

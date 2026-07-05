@@ -35,4 +35,3 @@ function ctype_alnum(string $text): bool
 ## Cross-references
 
 - [User reference for `ctype_alnum()`](../../../php/builtins/type/ctype_alnum.md)
-

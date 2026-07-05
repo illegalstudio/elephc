@@ -35,4 +35,3 @@ function tan(float $num): float
 ## Cross-references
 
 - [User reference for `tan()`](../../../php/builtins/math/tan.md)
-

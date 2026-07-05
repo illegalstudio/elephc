@@ -35,4 +35,3 @@ function log10(float $num): float
 ## Cross-references
 
 - [User reference for `log10()`](../../../php/builtins/math/log10.md)
-

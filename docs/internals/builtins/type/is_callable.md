@@ -38,4 +38,3 @@ function is_callable(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_callable()`](../../../php/builtins/type/is_callable.md)
-

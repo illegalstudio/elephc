@@ -35,4 +35,3 @@ function array_values(array $array): array
 ## Cross-references
 
 - [User reference for `array_values()`](../../../php/builtins/array/array_values.md)
-

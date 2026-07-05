@@ -37,4 +37,3 @@ function stream_socket_client(string $address): mixed
 ## Cross-references
 
 - [User reference for `stream_socket_client()`](../../../php/builtins/io/stream_socket_client.md)
-

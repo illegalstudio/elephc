@@ -35,4 +35,3 @@ function ctype_space(string $text): bool
 ## Cross-references
 
 - [User reference for `ctype_space()`](../../../php/builtins/type/ctype_space.md)
-

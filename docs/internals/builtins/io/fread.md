@@ -36,4 +36,3 @@ function fread(resource $stream, int $length): string
 ## Cross-references
 
 - [User reference for `fread()`](../../../php/builtins/io/fread.md)
-

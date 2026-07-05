@@ -35,4 +35,3 @@ function class_attribute_args(string $class_name, string $attribute_name): array
 ## Cross-references
 
 - [User reference for `class_attribute_args()`](../../../php/builtins/class/class_attribute_args.md)
-

@@ -39,4 +39,3 @@ function filesize(string $filename): int
 ## Cross-references
 
 - [User reference for `filesize()`](../../../php/builtins/filesystem/filesize.md)
-

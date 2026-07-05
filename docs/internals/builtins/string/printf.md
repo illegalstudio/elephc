@@ -37,4 +37,3 @@ function printf(string $format, ...$values): int
 ## Cross-references
 
 - [User reference for `printf()`](../../../php/builtins/string/printf.md)
-

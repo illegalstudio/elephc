@@ -38,4 +38,3 @@ function unlink(string $filename): bool
 ## Cross-references
 
 - [User reference for `unlink()`](../../../php/builtins/filesystem/unlink.md)
-

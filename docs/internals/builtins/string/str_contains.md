@@ -36,4 +36,3 @@ function str_contains(string $haystack, string $needle): bool
 ## Cross-references
 
 - [User reference for `str_contains()`](../../../php/builtins/string/str_contains.md)
-

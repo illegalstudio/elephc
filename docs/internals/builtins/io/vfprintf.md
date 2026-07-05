@@ -37,4 +37,3 @@ function vfprintf(resource $stream, string $format, array $values): int
 ## Cross-references
 
 - [User reference for `vfprintf()`](../../../php/builtins/io/vfprintf.md)
-

@@ -37,4 +37,3 @@ function fsync(resource $stream): bool
 ## Cross-references
 
 - [User reference for `fsync()`](../../../php/builtins/io/fsync.md)
-

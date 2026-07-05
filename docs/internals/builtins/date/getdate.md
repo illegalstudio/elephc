@@ -41,4 +41,3 @@ function getdate(int $timestamp = null): array
 ## Cross-references
 
 - [User reference for `getdate()`](../../../php/builtins/date/getdate.md)
-

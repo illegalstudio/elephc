@@ -39,4 +39,3 @@ function fileinode(string $filename): mixed
 ## Cross-references
 
 - [User reference for `fileinode()`](../../../php/builtins/filesystem/fileinode.md)
-

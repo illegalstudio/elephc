@@ -35,4 +35,3 @@ function var_dump(mixed $value): void
 ## Cross-references
 
 - [User reference for `var_dump()`](../../../php/builtins/misc/var_dump.md)
-

@@ -37,4 +37,3 @@ function file(string $filename): array
 ## Cross-references
 
 - [User reference for `file()`](../../../php/builtins/io/file.md)
-

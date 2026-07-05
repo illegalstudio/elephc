@@ -41,4 +41,3 @@ function arsort(array $array): bool
 ## Cross-references
 
 - [User reference for `arsort()`](../../../php/builtins/array/arsort.md)
-

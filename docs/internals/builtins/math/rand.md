@@ -36,4 +36,3 @@ function rand(int $min, int $max): int
 ## Cross-references
 
 - [User reference for `rand()`](../../../php/builtins/math/rand.md)
-

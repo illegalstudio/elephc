@@ -36,4 +36,3 @@ function lchgrp(string $filename, string $group): bool
 ## Cross-references
 
 - [User reference for `lchgrp()`](../../../php/builtins/filesystem/lchgrp.md)
-

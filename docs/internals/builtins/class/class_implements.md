@@ -35,4 +35,3 @@ function class_implements(mixed $object_or_class, bool $autoload = true): mixed
 ## Cross-references
 
 - [User reference for `class_implements()`](../../../php/builtins/class/class_implements.md)
-

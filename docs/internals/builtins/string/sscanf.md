@@ -38,4 +38,3 @@ function sscanf(string $string, string $format, ...$vars): array
 ## Cross-references
 
 - [User reference for `sscanf()`](../../../php/builtins/string/sscanf.md)
-

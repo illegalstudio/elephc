@@ -38,4 +38,3 @@ function stat(string $filename): mixed
 ## Cross-references
 
 - [User reference for `stat()`](../../../php/builtins/filesystem/stat.md)
-

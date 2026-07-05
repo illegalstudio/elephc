@@ -36,4 +36,3 @@ function stream_socket_shutdown(resource $stream, int $mode): bool
 ## Cross-references
 
 - [User reference for `stream_socket_shutdown()`](../../../php/builtins/io/stream_socket_shutdown.md)
-

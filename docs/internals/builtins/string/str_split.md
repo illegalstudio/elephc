@@ -36,4 +36,3 @@ function str_split(string $string, int $length = 1): array
 ## Cross-references
 
 - [User reference for `str_split()`](../../../php/builtins/string/str_split.md)
-

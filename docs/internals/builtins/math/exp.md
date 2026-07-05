@@ -35,4 +35,3 @@ function exp(float $num): float
 ## Cross-references
 
 - [User reference for `exp()`](../../../php/builtins/math/exp.md)
-

@@ -35,4 +35,3 @@ function get_resource_id(resource $resource): int
 ## Cross-references
 
 - [User reference for `get_resource_id()`](../../../php/builtins/type/get_resource_id.md)
-

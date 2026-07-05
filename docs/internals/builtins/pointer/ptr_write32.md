@@ -36,4 +36,3 @@ function ptr_write32(pointer $pointer, int $value): void
 ## Cross-references
 
 - [User reference for `ptr_write32()`](../../../php/builtins/pointer/ptr_write32.md)
-

@@ -36,4 +36,3 @@ function array_any(mixed $array, mixed $callback): bool
 ## Cross-references
 
 - [User reference for `array_any()`](../../../php/builtins/array/array_any.md)
-

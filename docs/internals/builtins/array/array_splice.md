@@ -36,4 +36,3 @@ function array_splice(array $array, int $offset, int $length = null): array
 ## Cross-references
 
 - [User reference for `array_splice()`](../../../php/builtins/array/array_splice.md)
-

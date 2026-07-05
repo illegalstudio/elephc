@@ -35,4 +35,3 @@ function is_bool(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_bool()`](../../../php/builtins/type/is_bool.md)
-

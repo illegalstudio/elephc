@@ -35,4 +35,3 @@ function phpversion(): string
 ## Cross-references
 
 - [User reference for `phpversion()`](../../../php/builtins/misc/phpversion.md)
-

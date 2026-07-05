@@ -36,4 +36,3 @@ function stream_get_meta_data(resource $stream): array
 ## Cross-references
 
 - [User reference for `stream_get_meta_data()`](../../../php/builtins/io/stream_get_meta_data.md)
-
