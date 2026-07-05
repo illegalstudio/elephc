@@ -1152,9 +1152,12 @@ fn lower_null_coalesce(
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 
-/// Lowers the value side of `??`, suppressing only undefined-offset warnings
-/// from the top-level array read while preserving index/receiver evaluation.
+/// Lowers the value side of `??`, suppressing undefined-offset warnings from
+/// native array reads while preserving nullsafe-chain lazy evaluation.
 fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value: &Expr) -> LoweredValue {
+    if let Some(value) = nullsafe_chain::lower_with_missing_warning(ctx, value, false) {
+        return value;
+    }
     if let ExprKind::ArrayAccess { array, index } = &value.kind {
         return lower_array_access_with_missing_warning(ctx, array, index, value, false);
     }
