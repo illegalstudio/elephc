@@ -141,22 +141,26 @@ echo $user->email;
 }
 
 /// Verifies that accessing a typed instance property before it is initialized
-/// produces a `Typed property ... must not be accessed before initialization` fatal error.
+/// throws a catchable `Error` that `catch(\Error $e)` can observe.
 #[test]
 fn test_uninitialized_typed_instance_property_is_fatal() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class Box {
     public int $value;
 }
 
 $box = new Box();
-echo $box->value;
+try {
+    echo $box->value;
+} catch (\Error $e) {
+    echo $e->getMessage();
+}
 "#,
     );
     assert!(
-        err.contains("Fatal error: Typed property Box::$value must not be accessed before initialization"),
-        "{err}"
+        out.contains("Typed property Box::$value must not be accessed before initialization"),
+        "{out}"
     );
 }
 
@@ -178,27 +182,59 @@ echo $box->value;
     assert_eq!(out, "0");
 }
 
-/// Verifies that accessing an uninitialized typed static property produces a
-/// `Typed static property ... must not be accessed before initialization` fatal error.
+/// Verifies that accessing an uninitialized typed static property throws a
+/// catchable `Error` that `catch(\Error $e)` can observe.
 #[test]
 fn test_uninitialized_typed_static_property_is_fatal() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class Box {
     public static int $value;
 }
 
-echo Box::$value;
+try {
+    echo Box::$value;
+} catch (\Error $e) {
+    echo $e->getMessage();
+}
 "#,
     );
     assert!(
-        err.contains("Fatal error: Typed static property Box::$value must not be accessed before initialization"),
-        "{err}"
+        out.contains("Typed static property Box::$value must not be accessed before initialization"),
+        "{out}"
     );
 }
 
-/// Verifies that explicitly assigning `0` to a typed static property constitutes
-/// valid initialization and the static property reads back as `0`.
+/// Verifies that accessing an uninitialized typed property and catching `Error`
+/// allows continued execution after the property is initialized (issue #339).
+#[test]
+fn test_uninitialized_property_catch_then_continue() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $x; }
+$c = new C();
+try { echo $c->x; } catch (\Error $e) { echo "e"; }
+$c->x = 5;
+echo $c->x;
+"#,
+    );
+    assert_eq!(out, "e5");
+}
+
+/// Verifies that catching `Exception` (not `Error`) does NOT catch the
+/// uninitialized typed property access (issue #339).
+#[test]
+fn test_uninitialized_property_catch_exception_does_not_match() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class C { public int $x; }
+$c = new C();
+try { echo $c->x; } catch (\Exception $e) { echo "caught"; }
+echo "end";
+"#,
+    );
+    assert!(err.contains("uncaught"), "{err}");
+}
 #[test]
 fn test_typed_static_property_initialized_to_zero_reads_normally() {
     let out = compile_and_run(
@@ -216,7 +252,9 @@ echo Box::$value;
 
 /// Verifies that a nullable typed static property with an explicit `= null` default
 /// is considered initialized (`is_null()` returns true), and that a typed static
-/// property without a default remains uninitialized and triggers a fatal error.
+/// property without a default remains uninitialized and throws a catchable Error;
+/// without a try/catch the no-handler fast path still reports the specific
+/// fatal diagnostic (issue #339).
 #[test]
 fn test_nullable_static_property_default_null_is_initialized() {
     let out = compile_and_run(

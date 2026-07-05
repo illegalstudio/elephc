@@ -319,12 +319,12 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::Closure { .. } => Effect::PURE,
         ExprKind::NamedArg { value, .. } => expr_effect(value),
         ExprKind::PropertyAccess { object, .. }
-        | ExprKind::NullsafePropertyAccess { object, .. } => expr_effect(object),
+        | ExprKind::NullsafePropertyAccess { object, .. } => expr_effect(object).with_may_throw(),
         ExprKind::DynamicPropertyAccess { object, property }
         | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
             expr_effect(object).combine(expr_effect(property))
         }
-        ExprKind::StaticPropertyAccess { .. } => Effect::PURE,
+        ExprKind::StaticPropertyAccess { .. } => Effect::PURE.with_may_throw(),
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Effect::PURE,

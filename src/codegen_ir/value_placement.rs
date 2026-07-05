@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use crate::ir::{Function, IrType, Op, ValueDef, ValueId};
 
-const ITERATOR_STATE_BYTES: usize = 64;
+const ITERATOR_STATE_BYTES: usize = 72;
 
 /// Stack-slot table for the Phase 04 spill-everything backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,7 +169,7 @@ mod tests {
         let placement = allocate(&function);
 
         assert_eq!(placement.slot(array), Some(8));
-        assert_eq!(placement.slot(iterator), Some(72));
+        assert_eq!(placement.slot(iterator), Some(80));
         assert_eq!(placement.total_slot_bytes, 80);
     }
 }

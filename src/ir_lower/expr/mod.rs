@@ -1829,6 +1829,12 @@ fn lower_lazy_isset_operand(
             );
             Some(lower_expr(ctx, &synthetic))
         }
+        // `isset($this)` inside a static closure always evaluates to `false`
+        // because static closures have no `$this` binding. PHP allows this
+        // probe and returns false; elephc must not try to load a missing slot.
+        ExprKind::This if !ctx.local_slots.contains_key("this") => {
+            Some(lower_bool_literal(ctx, false, arg))
+        }
         _ => None,
     }
 }

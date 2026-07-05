@@ -129,8 +129,12 @@ pub(super) fn check_assign(
     }
 
     let null_coalesce_default = null_coalesce_assignment_default(name, value);
-    let saved_self_ref_ty = if env.contains_key(name) && closure_captures_name_by_ref(value, name) {
-        Some(env.insert(name.to_string(), PhpType::Callable))
+    let saved_self_ref_ty = if closure_captures_name_by_ref(value, name) {
+        if let Some(previous_ty) = env.insert(name.to_string(), PhpType::Callable) {
+            Some(Some(previous_ty))
+        } else {
+            Some(None)
+        }
     } else {
         None
     };
