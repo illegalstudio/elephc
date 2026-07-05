@@ -60,6 +60,23 @@ pub(crate) fn collect_constants(
         "PATHINFO_ALL".to_string(),
         (ExprKind::IntLiteral(15), PhpType::Int),
     );
+    // htmlspecialchars()/htmlentities() ENT_* flag constants (PHP standard values).
+    for (ent_name, ent_value) in [
+        ("ENT_QUOTES", 3),
+        ("ENT_COMPAT", 2),
+        ("ENT_NOQUOTES", 0),
+        ("ENT_HTML401", 0),
+        ("ENT_HTML5", 48),
+        ("ENT_XHTML", 32),
+        ("ENT_XML1", 16),
+        ("ENT_SUBSTITUTE", 8),
+        ("ENT_IGNORE", 4),
+    ] {
+        constants.insert(
+            ent_name.to_string(),
+            (ExprKind::IntLiteral(ent_value), PhpType::Int),
+        );
+    }
     let (fnm_noescape, fnm_pathname) = match target_platform {
         Platform::MacOS => (1, 2),
         Platform::Linux => (2, 1),

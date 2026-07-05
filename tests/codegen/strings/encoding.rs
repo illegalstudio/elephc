@@ -483,3 +483,14 @@ echo inet_pton("nonsense") === false ? "F" : "S";
     );
     assert_eq!(out, "SF");
 }
+
+/// EC-11 (#494): htmlspecialchars()/htmlentities() accept the optional ENT_* flags argument
+/// (the common `htmlspecialchars($s, ENT_QUOTES)` form) and the ENT_* constants resolve to their
+/// PHP values. Byte-parity vs PHP 8.5 for ENT_QUOTES escaping (the runtime applies ENT_QUOTES).
+#[test]
+fn test_htmlspecialchars_ent_flags() {
+    assert_eq!(
+        compile_and_run("<?php echo htmlspecialchars('<b> & x', ENT_QUOTES), '|', htmlentities('<y>', ENT_QUOTES), '|', (ENT_QUOTES + ENT_HTML5);"),
+        "&lt;b&gt; &amp; x|&lt;y&gt;|51"
+    );
+}

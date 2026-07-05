@@ -42,6 +42,19 @@ impl Checker {
         constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);
         constants.insert("PATHINFO_FILENAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_ALL".to_string(), PhpType::Int);
+        for ent in [
+            "ENT_QUOTES",
+            "ENT_COMPAT",
+            "ENT_NOQUOTES",
+            "ENT_HTML401",
+            "ENT_HTML5",
+            "ENT_XHTML",
+            "ENT_XML1",
+            "ENT_SUBSTITUTE",
+            "ENT_IGNORE",
+        ] {
+            constants.insert(ent.to_string(), PhpType::Int);
+        }
         constants.insert("FNM_NOESCAPE".to_string(), PhpType::Int);
         constants.insert("FNM_PATHNAME".to_string(), PhpType::Int);
         constants.insert("FNM_PERIOD".to_string(), PhpType::Int);
