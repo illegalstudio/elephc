@@ -226,6 +226,37 @@ pub(super) fn lower_array_get(
     }
 }
 
+/// Lowers an indexed-array element address for by-reference call arguments.
+pub(super) fn lower_array_elem_addr(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("array_elem_addr missing result value"))?;
+    let array_ty = ctx.value_php_type(array)?;
+    require_indexed_array(array_ty.clone(), inst)?;
+    require_integer_like_index(ctx.value_php_type(index)?, inst)?;
+    let elem_size = array_element_size(&array_ty)?;
+    let source_local = source_load_local_slot(ctx, array)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_array_elem_addr_prepare_aarch64(ctx, array, index, elem_size)?,
+        Arch::X86_64 => lower_array_elem_addr_prepare_x86_64(ctx, array, index, elem_size)?,
+    }
+    ctx.store_result_value(array)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, array)?;
+    }
+    ctx.writeback_global_array_source(array)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => emit_array_elem_addr_result_aarch64(ctx, array, index, elem_size)?,
+        Arch::X86_64 => emit_array_elem_addr_result_x86_64(ctx, array, index, elem_size)?,
+    }
+    ctx.store_int_result_value(result)
+}
+
 /// Lowers an indexed-array element write through target-aware runtime helpers.
 pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
@@ -1451,6 +1482,218 @@ fn convert_hash_union_result_to_mixed_if_needed(
             abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
         }
     }
+}
+
+/// Ensures indexed-array storage is unique and addressable on AArch64.
+fn lower_array_elem_addr_prepare_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+    elem_size: i64,
+) -> Result<()> {
+    let grow_check = ctx.next_label("array_elem_addr_grow_check");
+    let ready = ctx.next_label("array_elem_addr_ready");
+    let fill_loop = ctx.next_label("array_elem_addr_fill_loop");
+    let store_len = ctx.next_label("array_elem_addr_store_len");
+    let done = ctx.next_label("array_elem_addr_done");
+    ctx.load_value_to_reg(index, "x1")?;
+    ctx.emitter.instruction("cmp x1, #0");                                      // reject negative by-reference offsets by clamping to slot zero
+    ctx.emitter.instruction("csel x1, xzr, x1, lt");                            // keep generated code memory-safe for unsupported negative offsets
+    abi::emit_push_reg(ctx.emitter, "x1");
+    ctx.load_value_to_reg(array, "x0")?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
+    abi::emit_pop_reg(ctx.emitter, "x1");
+    ctx.emitter.label(&grow_check);
+    ctx.emitter.instruction("ldr x10, [x0, #8]");                               // load indexed-array capacity before exposing an element address
+    ctx.emitter.instruction("cmp x1, x10");                                     // does the referenced slot fit in the current allocation?
+    ctx.emitter.instruction(&format!("b.lo {}", ready));                        // skip growth once the slot is addressable
+    abi::emit_push_reg(ctx.emitter, "x1");
+    abi::emit_call_label(ctx.emitter, "__rt_array_grow");
+    abi::emit_pop_reg(ctx.emitter, "x1");
+    ctx.emitter.instruction(&format!("b {}", grow_check));                      // keep growing until the by-reference slot fits
+    ctx.emitter.label(&ready);
+    ctx.emitter.instruction("ldr x9, [x0]");                                    // load current logical length before filling missing by-reference slots
+    ctx.emitter.instruction("cmp x1, x9");                                      // is the referenced slot already inside the logical array length?
+    ctx.emitter.instruction(&format!("b.lo {}", done));                         // existing slots can be referenced without extending length
+    ctx.emitter.instruction("mov x11, x9");                                     // start zero-filling at the previous logical end
+    ctx.emitter.label(&fill_loop);
+    ctx.emitter.instruction("cmp x11, x1");                                     // have all gap slots before the referenced slot been initialized?
+    ctx.emitter.instruction(&format!("b.ge {}", store_len));                    // stop filling before the referenced slot
+    emit_zero_array_slot_aarch64(ctx, elem_size, "x0", "x11")?;
+    ctx.emitter.instruction("add x11, x11, #1");                                // advance to the next gap slot
+    ctx.emitter.instruction(&format!("b {}", fill_loop));                       // continue zero-filling until the referenced slot
+    ctx.emitter.label(&store_len);
+    ctx.emitter.instruction("add x11, x1, #1");                                 // compute new logical length after materializing the reference slot
+    ctx.emitter.instruction("str x11, [x0]");                                   // publish the extended indexed-array length
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Ensures indexed-array storage is unique and addressable on x86_64.
+fn lower_array_elem_addr_prepare_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+    elem_size: i64,
+) -> Result<()> {
+    let grow_check = ctx.next_label("array_elem_addr_grow_check");
+    let ready = ctx.next_label("array_elem_addr_ready");
+    let fill_loop = ctx.next_label("array_elem_addr_fill_loop");
+    let store_len = ctx.next_label("array_elem_addr_store_len");
+    let done = ctx.next_label("array_elem_addr_done");
+    ctx.load_value_to_reg(index, "rsi")?;
+    ctx.emitter.instruction("xor r10, r10");                                    // prepare the safe fallback offset for unsupported negative indexes
+    ctx.emitter.instruction("cmp rsi, 0");                                      // check whether the by-reference offset is negative
+    ctx.emitter.instruction("cmovl rsi, r10");                                  // clamp negative offsets to slot zero to avoid invalid addresses
+    abi::emit_push_reg(ctx.emitter, "rsi");
+    ctx.load_value_to_reg(array, "rdi")?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
+    abi::emit_pop_reg(ctx.emitter, "rsi");
+    ctx.emitter.label(&grow_check);
+    ctx.emitter.instruction("mov r10, QWORD PTR [rax + 8]");                    // load indexed-array capacity before exposing an element address
+    ctx.emitter.instruction("cmp rsi, r10");                                    // does the referenced slot fit in the current allocation?
+    ctx.emitter.instruction(&format!("jb {}", ready));                          // skip growth once the slot is addressable
+    abi::emit_push_reg(ctx.emitter, "rsi");
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the current indexed-array pointer to the growth helper
+    abi::emit_call_label(ctx.emitter, "__rt_array_grow");
+    abi::emit_pop_reg(ctx.emitter, "rsi");
+    ctx.emitter.instruction(&format!("jmp {}", grow_check));                    // keep growing until the by-reference slot fits
+    ctx.emitter.label(&ready);
+    ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                         // load current logical length before filling missing by-reference slots
+    ctx.emitter.instruction("cmp rsi, r9");                                     // is the referenced slot already inside the logical array length?
+    ctx.emitter.instruction(&format!("jb {}", done));                           // existing slots can be referenced without extending length
+    ctx.emitter.instruction("mov r11, r9");                                     // start zero-filling at the previous logical end
+    ctx.emitter.label(&fill_loop);
+    ctx.emitter.instruction("cmp r11, rsi");                                    // have all gap slots before the referenced slot been initialized?
+    ctx.emitter.instruction(&format!("jae {}", store_len));                     // stop filling before the referenced slot
+    emit_zero_array_slot_x86_64(ctx, elem_size, "rax", "r11")?;
+    ctx.emitter.instruction("add r11, 1");                                      // advance to the next gap slot
+    ctx.emitter.instruction(&format!("jmp {}", fill_loop));                     // continue zero-filling until the referenced slot
+    ctx.emitter.label(&store_len);
+    ctx.emitter.instruction("lea r11, [rsi + 1]");                              // compute new logical length after materializing the reference slot
+    ctx.emitter.instruction("mov QWORD PTR [rax], r11");                        // publish the extended indexed-array length
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Emits one zero-filled indexed-array slot on AArch64.
+fn emit_zero_array_slot_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    elem_size: i64,
+    array_reg: &str,
+    index_reg: &str,
+) -> Result<()> {
+    match elem_size {
+        8 => {
+            ctx.emitter.instruction(&format!("add x12, {}, #24", array_reg));   // compute the base address of pointer-sized indexed-array slots
+            ctx.emitter.instruction(&format!("str xzr, [x12, {}, lsl #3]", index_reg)); // initialize the missing by-reference slot to null
+        }
+        16 => {
+            ctx.emitter.instruction(&format!("lsl x12, {}, #4", index_reg));    // scale the gap index by the two-word slot size
+            ctx.emitter.instruction(&format!("add x12, {}, x12", array_reg));   // move to the selected two-word indexed-array slot
+            ctx.emitter.instruction("add x12, x12, #24");                       // skip the indexed-array header before clearing the slot
+            ctx.emitter.instruction("stp xzr, xzr, [x12]");                     // initialize both words of the missing by-reference slot
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_elem_addr element size {}",
+                other
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Emits one zero-filled indexed-array slot on x86_64.
+fn emit_zero_array_slot_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    elem_size: i64,
+    array_reg: &str,
+    index_reg: &str,
+) -> Result<()> {
+    match elem_size {
+        8 => {
+            let clear_slot = format!(
+                "mov QWORD PTR [{} + 24 + {} * 8], 0",
+                array_reg, index_reg
+            );
+            ctx.emitter.instruction(&clear_slot);                               // initialize the missing by-reference slot to null
+        }
+        16 => {
+            ctx.emitter.instruction(&format!("mov r12, {}", index_reg));        // copy the gap index before scaling for a two-word slot
+            ctx.emitter.instruction("shl r12, 4");                              // scale the gap index by the two-word slot size
+            ctx.emitter.instruction(&format!("mov QWORD PTR [{} + 24 + r12], 0", array_reg)); // initialize the first word of the missing slot
+            ctx.emitter.instruction(&format!("mov QWORD PTR [{} + 32 + r12], 0", array_reg)); // initialize the second word of the missing slot
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_elem_addr element size {}",
+                other
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Computes the final element-slot address on AArch64.
+fn emit_array_elem_addr_result_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+    elem_size: i64,
+) -> Result<()> {
+    ctx.load_value_to_reg(array, "x9")?;
+    ctx.load_value_to_reg(index, "x10")?;
+    ctx.emitter.instruction("cmp x10, #0");                                     // keep negative by-reference offsets aligned with the materialized slot
+    ctx.emitter.instruction("csel x10, xzr, x10, lt");                          // clamp unsupported negative offsets to the safe slot
+    match elem_size {
+        8 => {
+            ctx.emitter.instruction("add x0, x9, #24");                         // compute the base address of pointer-sized indexed-array slots
+            ctx.emitter.instruction("add x0, x0, x10, lsl #3");                 // return the selected by-reference element slot address
+        }
+        16 => {
+            ctx.emitter.instruction("lsl x10, x10, #4");                        // scale the element index by the two-word slot size
+            ctx.emitter.instruction("add x0, x9, #24");                         // compute the base address of two-word indexed-array slots
+            ctx.emitter.instruction("add x0, x0, x10");                         // return the selected by-reference element slot address
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_elem_addr element size {}",
+                other
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Computes the final element-slot address on x86_64.
+fn emit_array_elem_addr_result_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+    elem_size: i64,
+) -> Result<()> {
+    ctx.load_value_to_reg(array, "r10")?;
+    ctx.load_value_to_reg(index, "r11")?;
+    ctx.emitter.instruction("xor r12, r12");                                    // prepare the safe fallback offset for unsupported negative indexes
+    ctx.emitter.instruction("cmp r11, 0");                                      // keep negative by-reference offsets aligned with the materialized slot
+    ctx.emitter.instruction("cmovl r11, r12");                                  // clamp unsupported negative offsets to the safe slot
+    match elem_size {
+        8 => {
+            ctx.emitter.instruction("lea rax, [r10 + 24 + r11 * 8]");           // return the selected pointer-sized by-reference slot address
+        }
+        16 => {
+            ctx.emitter.instruction("shl r11, 4");                              // scale the element index by the two-word slot size
+            ctx.emitter.instruction("lea rax, [r10 + 24 + r11]");               // return the selected two-word by-reference slot address
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_elem_addr element size {}",
+                other
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Returns the local/ref-cell slot loaded by an array operand when it can be written back after growth.

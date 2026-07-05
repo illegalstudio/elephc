@@ -151,6 +151,7 @@ pub(crate) fn emit_runtime_data_user(
         ("_spl_stack_class_id", "SplStack"),
         ("_spl_queue_class_id", "SplQueue"),
         ("_spl_fixed_array_class_id", "SplFixedArray"),
+        ("_spl_error_class_id", "Error"),
         ("_spl_logic_exception_class_id", "LogicException"),
         ("_spl_runtime_exception_class_id", "RuntimeException"),
         ("_spl_out_of_range_exception_class_id", "OutOfRangeException"),
@@ -158,7 +159,6 @@ pub(crate) fn emit_runtime_data_user(
         ("_spl_invalid_argument_exception_class_id", "InvalidArgumentException"),
         ("_spl_type_error_class_id", "TypeError"),
         ("_spl_value_error_class_id", "ValueError"),
-        ("_spl_error_class_id", "Error"),
         ("_spl_arithmetic_error_class_id", "ArithmeticError"),
     ] {
         let class_id = all_class_id_by_name

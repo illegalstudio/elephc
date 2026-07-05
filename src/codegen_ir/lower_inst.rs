@@ -137,6 +137,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayGet => arrays::lower_array_get(ctx, &inst, true),
         Op::ArrayGetSilent => arrays::lower_array_get(ctx, &inst, false),
         Op::ArrayIsset => builtins::lower_array_isset(ctx, &inst),
+        Op::ArrayElemAddr => arrays::lower_array_elem_addr(ctx, &inst),
         Op::ArraySet => arrays::lower_array_set(ctx, &inst),
         Op::ArraySetMixedKey => arrays::lower_array_set_mixed_key(ctx, &inst),
         Op::ArrayGetMixedKey => arrays::lower_array_get_mixed_key(ctx, &inst, true),
@@ -5274,6 +5275,10 @@ fn materialize_ref_arg_address(
     if local_ref_arg_source(ctx, value).is_ok() {
         return materialize_local_ref_arg_address(ctx, value);
     }
+    if value_is_array_element_address(ctx, value)? {
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+        return Ok(());
+    }
     materialize_temporary_ref_arg_cell(ctx, value, param_ty)
 }
 
@@ -5401,6 +5406,21 @@ fn materialize_local_ref_arg_address(
         abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
     }
     Ok(())
+}
+
+/// Returns true when a value already holds a direct pointer to an array element slot.
+fn value_is_array_element_address(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    Ok(inst_ref.op == Op::ArrayElemAddr)
 }
 
 /// Describes a local operand used as a by-reference call argument.

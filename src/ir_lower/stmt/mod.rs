@@ -27,7 +27,7 @@ use crate::parser::ast::{
     is_compound_assignment_self_read, CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
 };
 use crate::span::Span;
-use crate::types::PhpType;
+use crate::types::{PhpType, ThrowAccessKind};
 
 /// Lowers one AST statement into the current EIR insertion block.
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
@@ -1900,6 +1900,76 @@ fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId)
     ctx.builder.terminate(Terminator::Throw { value });
 }
 
+/// Lowers a statically-decided access violation as a catchable `Error` throw.
+///
+/// Builds a synthetic `new Error($message)` expression at `span`, lowers it to an
+/// EIR object value, then terminates the current block with a throw. Mirrors PHP,
+/// which raises these conditions as catchable `Error` exceptions instead of fatal
+/// compile-time rejections. Used in statement positions where no value is needed.
+pub(crate) fn lower_throw_access_error(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: Span,
+) {
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let error_expr = Expr::new(
+        ExprKind::NewObject {
+            class_name: crate::names::Name::unqualified("Error"),
+            args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
+        },
+        span,
+    );
+    let error_value = crate::ir_lower::expr::lower_expr(ctx, &error_expr);
+    terminate_throw(ctx, error_value.value);
+}
+
+/// Lowers a statically-decided access violation as a catchable `Error` throw in
+/// expression position and returns a placeholder null value.
+///
+/// Builds a synthetic `new Error($message)` expression at `span`, lowers it to an
+/// EIR object value, emits `Op::ThrowException`, then returns a null placeholder so
+/// the surrounding expression lowering keeps producing well-formed EIR after the
+/// (unreachable) throw.
+pub(crate) fn lower_throw_access_error_expr(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: Span,
+) -> LoweredValue {
+    let error_expr = Expr::new(
+        ExprKind::NewObject {
+            class_name: crate::names::Name::unqualified("Error"),
+            args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
+        },
+        span,
+    );
+    let error_value = crate::ir_lower::expr::lower_expr(ctx, &error_expr);
+    ctx.emit_void(
+        Op::ThrowException,
+        vec![error_value.value],
+        None,
+        Op::ThrowException.default_effects(),
+        Some(span),
+    );
+    LoweredValue {
+        value: ctx
+            .builder
+            .emit_with_effects(
+                Op::ConstNull,
+                Vec::new(),
+                None,
+                IrType::I64,
+                PhpType::Void,
+                Ownership::NonHeap,
+                Op::ConstNull.default_effects(),
+                Some(span),
+            )
+            .expect("const_null produces a value"),
+        ir_type: IrType::I64,
+    }
+}
+
 /// Returns how many inner loop cleanups a multi-level branch skips.
 fn loop_cleanup_count_for_branch(level: usize) -> usize {
     level.max(1).saturating_sub(1)
@@ -2086,9 +2156,29 @@ fn lower_property_assign(
     value: &Expr,
     span: Span,
 ) {
+    // A statically-decided readonly-property write outside the declaring
+    // constructor raises a catchable `Error` in PHP rather than a compile-time
+    // error, but the object and RHS expressions must still be evaluated first.
+    let throw_access_message = ctx.throw_access_sites.get(&span).and_then(|info| {
+        if let ThrowAccessKind::ReadonlyProperty { class_name, property } = &info.kind {
+            Some(format!("Cannot modify readonly property {}::${}", class_name, property))
+        } else {
+            None
+        }
+    });
     let object = lower_expr(ctx, object);
     let value_expr = value;
     let lowered_value = lower_expr(ctx, value_expr);
+    if let Some(message) = throw_access_message {
+        if ctx.value_is_owning_temporary(object) {
+            crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+        }
+        if ctx.value_is_owning_temporary(lowered_value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, lowered_value, Some(span));
+        }
+        lower_throw_access_error(ctx, &message, span);
+        return;
+    }
     let value = contextualize_property_array_assignment(
         ctx,
         object.value,

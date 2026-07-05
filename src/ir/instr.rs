@@ -249,6 +249,7 @@ pub enum Op {
     HashGet,
     ArrayIsset,
     HashIsset,
+    ArrayElemAddr,
     ArraySet,
     HashSet,
     HashUnset,
@@ -421,7 +422,9 @@ impl Op {
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArraySetMixedKey => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            ArrayElemAddr | ArraySetMixedKey => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
+            }
             ArrayGetMixedKey => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::MAY_WARN,
             ArrayGetMixedKeySilent => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
             ArrayUnion | HashUnion | ArrayHashUnion | HashArrayUnion | ArrayToHash => {
@@ -575,6 +578,7 @@ impl Op {
             HashGet => "hash_get",
             ArrayIsset => "array_isset",
             HashIsset => "hash_isset",
+            ArrayElemAddr => "array_elem_addr",
             ArraySet => "array_set",
             HashSet => "hash_set",
             HashUnset => "hash_unset",

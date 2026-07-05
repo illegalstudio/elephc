@@ -1726,7 +1726,7 @@ fn object_iterator_source(
             let iterator_class = iterator_class.trim_start_matches('\\').to_string();
             if ctx.module.interface_infos.contains_key(&iterator_class) {
                 IteratorSourceKind::Interface {
-                    interface_name: iterator_class,
+                    interface_name: iterator_return_interface_dispatch_name(ctx, &iterator_class),
                     aggregate_class_name: Some(class_name.to_string()),
                 }
             } else {
@@ -1740,6 +1740,21 @@ fn object_iterator_source(
             class_name: class_name.to_string(),
             aggregate_class_name: None,
         },
+    }
+}
+
+/// Returns the interface whose method slots should drive an IteratorAggregate result.
+fn iterator_return_interface_dispatch_name(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+) -> String {
+    if interface_name == "Traversable"
+        || (interface_extends_interface(ctx, interface_name, "Traversable")
+            && !interface_extends_interface(ctx, interface_name, "Iterator"))
+    {
+        "Iterator".to_string()
+    } else {
+        interface_name.to_string()
     }
 }
 

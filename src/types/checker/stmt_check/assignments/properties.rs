@@ -198,7 +198,7 @@ pub(super) fn check_property_array_assign(
 /// visibility via `can_access_member`, and declared-type compatibility via `require_compatible_arg_type`.
 /// StdClass properties are allowed unconditionally.
 fn check_object_property_write(
-    checker: &Checker,
+    checker: &mut Checker,
     object: &Expr,
     class_name: &str,
     property: &str,
@@ -243,13 +243,20 @@ fn check_object_property_write(
                 && checker.current_method.as_deref() == Some("__construct"))
             && !readonly_non_null_coalesce_keep
         {
-            return Err(CompileError::new(
+            // PHP raises this as a catchable `Error` at runtime instead of a
+            // compile-time rejection. Record the throw site so EIR lowering
+            // emits the throw sequence, and let lowering proceed.
+            checker.throw_access_sites.insert(
                 span,
-                &format!(
-                    "Cannot assign to readonly property outside constructor: {}::{}",
-                    class_name, property
-                ),
-            ));
+                crate::types::ThrowAccessInfo {
+                    span,
+                    kind: crate::types::ThrowAccessKind::ReadonlyProperty {
+                        class_name: class_name.to_string(),
+                        property: property.to_string(),
+                    },
+                },
+            );
+            return Ok(());
         }
         // A property with a `get` hook but no `set` hook is read-only: external writes are an error
         // (PHP rejects writing a virtual/get-only hooked property). Writes from inside the property's

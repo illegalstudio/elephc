@@ -22,7 +22,7 @@ use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
 use crate::span::Span;
 use crate::types::{
     ClassInfo, EnumInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
-    TypeEnv,
+    ThrowAccessInfo, TypeEnv,
 };
 
 /// Value returned by expression lowering with its PHP metadata.
@@ -105,6 +105,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub enums: &'m HashMap<String, EnumInfo>,
     pub interfaces: &'m HashMap<String, InterfaceInfo>,
     pub packed_classes: &'m HashMap<String, PackedClassInfo>,
+    /// Statically-decided access violations lowered to runtime `Error` throws,
+    /// keyed by the source span of the offending call/assignment.
+    pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
@@ -151,6 +154,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         enums: &'m HashMap<String, EnumInfo>,
         interfaces: &'m HashMap<String, InterfaceInfo>,
         packed_classes: &'m HashMap<String, PackedClassInfo>,
+        throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
         current_class: Option<String>,
@@ -176,6 +180,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             enums,
             interfaces,
             packed_classes,
+            throw_access_sites,
             constants: constants.clone(),
             top_level_env,
             current_class,

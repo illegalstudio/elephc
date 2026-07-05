@@ -29,6 +29,7 @@ use crate::types::checker::builtins::canonical_builtin_function_name;
 use crate::types::{
     array_key_type_from_value_type, checker::infer_expr_type_syntactic,
     merge_array_key_types, normalized_array_key_type, ExternFunctionSig, FunctionSig, PhpType,
+    ThrowAccessKind,
 };
 use std::collections::HashSet;
 
@@ -4275,6 +4276,9 @@ fn lower_arg_with_signature(
     index: usize,
     arg: &Expr,
 ) -> crate::ir::ValueId {
+    if let Some(value) = lower_by_ref_array_element_arg_with_signature(ctx, sig, index, arg) {
+        return value;
+    }
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
@@ -4372,6 +4376,49 @@ fn lower_by_ref_array_arg_with_signature(
     );
     ctx.store_mutated_local(name, converted, array_ty, Some(arg.span));
     Some(ctx.load_local(name, Some(arg.span)).value)
+}
+
+/// Lowers `$array[$index]` as a direct by-reference argument cell address.
+fn lower_by_ref_array_element_arg_with_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) -> Option<crate::ir::ValueId> {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    let ExprKind::ArrayAccess { array, index: element_index } = &arg.kind else {
+        return None;
+    };
+    let ExprKind::Variable(array_name) = &array.kind else {
+        return None;
+    };
+    let PhpType::Array(elem_ty) = ctx.local_type(array_name).codegen_repr() else {
+        return None;
+    };
+    let (_, param_ty) = sig.params.get(index)?;
+    let element_ty = match normalize_value_php_type(*elem_ty) {
+        PhpType::Void => normalize_value_php_type(param_ty.codegen_repr()),
+        other => other,
+    };
+    let array_value = ctx.load_local(array_name, Some(array.span));
+    let element_index = lower_expr(ctx, element_index);
+    let element_index = coerce_to_int_at_span(ctx, element_index, Some(arg.span));
+    let value = ctx
+        .builder
+        .emit_with_effects(
+            Op::ArrayElemAddr,
+            vec![array_value.value, element_index.value],
+            None,
+            IrType::I64,
+            element_ty,
+            Ownership::NonHeap,
+            Op::ArrayElemAddr.default_effects(),
+            Some(arg.span),
+        )
+        .expect("array_elem_addr produces a value");
+    Some(value)
 }
 
 /// Returns true when a local array must be converted before a by-reference call.
@@ -8522,8 +8569,34 @@ fn lower_method_call(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    // A statically-decided private/protected method access from an inaccessible
+    // scope raises a catchable `Error` in PHP rather than a compile-time error,
+    // but the receiver expression must still be evaluated first.
+    let throw_access_message = if op == Op::MethodCall {
+        ctx.throw_access_sites.get(&expr.span).and_then(|info| {
+            if let ThrowAccessKind::PrivateMethod {
+                visibility,
+                class_name,
+                method: m,
+            } = &info.kind
+            {
+                Some(format!(
+                    "Call to {} method {}::{}() from global scope",
+                    visibility, class_name, m
+                ))
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
     let object_expr = object;
     let object = lower_expr(ctx, object_expr);
+    if let Some(message) = throw_access_message {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
+    }
     if op == Op::MethodCall && value_is_definitely_null(ctx, object.value) {
         let null_value = lower_null(ctx, expr);
         terminate_method_call_on_null(ctx, method);
