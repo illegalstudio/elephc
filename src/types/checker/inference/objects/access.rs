@@ -27,6 +27,14 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        // Flow-narrowing: a ternary like `$var->prop instanceof X ? ... : ...` records the
+        // narrowed type of a simple property access under a synthetic env key (see
+        // `branch_guard_narrowing`). Consult it first so a guarded branch sees the narrowed type.
+        if let Some(key) = Self::narrowed_property_env_key(object, property) {
+            if let Some(narrowed) = env.get(&key) {
+                return Ok(narrowed.clone());
+            }
+        }
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
             return self.infer_property_on_class_type(class_name, property, expr);

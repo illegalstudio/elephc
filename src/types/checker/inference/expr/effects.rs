@@ -105,9 +105,17 @@ impl Checker {
                 else_expr,
             } => {
                 self.infer_type_with_assignment_effects(condition, env)?;
+                // Flow-narrowing across the branches (see branch_guard_narrowing): `$x instanceof X`
+                // and simple `$x->prop instanceof X` guards narrow the branch envs. A ternary is a
+                // single expression, so branch narrowing is write-invalidation-safe.
+                let guard = self.branch_guard_narrowing(condition, env)?;
                 let mut then_env = env.clone();
-                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
                 let mut else_env = env.clone();
+                if let Some((key, then_narrow, else_narrow)) = guard {
+                    then_env.insert(key.clone(), then_narrow);
+                    else_env.insert(key, else_narrow);
+                }
+                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
                 let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
                 Ok(wider_type_syntactic(&then_ty, &else_ty))
             }

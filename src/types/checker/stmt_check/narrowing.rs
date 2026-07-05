@@ -15,6 +15,7 @@
 //! - Conservative: a concrete (non-union, non-mixed) type is left unchanged, and an empty narrowing
 //!   result falls back to the original type, so valid code is never narrowed away to `Never`.
 
+use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
@@ -56,6 +57,57 @@ impl Checker {
             (matched, complement)
         };
         Some(GuardNarrowing { var, then_ty, else_ty })
+    }
+
+    /// Synthetic `TypeEnv` key for a narrowed simple property access `$var->prop` (`None` for a
+    /// more complex receiver). The `\x01` sigil bytes cannot appear in a real variable name, so
+    /// this key never collides with a variable binding — a normal property read only picks it up
+    /// when a narrowing has explicitly inserted it.
+    pub(crate) fn narrowed_property_env_key(object: &Expr, property: &str) -> Option<String> {
+        match &object.kind {
+            ExprKind::Variable(var) => Some(format!("\u{1}prop\u{1}{var}->{property}")),
+            ExprKind::This => Some(format!("\u{1}prop\u{1}$this->{property}")),
+            _ => None,
+        }
+    }
+
+    /// Extracts a flow-narrowing guard from a ternary condition for narrowing the branch
+    /// expressions. Handles `$var <guard>` (keyed by the variable name — the branch env then
+    /// shadows the variable's type) via the existing variable narrowing, plus
+    /// `$var->prop instanceof Class` (keyed by a synthetic property key that
+    /// `infer_property_access_type` consults). Returns `(env_key, then_type, else_type)` or `None`.
+    /// A ternary is a single expression, so no writes occur between the guard and the branches —
+    /// property narrowing is write-invalidation-safe here.
+    pub(crate) fn branch_guard_narrowing(
+        &mut self,
+        condition: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<(String, PhpType, PhpType)>, CompileError> {
+        if let Some(guard) = self.type_guard_narrowing(condition, env) {
+            return Ok(Some((guard.var, guard.then_ty, guard.else_ty)));
+        }
+        let (cond, negated) = match &condition.kind {
+            ExprKind::Not(inner) => (inner.as_ref(), true),
+            _ => (condition, false),
+        };
+        if let ExprKind::InstanceOf {
+            value,
+            target: InstanceOfTarget::Name(class),
+        } = &cond.kind
+        {
+            if let ExprKind::PropertyAccess { object, property } = &value.kind {
+                if let Some(key) = Self::narrowed_property_env_key(object, property) {
+                    let current = self.infer_type(value, env)?;
+                    let target = PhpType::Object(class.as_str().to_string());
+                    let matched = self.narrow_to(&current, &target);
+                    let complement = self.narrow_complement(&current, &target);
+                    let (then_ty, else_ty) =
+                        if negated { (complement, matched) } else { (matched, complement) };
+                    return Ok(Some((key, then_ty, else_ty)));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Narrows `current` to the guard-true type. Inside the branch the guard guarantees the target,

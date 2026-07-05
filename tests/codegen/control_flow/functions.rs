@@ -134,3 +134,14 @@ fn test_strict_null_guard_narrowing() {
     );
     assert_eq!(out, "hi");
 }
+
+/// EC-8 (#491): `$this->prop instanceof X ? ... : <uses $this->prop>` narrows the PROPERTY in the
+/// ternary else-branch (Message|string → string), so `new Message($this->prop)` type-checks.
+/// Byte-parity vs PHP 8.5. Exercises property-access flow-narrowing across ternary branches.
+#[test]
+fn test_property_instanceof_ternary_narrowing() {
+    let out = compile_and_run(
+        "<?php declare(strict_types=1); final class Message { public function __construct(public string $key) {} } final class V { public function __construct(private Message|string $raw) {} public function msg(): Message { return $this->raw instanceof Message ? $this->raw : new Message($this->raw); } } echo (new V('hi'))->msg()->key, ':', (new V(new Message('k')))->msg()->key;",
+    );
+    assert_eq!(out, "hi:k");
+}

@@ -297,8 +297,24 @@ impl Checker {
                 else_expr,
             } => {
                 self.infer_type(condition, env)?;
-                let then_ty = self.infer_type(then_expr, env)?;
-                let else_ty = self.infer_type(else_expr, env)?;
+                // Flow-narrowing across the branches: `$x instanceof X ? ... : ...` (and the other
+                // recognized guards) narrow `$x` — or a simple `$x->prop` — in the then/else
+                // branches. A ternary is a single expression (no intervening writes), so the
+                // narrowing is safe to scope to each branch's inference.
+                let (then_ty, else_ty) = if let Some((key, then_narrow, else_narrow)) =
+                    self.branch_guard_narrowing(condition, env)?
+                {
+                    let mut then_env = env.clone();
+                    then_env.insert(key.clone(), then_narrow);
+                    let mut else_env = env.clone();
+                    else_env.insert(key, else_narrow);
+                    (
+                        self.infer_type(then_expr, &then_env)?,
+                        self.infer_type(else_expr, &else_env)?,
+                    )
+                } else {
+                    (self.infer_type(then_expr, env)?, self.infer_type(else_expr, env)?)
+                };
                 let result_ty = if then_ty == else_ty {
                     then_ty
                 } else if then_ty == PhpType::Str || else_ty == PhpType::Str {
