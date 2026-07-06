@@ -1351,3 +1351,250 @@ echo $t;
         out.stderr
     );
 }
+
+/// Regression test: concatenating a string with a `Mixed`-valued associative-array
+/// element (e.g. `"x" . $_SERVER['SERVER_SOFTWARE']`) must not leak the boxed
+/// `Mixed` operand. Stringifying a `Mixed` concat operand via `Op::Cast` produces
+/// an independent string; the original owned `Mixed` cell (and its payload) has to
+/// be released. Before the fix, `release_stringified_source_if_owned` released
+/// only `Object`/`Array`/`AssocArray` sources and skipped `Mixed`, leaking two
+/// heap blocks per concatenation — which exhausted a long-lived `--web` worker's
+/// heap under load. Runs the concat in a loop so any per-iteration leak
+/// accumulates well past a single fixture's noise, and asserts a clean heap.
+#[test]
+fn test_regression_concat_with_mixed_assoc_element_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = ['s' => 'hello', 'n' => 42];
+$acc = 0;
+for ($i = 0; $i < 100; $i++) {
+    $acc += strlen('pre-' . $a['s']);
+}
+echo $acc;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "900");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "concatenating with a Mixed assoc-array element must not leak, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: appending in a loop to a `Mixed`-widened static-local array
+/// (the `static $c = null; if ($c === null) { $c = []; ... $c[] = ... }`
+/// boot-once cache idiom) must stay linear and leak-free.
+///
+/// `static $c = null` widens the slot to `Mixed`, so each `$c[] = ...` loaded the
+/// boxed cell and unboxed it with an unconditional retain, leaving the array
+/// permanently shared (rc > 1). `__rt_array_ensure_unique` then deep-cloned the
+/// whole array — re-persisting every string element — on EVERY push (`O(n^2)`
+/// allocations), and the re-box writeback leaked the relocated array after each
+/// grow. At 2000 elements this exhausted the default 8 MB heap. The fix drops the
+/// spurious retain (`__rt_array_uncow_if_cell_unique`) and republishes the
+/// mutated container in place (`__rt_mixed_slot_publish`) when the owning cell is
+/// uniquely owned, so appends mutate in place. Asserts a clean heap and the
+/// correct element count at a size that previously OOM'd.
+#[test]
+fn test_regression_mixed_static_array_append_loop_is_linear_and_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+static $c = null;
+if ($c === null) {
+    $c = [];
+    for ($i = 0; $i < 2000; $i++) {
+        $c[] = "item-$i";
+    }
+}
+echo count($c);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2000");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "appending to a Mixed static-local array in a loop must not leak, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: repeatedly writing indexed elements of a `Mixed`-widened
+/// static-local array (`static $c = null; ... $c[$i] = ...`) must not leak.
+///
+/// Index-set shares the same load-retain + re-box writeback path as append, so
+/// before the fix an in-place element-write loop leaked one array buffer per
+/// iteration. Asserts a clean heap and correct final value.
+#[test]
+fn test_regression_mixed_static_array_index_set_loop_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+static $c = null;
+if ($c === null) {
+    $c = [];
+    for ($i = 0; $i < 300; $i++) { $c[] = 0; }
+    for ($i = 0; $i < 300; $i++) { $c[$i] = $i * 2; }
+}
+echo count($c);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "300");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "in-place index writes to a Mixed static-local array must not leak, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: the in-place-append fast path for a `Mixed` static-local
+/// array must preserve copy-on-write for a live alias. When `$x = $c` is taken
+/// before `$c[] = ...`, appending must clone so `$x` keeps the pre-append value;
+/// the in-place swap only applies when the container is uniquely owned. Asserts
+/// PHP value semantics (the alias is not mutated).
+#[test]
+fn test_regression_mixed_static_array_append_preserves_alias() {
+    let out = compile_and_run(
+        r#"<?php
+function run(): string {
+    static $c = null;
+    if ($c === null) { $c = []; $c[] = "a"; $c[] = "b"; }
+    $x = $c;
+    $c[] = "NEW";
+    return count($c) . "/" . count($x) . "/" . $x[1] . "/" . $c[2];
+}
+echo run();
+"#,
+    );
+    assert_eq!(out, "3/2/b/NEW");
+}
+
+/// Regression test: reading elements of a `Mixed`-widened static-local array
+/// (`static $c = null; ... $c[$i]`) must not leak the container.
+///
+/// The `Mixed -> Array` load unboxes the cell with an unconditional retain (to
+/// force copy-on-write for Mixed-typed aliases). For a borrowed element read the
+/// receiver is discarded afterward, so `lower_array_access_from_value` releases
+/// that retained reference. Without it, every read leaked the whole array (and
+/// its string payloads). Reads the static in a loop and asserts a clean heap.
+#[test]
+fn test_regression_mixed_static_array_element_read_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+static $c = null;
+if ($c === null) { $c = ["a", "b", "c"]; }
+$acc = 0;
+for ($i = 0; $i < 100; $i++) {
+    $acc += strlen($c[$i % 3]);
+}
+echo $acc;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "100");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "reading elements of a Mixed static-local array must not leak, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: copying a `Mixed`-widened static-local array (`$x = $c`) must
+/// not leak the container.
+///
+/// The store acquires an independent reference for `$x`, but the borrowed source
+/// load had already been retained by the `Mixed -> Array` unbox; `store_local`
+/// now releases that retained source (narrowly, only for this load shape — a
+/// broad owning-temporary reclassification over-releases borrowed builtin args
+/// like `count($c)` and corrupts a following read). Copies in a loop and asserts
+/// a clean heap and that `count($c)` reads stay correct alongside the copy.
+#[test]
+fn test_regression_mixed_static_array_copy_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+static $c = null;
+if ($c === null) { $c = ["a", "b"]; }
+$t = 0;
+for ($i = 0; $i < 100; $i++) {
+    $x = $c;
+    $t += count($x) + count($c);
+}
+echo $t;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "400");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "copying a Mixed static-local array must not leak, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: returning a `Mixed`-widened static-local array by value
+/// (`return $c`) must not leak the container.
+///
+/// The return path acquires an independent snapshot for the caller, but the
+/// borrowed source load had already been retained by the `Mixed -> Array` unbox;
+/// `acquire_borrowed_return_value` now releases that retained source (narrowly,
+/// only for this load shape). Returns the static in a loop and asserts a clean
+/// heap and correct element counts across repeated calls.
+#[test]
+fn test_regression_mixed_static_array_return_by_value_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function make(): array {
+    static $c = null;
+    if ($c === null) { $c = ["a", "b", "c"]; }
+    return $c;
+}
+$t = 0;
+for ($i = 0; $i < 100; $i++) {
+    $r = make();
+    $t += count($r);
+}
+echo $t;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "300");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "returning a Mixed static-local array by value must not leak, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: iterating a `Mixed`-widened static-local array with `foreach`
+/// must not leak the container.
+///
+/// The iterator only borrows the source for the loop, so the retained
+/// `Mixed -> Array` unbox has no other balance; `lower_foreach` now releases the
+/// source on loop exit (and on break/continue) for this load shape, mirroring the
+/// existing owning-temporary handling. Iterates the static in an outer loop and
+/// asserts a clean heap.
+#[test]
+fn test_regression_mixed_static_array_foreach_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+static $c = null;
+if ($c === null) { $c = ["a", "b", "c"]; }
+$n = 0;
+for ($i = 0; $i < 50; $i++) {
+    $s = "";
+    foreach ($c as $v) {
+        $s .= $v;
+    }
+    $n += strlen($s);
+}
+echo $n;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "150");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "iterating a Mixed static-local array with foreach must not leak, got: {}",
+        out.stderr
+    );
+}

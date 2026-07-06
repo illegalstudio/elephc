@@ -1156,9 +1156,14 @@ fn lower_foreach(
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(body_block);
-    let cleanup = ctx
-        .value_is_owning_temporary(source)
-        .then_some(LoopCleanup { value: source, span: array.span });
+    // A Mixed static-slot source is retained by its `Mixed -> Array/Hash` unbox
+    // just like a fresh owning temporary, and the iterator only borrows it, so it
+    // must be released when the loop ends (including via break/continue). Narrowly
+    // scoped to that load shape to avoid double-freeing a genuinely borrowed source.
+    let source_needs_release = ctx.value_is_owning_temporary(source)
+        || ctx.value_is_mixed_boxed_static_container_load(source.value);
+    let cleanup =
+        source_needs_release.then_some(LoopCleanup { value: source, span: array.span });
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: header,
@@ -1205,11 +1210,11 @@ fn lower_foreach(
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
     // Release the source when it is a fresh owning temporary (e.g. `foreach
-    // (explode(...) as $p)` or a literal array): the iterator borrows it for the
-    // duration of the loop, so nothing else frees it once iteration ends. (For an
-    // array the iterator aliases the source, so it must NOT be released separately
-    // — that would double-free.)
-    if ctx.value_is_owning_temporary(source) {
+    // (explode(...) as $p)` or a literal array) or a retained Mixed static-slot
+    // container: the iterator borrows it for the duration of the loop, so nothing
+    // else frees it once iteration ends. (For an array the iterator aliases the
+    // source, so it must NOT be released separately — that would double-free.)
+    if source_needs_release {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(array.span));
     }
 }
@@ -1958,7 +1963,16 @@ fn acquire_borrowed_return_value(
     if !(is_borrowed_read || is_refcell_by_value) {
         return value;
     }
-    crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+    let acquired = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    // A `return $c` whose source unboxed a container out of a Mixed static slot
+    // retained it (the codegen `Mixed -> Array/Hash` coercion). The acquire above
+    // gives the caller an independent snapshot, so the borrowed source's retained
+    // reference must be released or the container leaks. Narrowly scoped to this
+    // load shape to avoid over-releasing genuinely borrowed reads.
+    if ctx.value_is_mixed_boxed_static_container_load(value.value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    acquired
 }
 
 /// Terminates with a return after running active finally bodies from inner to outer.

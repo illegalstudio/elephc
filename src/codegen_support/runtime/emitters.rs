@@ -191,6 +191,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_free_deep(emitter);
     arrays::emit_array_clone_shallow(emitter);
     arrays::emit_array_ensure_unique(emitter);
+    arrays::emit_array_uncow_if_cell_unique(emitter);
+    arrays::emit_mixed_slot_publish(emitter);
     arrays::emit_array_grow(emitter);
     arrays::emit_array_new(emitter);
     arrays::emit_array_push_int(emitter);

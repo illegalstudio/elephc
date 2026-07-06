@@ -684,9 +684,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.builder.widen_local_storage_type(slot, widen_type);
         let source = value;
         let source_is_owning_temporary = self.value_is_owning_temporary(value);
-        let release_source_after_store =
-            self.value_needs_release_after_retaining_store(value)
-                && !matches!(previous_kind, LocalKind::HiddenTemp | LocalKind::OwnedTemp);
+        // A `$x = $c` copy whose source unboxed a container out of a Mixed static
+        // slot retains it (the codegen `Mixed -> Array/Hash` coercion); the store
+        // acquires an independent reference for the destination, so the borrowed
+        // source's retained reference must be released here or the container leaks.
+        // Kept narrow (only this load shape) to avoid the over-release that a broad
+        // owning-temporary reclassification causes for borrowed builtin arguments.
+        // The owning-temporary exclusion on the retaining-store path mirrors
+        // `value_is_owning_temporary`: a temp that already transfers ownership
+        // must not also be released here. The mixed-boxed-static-container case is
+        // source-shape-gated (a `LoadStaticLocal` out of a `Mixed` slot) and so is
+        // independent of the destination slot kind the guard keys on.
+        let release_source_after_store = (self.value_needs_release_after_retaining_store(value)
+                && !matches!(previous_kind, LocalKind::HiddenTemp | LocalKind::OwnedTemp))
+            || self.value_is_mixed_boxed_static_container_load(value.value);
         let transfer_callable_source_to_store = source_is_owning_temporary
             && matches!(php_type.codegen_repr(), PhpType::Callable);
         if !uses_global
@@ -1171,6 +1182,37 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return false;
         };
         self.builder.local_kind(slot) == LocalKind::OwnedTemp
+    }
+
+    /// Returns whether a load unboxed a concrete container out of a `Mixed`-widened
+    /// static-local slot, which the codegen `Mixed -> Array/Hash` coercion retains.
+    ///
+    /// `static $c = null` widens the slot to `Mixed`; reading `$c` as a concrete
+    /// array/hash unboxes the cell with an unconditional retain (to conservatively
+    /// force copy-on-write for Mixed-typed aliases). For a borrowed use (element
+    /// read, `count($c)`, `$x = $c`) that retain has no matching release, so the
+    /// container leaks one reference. Treating the load as an owning temporary lets
+    /// the normal lifetime machinery balance it: released when discarded/after a
+    /// retaining store, transferred (never double-released) when handed to a call.
+    /// Scoped to `LoadStaticLocal` because only static slots take the Mixed re-box
+    /// storage path; direct `Array` slots load a borrowed pointer with no retain.
+    pub(crate) fn value_is_mixed_boxed_static_container_load(&self, value: ValueId) -> bool {
+        let Some(inst) = self.builder.value_defining_instruction(value) else {
+            return false;
+        };
+        if inst.op != Op::LoadStaticLocal {
+            return false;
+        }
+        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+            return false;
+        };
+        if self.builder.local_php_type(slot).codegen_repr() != PhpType::Mixed {
+            return false;
+        }
+        matches!(
+            self.builder.value_php_type(value).codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        )
     }
 
     /// Returns whether a generic cast owns a detached string copy of a Mixed operand.

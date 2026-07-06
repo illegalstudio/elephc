@@ -22,6 +22,8 @@ mod array_diff_refcounted;
 mod array_diff_key;
 mod array_edge_key;
 mod array_ensure_unique;
+mod array_uncow_if_cell_unique;
+mod mixed_slot_publish;
 mod array_fill;
 mod array_fill_assoc;
 mod array_fill_keys;
@@ -183,6 +185,10 @@ pub use array_diff_key::emit_array_diff_key;
 pub use array_edge_key::emit_array_edge_key;
 /// Emit array first/last key helper (array_key_first / array_key_last).
 pub use array_ensure_unique::emit_array_ensure_unique;
+/// Emit the boxed-container spurious-retain drop helper for uniquely owned Mixed cells.
+pub use array_uncow_if_cell_unique::emit_array_uncow_if_cell_unique;
+/// Emit the Mixed static/global slot container republish helper (in-place swap or COW rebox).
+pub use mixed_slot_publish::emit_mixed_slot_publish;
 /// Emit array uniqueness enforcement helper.
 pub use array_fill::emit_array_fill;
 pub use array_fill_assoc::emit_array_fill_assoc;

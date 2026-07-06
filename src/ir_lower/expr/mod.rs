@@ -7335,14 +7335,22 @@ fn lower_array_access_from_value(
         _ => Op::RuntimeCall,
     };
     let result_type = array_access_result_type(ctx, array_value.value, op, expr);
-    ctx.emit_value(
+    let result = ctx.emit_value(
         op,
         vec![array_value.value, index_value.value],
         None,
         result_type,
         op.default_effects(),
         Some(expr.span),
-    )
+    );
+    // A `Mixed`-widened static array read (`$c[$i]`) unboxes the cell with a
+    // retain; the borrowed receiver is discarded after this element read, so
+    // release the retained reference to avoid leaking the container. Each such
+    // access re-loads the static, so the receiver is used exactly once here.
+    if ctx.value_is_mixed_boxed_static_container_load(array_value.value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(expr.span));
+    }
+    result
 }
 
 /// Lowers nullable receiver indexing without evaluating the index on a null receiver.
@@ -7690,7 +7698,16 @@ fn release_stringified_source_if_owned(
         return;
     }
     match ctx.builder.value_php_type(source.value).codegen_repr() {
-        PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
+        // A boxed `Mixed` source (e.g. an associative-array element read for a
+        // concat operand, like `$_SERVER['k']`) owns its heap cell and payload.
+        // Stringifying it via `Op::Cast` produces an independent string, so the
+        // original owned `Mixed` must be released here or the box and its inner
+        // value leak — one leaked cell per concat, which exhausts a long-lived
+        // `--web` worker's heap under load.
+        PhpType::Object(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Mixed => {
             crate::ir_lower::ownership::release_if_owned(ctx, source, span);
         }
         _ => {}

@@ -12,7 +12,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
+use crate::codegen::{
+    abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed, runtime_value_tag,
+};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -486,31 +488,65 @@ impl<'a> FunctionContext<'a> {
                 let slot_storage_ty = local.php_type.codegen_repr();
                 let ty = self.value_php_type(value)?;
                 self.data.add_comm(symbol.clone(), 16);
-                // When the slot widened to Mixed, the authoritative container must be
-                // re-boxed into a fresh Mixed cell and the OLD cell released via
-                // release-previous — never overwrite the cell pointer in place. A
-                // payload swap inside the old cell would be unsafe if that cell is
-                // shared (rc>1). Refcount proof: new cell (rc1) -> new container;
-                // old cell decref -> 0 -> mixed_free_deep frees old cell + old
-                // container.
+                // When the slot widened to Mixed, republish the mutated container
+                // through `__rt_mixed_slot_publish`: it swaps the payload IN PLACE
+                // when the owning cell is uniquely owned (rc == 1) — no rebox, no
+                // retain/decref churn, so a boot-once loop of appends stays O(1)
+                // per push — and falls back to copy-on-write (box into a fresh cell
+                // + decref the old one) when a live Mixed-typed alias shares the
+                // cell. The load path already dropped its spurious retain via
+                // `__rt_array_uncow_if_cell_unique`, so the container is uniquely
+                // owned on the in-place path. Never overwrite the cell pointer in
+                // place unconditionally: a payload swap inside a shared cell (rc>1)
+                // would corrupt the alias, which is why the helper checks cell rc.
                 if matches!(slot_storage_ty, PhpType::Mixed)
                     && !matches!(ty.codegen_repr(), PhpType::Mixed)
                 {
                     let source_ty = self.load_value_to_result(value)?;
-                    // Re-box the mutated container into a fresh Mixed cell and
-                    // release the old cell (release-previous). Ownership-aware
-                    // box selection mirrors `store_value_to_local`: when the
-                    // source value's producer left an owned result, transfer it
-                    // (no incref); otherwise borrow-box (retain). This gate keeps
-                    // the writeback correct whether or not the source is a
-                    // freshly-owned COW-unique container.
-                    if self.value_can_own_mixed_box_source(value)? {
-                        emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
+                    let repr = source_ty.codegen_repr();
+                    if matches!(repr, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                        let target = self.emitter.target;
+                        let container_reg = abi::int_arg_reg_name(target, 0);
+                        let cell_reg = abi::int_arg_reg_name(target, 1);
+                        let tag_reg = abi::int_arg_reg_name(target, 2);
+                        abi::emit_reg_move(
+                            self.emitter,
+                            container_reg,
+                            abi::int_result_reg(self.emitter),
+                        );
+                        abi::emit_load_symbol_to_reg(self.emitter, cell_reg, &symbol, 0);
+                        abi::emit_load_int_immediate(
+                            self.emitter,
+                            tag_reg,
+                            runtime_value_tag(&repr) as i64,
+                        );
+                        abi::emit_call_label(self.emitter, "__rt_mixed_slot_publish");
+                        // The helper handled the old cell (in-place keeps it, COW
+                        // decrefs it), so this store is a plain pointer overwrite.
+                        abi::emit_store_result_to_symbol(
+                            self.emitter,
+                            &symbol,
+                            &PhpType::Mixed,
+                            false,
+                        );
+                        abi::emit_store_zero_to_symbol(self.emitter, &symbol, 8);
                     } else {
-                        emit_box_current_value_as_mixed(self.emitter, &source_ty);
+                        // Defensive fallback for any non-container concrete value
+                        // reaching this container-writeback path: box and release
+                        // the previous cell, mirroring the historical behaviour.
+                        if self.value_can_own_mixed_box_source(value)? {
+                            emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
+                        } else {
+                            emit_box_current_value_as_mixed(self.emitter, &source_ty);
+                        }
+                        abi::emit_store_result_to_symbol(
+                            self.emitter,
+                            &symbol,
+                            &PhpType::Mixed,
+                            true,
+                        );
+                        abi::emit_store_zero_to_symbol(self.emitter, &symbol, 8);
                     }
-                    abi::emit_store_result_to_symbol(self.emitter, &symbol, &PhpType::Mixed, true);
-                    abi::emit_store_zero_to_symbol(self.emitter, &symbol, 8);
                 } else {
                     self.load_value_to_result(value)?;
                     abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
@@ -521,6 +557,68 @@ impl<'a> FunctionContext<'a> {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    /// Drops the spurious boxed-load retain before an in-place mutation whose
+    /// container was loaded from a Mixed-widened static-local slot.
+    ///
+    /// A `static $c = null` initializer widens the slot to `Mixed`, so every
+    /// `$c[] = ...` / `$c[k] = ...` loads the boxed cell and unboxes it with an
+    /// unconditional retain (see the `Mixed -> Array/AssocArray` arm of
+    /// `coerce_loaded_local_to_result_type`). That retain conservatively forces
+    /// copy-on-write to protect Mixed-typed aliases (`$x = $c`) that share the
+    /// *cell*. For a read-modify-write back to the same slot it is spurious when
+    /// the cell is uniquely owned: it leaves the container permanently shared
+    /// (rc > 1), so `__rt_array_ensure_unique` deep-clones on every mutation
+    /// (`O(n^2)` allocations) instead of mutating in place.
+    ///
+    /// This emits `__rt_array_uncow_if_cell_unique(container, cell)`, which drops
+    /// exactly one container reference *only* when the owning cell's refcount is
+    /// 1. When the cell is shared (a live Mixed-typed alias) it is a no-op, so
+    /// copy-on-write still clones and the alias is preserved. No-op unless `value`
+    /// is a concrete container loaded from a Mixed static-local slot.
+    pub(super) fn emit_uncow_if_mixed_boxed_static_source(&mut self, value: ValueId) -> Result<()> {
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(());
+        };
+        let Some(inst_ref) = self.function.instruction(inst) else {
+            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+        };
+        if inst_ref.op != Op::LoadStaticLocal {
+            return Ok(());
+        }
+        let Some(crate::ir::Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+            return Ok(());
+        };
+        let local = self
+            .function
+            .locals
+            .get(slot.as_raw() as usize)
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))?;
+        // The spurious retain only exists when the slot storage widened to Mixed
+        // (boxed cell) but the loaded value is a concrete container. A non-widened
+        // Array slot loads the pointer directly with no retain, so nothing to undo.
+        if local.php_type.codegen_repr() != PhpType::Mixed {
+            return Ok(());
+        }
+        let loaded_ty = self.value_php_type(value)?.codegen_repr();
+        if !matches!(loaded_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            return Ok(());
+        }
+        let name = local.name.clone().ok_or_else(|| {
+            CodegenIrError::invalid_module("LoadStaticLocal is missing a source name".to_string())
+        })?;
+        let symbol = crate::names::static_local_symbol(&self.function.name, &name);
+        let target = self.emitter.target;
+        let container_reg = abi::int_arg_reg_name(target, 0);
+        let cell_reg = abi::int_arg_reg_name(target, 1);
+        self.load_value_to_reg(value, container_reg)?;
+        abi::emit_load_symbol_to_reg(self.emitter, cell_reg, &symbol, 0);
+        abi::emit_call_label(self.emitter, "__rt_array_uncow_if_cell_unique");
         Ok(())
     }
 
