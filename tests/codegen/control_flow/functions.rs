@@ -145,3 +145,25 @@ fn test_property_instanceof_ternary_narrowing() {
     );
     assert_eq!(out, "hi:k");
 }
+
+/// EC-8 (#491): `if (is_null($x)) { throw; }` narrows ?int → int on the fall-through path — the
+/// same complement-stripping as `$x === null` (ward-schema ColumnNode::assertDecimalPrecision).
+/// Byte-parity vs PHP 8.5.
+#[test]
+fn test_is_null_guard_narrowing() {
+    let out = compile_and_run(
+        "<?php declare(strict_types=1); function f(?int $p): int { if (is_null($p)) { throw new \\InvalidArgumentException('null'); } if ($p <= 0) { throw new \\InvalidArgumentException('non-positive'); } return $p; } echo f(5);",
+    );
+    assert_eq!(out, "5");
+}
+
+/// EC-8 (#491): a negated-instanceof throw-guard on a PROPERTY narrows it for the statements
+/// after the `if` (ward-forms StoreResult::ref pattern: `?StoredFileRef` → StoredFileRef on the
+/// fall-through return). Byte-parity vs PHP 8.5.
+#[test]
+fn test_property_throw_guard_narrowing() {
+    let out = compile_and_run(
+        "<?php declare(strict_types=1); final class W { public function __construct(public string $v) {} } final class R { public function __construct(private ?W $w) {} public function ref(): W { if (!$this->w instanceof W) { throw new \\LogicException('rejected'); } return $this->w; } } echo (new R(new W('x')))->ref()->v;",
+    );
+    assert_eq!(out, "x");
+}

@@ -21,34 +21,51 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
 
-/// A detected type-guard narrowing: the guarded variable and the types it takes in the
+/// A detected type-guard narrowing: the guarded binding's env key and the types it takes in the
 /// then-branch (guard true) and else-branch (guard false).
 pub(crate) struct GuardNarrowing {
-    /// Name of the guarded variable (without the leading `$`).
+    /// `TypeEnv` key of the guarded binding: a variable name (without the leading `$`) or the
+    /// synthetic property key from `narrowed_property_env_key`.
     pub var: String,
-    /// Type the variable has where the guard is true.
+    /// Type the binding has where the guard is true.
     pub then_ty: PhpType,
-    /// Type the variable has where the guard is false.
+    /// Type the binding has where the guard is false.
     pub else_ty: PhpType,
 }
 
 impl Checker {
-    /// Detects a type-predicate guard in an `if` condition and computes the then/else narrowing
-    /// for the guarded variable against the current environment. Handles the scalar `is_*`
-    /// predicates and `$var instanceof Class`, with an optional leading `!` that swaps the
-    /// branches. Returns `None` when the condition is not a recognized single-variable guard or the
-    /// variable has no known type in `env`.
-    pub(crate) fn type_guard_narrowing(
-        &self,
+    /// Detects a type-predicate guard in an `if`/ternary condition and computes the then/else
+    /// narrowing for the guarded binding against the current environment. Handles the scalar
+    /// `is_*` predicates, `is_null`, `instanceof Class`, and `=== false` / `=== null`, each with an
+    /// optional leading `!` that swaps the branches. The guarded receiver may be a variable
+    /// (narrowed under its name) or a simple property access `$var->prop` / `$this->prop`
+    /// (narrowed under a synthetic key that `infer_property_access_type` consults). Returns
+    /// `Ok(None)` when the condition is not a recognized guard or the receiver's current type is
+    /// unknown.
+    pub(crate) fn guard_narrowing(
+        &mut self,
         condition: &Expr,
         env: &TypeEnv,
-    ) -> Option<GuardNarrowing> {
+    ) -> Result<Option<GuardNarrowing>, CompileError> {
         let (cond, negated) = match &condition.kind {
             ExprKind::Not(inner) => (inner.as_ref(), true),
             _ => (condition, false),
         };
-        let (var, target) = guard_var_and_type(cond)?;
-        let current = env.get(&var)?.clone();
+        let Some((receiver, target)) = guard_receiver_and_type(cond) else {
+            return Ok(None);
+        };
+        let Some(key) = Self::guard_env_key(receiver) else {
+            return Ok(None);
+        };
+        // A prior narrowing (or a variable binding) wins; otherwise a property receiver falls back
+        // to its declared field type. An unbound plain variable stays un-narrowed.
+        let current = match env.get(&key) {
+            Some(ty) => ty.clone(),
+            None if matches!(receiver.kind, ExprKind::PropertyAccess { .. }) => {
+                self.infer_type(receiver, env)?
+            }
+            None => return Ok(None),
+        };
         let matched = self.narrow_to(&current, &target);
         let complement = self.narrow_complement(&current, &target);
         let (then_ty, else_ty) = if negated {
@@ -56,7 +73,7 @@ impl Checker {
         } else {
             (matched, complement)
         };
-        Some(GuardNarrowing { var, then_ty, else_ty })
+        Ok(Some(GuardNarrowing { var: key, then_ty, else_ty }))
     }
 
     /// Synthetic `TypeEnv` key for a narrowed simple property access `$var->prop` (`None` for a
@@ -71,43 +88,25 @@ impl Checker {
         }
     }
 
-    /// Extracts a flow-narrowing guard from a ternary condition for narrowing the branch
-    /// expressions. Handles `$var <guard>` (keyed by the variable name — the branch env then
-    /// shadows the variable's type) via the existing variable narrowing, plus
-    /// `$var->prop instanceof Class` (keyed by a synthetic property key that
-    /// `infer_property_access_type` consults). Returns `(env_key, then_type, else_type)` or `None`.
-    /// A ternary is a single expression, so no writes occur between the guard and the branches —
-    /// property narrowing is write-invalidation-safe here.
-    pub(crate) fn branch_guard_narrowing(
-        &mut self,
-        condition: &Expr,
-        env: &TypeEnv,
-    ) -> Result<Option<(String, PhpType, PhpType)>, CompileError> {
-        if let Some(guard) = self.type_guard_narrowing(condition, env) {
-            return Ok(Some((guard.var, guard.then_ty, guard.else_ty)));
-        }
-        let (cond, negated) = match &condition.kind {
-            ExprKind::Not(inner) => (inner.as_ref(), true),
-            _ => (condition, false),
-        };
-        if let ExprKind::InstanceOf {
-            value,
-            target: InstanceOfTarget::Name(class),
-        } = &cond.kind
-        {
-            if let ExprKind::PropertyAccess { object, property } = &value.kind {
-                if let Some(key) = Self::narrowed_property_env_key(object, property) {
-                    let current = self.infer_type(value, env)?;
-                    let target = PhpType::Object(class.as_str().to_string());
-                    let matched = self.narrow_to(&current, &target);
-                    let complement = self.narrow_complement(&current, &target);
-                    let (then_ty, else_ty) =
-                        if negated { (complement, matched) } else { (matched, complement) };
-                    return Ok(Some((key, then_ty, else_ty)));
-                }
+    /// `TypeEnv` key for a guard receiver: a variable's name, or the synthetic property key for a
+    /// simple property access. `None` for receivers narrowing can't key (complex chains).
+    fn guard_env_key(receiver: &Expr) -> Option<String> {
+        match &receiver.kind {
+            ExprKind::Variable(var) => Some(var.clone()),
+            ExprKind::PropertyAccess { object, property } => {
+                Self::narrowed_property_env_key(object, property)
             }
+            _ => None,
         }
-        Ok(None)
+    }
+
+    /// Drops every synthetic property narrowing from the environment. Called after effects that
+    /// may write a property (property assignments, any call — a callee can mutate the object),
+    /// and at loop-body entry (a later iteration may observe an earlier iteration's write), so a
+    /// stale narrowing never survives a potential mutation. Variable narrowings are unaffected —
+    /// visible assignments already update those bindings directly.
+    pub(crate) fn purge_property_narrowings(env: &mut TypeEnv) {
+        env.retain(|key, _| !key.starts_with('\u{1}'));
     }
 
     /// Narrows `current` to the guard-true type. Inside the branch the guard guarantees the target,
@@ -188,47 +187,50 @@ impl Checker {
     }
 }
 
-/// Extracts the guarded variable name and the target type from a (non-negated) guard expression.
-/// Recognizes the scalar `is_*` predicates and `instanceof <Name>`; returns `None` for anything
-/// else (including guards on non-variable operands).
-fn guard_var_and_type(cond: &Expr) -> Option<(String, PhpType)> {
+/// Extracts the guarded receiver expression and the target type from a (non-negated) guard
+/// expression. Recognizes the scalar `is_*` predicates, `is_null`, `instanceof <Name>`, and
+/// `=== false` / `=== null`. The receiver may be any expression here — `guard_env_key` decides
+/// which receivers narrowing can actually key (variables and simple property accesses).
+fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType)> {
     match &cond.kind {
         ExprKind::FunctionCall { name, args } if args.len() == 1 => {
-            let ExprKind::Variable(var) = &args[0].kind else {
-                return None;
-            };
             let target = match name.as_str().to_ascii_lowercase().as_str() {
                 "is_int" | "is_integer" | "is_long" => PhpType::Int,
                 "is_float" | "is_double" => PhpType::Float,
                 "is_string" => PhpType::Str,
                 "is_bool" => PhpType::Bool,
+                // `is_null($x)`: same narrowing as `$x === null` — elephc models a `?T` value's
+                // null as Void, so the complement strips it (`if (is_null($x)) { throw; }` leaves
+                // ?int as int on the fall-through path).
+                "is_null" => PhpType::Void,
                 _ => return None,
             };
-            Some((var.clone(), target))
+            Some((&args[0], target))
         }
         ExprKind::InstanceOf { value, target } => {
-            let ExprKind::Variable(var) = &value.kind else {
-                return None;
-            };
             let InstanceOfTarget::Name(class) = target else {
                 return None;
             };
-            Some((var.clone(), PhpType::Object(class.as_str().to_string())))
+            Some((value, PhpType::Object(class.as_str().to_string())))
         }
         // `$var === false` / `false === $var`: narrow to Bool in the then-branch; the else-branch
         // (guard false) strips the false-ish Bool member (e.g. int|false → int). Enables the common
         // `if ($x === false) { throw; } return $x;` guard (ward-http StreamGuards::requireInt etc.).
         ExprKind::BinaryOp { left, op: BinOp::StrictEq, right } => {
-            let (var, lit) = match (&left.kind, &right.kind) {
-                (ExprKind::Variable(v), _) => (v, &right.kind),
-                (_, ExprKind::Variable(v)) => (v, &left.kind),
+            let (receiver, lit) = match (&left.kind, &right.kind) {
+                (ExprKind::Variable(_) | ExprKind::PropertyAccess { .. }, _) => {
+                    (left.as_ref(), &right.kind)
+                }
+                (_, ExprKind::Variable(_) | ExprKind::PropertyAccess { .. }) => {
+                    (right.as_ref(), &left.kind)
+                }
                 _ => return None,
             };
             match lit {
-                ExprKind::BoolLiteral(false) => Some((var.clone(), PhpType::Bool)),
+                ExprKind::BoolLiteral(false) => Some((receiver, PhpType::Bool)),
                 // `$x === null`: strip the null-ish member (elephc models a `?T` value's null as
                 // Void), e.g. `?self` / self|null → self after `if ($x === null) { throw; }`.
-                ExprKind::Null => Some((var.clone(), PhpType::Void)),
+                ExprKind::Null => Some((receiver, PhpType::Void)),
                 _ => None,
             }
         }

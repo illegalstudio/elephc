@@ -301,13 +301,13 @@ impl Checker {
                 // recognized guards) narrow `$x` — or a simple `$x->prop` — in the then/else
                 // branches. A ternary is a single expression (no intervening writes), so the
                 // narrowing is safe to scope to each branch's inference.
-                let (then_ty, else_ty) = if let Some((key, then_narrow, else_narrow)) =
-                    self.branch_guard_narrowing(condition, env)?
+                let (then_ty, else_ty) = if let Some(guard) =
+                    self.guard_narrowing(condition, env)?
                 {
                     let mut then_env = env.clone();
-                    then_env.insert(key.clone(), then_narrow);
+                    then_env.insert(guard.var.clone(), guard.then_ty);
                     let mut else_env = env.clone();
-                    else_env.insert(key, else_narrow);
+                    else_env.insert(guard.var, guard.else_ty);
                     (
                         self.infer_type(then_expr, &then_env)?,
                         self.infer_type(else_expr, &else_env)?,
