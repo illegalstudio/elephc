@@ -51,7 +51,9 @@ arguments (not elephc compiler flags):
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of prefork worker processes. Minimum 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes (`0` = unlimited); oversized bodies get `413`. |
-| `--max-requests N` | No | `0` (classic) / `1000` (worker) | Recycle each worker after N requests (bounds memory growth). Worker mode defaults to 1000. |
+| `--max-requests N` | No | `0` (classic) / `1000` (worker) | Recycle each worker process after N requests (bounds memory growth). Worker mode defaults to 1000. |
+| `--max-requests-per-connection N` | No | `0` (opt-in) | Close a keep-alive connection after N responses (sends `Connection: close`) so the client reconnects and the kernel re-picks a worker; `0` = unlimited (off by default; no behavior change unless set). Same default in all three web modes. |
+| `--idle-timeout SECS` | No | `0` (opt-in) | Close a keep-alive connection idle (no new request) for more than SECS seconds; `0` = never (off by default; no behavior change unless set). Same default in all three web modes. |
 | `--worker-gc-interval N` | No | `0` (classic) / `1` (worker) | Run the cycle collector every N requests (`0` = never, `1` = every request). Worker-mode only. |
 | `--max-execution-time N` | No | `0` (none) | Kill a handler that runs longer than N seconds; the master respawns the worker. |
 | `--gzip` | No | off | Gzip-compress responses when the client sends `Accept-Encoding: gzip`. |

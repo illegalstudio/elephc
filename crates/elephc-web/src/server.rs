@@ -27,7 +27,13 @@ Options:
   --listen HOST:PORT     Address to bind (required), e.g. 127.0.0.1:8080
   --workers N            Number of prefork worker processes (default: CPU count)
   --max-body-size BYTES  Max request body in bytes; 0 = unlimited (default: 8388608)
-  --max-requests N       Recycle a worker after N requests; 0 = never (default: 0; worker mode: 1000)
+  --max-requests N       Recycle a WORKER PROCESS after N requests; 0 = never (default: 0; worker mode: 1000)
+  --max-requests-per-connection N
+                         Close a keep-alive CONNECTION after N responses (sends
+                         \"Connection: close\" so the client reconnects and the
+                         kernel re-picks a worker); 0 = unlimited (default: 0)
+  --idle-timeout SECS    Close a keep-alive connection idle (no new request) for
+                         more than SECS seconds; 0 = never (default: 0)
   --access-log           Log one line per request to stderr
   --max-execution-time N Kill (and respawn) a worker whose handler runs > N seconds; 0 = no limit
   --worker-gc-interval N Run the cycle collector every N requests; 0 = never, 1 = every request (worker mode default: 1)
@@ -110,6 +116,13 @@ struct ServerArgs {
     /// Run the cycle collector every N requests in worker mode; `0` = never,
     /// `1` = every request. Ignored in classic `--web` mode.
     worker_gc_interval: u32,
+    /// Close a keep-alive connection after this many responses; `0` = unlimited.
+    /// Mode-independent, default `0` (opt-in; off preserves the original behavior).
+    max_conn_requests: usize,
+    /// Close a keep-alive connection idle for more than this many seconds;
+    /// `0` = never. Mode-independent, default `0` (opt-in; off preserves the
+    /// original behavior).
+    idle_timeout_secs: u32,
 }
 
 impl ServerArgs {
@@ -122,6 +135,8 @@ impl ServerArgs {
             max_exec_secs: self.max_exec_secs,
             gzip: self.gzip,
             worker_gc_interval: self.worker_gc_interval,
+            max_conn_requests: self.max_conn_requests,
+            idle_timeout_secs: self.idle_timeout_secs,
         }
     }
 }
@@ -173,6 +188,11 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
     let mut gzip = false;
     let mut worker_gc_interval: u32 = if worker_mode { 1 } else { 0 };
     let mut worker_gc_interval_set = false;
+    // Keep-alive rotation defaults are mode-independent (same in classic `--web`,
+    // `--web-worker`, and `--web-worker=script`), so they are set here at init
+    // rather than in the worker-mode override block below.
+    let mut max_conn_requests: usize = 0;
+    let mut idle_timeout_secs: u32 = 0;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -186,6 +206,8 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
                     max_requests_set = true;
                 }
             }
+            "--max-requests-per-connection" => { i += 1; max_conn_requests = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_conn_requests); }
+            "--idle-timeout" => { i += 1; idle_timeout_secs = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(idle_timeout_secs); }
             "--max-execution-time" => { i += 1; max_exec_secs = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_exec_secs); }
             "--worker-gc-interval" => {
                 i += 1;
@@ -216,6 +238,8 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             max_exec_secs,
             gzip,
             worker_gc_interval,
+            max_conn_requests,
+            idle_timeout_secs,
         }),
         None => {
             eprintln!("error: --web binary requires --listen host:port (try --help)");

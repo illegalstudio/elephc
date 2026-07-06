@@ -34,7 +34,9 @@ The produced binary accepts these arguments at runtime:
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of worker processes to prefork. Minimum 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes; `0` means unlimited. A request whose body exceeds the cap gets `413 Payload Too Large` and the PHP handler never runs. |
-| `--max-requests N` | No | `0` (never) | Recycle each worker after serving N requests (the master respawns it), bounding memory growth in long-running servers. |
+| `--max-requests N` | No | `0` (never) | Recycle each **worker process** after serving N requests (the master respawns it), bounding memory growth in long-running servers. Do not confuse with `--max-requests-per-connection`. |
+| `--max-requests-per-connection N` | No | `0` (opt-in) | Close a keep-alive **connection** after N responses by sending `Connection: close`, so the client reconnects and `SO_REUSEPORT` re-picks a worker (see [Keep-alive and load distribution](#keep-alive-and-load-distribution-across-workers)); `0` = unlimited (off by default; no behavior change from before this flag existed). Same default in all three web modes. |
+| `--idle-timeout SECS` | No | `0` (opt-in) | Close a keep-alive connection that stays idle (no new request) for more than SECS seconds, so the client reconnects; `0` = never (off by default; no behavior change from before this flag existed). Same default in all three web modes. |
 | `--access-log` | No | off | Log one line per request to stderr (`<ip> "<method> <path>" <status> <ms>`). |
 | `--help`, `--version` | No | — | Print usage / version and exit 0. |
 
@@ -275,8 +277,12 @@ two worker-mode defaults:
 | `--worker-gc-interval N` | `1` | Run the cycle collector every N requests (`0` = never, `1` = every request). |
 
 All other runtime arguments (`--listen`, `--workers`, `--max-body-size`,
-`--max-execution-time`, `--access-log`, `--gzip`, `--help`, `--version`) behave
-the same as in classic `--web`.
+`--max-requests-per-connection`, `--idle-timeout`, `--max-execution-time`,
+`--access-log`, `--gzip`, `--help`, `--version`) behave the same as in classic
+`--web`. In particular the keep-alive rotation flags
+(`--max-requests-per-connection`, `--idle-timeout`) keep their `0` / `0`
+(opt-in, off) defaults in worker mode — unlike `--max-requests`, they do not
+vary by mode.
 
 ### When to use worker mode
 
@@ -425,6 +431,38 @@ single worker, requests are served **one at a time** — the PHP body runs to
 completion before the next request is accepted. Parallelism equals the worker
 count; a slow request occupies exactly one worker for its duration.
 
+### Keep-alive and load distribution across workers
+
+`SO_REUSEPORT` picks a worker for a connection **at accept time**, by hashing the
+connection's 4-tuple (source/dest IP and port). HTTP/1.1 keep-alive then pins
+**every** request on that connection to the same worker for the connection's
+lifetime. Under a long-lived keep-alive load (e.g. `wrk -c1000`), the assignment
+of connections to workers is frozen for the whole run: if one worker draws a slow
+request, every connection pinned to it waits behind it, while other workers may be
+idle. Unlike a shared work queue, elephc does not steal work between workers.
+
+Two opt-in runtime flags can bound how long a connection stays pinned, so clients
+reconnect periodically and the kernel re-picks a worker (a new source port
+re-hashes the 4-tuple, landing on a statistically different worker):
+
+- `--max-requests-per-connection N` (default `0`, off) — after N responses the
+  server sends `Connection: close`; the client reconnects for its next request.
+- `--idle-timeout SECS` (default `0`, off) — a connection idle for longer than SECS
+  is closed, so a bursty client re-picks a worker on its next request.
+
+Both default to `0` (disabled), which keeps connections pinned for their full
+lifetime — the original, pre-rotation behavior — with no measurable overhead.
+Set either to a positive value to opt in to rotation; smaller values (e.g.
+`--max-requests-per-connection 16`) rebalance faster at the cost of more TCP
+handshakes. Rotation is a cheap, opt-in mitigation, not a substitute for a
+shared work queue (that is the separate fd-dispatch feature): within one
+pinning window a slow request still blocks the requests queued behind it on
+that worker, and in a mixed fast/slow benchmark aggressive rotation did not
+improve — and could worsen — fast-route tail latency, which is why it ships
+off by default. On Linux the `SO_REUSEPORT` hash spreads reconnects evenly; on
+macOS the distribution is less uniform, so p99 validation benchmarks are
+authoritative on Linux.
+
 ## Robustness
 
 - **Graceful shutdown** — the master shuts down cleanly on `SIGINT` (Ctrl-C) and
@@ -437,10 +475,17 @@ count; a slow request occupies exactly one worker for its duration.
   respawn.
 - **Request body cap** — see `--max-body-size`; oversized bodies are rejected with
   `413` before the handler runs.
-- **Slow-connection bound** — HTTP/1.1 keep-alive is enabled, but a connection that
-  does not send the next request's headers within 30 s is closed. Because a worker
-  serves one connection at a time, a kept-alive connection holds a worker until it
-  closes or times out — size `--workers` accordingly.
+- **Idle and slow-connection bounds** — HTTP/1.1 keep-alive is enabled. When
+  `--idle-timeout` is set (opt-in, default `0` = off), an idle keep-alive
+  connection is closed after that many seconds by a per-connection watchdog;
+  independently, hyper's `header_read_timeout` (30 s, anti-slowloris) always
+  closes a connection whose next request's headers do not arrive in time. On
+  the bundled hyper version the 30 s header timeout also caps the idle wait, so
+  an `--idle-timeout` set above `30` is effectively capped at ~30 s; values `<=
+  30` are honored by the watchdog, which fires first. Because a worker serves
+  one connection at a time, a kept-alive connection holds a worker until it
+  closes or times out — size `--workers` accordingly, or opt in to
+  `--idle-timeout` / `--max-requests-per-connection` to rotate sooner.
 
 ## Limitations
 

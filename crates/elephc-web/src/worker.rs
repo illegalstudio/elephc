@@ -10,9 +10,11 @@
 //!   two threads in one worker; concurrency comes from the N forked workers.
 //! - SO_REUSEPORT lets every worker bind the same port; the kernel balances.
 
+use std::cell::Cell;
 use std::convert::Infallible;
 use std::ffi::CString;
 use std::net::SocketAddr;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -104,6 +106,14 @@ pub struct WorkerConfig {
     /// Run `__rt_gc_collect_cycles` every N requests (worker mode only);
     /// `0` = never, `1` = every request. Defaults to `1` in worker mode.
     pub worker_gc_interval: u32,
+    /// Close a keep-alive connection after this many responses so the client
+    /// reconnects and SO_REUSEPORT re-picks a worker (sends `Connection: close`);
+    /// `0` = unlimited, default `0` (opt-in; off preserves the original behavior).
+    pub max_conn_requests: usize,
+    /// Close a keep-alive connection that stays idle (no new request) for more
+    /// than this many seconds so the client reconnects; `0` = never, default `0`
+    /// (opt-in; off preserves the original behavior).
+    pub idle_timeout_secs: u32,
 }
 
 /// Minimum response size (bytes) worth gzip-compressing; below this the framing
@@ -121,6 +131,10 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         max_exec_secs,
         gzip,
         worker_gc_interval: _,
+        // Read straight off `cfg` (still valid: `WorkerConfig` is `Copy`) in the
+        // close predicate; only the idle timeout needs a loop-invariant local.
+        max_conn_requests: _,
+        idle_timeout_secs,
     } = cfg;
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
@@ -160,6 +174,20 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         };
         // Connection-serving config is identical for every connection, so build the
         // hyper HTTP/1 builder once and reuse it (serve_connection takes &self).
+        //
+        // WI-4 / Q4 note on `header_read_timeout` idle semantics (hyper 1.10.1,
+        // locked in Cargo.lock): hyper arms this timer inside `poll_read_head` as
+        // soon as the connection starts waiting for a request head — which INCLUDES
+        // the idle wait for the next keep-alive request. So on this version it
+        // already doubles as an implicit ~30s idle bound, conflated with the
+        // anti-slowloris header-read budget. We keep it at 30s (anti-slowloris) and
+        // put the configurable idle rotation in the `--idle-timeout` watchdog
+        // instead. Consequence: because this timer stays at 30s, when
+        // `--idle-timeout` is set > 30, it is effectively capped at ~30s by
+        // `header_read_timeout`; values <= 30 are honored by the watchdog, which
+        // fires first. Verified empirically by
+        // `web_idle_timeout_zero_keeps_connection` (a sub-30s idle wait with the
+        // watchdog off keeps the connection alive).
         let mut http = http1::Builder::new();
         http.timer(TokioTimer::new())
             .header_read_timeout(Duration::from_secs(30));
@@ -178,8 +206,33 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             // latency to keep-alive request/response round-trips. Best-effort.
             let _ = stream.set_nodelay(true);
             let io = TokioIo::new(stream);
-            tokio::task::spawn_local(http
-                .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| async move {
+            // Per-connection keep-alive rotation state, allocated ONLY when the
+            // relevant feature is enabled so the default (both off) hot path keeps
+            // the original zero-allocation, zero-bookkeeping behavior. `rotate_on`
+            // gates the response counter + close/C3-drain check; `idle_on` gates the
+            // last-activity stamps + idle watchdog. When on, each cell lives in this
+            // connection's !Send task on the LocalSet, so plain `Rc<Cell<_>>`
+            // suffices (no atomics).
+            let rotate_on = cfg.max_conn_requests > 0 || cfg.max_requests > 0;
+            let idle_on = idle_timeout_secs > 0;
+            let conn_served = rotate_on.then(|| Rc::new(Cell::new(0usize)));
+            let last_activity = idle_on.then(|| Rc::new(Cell::new(Instant::now())));
+            let watchdog_activity = last_activity.clone();
+            // `service_fn` is FnMut — called once per request on this connection —
+            // so the OUTER closure is non-async and clones the per-connection
+            // `Option<Rc<..>>` handles into each returned `async move` block (cloning
+            // `None` is free); the Copy config values (`cfg`, `peer`, `addr`, …) are
+            // copied in.
+            let service = service_fn(move |req: Request<hyper::body::Incoming>| {
+                let conn_served = conn_served.clone();
+                let last_activity = last_activity.clone();
+                async move {
+                    // A request just arrived on this connection: stamp activity so
+                    // the idle watchdog measures inactivity from now (only when the
+                    // idle timeout is enabled; otherwise the handle is `None`).
+                    if let Some(la) = &last_activity {
+                        la.set(Instant::now());
+                    }
                     let started = Instant::now();
                     let method = req.method().as_str().to_string();
                     let uri = req.uri().to_string();
@@ -256,6 +309,31 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     if do_gzip {
                         builder = builder.header("content-encoding", "gzip");
                     }
+                    // Keep-alive rotation (only when a rotation feature is enabled):
+                    // count this response, then ask hyper to close the connection
+                    // (`Connection: close`) when this connection hit its per-connection
+                    // cap OR the worker hit its `--max-requests` recycle cap (the C3
+                    // drain), so the client reconnects and SO_REUSEPORT re-picks a
+                    // worker instead of being cut at exit. With both features off this
+                    // block is skipped entirely (`conn_served` is `None`).
+                    if rotate_on {
+                        let served = conn_served
+                            .as_ref()
+                            .map(|c| {
+                                c.set(c.get() + 1);
+                                c.get()
+                            })
+                            .unwrap_or(0);
+                        if should_close_connection(served, SERVED.load(Ordering::Relaxed), &cfg) {
+                            builder = builder.header(hyper::header::CONNECTION, "close");
+                        }
+                    }
+                    // Response produced: stamp activity again (only when the idle
+                    // timeout is enabled) so an idle wait for the next request is
+                    // measured from the response, not the arrival.
+                    if let Some(la) = &last_activity {
+                        la.set(Instant::now());
+                    }
                     let response = builder
                         .body(Full::new(Bytes::from(resp_body)))
                         .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b""))));
@@ -270,9 +348,114 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                         );
                     }
                     Ok::<_, Infallible>(response)
-                })));
+                }
+            });
+            // Idle watchdog: wrap the connection only when `--idle-timeout` is
+            // enabled (`watchdog_activity` is `Some`); with the timeout off the handle
+            // is `None`, so we spawn the original zero-overhead plain connection future
+            // (no timer, no per-connection wakeups) — identical to the pre-rotation
+            // path.
+            let conn = http.serve_connection(io, service);
+            match watchdog_activity {
+                Some(wa) => {
+                    tokio::task::spawn_local(serve_connection_with_idle(
+                        conn,
+                        wa,
+                        Duration::from_secs(idle_timeout_secs as u64),
+                    ));
+                }
+                None => {
+                    tokio::task::spawn_local(conn);
+                }
+            }
         }
     });
+}
+
+/// Decides whether this keep-alive connection should be closed after the current
+/// response, so hyper emits `Connection: close` and the client reconnects (a new
+/// source port re-hashes SO_REUSEPORT onto a possibly different worker). Returns
+/// true when this connection hit its per-connection cap
+/// (`--max-requests-per-connection`), or when the worker itself hit its recycle
+/// cap (`--max-requests`) and should drain its keep-alive connections rather than
+/// serve them past the cap and cut them at `process::exit` (the C3 drain).
+///
+/// `conn_served` is this connection's own response count; `served_total` is the
+/// worker's process-wide `SERVED` count (passed in because each module owns a
+/// separate `SERVED` static). Both caps are disabled at `0`. Shared by the
+/// classic and worker-mode serve loops so the predicate lives in one place.
+pub(crate) fn should_close_connection(
+    conn_served: usize,
+    served_total: usize,
+    cfg: &WorkerConfig,
+) -> bool {
+    (cfg.max_conn_requests > 0 && conn_served >= cfg.max_conn_requests)
+        || (cfg.max_requests > 0 && served_total >= cfg.max_requests)
+}
+
+/// Drives one hyper HTTP/1 connection to completion with an idle-timeout
+/// watchdog. `last_activity` is stamped by the connection's service on each
+/// request (on entry and after the response); when it has not advanced for
+/// `idle`, the connection is gracefully shut down. `graceful_shutdown` finishes
+/// any in-flight response before closing the socket (so a slow response is never
+/// truncated) and closes an idle keep-alive connection immediately. Shared by
+/// both serve loops; only used when `idle_timeout_secs > 0` (the zero path spawns
+/// the plain `serve_connection` future with no watchdog).
+///
+/// This is a hand-rolled select (poll the connection, then the idle timer) via
+/// `poll_fn` rather than `tokio::select!`, because the crate does not enable
+/// tokio's `macros` feature.
+pub(crate) async fn serve_connection_with_idle<I, B, S>(
+    conn: http1::Connection<I, S>,
+    last_activity: Rc<Cell<Instant>>,
+    idle: Duration,
+) where
+    I: hyper::rt::Read + hyper::rt::Write + Unpin + 'static,
+    S: hyper::service::HttpService<hyper::body::Incoming, ResBody = B> + 'static,
+    S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    B: hyper::body::Body + 'static,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    use std::future::Future;
+    use std::task::Poll;
+    // Box::pin both futures so they are movable into the FnMut poll closure and
+    // pinned for `poll` / `graceful_shutdown` (both are `!Unpin`).
+    let mut conn = Box::pin(conn);
+    let mut sleep = Box::pin(tokio::time::sleep_until(tokio::time::Instant::from_std(
+        last_activity.get() + idle,
+    )));
+    let mut shutting_down = false;
+    std::future::poll_fn(move |cx| {
+        // Drive the connection first, so an in-flight request/response always makes
+        // progress before the idle timer can act.
+        if let Poll::Ready(res) = conn.as_mut().poll(cx) {
+            let _ = res;
+            return Poll::Ready(());
+        }
+        if !shutting_down && sleep.as_mut().poll(cx).is_ready() {
+            let deadline = last_activity.get() + idle;
+            if Instant::now() < deadline {
+                // A request arrived while we waited and pushed the deadline forward;
+                // re-arm the timer to the new deadline and keep serving.
+                sleep
+                    .as_mut()
+                    .reset(tokio::time::Instant::from_std(deadline));
+                let _ = sleep.as_mut().poll(cx);
+            } else {
+                // Genuinely idle past the timeout: begin a graceful shutdown. The
+                // connection is still polled above until it finishes, so any
+                // in-flight response completes before the socket closes.
+                conn.as_mut().graceful_shutdown();
+                shutting_down = true;
+                if let Poll::Ready(res) = conn.as_mut().poll(cx) {
+                    let _ = res;
+                    return Poll::Ready(());
+                }
+            }
+        }
+        Poll::Pending
+    })
+    .await;
 }
 
 /// gzip-compresses `data`, returning the compressed bytes, or `None` if encoding

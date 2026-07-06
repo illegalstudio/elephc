@@ -2197,3 +2197,288 @@ fn web_worker_script_fence_vs_web_resets() {
     assert!(script_r1.ends_with("1"), "script request 1 must be '1': {:?}", script_r1);
     assert!(script_r2.ends_with("2"), "script request 2 must accumulate to '2': {:?}", script_r2);
 }
+
+// --- PR1: keep-alive rebalance (--max-requests-per-connection / --idle-timeout) ---
+
+/// Spawns the server on a fresh ephemeral port with arbitrary extra runtime flags
+/// (appended after `--listen <addr>`), returning a kill-on-drop `ServerHandle`.
+/// Callers pass their own `--workers` when needed. Used by the keep-alive
+/// rotation tests, which need custom rotation/idle flags the plain
+/// `spawn_server_guarded` does not set.
+fn spawn_server_with_flags(bin: &Path, extra: &[&str]) -> ServerHandle {
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut cmd = Command::new(bin);
+    cmd.arg("--listen").arg(&addr);
+    for a in extra {
+        cmd.arg(a);
+    }
+    let child = cmd.spawn().expect("failed to spawn web server");
+    wait_until_ready(&addr);
+    ServerHandle { child, addr }
+}
+
+/// Reads exactly one HTTP/1.1 response off a keep-alive socket: the status line
+/// and headers up to the blank line, then `Content-Length` body bytes (elephc-web
+/// always sets `Content-Length`). Returns the full raw response text. Unlike a
+/// single `read`, this does not depend on the whole response arriving in one TCP
+/// segment, so the `Connection: close` assertions are not flaky.
+fn read_keepalive_response(sock: &mut TcpStream) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut tmp = [0u8; 2048];
+    // Read until the full header block (\r\n\r\n) is present, or EOF.
+    let header_end = loop {
+        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            break pos + 4;
+        }
+        let n = sock.read(&mut tmp).unwrap();
+        if n == 0 {
+            return String::from_utf8_lossy(&buf).into_owned();
+        }
+        buf.extend_from_slice(&tmp[..n]);
+    };
+    let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+    let content_len = head
+        .lines()
+        .find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.trim()
+                .eq_ignore_ascii_case("content-length")
+                .then(|| v.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    while buf.len() < header_end + content_len {
+        let n = sock.read(&mut tmp).unwrap();
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+/// WI-2: `--max-requests-per-connection 2` closes a keep-alive connection after 2
+/// responses. Two requests on ONE connection: response 1 (under the cap) carries
+/// no `Connection: close`; response 2 (at the cap) carries it; the next read
+/// returns 0 (EOF), proving hyper actually closed the socket.
+#[test]
+fn web_connection_closes_after_max_requests_per_connection() {
+    let dir = make_test_dir("web_maxconn");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--max-requests-per-connection", "2"]);
+    let mut sock = TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let req = format!("GET / HTTP/1.1\r\nHost: {}\r\n\r\n", srv.addr());
+    // Request 1: within the cap → keep-alive stays open.
+    sock.write_all(req.as_bytes()).unwrap();
+    let r1 = read_keepalive_response(&mut sock);
+    assert!(r1.contains("200") && http_body(&r1) == "ok", "r1: {:?}", r1);
+    assert!(
+        !r1.to_lowercase().contains("connection: close"),
+        "request 1 (under cap) must not close the connection: {:?}",
+        r1
+    );
+    // Request 2: hits the cap → Connection: close, then the server closes.
+    sock.write_all(req.as_bytes()).unwrap();
+    let r2 = read_keepalive_response(&mut sock);
+    assert!(r2.contains("200") && http_body(&r2) == "ok", "r2: {:?}", r2);
+    assert!(
+        r2.to_lowercase().contains("connection: close"),
+        "request 2 (at cap) must carry Connection: close: {:?}",
+        r2
+    );
+    // The server must actually close the connection after response 2.
+    let mut tmp = [0u8; 64];
+    let n = sock.read(&mut tmp).unwrap();
+    assert_eq!(n, 0, "server must close the connection after the cap (EOF expected)");
+}
+
+/// WI-2: `--max-requests-per-connection 0` disables the per-connection cap, so a
+/// keep-alive connection serves unbounded requests and no response carries
+/// `Connection: close`.
+#[test]
+fn web_connection_unlimited_when_cap_zero() {
+    let dir = make_test_dir("web_maxconn_zero");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--max-requests-per-connection", "0"]);
+    let mut sock = TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let req = format!("GET / HTTP/1.1\r\nHost: {}\r\n\r\n", srv.addr());
+    for i in 1..=3 {
+        sock.write_all(req.as_bytes()).unwrap();
+        let r = read_keepalive_response(&mut sock);
+        assert!(r.contains("200") && http_body(&r) == "ok", "request {i} resp: {:?}", r);
+        assert!(
+            !r.to_lowercase().contains("connection: close"),
+            "request {i} must keep the connection alive with cap 0: {:?}",
+            r
+        );
+    }
+}
+
+/// WI-3: the per-connection cap works in `--web-worker=script` mode, and the
+/// forced reconnect does not reset worker persistence: a PHP function `static`
+/// counter keeps advancing across the cap-triggered reconnect (would restart at
+/// "1" if the worker had been recycled).
+#[test]
+fn web_worker_script_connection_closes_after_cap() {
+    let dir = make_test_dir("wws_maxconn");
+    let src = "<?php function n(): int { static $c = 0; return ++$c; } echo n();";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--max-requests-per-connection", "2"]);
+    let req = format!("GET / HTTP/1.1\r\nHost: {}\r\n\r\n", srv.addr());
+    // Two requests on ONE connection: static counter → "1", "2"; response 2 closes.
+    let mut sock = TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    sock.write_all(req.as_bytes()).unwrap();
+    let r1 = read_keepalive_response(&mut sock);
+    assert_eq!(http_body(&r1), "1", "r1 body must be the persistent static 1: {:?}", r1);
+    sock.write_all(req.as_bytes()).unwrap();
+    let r2 = read_keepalive_response(&mut sock);
+    assert_eq!(http_body(&r2), "2", "r2 body must be the persistent static 2: {:?}", r2);
+    assert!(
+        r2.to_lowercase().contains("connection: close"),
+        "response 2 must carry Connection: close in script mode: {:?}",
+        r2
+    );
+    let mut tmp = [0u8; 64];
+    let n = sock.read(&mut tmp).unwrap();
+    assert_eq!(n, 0, "connection must close after the per-connection cap");
+    // Reconnect (new source port): the worker persisted the static across the
+    // rotation, so the next request continues at "3", not "1".
+    let mut sock2 = TcpStream::connect(srv.addr()).unwrap();
+    sock2.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    sock2.write_all(req.as_bytes()).unwrap();
+    let r3 = read_keepalive_response(&mut sock2);
+    assert_eq!(
+        http_body(&r3),
+        "3",
+        "static must keep advancing across the rotation reconnect (expected 3): {:?}",
+        r3
+    );
+}
+
+/// WI-2 (C3 drain): a worker at its `--max-requests` recycle cap drains its
+/// keep-alive connections by setting `Connection: close` on responses instead of
+/// serving them past the cap and cutting them at `process::exit`. With
+/// `--max-requests 1`, the first keep-alive response already carries the header.
+#[test]
+fn web_max_requests_drains_keepalive() {
+    let dir = make_test_dir("web_drain");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--max-requests", "1"]);
+    let mut sock = TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let req = format!("GET / HTTP/1.1\r\nHost: {}\r\n\r\n", srv.addr());
+    sock.write_all(req.as_bytes()).unwrap();
+    let r = read_keepalive_response(&mut sock);
+    assert!(r.contains("200") && http_body(&r) == "ok", "resp: {:?}", r);
+    assert!(
+        r.to_lowercase().contains("connection: close"),
+        "a worker at its --max-requests cap must drain keep-alive with Connection: close (C3): {:?}",
+        r
+    );
+}
+
+/// WI-4: `--idle-timeout 1` closes a connection left idle past the timeout. After
+/// one response, staying idle for 2s must have the watchdog gracefully close the
+/// connection, so the next read returns 0 (EOF) well before the 30s
+/// header_read_timeout would.
+#[test]
+fn web_idle_timeout_closes_idle_connection() {
+    let dir = make_test_dir("web_idle_close");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--idle-timeout", "1"]);
+    let mut sock = TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let req = format!("GET / HTTP/1.1\r\nHost: {}\r\n\r\n", srv.addr());
+    sock.write_all(req.as_bytes()).unwrap();
+    let r1 = read_keepalive_response(&mut sock);
+    assert!(r1.contains("200") && http_body(&r1) == "ok", "r1: {:?}", r1);
+    // Stay idle past the 1s idle-timeout; the watchdog must close the connection.
+    std::thread::sleep(Duration::from_secs(2));
+    let mut tmp = [0u8; 64];
+    let n = sock.read(&mut tmp).unwrap();
+    assert_eq!(n, 0, "idle connection must be closed by the --idle-timeout watchdog (EOF)");
+}
+
+/// WI-4: `--idle-timeout 0` disables the watchdog. A connection idle for 2s (well
+/// under hyper's 30s header_read_timeout) must stay open for a second request.
+/// The sub-30s sleep keeps this independent of hyper's own idle behavior (Q4).
+#[test]
+fn web_idle_timeout_zero_keeps_connection() {
+    let dir = make_test_dir("web_idle_zero");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--idle-timeout", "0"]);
+    let mut sock = TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let req = format!("GET / HTTP/1.1\r\nHost: {}\r\n\r\n", srv.addr());
+    sock.write_all(req.as_bytes()).unwrap();
+    let r1 = read_keepalive_response(&mut sock);
+    assert!(r1.contains("200") && http_body(&r1) == "ok", "r1: {:?}", r1);
+    // Idle well under the 30s header_read_timeout; with idle-timeout 0 there is no
+    // watchdog, so the connection must stay open for a second request.
+    std::thread::sleep(Duration::from_secs(2));
+    sock.write_all(req.as_bytes()).unwrap();
+    let r2 = read_keepalive_response(&mut sock);
+    assert!(
+        r2.contains("200") && http_body(&r2) == "ok",
+        "connection must stay open with idle-timeout 0: {:?}",
+        r2
+    );
+}
+
+/// WI-4 non-truncation guard: a large response (multiple socket writes) in flight
+/// while a short `--idle-timeout` expires must NOT be cut off. The client stalls
+/// past the timeout (so the watchdog fires and `graceful_shutdown` runs), then
+/// drains the socket; the whole body must arrive intact, proving graceful
+/// shutdown finishes the in-flight response instead of truncating it.
+#[test]
+fn web_idle_timeout_does_not_truncate_inflight_response() {
+    let dir = make_test_dir("web_idle_notrunc");
+    // 500_000 bytes exceeds a typical socket buffer, so the response spans several
+    // writes and can still be flushing when the idle watchdog fires.
+    let src = "<?php echo str_repeat('A', 500000); echo 'END';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--idle-timeout", "1"]);
+    let mut sock = TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let req = format!("GET / HTTP/1.1\r\nHost: {}\r\n\r\n", srv.addr());
+    sock.write_all(req.as_bytes()).unwrap();
+    // Stall past the 1s idle-timeout WITHOUT reading, so the server may block
+    // mid-write and the watchdog fires while the response is in flight.
+    std::thread::sleep(Duration::from_millis(1500));
+    // Now drain the whole response to EOF; graceful_shutdown must have let it
+    // finish rather than cutting it.
+    let mut resp: Vec<u8> = Vec::new();
+    sock.read_to_end(&mut resp).unwrap();
+    let text = String::from_utf8_lossy(&resp);
+    let body = text.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
+    assert_eq!(
+        body.len(),
+        500003,
+        "in-flight response must not be truncated by the idle watchdog (got {} bytes)",
+        body.len()
+    );
+    assert!(body.ends_with("END"), "large body must end with the sentinel, not be cut short");
+}
+
+/// WI-1: the produced `--web` binary's `--help` lists both new rebalance flags.
+#[test]
+fn web_help_lists_rebalance_flags() {
+    let dir = make_test_dir("web_help_rebalance");
+    let bin = compile_web(&dir, "<?php echo 'x';", "app");
+    let help = Command::new(&bin).arg("--help").output().expect("help");
+    assert!(help.status.success(), "--help should exit 0");
+    let text = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        text.contains("--max-requests-per-connection"),
+        "--help must list --max-requests-per-connection:\n{}",
+        text
+    );
+    assert!(
+        text.contains("--idle-timeout"),
+        "--help must list --idle-timeout:\n{}",
+        text
+    );
+}
