@@ -167,7 +167,8 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'not binary(codegen_tests)' \
-            --no-fail-fast --retries 1 --flaky-result pass
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
 
   codegen-tests:
     name: Codegen Tests (${{ matrix.platform.name }} ${{ matrix.shard }}/16)
@@ -223,7 +224,8 @@ jobs:
             --workspace-remap . \
             -E 'binary(codegen_tests)' \
             --partition hash:${{ matrix.shard }}/16 \
-            --no-fail-fast --retries 1 --flaky-result pass
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
 
   image-api-sync:
     name: Image API stubs in sync
