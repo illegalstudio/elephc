@@ -1081,8 +1081,7 @@ fn lower_foreach(
         if value_ty == PhpType::Mixed {
             initialize_foreach_mixed_local_if_needed(ctx, value_var, value_needs_null_init, array.span);
         } else if value_needs_null_init {
-            ctx.declare_local(value_var, value_ty.clone());
-            ctx.set_local_type(value_var, value_ty);
+            initialize_foreach_concrete_local_if_needed(ctx, value_var, value_ty.clone(), array.span);
         }
     }
     let header = ctx.builder.create_named_block("foreach.next", Vec::new());
@@ -1170,10 +1169,20 @@ fn lower_foreach(
 /// Returns the by-value foreach local type when Phase 04 can keep a concrete element.
 fn foreach_value_type(source_ty: &PhpType) -> PhpType {
     match source_ty.codegen_repr() {
-        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Callable => PhpType::Callable,
+        PhpType::Array(elem) => foreach_element_value_type(elem.codegen_repr()),
+        PhpType::AssocArray { value, .. } => foreach_element_value_type(value.codegen_repr()),
         PhpType::Object(class_name) if class_name == "Phar" || class_name == "PharData" => {
             PhpType::Object("PharFileInfo".to_string())
         }
+        _ => PhpType::Mixed,
+    }
+}
+
+/// Returns the foreach value type for a concrete array element type, widening
+/// non-scalar element types to `Mixed` so the runtime always boxes them.
+fn foreach_element_value_type(elem_ty: PhpType) -> PhpType {
+    match elem_ty {
+        PhpType::Str | PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable => elem_ty,
         _ => PhpType::Mixed,
     }
 }
@@ -1212,6 +1221,61 @@ fn initialize_foreach_mixed_local_if_needed(
         Some(span),
     );
     ctx.store_local(name, boxed, PhpType::Mixed, Some(span));
+}
+
+/// Initializes a fresh foreach loop variable to a safe empty value before the first
+/// iteration when the foreach value has a concrete type (e.g. `string` from
+/// `array<string>`). Without this, the first `release` of the previous slot value
+/// would read uninitialized stack memory.
+fn initialize_foreach_concrete_local_if_needed(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    value_ty: PhpType,
+    span: Span,
+) {
+    ctx.declare_local(name, value_ty.clone());
+    ctx.set_local_type(name, value_ty.clone());
+    match value_ty.codegen_repr() {
+        PhpType::Str => {
+            let empty_str_id = ctx.intern_string("");
+            let empty = ctx.emit_value(
+                Op::ConstStr,
+                Vec::new(),
+                Some(Immediate::Data(empty_str_id)),
+                PhpType::Str,
+                Op::ConstStr.default_effects(),
+                Some(span),
+            );
+            ctx.store_local(name, empty, PhpType::Str, Some(span));
+        }
+        PhpType::Int | PhpType::Bool => {
+            let zero = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(0)),
+                value_ty.clone(),
+                Op::ConstI64.default_effects(),
+                Some(span),
+            );
+            ctx.store_local(name, zero, value_ty, Some(span));
+        }
+        PhpType::Float => {
+            let zero = ctx.emit_value(
+                Op::ConstF64,
+                Vec::new(),
+                Some(Immediate::F64(0.0)),
+                value_ty.clone(),
+                Op::ConstF64.default_effects(),
+                Some(span),
+            );
+            ctx.store_local(name, zero, value_ty, Some(span));
+        }
+        _ => {
+            // For other refcounted or complex types, fall back to null.
+            let null = emit_null_value(ctx, Some(span));
+            ctx.store_local(name, null, value_ty, Some(span));
+        }
+    }
 }
 
 /// Lowers a `switch` with source-ordered pattern evaluation and PHP fallthrough.
