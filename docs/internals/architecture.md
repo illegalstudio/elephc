@@ -262,21 +262,18 @@ src/
 │
 ├── codegen_support/
 │   ├── mod.rs                 Shared codegen metadata registries and support re-exports
-│   ├── driver_support.rs      Retained codegen orchestration helpers while legacy emitters are disentangled
+│   ├── driver_support.rs      Runtime object, deferred callable, boxing, and hash-key helpers
 │   ├── arrays.rs              Shared array value-type metadata stamping helpers
 │   ├── callable_invoker_args.rs Descriptor-invoker argument cloning and Mixed boxing helpers
 │   ├── value_boxing.rs        Shared runtime-value and owned-value boxing into Mixed cells
 │   ├── wrappers/              Shared callback and fiber wrapper emitters
-│   ├── main_emission.rs       Historical top-level emission support retained for disentangling
-│   ├── class_methods.rs       Instance/static method emission orchestration
-│   ├── function_variants.rs   Include-loaded function variant dispatchers
 │   ├── interface_wrappers.rs  Interface dispatch return-shape adapters
 │   ├── callables.rs           Top-level callable metadata and indirect-call helpers
 │   ├── reflection.rs          Shared ReflectionAttribute materialization helpers
-│   ├── prescan.rs             Pre-pass that collects program-wide codegen metadata
-│   ├── program_usage.rs       Program-usage analysis feeding metadata emission
-│   ├── program_usage/         Required-class and variable usage scanners
-│   ├── functions/generator/   Generator wrapper and resume state-machine lowering
+│   ├── prescan.rs             Constant pre-scan feeding EIR lowering
+│   ├── program_usage.rs       Required-class analysis feeding metadata emission
+│   ├── program_usage/         Required-class scanners
+│   ├── functions/generator/   Legacy closure generator wrapper and resume state-machine lowering
 │   ├── expr.rs                Expression codegen dispatcher
 │   ├── expr/                  Expression submodules
 │   │   ├── arrays.rs          Array-expression dispatch

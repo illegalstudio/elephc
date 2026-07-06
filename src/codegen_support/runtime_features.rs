@@ -5,7 +5,6 @@
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` before runtime-cache preparation.
-//! - `crate::codegen_support::generate()` when tests request combined user/runtime assembly.
 //!
 //! Key details:
 //! - Direct `preg_*` calls and emitted regex iterator classes both enable regex

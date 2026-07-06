@@ -3,7 +3,7 @@
 //! Handles C-facing symbols, argument movement, return values, and required library metadata.
 //!
 //! Called from:
-//! - `crate::codegen_support::generate()` and extern call expression lowering
+//! - `crate::codegen::lower_inst::externs` and legacy extern call expression lowering.
 //!
 //! Key details:
 //! - Extern lowering follows platform ABI rules and must not use PHP call normalization for C-only details.

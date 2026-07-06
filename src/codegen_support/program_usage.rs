@@ -1,18 +1,16 @@
 //! Purpose:
-//! Re-exports program scans that answer codegen-only reachability and variable-use questions.
-//! Keeps required-class and variable analysis isolated from emission modules.
+//! Re-exports program scans that answer required-class reachability questions.
+//! Keeps class metadata filtering isolated from runtime feature selection.
 //!
 //! Called from:
-//! - `crate::codegen_support::generate()` and lowering helpers that need whole-program facts
+//! - `crate::codegen_support::runtime_features`.
 //!
 //! Key details:
 //! - These scans must be side-effect free and follow AST recursion whenever new nodes are added.
 
 mod required_classes;
-mod variables;
 
 pub(super) use required_classes::{
     collect_required_class_names, collect_required_class_names_in_stmts,
     program_has_dynamic_instanceof,
 };
-pub(super) use variables::program_uses_variable;

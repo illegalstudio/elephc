@@ -3,7 +3,8 @@
 //! Provides the shared bookkeeping used while lowering expressions, statements, functions, and wrappers.
 //!
 //! Called from:
-//! - `crate::codegen_support::generate()` and nested codegen emitters
+//! - Legacy callable wrapper emitters still shared by the EIR backend.
+//! - `crate::codegen_support::runtime_callable_invoker`.
 //!
 //! Key details:
 //! - Ownership states must remain conservative across branches, temporaries, and cleanup paths.
@@ -347,7 +348,7 @@ impl Context {
     /// Creates a default `Context` for top-level (non-function) codegen.
     ///
     /// All maps and vectors are empty; `in_main` is `false`; `return_type` is `Void`.
-    /// Use `crate::codegen_support::generate()` to obtain a fully initialized context for a program.
+    /// EIR callsites populate these maps from the lowered module before invoking shared wrapper emitters.
     pub fn new() -> Self {
         Self {
             variables: HashMap::new(),

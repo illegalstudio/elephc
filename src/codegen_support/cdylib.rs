@@ -5,7 +5,7 @@
 //! lifecycle entry points the embedding host calls before/after exports.
 //!
 //! Called from:
-//! - `crate::codegen_support::generate_user_asm()` when `emit == Emit::Cdylib`.
+//! - `crate::codegen::finalize_user_asm()` when `emit == Emit::Cdylib`.
 //!
 //! Key details:
 //! - elephc's internal calling convention already routes integer/scalar params

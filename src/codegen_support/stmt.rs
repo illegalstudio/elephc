@@ -3,7 +3,7 @@
 //! Owns statement-level cleanup and fallthrough behavior for generated program bodies.
 //!
 //! Called from:
-//! - `crate::codegen_support::main_emission` and `crate::codegen_support::functions`
+//! - Legacy closure/FCC wrapper emission in `crate::codegen_support::functions`.
 //!
 //! Key details:
 //! - Statements must preserve PHP source order while maintaining local ownership and loop/try context state.

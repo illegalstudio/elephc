@@ -309,7 +309,7 @@ pub(crate) fn emit_runtime_data_user(
     // init thunks. Entry = _class_propinit_<id> when the class has any property
     // default, else 0 (null = nothing to init). __rt_new_by_name indexes this
     // by class_id and calls the thunk (when non-zero) after zeroing the object.
-    // The has-default predicate MUST match property_init_thunks::class_needs_property_init.
+    // The has-default predicate MUST match EIR property-init thunk generation.
     out.push_str(".globl _class_propinit_ptrs\n_class_propinit_ptrs:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {

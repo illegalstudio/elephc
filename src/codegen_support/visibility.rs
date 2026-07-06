@@ -6,7 +6,7 @@
 //! Called from:
 //! - `crate::codegen_support::driver_support::generate_runtime_with_features_pic()` for
 //!   the PIC runtime object.
-//! - `crate::codegen_support::generate_user_asm()` for cdylib user objects.
+//! - `crate::codegen::finalize_user_asm()` for cdylib user objects.
 //!
 //! Key details:
 //! - Hidden visibility is what makes the cdylib correct and linkable: internal

@@ -3,7 +3,7 @@
 //! Materializes receiver and argument forwarding for interface vtable calls.
 //!
 //! Called from:
-//! - `crate::codegen_support::generate()` after class metadata collection
+//! - `crate::codegen::finalize_user_asm()` after class metadata collection.
 //!
 //! Key details:
 //! - Wrapper ABI order must match both interface slots and concrete method codegen signatures.

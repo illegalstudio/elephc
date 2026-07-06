@@ -4,25 +4,16 @@
 //! arguments are stored in the Fiber runtime object.
 //!
 //! Called from:
-//! - `crate::codegen_support::generate_user_asm()` and Fiber method-call lowering.
+//! - Legacy Fiber method-call lowering inside callable wrapper emission.
 //!
 //! Key details:
 //! - Start arguments are always boxed as `Mixed`; only parameter names/defaults
 //!   are borrowed from the callback signature for named/spread normalization.
 
-use std::collections::HashMap;
-
 use crate::codegen_support::context::Context;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
-
-/// Collects functions whose body directly returns `new Fiber(<known callback>)`.
-pub(crate) fn collect_fiber_return_sigs(program: &Program) -> HashMap<String, FunctionSig> {
-    let mut sigs = HashMap::new();
-    collect_fiber_return_sigs_from_stmts(program, &mut sigs);
-    sigs
-}
 
 /// Returns the known Fiber callback start signature associated with an expression.
 pub(crate) fn fiber_start_sig_for_expr(expr: &Expr, ctx: &Context) -> Option<FunctionSig> {
@@ -44,47 +35,6 @@ pub(crate) fn fiber_start_sig_from_new_object(expr: &Expr, ctx: &Context) -> Opt
     }
     let callback = args.first()?;
     fiber_start_sig_from_callable_expr(callback, ctx)
-}
-
-/// Recursively scans statements for function declarations with direct Fiber returns.
-fn collect_fiber_return_sigs_from_stmts(
-    stmts: &[Stmt],
-    sigs: &mut HashMap<String, FunctionSig>,
-) {
-    let ctx = Context::new();
-    for stmt in stmts {
-        match &stmt.kind {
-            StmtKind::FunctionDecl { name, body, .. } => {
-                if let Some(sig) = fiber_return_sig_from_body(body, &ctx) {
-                    sigs.insert(name.clone(), sig);
-                }
-            }
-            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
-                collect_fiber_return_sigs_from_stmts(body, sigs);
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Finds a direct `return new Fiber(<known callback>)` in a function body.
-fn fiber_return_sig_from_body(body: &[Stmt], ctx: &Context) -> Option<FunctionSig> {
-    for stmt in body {
-        match &stmt.kind {
-            StmtKind::Return(Some(expr)) => {
-                if let Some(sig) = fiber_start_sig_from_new_object(expr, ctx) {
-                    return Some(sig);
-                }
-            }
-            StmtKind::Synthetic(body) => {
-                if let Some(sig) = fiber_return_sig_from_body(body, ctx) {
-                    return Some(sig);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Builds a Fiber start-call signature from a supported callable expression.

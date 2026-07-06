@@ -4,8 +4,8 @@
 //! state-machine resume symbol that drives the body across yield points.
 //!
 //! Called from:
-//!  - `crate::codegen_support::functions::emit_function()` when
-//!    `yield_validation::body_contains_yield()` is true.
+//!  - `crate::codegen_support::functions::emit_closure()` when a deferred
+//!    closure wrapper body contains `yield`.
 //!
 //! Key details:
 //!  - Emits two ARM64 symbols per generator: `_fn_<f>` (wrapper allocating a
@@ -30,38 +30,12 @@ use std::collections::HashMap;
 use crate::codegen_support::data_section::DataSection;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::names::function_symbol;
 use crate::parser::ast::Stmt;
 use crate::types::{ClassInfo, FunctionSig, PhpType};
 
 use build::{build_nodes, collect_locals};
 use emit::{emit_resume, emit_wrapper};
 use model::{SlotType, StateNumberer};
-
-/// Emits the wrapper and resume symbols for a top-level generator function.
-///
-/// The wrapper allocates a `GeneratorFrame`, copies parameters into it,
-/// zeros locals, and returns the frame pointer. The resume symbol drives
-/// the body across yield points via a per-state label table.
-///
-/// # Arguments
-/// * `emitter` - Target instruction emitter
-/// * `data` - Data section for constants and metadata
-/// * `name` - PHP function name (converted to a symbol via `function_symbol()`)
-/// * `sig` - Function signature including parameters
-/// * `body` - Parsed AST statements (must contain `yield`)
-/// * `classes` - Optional class info map (used to look up the Generator class id)
-pub(crate) fn emit_generator_function(
-    emitter: &mut Emitter,
-    data: &mut DataSection,
-    name: &str,
-    sig: &FunctionSig,
-    body: &[Stmt],
-    classes: Option<&HashMap<String, ClassInfo>>,
-) {
-    let wrapper_label = function_symbol(name);
-    emit_generator_with_label(emitter, data, &wrapper_label, sig, &[], body, classes);
-}
 
 /// Emits the wrapper and resume symbols for a generator captured inside a closure.
 ///

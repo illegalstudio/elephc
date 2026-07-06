@@ -1,34 +1,32 @@
 //! Purpose:
 //! Provides driver-level helpers that bridge generated user code with runtime conventions.
-//! Emits runtime assembly fragments, deferred wrappers, and AST-owned hash-key normalization.
+//! Emits runtime assembly fragments, deferred callable wrappers, and hash-key normalization.
 //!
 //! Called from:
-//! - `crate::codegen_support::generate()` and runtime-facing codegen helpers
+//! - `crate::runtime_cache` through runtime generation re-exports.
+//! - EIR codegen helpers that still share callable support.
 //!
 //! Key details:
 //! - Runtime feature selection and deferred emission must stay deterministic for runtime caching.
 
 use crate::parser::ast::Expr;
-use crate::types::{ClassInfo, EnumInfo, PhpType};
+use crate::types::PhpType;
 
 use super::abi;
 use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
-use super::expr::{coerce_result_to_type, emit_expr, expr_result_heap_ownership};
+use super::expr::{emit_expr, expr_result_heap_ownership};
 use super::functions;
 use super::platform::{Arch, Target};
 use super::runtime;
 use super::runtime_features::RuntimeFeatures;
-use super::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use super::value_boxing::{
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
 };
 use super::wrappers::{
     emit_callback_wrapper, emit_extern_callback_trampoline, emit_fiber_wrapper,
 };
-
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits a write syscall for a labeled literal string to stderr, using the given
 /// label (from the data section) and its byte length. Handles target-specific
@@ -138,157 +136,6 @@ pub fn generate_runtime_with_features_pic(
     output
 }
 
-/// Emits global singleton initializers for all enum cases in sorted order.
-pub(super) fn emit_enum_singleton_initializers(
-    emitter: &mut Emitter,
-    data: &mut DataSection,
-    ctx: &Context,
-    allowed_class_names: Option<&std::collections::HashSet<String>>,
-) {
-    let mut sorted_enums: Vec<(&String, &EnumInfo)> = ctx.enums.iter().collect();
-    sorted_enums.sort_by_key(|(name, _)| name.as_str());
-    for (enum_name, enum_info) in sorted_enums {
-        if allowed_class_names.is_some_and(|allowed| !allowed.contains(enum_name)) {
-            continue;
-        }
-        let Some(class_info) = ctx.classes.get(enum_name) else {
-            continue;
-        };
-        for case in &enum_info.cases {
-            emitter.comment(&format!("initialize enum singleton {}::{}", enum_name, case.name));
-            let obj_size = 8 + class_info.properties.len() * 16;
-            let result_reg = abi::int_result_reg(emitter);
-            let object_reg = abi::symbol_scratch_reg(emitter);
-            let temp_reg = abi::temp_int_reg(emitter.target);
-            abi::emit_load_int_immediate(emitter, result_reg, obj_size as i64); // enum singleton object size in bytes in the heap allocator input register
-            abi::emit_call_label(emitter, "__rt_heap_alloc");                   // allocate enum singleton object storage
-            abi::emit_load_int_immediate(emitter, temp_reg, 4);                 // heap kind 4 = object instance
-            match emitter.target.arch {
-                Arch::AArch64 => {
-                    emitter.instruction(&format!("str {}, [{}, #-8]", temp_reg, result_reg)); // store object kind in the uniform heap header just before the payload pointer
-                }
-                Arch::X86_64 => {
-                    emitter.instruction(&format!("mov {}, 0x{:x}", temp_reg, (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word with the uniform heap marker
-                    emitter.instruction(&format!("mov QWORD PTR [{} - 8], {}", result_reg, temp_reg)); // store object kind in the x86_64 uniform heap header just before the payload pointer
-                }
-            }
-            abi::emit_load_int_immediate(emitter, temp_reg, class_info.class_id as i64); // load compile-time enum class id
-            abi::emit_store_to_address(emitter, temp_reg, result_reg, 0);       // store enum class id at object header
-            abi::emit_push_reg(emitter, result_reg);                            // save singleton object pointer while initializing properties
-
-            for i in 0..class_info.properties.len() {
-                let offset = 8 + i * 16;
-                abi::emit_load_temporary_stack_slot(emitter, object_reg, 0);    // peek enum singleton pointer from the temporary stack slot
-                abi::emit_store_zero_to_address(emitter, object_reg, offset);   // zero-initialize the low property word
-                abi::emit_store_zero_to_address(emitter, object_reg, offset + 8); // zero-initialize the high property word
-            }
-
-            if let Some(case_value) = &case.value {
-                abi::emit_load_temporary_stack_slot(emitter, object_reg, 0);    // reload enum singleton pointer for backing-value initialization
-                match case_value {
-                    crate::types::EnumCaseValue::Int(value) => {
-                        load_immediate(emitter, temp_reg, *value);              // materialize the enum int backing value
-                        abi::emit_store_to_address(emitter, temp_reg, object_reg, 8); // store the int backing value in the first property slot
-                        abi::emit_store_zero_to_address(emitter, object_reg, 16); // clear the metadata/high word for the int property
-                    }
-                    crate::types::EnumCaseValue::Str(value) => {
-                        let bytes = crate::string_bytes::literal_bytes(value);
-                        let (label, len) = data.add_string(&bytes);
-                        abi::emit_symbol_address(emitter, temp_reg, &label);    // materialize the enum string backing literal address
-                        abi::emit_store_to_address(emitter, temp_reg, object_reg, 8); // store the string backing pointer in the first property slot
-                        abi::emit_load_int_immediate(emitter, temp_reg, len as i64); // materialize the enum string backing length
-                        abi::emit_store_to_address(emitter, temp_reg, object_reg, 16); // store the string backing length in the second property word
-                    }
-                }
-            }
-
-            abi::emit_pop_reg(emitter, result_reg);                             // pop initialized enum singleton pointer into the active integer result register
-            let slot_label = crate::names::enum_case_symbol(enum_name, &case.name);
-            abi::emit_store_reg_to_symbol(emitter, result_reg, &slot_label, 0); // publish the enum singleton pointer in its global slot
-        }
-    }
-}
-
-/// Emits initialization for static properties, including uninitialized sentinels.
-///
-/// `allowed_class_names` must match the filter used when emitting static-property *storage*
-/// (`emit_runtime_data_user`): classes outside that set get no `.comm` slot, so initializing their
-/// statics here would reference an undefined symbol. This matters for builtin/synthetic classes,
-/// which are only emitted when actually used (unlike declared user classes); without the filter, a
-/// declared-but-unused synthetic class carrying a static property (e.g. `DateTime`/`DateTimeImmutable`
-/// sharing one) would emit an initializer for a slot that was never defined.
-pub(super) fn emit_static_property_initializers(
-    emitter: &mut Emitter,
-    data: &mut DataSection,
-    ctx: &mut Context,
-    allowed_class_names: Option<&std::collections::HashSet<String>>,
-) {
-    let mut initializers = Vec::new();
-    let mut uninitialized_static_properties = Vec::new();
-    let mut sorted_classes: Vec<(&String, &ClassInfo)> = ctx.classes.iter().collect();
-    sorted_classes.sort_by_key(|(class_name, _)| class_name.as_str());
-    for (class_name, class_info) in sorted_classes {
-        if allowed_class_names.is_some_and(|allowed| !allowed.contains(class_name.as_str())) {
-            continue;
-        }
-        for (index, (property_name, prop_ty)) in class_info.static_properties.iter().enumerate() {
-            let declaring_class = class_info
-                .static_property_declaring_classes
-                .get(property_name)
-                .map(String::as_str)
-                .unwrap_or(class_name.as_str());
-            if declaring_class != class_name {
-                continue;
-            }
-            let default_expr = class_info.static_defaults.get(index).cloned().flatten();
-            if default_expr.is_none() && class_info.declared_static_properties.contains(property_name) {
-                uninitialized_static_properties.push((class_name.clone(), property_name.clone()));
-            }
-            let Some(default_expr) = default_expr else {
-                continue;
-            };
-            let declared = class_info.declared_static_properties.contains(property_name);
-            initializers.push((
-                class_name.clone(),
-                property_name.clone(),
-                prop_ty.clone(),
-                default_expr,
-                declared,
-            ));
-        }
-    }
-
-    for (class_name, property_name) in uninitialized_static_properties {
-        emitter.comment(&format!(
-            "mark static property {}::${} uninitialized",
-            class_name, property_name
-        ));
-        let marker_reg = abi::int_result_reg(emitter);
-        abi::emit_load_int_immediate(emitter, marker_reg, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-        let symbol = crate::names::static_property_symbol(&class_name, &property_name);
-        abi::emit_store_reg_to_symbol(emitter, marker_reg, &symbol, 8);
-    }
-
-    for (class_name, property_name, prop_ty, default_expr, declared) in initializers {
-        emitter.comment(&format!(
-            "initialize static property {}::${}",
-            class_name, property_name
-        ));
-        let actual_ty = emit_expr(&default_expr, emitter, ctx, data);
-        let store_ty = if declared {
-            coerce_result_to_type(emitter, ctx, data, &actual_ty, &prop_ty);
-            prop_ty
-        } else {
-            actual_ty
-        };
-        let symbol = crate::names::static_property_symbol(&class_name, &property_name);
-        abi::emit_store_result_to_symbol(emitter, &symbol, &store_ty, false);
-        if !matches!(store_ty.codegen_repr(), PhpType::Str) {
-            abi::emit_store_zero_to_symbol(emitter, &symbol, 8);
-        }
-    }
-}
-
 /// Emits all deferred closures, fiber wrappers, and callback wrappers into the output.
 pub(crate) fn emit_deferred_closures(
     emitter: &mut Emitter,
@@ -362,60 +209,6 @@ pub(crate) fn emit_deferred_closures(
             );
         }
     }
-}
-
-/// Emits code to push the main function's exception cleanup activation record.
-pub(super) fn emit_main_activation_record_push(
-    emitter: &mut Emitter,
-    ctx: &Context,
-    cleanup_label: &str,
-) {
-    let prev_offset = ctx
-        .activation_prev_offset
-        .expect("codegen bug: missing main activation prev slot");
-    let cleanup_offset = ctx
-        .activation_cleanup_offset
-        .expect("codegen bug: missing main activation cleanup slot");
-    let frame_base_offset = ctx
-        .activation_frame_base_offset
-        .expect("codegen bug: missing main activation frame-base slot");
-
-    emitter.comment("register main exception cleanup frame");
-    let scratch = abi::temp_int_reg(emitter.target);
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_exc_call_frame_top", 0);
-    abi::store_at_offset(emitter, scratch, prev_offset);                        // save the previous call-frame pointer in the main activation record
-    abi::emit_symbol_address(emitter, scratch, cleanup_label);
-    abi::store_at_offset(emitter, scratch, cleanup_offset);                     // save the main cleanup callback address in the activation record
-    abi::emit_copy_frame_pointer(emitter, scratch);
-    abi::store_at_offset(emitter, scratch, frame_base_offset);                  // save the main frame pointer in the activation record
-    abi::emit_store_zero_to_local_slot(emitter, ctx.pending_action_offset.expect("codegen bug: missing main pending-action slot")); // clear any stale finally action before running main
-    abi::emit_frame_slot_address(emitter, scratch, prev_offset);                // compute the address of the main activation record's first slot
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
-}
-
-/// Emits code to pop and restore the previous exception cleanup frame on main exit.
-pub(super) fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
-    let prev_offset = ctx
-        .activation_prev_offset
-        .expect("codegen bug: missing main activation prev slot");
-
-    emitter.comment("unregister main exception cleanup frame");
-    let scratch = abi::temp_int_reg(emitter.target);
-    abi::load_at_offset(emitter, scratch, prev_offset);                         // reload the previous call-frame pointer from the main activation record
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
-}
-
-/// Emits the main cleanup callback label and body for exception unwinding.
-pub(super) fn emit_main_cleanup_callback(
-    emitter: &mut Emitter,
-    cleanup_label: &str,
-    ctx: &Context,
-) {
-    emitter.label(cleanup_label);
-    abi::emit_cleanup_callback_prologue(emitter, abi::int_arg_reg_name(emitter.target, 0));
-    functions::emit_owned_local_epilogue_cleanup(emitter, ctx, cleanup_label);
-    abi::emit_cleanup_callback_epilogue(emitter);
-    emitter.blank();
 }
 
 /// Boxes the current expression result as Mixed, applying ownership-aware handling for containers.
@@ -547,13 +340,6 @@ pub(crate) fn emit_normalized_hash_key(
 /// and heap allocation sizes to the 16-byte ABI requirement on both AArch64 and x86_64.
 pub(super) fn align16(n: usize) -> usize {
     (n + 15) & !15
-}
-
-/// Materializes an immediate i64 value into the given register via the target-aware
-/// ABI helper (`emit_load_int_immediate`). Handles large immediates that may require
-/// multiple instructions on the target architecture.
-fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
-    abi::emit_load_int_immediate(emitter, reg, value);                          // materialize the immediate through the shared target-aware helper
 }
 
 /// Emits the shared empty-string constant as a hash key pair for the active target.

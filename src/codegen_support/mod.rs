@@ -21,8 +21,6 @@ pub(crate) mod runtime_callable_invoker;
 pub(crate) mod stream_filters;
 pub(crate) mod tls;
 mod callables;
-mod class_methods;
-mod property_init_thunks;
 /// Codegen context module.
 pub mod context;
 pub(crate) mod data_section;
@@ -31,10 +29,8 @@ pub(crate) mod emit;
 mod expr;
 mod ffi;
 mod fiber_sigs;
-mod function_variants;
 mod functions;
 pub(crate) mod interface_wrappers;
-mod main_emission;
 /// Platform module.
 pub mod platform;
 mod prescan;
@@ -133,17 +129,8 @@ pub(crate) fn declared_trait_uses(name: &str) -> Vec<String> {
 }
 
 use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
-use crate::types::{
-    ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
-    PackedClassInfo, PhpType, TypeEnv,
-};
-use class_methods::emit_class_methods;
-use property_init_thunks::emit_property_init_thunk;
-use data_section::DataSection;
+use crate::types::{ClassInfo, InterfaceInfo};
 use driver_support::align16;
-use emit::Emitter;
-use interface_wrappers::emit_interface_return_wrappers;
-use main_emission::emit_main_and_finalize;
 pub(crate) use driver_support::{
     emit_box_current_expr_value_as_mixed_for_container, emit_deferred_closures,
     emit_write_current_string_stderr, emit_write_literal_stderr,
@@ -157,7 +144,6 @@ pub(crate) use value_boxing::{
 pub(crate) use arrays::emit_array_value_type_stamp;
 pub(crate) use wrappers::emit_fiber_wrapper;
 pub(crate) use sentinels::{NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL};
-pub use sentinels::NullRepr;
 #[allow(unused_imports)]
 pub use driver_support::{
     generate_runtime, generate_runtime_with_features, generate_runtime_with_features_pic,
@@ -166,273 +152,10 @@ pub use runtime_features::{
     required_libraries_for_runtime_features, runtime_features_for_program_and_classes,
 };
 pub use runtime_features::RuntimeFeatures;
-use platform::Target;
 pub(crate) use prescan::collect_constants;
-
-/// Output artifact kind selected by the compiler's `--emit` flag.
-///
-/// `Executable` (default) produces a standalone native binary with a `_main`
-/// entry point and a process-exit call at the end of top-level statements.
-///
-/// `Cdylib` produces a position-independent shared library (`.so` on Linux,
-/// `.dylib` on macOS) loadable via `dlopen(3)` and friends. Cdylib output has
-/// no `_main` entry, no implicit top-level execution at load time, and exposes
-/// PHP functions marked with `#[Export]` under their unmangled PHP names plus
-/// the `elephc_init` / `elephc_shutdown` / `elephc_last_error` / `elephc_free`
-/// lifecycle entry points for embedding hosts.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-#[allow(dead_code)]
-pub enum Emit {
-    Executable,
-    Cdylib,
-}
-use prescan::{collect_global_var_names, collect_static_vars};
 use program_usage::{
     collect_required_class_names, collect_required_class_names_in_stmts,
-    program_has_dynamic_instanceof,
 };
-
-/// Generates user-code assembly for the target.
-/// Returns the raw assembly string.
-/// Generates the user assembly object for a checked and optimized program.
-///
-/// The returned assembly contains user functions, class metadata, `_main`, and
-/// user-specific data, but not the shared cached runtime object. When
-/// `requires_elephc_tls` is true, `_main` publishes the TLS staticlib entry
-/// points before user code runs so dynamic URL helpers can call through them.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn generate_user_asm(
-    program: &Program,
-    global_env: &TypeEnv,
-    functions: &HashMap<String, FunctionSig>,
-    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
-    callable_return_sigs: &HashMap<String, FunctionSig>,
-    callable_array_return_sigs: &HashMap<String, FunctionSig>,
-    interfaces: &HashMap<String, InterfaceInfo>,
-    classes: &HashMap<String, ClassInfo>,
-    enums: &HashMap<String, EnumInfo>,
-    packed_classes: &HashMap<String, PackedClassInfo>,
-    extern_functions: &HashMap<String, ExternFunctionSig>,
-    extern_classes: &HashMap<String, ExternClassInfo>,
-    extern_globals: &HashMap<String, PhpType>,
-    _heap_size: usize,
-    gc_stats: bool,
-    heap_debug: bool,
-    target: Target,
-    requires_elephc_tls: bool,
-    null_repr: NullRepr,
-    emit: Emit,
-    exported_functions: &HashMap<String, crate::exports::ExportedFunction>,
-) -> String {
-    sentinels::set_null_repr(null_repr);
-    let mut emitter = match emit {
-        Emit::Cdylib => Emitter::new_pic(target),
-        Emit::Executable => Emitter::new(target),
-    };
-    if target.arch == platform::Arch::X86_64 {
-        emitter.emit_text_prelude();
-    }
-    let mut data = DataSection::new();
-
-    // Pre-scan for compile-time constants (const declarations and define() calls)
-    let global_constants = collect_constants(program, target.platform);
-
-    // Pre-scan for global variable names used in `global $var` statements across all functions
-    let all_global_var_names = collect_global_var_names(program);
-
-    // Pre-scan for static variable declarations across all functions
-    let all_static_vars = collect_static_vars(program, global_env);
-    let declared_trait_order = collect_declared_trait_names(program);
-    let declared_traits: HashSet<String> = declared_trait_order.iter().cloned().collect();
-    DECLARED_TRAIT_USES.with(|uses| *uses.borrow_mut() = collect_declared_trait_uses(program));
-    set_declared_name_order(
-        collect_declared_class_names(program, classes),
-        collect_declared_interface_names(program, interfaces),
-        declared_trait_order,
-    );
-
-    // Emit user-defined functions before _main (skip extern functions)
-    let function_variant_groups = function_variants::collect_function_variant_groups(program);
-    let function_variant_group_names: HashSet<String> =
-        function_variant_groups.keys().cloned().collect();
-    let fiber_return_sigs = fiber_sigs::collect_fiber_return_sigs(program);
-    for (name, sig) in functions {
-        if extern_functions.contains_key(name) {
-            continue; // extern functions have no body — they're linked from C
-        }
-        if function_variant_groups.contains_key(name) {
-            function_variants::emit_function_variant_dispatcher(&mut emitter, &mut data, name);
-            continue;
-        }
-        let body = program
-            .iter()
-            .find_map(|s| match &s.kind {
-                StmtKind::FunctionDecl { name: n, body, .. } if n == name => Some(body),
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("codegen bug: function '{}' declared in signatures but body not found in AST", name));
-
-        functions::emit_function(
-            &mut emitter, &mut data, name, sig, body, functions,
-            callable_param_sigs,
-            callable_return_sigs,
-            callable_array_return_sigs,
-            &fiber_return_sigs,
-            &function_variant_group_names,
-            &global_constants, &all_global_var_names, &all_static_vars,
-            interfaces,
-            &declared_traits,
-            Some(classes),
-            enums,
-            packed_classes,
-            extern_functions,
-            extern_classes,
-            extern_globals,
-        );
-    }
-
-    // Emit flattened class methods in class-id order for deterministic output.
-    // Filter classes to those visibly used by the program so that test asm
-    // stays compact; the filter must include every parent
-    // and implemented interface in the inheritance chain because vtables and
-    // interface_impl tables reference the inherited method symbols (e.g.
-    // JsonException's vtable points at _method_Exception_getmessage).
-    //
-    // The builtin throwable hierarchy is always included unconditionally
-    // because runtime helpers (e.g. __rt_json_throw_error) can raise
-    // JsonException objects whose class_id lands in the user-asm tables
-    // (parent_ids, vtable_ptrs, interface_ptrs). Without those slots
-    // populated, the catch-time inheritance walk in __rt_exception_matches
-    // sees a -1 parent for the thrown class and reports no match.
-    let emitted_class_names = if !program_has_dynamic_instanceof(program) {
-        Some(collect_emitted_class_names(program, classes))
-    } else {
-        None
-    };
-    let mut sorted_classes: Vec<(&String, &ClassInfo)> = classes
-        .iter()
-        .filter(|(class_name, _)| {
-            emitted_class_names
-                .as_ref()
-                .is_none_or(|declared| declared.contains(*class_name))
-        })
-        .collect();
-    sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
-    for (class_name, class_info) in sorted_classes {
-        emit_class_methods(
-            &mut emitter,
-            &mut data,
-            class_name,
-            class_info,
-            functions,
-            callable_param_sigs,
-            callable_return_sigs,
-            callable_array_return_sigs,
-            &fiber_return_sigs,
-            &function_variant_group_names,
-            &global_constants,
-            interfaces,
-            &declared_traits,
-            classes,
-            enums,
-            packed_classes,
-            extern_functions,
-            extern_classes,
-            extern_globals,
-        );
-        // Per-class property-default thunk (_class_propinit_<id>), invoked by
-        // __rt_new_by_name so new $var() / registered wrappers + filters get
-        // their declared property defaults. Same filtered/sorted class set as
-        // the method emission above and the _class_propinit_ptrs table.
-        emit_property_init_thunk(
-            &mut emitter,
-            &mut data,
-            class_name,
-            class_info,
-            functions,
-            callable_param_sigs,
-            callable_return_sigs,
-            &function_variant_group_names,
-            &global_constants,
-            interfaces,
-            &declared_traits,
-            classes,
-            enums,
-            packed_classes,
-            extern_functions,
-            extern_classes,
-            extern_globals,
-        );
-    }
-
-    emit_interface_return_wrappers(
-        &mut emitter,
-        interfaces,
-        classes,
-        emitted_class_names.as_ref(),
-    );
-
-    // Cdylib emission appends C-ABI export trampolines and lifecycle symbols
-    // after user functions so each `_fn_<name>` target the trampolines branch
-    // into has already been emitted. Executable mode skips this step entirely.
-    if matches!(emit, Emit::Cdylib) {
-        let mut sorted_exports: Vec<&crate::exports::ExportedFunction> =
-            exported_functions.values().collect();
-        sorted_exports.sort_by(|a, b| a.name.cmp(&b.name));
-        cdylib::emit_cdylib_exports(&mut emitter, target, &sorted_exports);
-    }
-
-    let user_asm = emit_main_and_finalize(
-        emitter,
-        data,
-        program,
-        global_env,
-        functions,
-        callable_param_sigs,
-        callable_return_sigs,
-        callable_array_return_sigs,
-        &fiber_return_sigs,
-        &function_variant_group_names,
-        interfaces,
-        &declared_traits,
-        classes,
-        enums,
-        packed_classes,
-        extern_functions,
-        extern_classes,
-        extern_globals,
-        &global_constants,
-        &all_global_var_names,
-        &all_static_vars,
-        emitted_class_names.as_ref(),
-        gc_stats,
-        heap_debug,
-        requires_elephc_tls,
-        emit,
-    );
-
-    // ELF cdylibs hide every internal global so the artifact exports only its
-    // public ABI (lifecycle entry points + #[Export] trampolines). Without
-    // this, internal runtime state would be preemptible and two elephc modules
-    // loaded into one process would alias each other's globals. Mach-O uses
-    // two-level namespace binding, so macOS needs no directive.
-    if matches!(emit, Emit::Cdylib) && target.platform == platform::Platform::Linux {
-        let mut exported: std::collections::HashSet<String> = exported_functions
-            .keys()
-            .map(|name| target.extern_symbol(name))
-            .collect();
-        for lifecycle in [
-            "elephc_init",
-            "elephc_shutdown",
-            "elephc_last_error",
-            "elephc_free",
-        ] {
-            exported.insert(target.extern_symbol(lifecycle));
-        }
-        return visibility::append_hidden_directives(&user_asm, &exported);
-    }
-    user_asm
-}
 
 /// Collects user-declared class and enum names from the program AST, merges them
 /// with internal class names, and returns the combined list in declaration order
@@ -1018,58 +741,4 @@ fn emitted_class_descends_from(
         current = classes.get(name).and_then(|info| info.parent.as_deref());
     }
     false
-}
-
-/// Generates complete target assembly including runtime.
-/// Returns tuple of (user_asm, full_asm_with_runtime).
-#[allow(dead_code)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn generate(
-    program: &Program,
-    global_env: &TypeEnv,
-    functions: &HashMap<String, FunctionSig>,
-    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
-    callable_return_sigs: &HashMap<String, FunctionSig>,
-    callable_array_return_sigs: &HashMap<String, FunctionSig>,
-    interfaces: &HashMap<String, InterfaceInfo>,
-    classes: &HashMap<String, ClassInfo>,
-    enums: &HashMap<String, EnumInfo>,
-    packed_classes: &HashMap<String, PackedClassInfo>,
-    extern_functions: &HashMap<String, ExternFunctionSig>,
-    extern_classes: &HashMap<String, ExternClassInfo>,
-    extern_globals: &HashMap<String, PhpType>,
-    heap_size: usize,
-    gc_stats: bool,
-    heap_debug: bool,
-    target: Target,
-    requires_elephc_tls: bool,
-    null_repr: NullRepr,
-) -> (String, String) {
-    let user_asm = generate_user_asm(
-        program,
-        global_env,
-        functions,
-        callable_param_sigs,
-        callable_return_sigs,
-        callable_array_return_sigs,
-        interfaces,
-        classes,
-        enums,
-        packed_classes,
-        extern_functions,
-        extern_classes,
-        extern_globals,
-        heap_size,
-        gc_stats,
-        heap_debug,
-        target,
-        requires_elephc_tls,
-        null_repr,
-        Emit::Executable,
-        &HashMap::new(),
-    );
-    let runtime_features = runtime_features_for_program_and_classes(program, classes);
-    let runtime_asm = generate_runtime_with_features(heap_size, target, runtime_features);
-
-    (user_asm, runtime_asm)
 }

@@ -512,19 +512,16 @@ src/
 ├── ir_lower/            # Active AST → EIR lowering
 ├── codegen/             # Active EIR → target assembly backend
 ├── codegen_support/     # Shared ABI/runtime/target helpers used by codegen
-│   ├── mod.rs           # Pipeline entry, main/global codegen orchestration
-│   ├── driver_support.rs # Pipeline glue and orchestration helpers
-│   ├── prescan.rs       # Pre-pass collecting program-wide codegen metadata
-│   ├── program_usage.rs # Usage analysis feeding metadata emission
+│   ├── mod.rs           # Shared metadata registries and support re-exports
+│   ├── driver_support.rs # Runtime object, deferred callable, boxing, and hash-key helpers
+│   ├── prescan.rs       # Constant pre-scan feeding EIR lowering
+│   ├── program_usage.rs # Required-class usage analysis feeding metadata emission
 │   ├── expr.rs          # Expression codegen dispatcher
 │   ├── expr/            # Focused expression helpers (arrays, calls, objects, binops, ...)
 │   ├── stmt.rs          # Statement codegen dispatcher
 │   ├── stmt/            # Focused statement helpers (arrays, control_flow, io, storage, ...)
 │   ├── abi/             # Target-aware calling-convention, frame, and value helpers
-│   ├── functions/       # User function emission, wrappers, and epilogue cleanup
-│   ├── main_emission.rs # Top-level program emission
-│   ├── class_methods.rs # Class/static method emission orchestration
-│   ├── function_variants.rs # Include-loaded function dispatchers
+│   ├── functions/       # Legacy closure/FCC wrapper emission and epilogue cleanup
 │   ├── interface_wrappers.rs # Interface dispatch return-shape adapters
 │   ├── callables.rs     # Top-level callable metadata and indirect-call helpers
 │   ├── ffi.rs           # Extern function/global/class codegen

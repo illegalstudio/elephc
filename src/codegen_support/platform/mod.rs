@@ -3,7 +3,7 @@
 //! Provides target metadata used before and after user assembly emission.
 //!
 //! Called from:
-//! - `crate::codegen_support::generate()` and pipeline linking support
+//! - `crate::cli`, `crate::codegen`, and pipeline linking support.
 //!
 //! Key details:
 //! - Target identity controls assembly syntax, object format, and post-processing assumptions.

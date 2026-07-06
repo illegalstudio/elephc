@@ -3,7 +3,7 @@
 //! Provides small target-aware helpers for heap debug setup, frame copying, and process exit.
 //!
 //! Called from:
-//! - `crate::codegen_support::main_emission` and top-level program prologue emission
+//! - `crate::codegen::block_emit` and top-level program prologue emission.
 //!
 //! Key details:
 //! - Register choices must match the platform entry convention before normal PHP frame setup begins.

@@ -1,9 +1,9 @@
 //! Purpose:
-//! Coordinates user function emission, wrappers, local layout, and return cleanup.
-//! Builds function frames from type signatures and statement bodies.
+//! Coordinates legacy closure and first-class-callable wrapper emission.
+//! Builds wrapper frames from type signatures and statement bodies.
 //!
 //! Called from:
-//! - `crate::codegen_support::generate()` after top-level metadata is available
+//! - `crate::codegen_support::driver_support::emit_deferred_closures()`.
 //!
 //! Key details:
 //! - Parameter slots, hidden locals, and cleanup paths must agree with call lowering and ownership tracking.
@@ -24,7 +24,6 @@ use crate::codegen_support::stmt;
 use crate::codegen_support::wrappers::{
     emit_callback_wrapper, emit_extern_callback_trampoline, emit_fiber_wrapper,
 };
-use crate::names::{function_epilogue_symbol, function_symbol};
 use crate::parser::ast::ExprKind;
 use crate::types::{
     ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
@@ -40,72 +39,6 @@ pub use self::locals::collect_local_vars;
 pub(crate) use self::types::{codegen_declared_type, codegen_static_type};
 pub use self::types::{infer_contextual_type, infer_local_type_with_ctx};
 pub(crate) use self::types::singular_object_class;
-
-/// Handles `yield`-containing bodies by delegating to `generator::emit_generator_function`,
-/// otherwise delegates to `emit_function_with_label` with a derived label/epilogue pair.
-#[allow(clippy::too_many_arguments)]
-pub fn emit_function(
-    emitter: &mut Emitter,
-    data: &mut DataSection,
-    name: &str,
-    sig: &FunctionSig,
-    body: &[crate::parser::ast::Stmt],
-    all_functions: &HashMap<String, FunctionSig>,
-    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
-    callable_return_sigs: &HashMap<String, FunctionSig>,
-    callable_array_return_sigs: &HashMap<String, FunctionSig>,
-    fiber_return_sigs: &HashMap<String, FunctionSig>,
-    function_variant_groups: &HashSet<String>,
-    constants: &HashMap<String, (ExprKind, PhpType)>,
-    all_global_var_names: &HashSet<String>,
-    all_static_vars: &HashMap<(String, String), PhpType>,
-    interfaces: &HashMap<String, InterfaceInfo>,
-    traits: &HashSet<String>,
-    classes: Option<&HashMap<String, ClassInfo>>,
-    enums: &HashMap<String, EnumInfo>,
-    packed_classes: &HashMap<String, PackedClassInfo>,
-    extern_functions: &HashMap<String, ExternFunctionSig>,
-    extern_classes: &HashMap<String, ExternClassInfo>,
-    extern_globals: &HashMap<String, PhpType>,
-) {
-    // A function whose body contains `yield` is a generator. The wrapper
-    // allocates a `GeneratorFrame`, stamps it as a Generator object, and
-    // returns it; a separate `<f>__resume` symbol holds the state machine
-    // that drives the body across `yield` points.
-    if crate::types::checker::yield_validation::body_contains_yield(body) {
-        generator::emit_generator_function(emitter, data, name, sig, body, classes);
-        return;
-    }
-
-    let label = function_symbol(name);
-    let epilogue_label = function_epilogue_symbol(name);
-    emit_function_with_label(
-        emitter,
-        data,
-        &label,
-        &epilogue_label,
-        name,
-        sig,
-        body,
-        all_functions,
-        callable_param_sigs,
-        callable_return_sigs,
-        callable_array_return_sigs,
-        fiber_return_sigs,
-        function_variant_groups,
-        constants,
-        all_global_var_names,
-        all_static_vars,
-        interfaces,
-        traits,
-        classes,
-        enums,
-        packed_classes,
-        extern_functions,
-        extern_classes,
-        extern_globals,
-    );
-}
 
 /// Handles `yield`-containing closure bodies by delegating to `generator::emit_generator_closure`,
 /// otherwise delegates to `emit_function_with_label_and_class` with an empty globals/statics set.
@@ -171,123 +104,6 @@ pub fn emit_closure(
         interfaces,
         traits,
         Some((classes, closure_class_name)),
-        enums,
-        packed_classes,
-        extern_functions,
-        extern_classes,
-        extern_globals,
-    );
-}
-
-/// Delegates to `emit_function_with_label_and_class` with an empty globals/statics set,
-/// using the given `label` as both the entry point and epilogue label.
-#[allow(clippy::too_many_arguments)]
-pub fn emit_method(
-    emitter: &mut Emitter,
-    data: &mut DataSection,
-    label: &str,
-    epilogue_label: &str,
-    sig: &FunctionSig,
-    body: &[crate::parser::ast::Stmt],
-    all_functions: &HashMap<String, FunctionSig>,
-    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
-    callable_return_sigs: &HashMap<String, FunctionSig>,
-    callable_array_return_sigs: &HashMap<String, FunctionSig>,
-    fiber_return_sigs: &HashMap<String, FunctionSig>,
-    function_variant_groups: &HashSet<String>,
-    constants: &HashMap<String, (ExprKind, PhpType)>,
-    interfaces: &HashMap<String, InterfaceInfo>,
-    traits: &HashSet<String>,
-    classes: &HashMap<String, ClassInfo>,
-    enums: &HashMap<String, EnumInfo>,
-    packed_classes: &HashMap<String, PackedClassInfo>,
-    class_name: &str,
-    extern_functions: &HashMap<String, ExternFunctionSig>,
-    extern_classes: &HashMap<String, ExternClassInfo>,
-    extern_globals: &HashMap<String, PhpType>,
-) {
-    let empty_globals = HashSet::new();
-    let empty_statics = HashMap::new();
-    emit_function_with_label_and_class(
-        emitter,
-        data,
-        label,
-        epilogue_label,
-        Some(label),
-        sig,
-        &[],
-        body,
-        all_functions,
-        callable_param_sigs,
-        callable_return_sigs,
-        callable_array_return_sigs,
-        fiber_return_sigs,
-        function_variant_groups,
-        constants,
-        &empty_globals,
-        &empty_statics,
-        interfaces,
-        traits,
-        Some((classes, class_name)),
-        enums,
-        packed_classes,
-        extern_functions,
-        extern_classes,
-        extern_globals,
-    );
-}
-
-/// Wraps `emit_function_with_label_and_class` with `callable_param_scope` set to `Some(scope)`,
-/// passing `None` for class context.
-#[allow(clippy::too_many_arguments)]
-fn emit_function_with_label(
-    emitter: &mut Emitter,
-    data: &mut DataSection,
-    label: &str,
-    epilogue_label: &str,
-    callable_param_scope: &str,
-    sig: &FunctionSig,
-    body: &[crate::parser::ast::Stmt],
-    all_functions: &HashMap<String, FunctionSig>,
-    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
-    callable_return_sigs: &HashMap<String, FunctionSig>,
-    callable_array_return_sigs: &HashMap<String, FunctionSig>,
-    fiber_return_sigs: &HashMap<String, FunctionSig>,
-    function_variant_groups: &HashSet<String>,
-    constants: &HashMap<String, (ExprKind, PhpType)>,
-    all_global_var_names: &HashSet<String>,
-    all_static_vars: &HashMap<(String, String), PhpType>,
-    interfaces: &HashMap<String, InterfaceInfo>,
-    traits: &HashSet<String>,
-    classes: Option<&HashMap<String, ClassInfo>>,
-    enums: &HashMap<String, EnumInfo>,
-    packed_classes: &HashMap<String, PackedClassInfo>,
-    extern_functions: &HashMap<String, ExternFunctionSig>,
-    extern_classes: &HashMap<String, ExternClassInfo>,
-    extern_globals: &HashMap<String, PhpType>,
-) {
-    let class_ctx = classes.map(|c| (c, "" as &str));
-    emit_function_with_label_and_class(
-        emitter,
-        data,
-        label,
-        epilogue_label,
-        Some(callable_param_scope),
-        sig,
-        &[],
-        body,
-        all_functions,
-        callable_param_sigs,
-        callable_return_sigs,
-        callable_array_return_sigs,
-        fiber_return_sigs,
-        function_variant_groups,
-        constants,
-        all_global_var_names,
-        all_static_vars,
-        interfaces,
-        traits,
-        class_ctx,
         enums,
         packed_classes,
         extern_functions,
@@ -660,10 +476,6 @@ fn emit_function_with_label_and_class(
         }
     }
 }
-
-pub(crate) use self::cleanup::{
-    emit_local_ref_cell_flag_zero_init, emit_owned_local_epilogue_cleanup,
-};
 
 /// Emits an abort sequence for functions with `PhpType::Never` return type that
 /// implicitly return. Writes a fatal diagnostic to stderr and exits with code 1

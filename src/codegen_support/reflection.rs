@@ -1,9 +1,8 @@
 //! Purpose:
-//! Shares compile-time reflection metadata helpers across class-method and
-//! expression codegen.
+//! Shares compile-time reflection metadata helpers across EIR and legacy callable support.
 //!
 //! Called from:
-//! - `crate::codegen_support::class_methods`
+//! - `crate::ir_lower::program`
 //! - `crate::codegen_support::builtins::system::class_get_attributes`
 //! - `crate::codegen_support::expr::objects::reflection`
 //!

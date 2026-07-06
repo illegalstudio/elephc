@@ -4,7 +4,7 @@
 //!
 //! Called from:
 //! - `crate::codegen_support::driver_support::generate_runtime()` while building the cached runtime object.
-//! - `crate::codegen_support::main_emission::finish_user_asm()` when appending user-specific runtime data.
+//! - `crate::codegen::finalize_user_asm()` when appending user-specific runtime data.
 //!
 //! Key details:
 //! - Keep this surface small: runtime codegen imports these re-exports instead of reaching into leaf emitters directly.

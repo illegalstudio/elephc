@@ -3,7 +3,7 @@
 //! Deduplicates string, float, and common symbols used by expression and runtime-facing emitters.
 //!
 //! Called from:
-//! - `crate::codegen_support::generate()` and expression/statement emitters
+//! - `crate::codegen` and shared expression/statement emitters.
 //!
 //! Key details:
 //! - Labels must stay stable within one compilation because code emission references them before final serialization.

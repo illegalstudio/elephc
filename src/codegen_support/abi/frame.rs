@@ -3,7 +3,7 @@
 //! Provides target-specific helpers for local slots, caller stack access, and cleanup callbacks.
 //!
 //! Called from:
-//! - `crate::codegen_support::functions`, `crate::codegen_support::main_emission`, and ABI call helpers
+//! - `crate::codegen`, `crate::codegen_support::functions`, and ABI call helpers.
 //!
 //! Key details:
 //! - Frame offsets and stack alignment are shared contracts with local collection and call materialization.

@@ -3,7 +3,7 @@
 //! Centralizes labels, directives, relocation forms, comments, and raw text output.
 //!
 //! Called from:
-//! - `crate::codegen_support::generate()` and all `crate::codegen_support::*` emitters
+//! - `crate::codegen` and all shared `crate::codegen_support::*` emitters.
 //!
 //! Key details:
 //! - Instruction comments are emitted by callers; this module preserves target syntax and output ordering.
