@@ -291,6 +291,7 @@ const WEB_EXTERN_BLOCK_SRC: &str = r#"extern "elephc_web" {
     function elephc_web_server_addr(): string;
     function elephc_web_server_port(): int;
     function elephc_web_protocol(): string;
+    function elephc_web_https(): int;
     function elephc_web_request_time(): int;
     function elephc_web_env_count(): int;
     function elephc_web_env_name(int $i): string;
@@ -334,7 +335,12 @@ $_SERVER['SERVER_PORT']       = elephc_web_server_port();
 $_SERVER['SERVER_NAME']       = elephc_web_server_addr();
 $_SERVER['SERVER_PROTOCOL']   = elephc_web_protocol();
 $_SERVER['REQUEST_TIME']      = elephc_web_request_time();
-$_SERVER['REQUEST_SCHEME']    = 'http';
+if (elephc_web_https() === 1) {
+    $_SERVER['HTTPS']          = 'on';
+    $_SERVER['REQUEST_SCHEME'] = 'https';
+} else {
+    $_SERVER['REQUEST_SCHEME'] = 'http';
+}
 $_SERVER['GATEWAY_INTERFACE'] = 'CGI/1.1';
 $_SERVER['SERVER_SOFTWARE']   = 'elephc';"#;
 

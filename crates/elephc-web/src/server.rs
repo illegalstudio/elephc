@@ -38,6 +38,8 @@ Options:
   --max-execution-time N Kill (and respawn) a worker whose handler runs > N seconds; 0 = no limit
   --worker-gc-interval N Run the cycle collector every N requests; 0 = never, 1 = every request (worker mode default: 1)
   --gzip                 Compress responses when the client sends Accept-Encoding: gzip
+  --tls-cert FILE        PEM certificate chain; enables TLS on --listen (requires --tls-key)
+  --tls-key FILE         PEM private key matching --tls-cert (PKCS#8, PKCS#1 or SEC1)
   --help                 Show this help and exit
   --version              Show the server version and exit";
 
@@ -123,6 +125,14 @@ struct ServerArgs {
     /// `0` = never. Mode-independent, default `0` (opt-in; off preserves the
     /// original behavior).
     idle_timeout_secs: u32,
+    /// PEM certificate-chain path for TLS (`--tls-cert`); `None` = plaintext HTTP.
+    /// Must be set together with `tls_key`. The acceptor is loaded in the master
+    /// before fork and installed into the `tls` module's `OnceLock`, so it does
+    /// not travel through the `Copy` `WorkerConfig`.
+    tls_cert: Option<String>,
+    /// PEM private-key path for TLS (`--tls-key`); `None` = plaintext HTTP. Must be
+    /// set together with `tls_cert`.
+    tls_key: Option<String>,
 }
 
 impl ServerArgs {
@@ -193,6 +203,8 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
     // rather than in the worker-mode override block below.
     let mut max_conn_requests: usize = 0;
     let mut idle_timeout_secs: u32 = 0;
+    let mut tls_cert: Option<String> = None;
+    let mut tls_key: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -218,9 +230,18 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             }
             "--access-log" => { access_log = true; }
             "--gzip" => { gzip = true; }
+            "--tls-cert" => { i += 1; tls_cert = args.get(i).cloned(); }
+            "--tls-key" => { i += 1; tls_key = args.get(i).cloned(); }
             _ => {}
         }
         i += 1;
+    }
+    // TLS flags are paired: one without the other is a usage error. Checked before
+    // the missing-`--listen` error so the TLS-specific mistake gets the precise
+    // diagnostic. The acceptor itself is loaded later, in the master before fork.
+    if tls_cert.is_some() != tls_key.is_some() {
+        eprintln!("error: --tls-cert and --tls-key must be provided together (try --help)");
+        return ParsedArgs::Exit(2);
     }
     // Worker-mode defaults: recycle after 1000 requests and collect cycles
     // every request, unless the operator explicitly overrode either flag.
@@ -240,6 +261,8 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             worker_gc_interval,
             max_conn_requests,
             idle_timeout_secs,
+            tls_cert,
+            tls_key,
         }),
         None => {
             eprintln!("error: --web binary requires --listen host:port (try --help)");
@@ -486,6 +509,35 @@ impl Clone for WorkerKind {
         }
     }
 }
+
+/// Loads and installs the TLS acceptor when both `--tls-cert` and `--tls-key` are
+/// set, BEFORE any worker is forked. On success the acceptor is stored in the
+/// `tls` module's process-wide `OnceLock`, which every forked worker inherits.
+/// Returns `Err(2)` (the fail-fast exit code) on a read/parse/mismatch error so
+/// the master exits before forking a single worker; returns `Ok(())` when TLS is
+/// off or configured successfully. Shared by all three run entry points.
+fn install_tls_if_configured(args: &ServerArgs) -> Result<(), i32> {
+    if let (Some(cert), Some(key)) = (&args.tls_cert, &args.tls_key) {
+        match crate::tls::load_acceptor(cert, key) {
+            Ok(acceptor) => crate::tls::set_tls_acceptor(acceptor),
+            Err(cause) => {
+                eprintln!("error: failed to load TLS certificate/key: {}", cause);
+                return Err(2);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Returns the URL scheme (`"https"` when TLS is configured, else `"http"`) for
+/// the startup log line.
+fn listen_scheme(args: &ServerArgs) -> &'static str {
+    if args.tls_cert.is_some() {
+        "https"
+    } else {
+        "http"
+    }
+}
 ///
 /// # Safety
 /// `handler` must be the compiler-emitted `_elephc_web_handler` symbol; argv
@@ -500,6 +552,11 @@ pub extern "C" fn elephc_web_run(
         ParsedArgs::Run(a) => a,
         ParsedArgs::Exit(code) => return code,
     };
+    // Load the TLS acceptor (if configured) BEFORE fork so a bad cert/key fails
+    // fast in the master instead of fork-looping.
+    if let Err(code) = install_tls_if_configured(&args) {
+        return code;
+    }
     install_signal_handlers();
     let kind = WorkerKind::Classic { handler };
     let cfg = args.worker_config();
@@ -509,7 +566,8 @@ pub extern "C" fn elephc_web_run(
         children.push((pid, rd, Instant::now()));
     }
     eprintln!(
-        "elephc-web: listening on http://{} ({} worker{})",
+        "elephc-web: listening on {}://{} ({} worker{})",
+        listen_scheme(&args),
         args.listen,
         args.workers,
         if args.workers == 1 { "" } else { "s" }
@@ -539,6 +597,11 @@ pub extern "C" fn elephc_web_run_worker(
         ParsedArgs::Run(a) => a,
         ParsedArgs::Exit(code) => return code,
     };
+    // Load the TLS acceptor (if configured) BEFORE fork so a bad cert/key fails
+    // fast in the master instead of fork-looping.
+    if let Err(code) = install_tls_if_configured(&args) {
+        return code;
+    }
     install_signal_handlers();
     let kind = WorkerKind::Worker { boot: boot_fn };
     let cfg = args.worker_config();
@@ -548,7 +611,8 @@ pub extern "C" fn elephc_web_run_worker(
         children.push((pid, rd, Instant::now()));
     }
     eprintln!(
-        "elephc-web: listening on http://{} ({} worker{}, web-worker mode)",
+        "elephc-web: listening on {}://{} ({} worker{}, web-worker mode)",
+        listen_scheme(&args),
         args.listen,
         args.workers,
         if args.workers == 1 { "" } else { "s" }
@@ -574,6 +638,11 @@ pub extern "C" fn elephc_web_run_script(
         ParsedArgs::Run(a) => a,
         ParsedArgs::Exit(code) => return code,
     };
+    // Load the TLS acceptor (if configured) BEFORE fork so a bad cert/key fails
+    // fast in the master instead of fork-looping.
+    if let Err(code) = install_tls_if_configured(&args) {
+        return code;
+    }
     install_signal_handlers();
     let kind = WorkerKind::Script { handler };
     let cfg = args.worker_config();
@@ -583,7 +652,8 @@ pub extern "C" fn elephc_web_run_script(
         children.push((pid, rd, Instant::now()));
     }
     eprintln!(
-        "elephc-web: listening on http://{} ({} worker{}, web-worker=script mode)",
+        "elephc-web: listening on {}://{} ({} worker{}, web-worker=script mode)",
+        listen_scheme(&args),
         args.listen,
         args.workers,
         if args.workers == 1 { "" } else { "s" }

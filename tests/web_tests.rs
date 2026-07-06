@@ -2482,3 +2482,325 @@ fn web_help_lists_rebalance_flags() {
         text
     );
 }
+
+// --- PR2: server-side TLS termination (--tls-cert / --tls-key) ---
+//
+// The cert+key are generated at RUNTIME with `rcgen` into the per-test temp dir
+// and never committed. The TLS client is a small self-contained blocking `rustls`
+// client that trusts the generated self-signed cert as its sole root, so the
+// suite needs no `openssl`/`curl` subprocess and no committed key material.
+
+/// Generates a self-signed `CN=localhost` cert+key at runtime and writes them to
+/// `cert.pem`/`key.pem` in `dir` (a temp dir), returning their paths. Nothing is
+/// committed; the files live under the system temp dir with the rest of the test's
+/// build artifacts.
+fn generate_tls_pair(dir: &Path) -> (PathBuf, PathBuf) {
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+        .expect("rcgen must generate a self-signed cert");
+    let cert_path = dir.join("cert.pem");
+    let key_path = dir.join("key.pem");
+    fs::write(&cert_path, cert.cert.pem()).expect("write cert.pem");
+    fs::write(&key_path, cert.key_pair.serialize_pem()).expect("write key.pem");
+    (cert_path, key_path)
+}
+
+/// Spawns the server on a fresh ephemeral port with `--tls-cert`/`--tls-key` set
+/// (and `--workers`), returning a kill-on-drop `ServerHandle`. Readiness is the
+/// TCP-connect probe (`wait_until_ready`), which succeeds for a TLS listener too.
+fn spawn_tls_server(bin: &Path, cert: &Path, key: &Path, workers: &str) -> ServerHandle {
+    spawn_server_with_flags(
+        bin,
+        &[
+            "--workers",
+            workers,
+            "--tls-cert",
+            cert.to_str().unwrap(),
+            "--tls-key",
+            key.to_str().unwrap(),
+        ],
+    )
+}
+
+/// Builds a blocking `rustls` client config that trusts ONLY the given self-signed
+/// server certificate as a root, so the test verifies the real cert chain without
+/// a system trust store or an external TLS client.
+fn tls_client_config(cert_pem_path: &Path) -> std::sync::Arc<rustls::ClientConfig> {
+    // Install the ring provider (idempotent) so `ClientConfig::builder()` has a
+    // process-default crypto provider — matches the server's ring provider.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let cert_bytes = fs::read(cert_pem_path).unwrap();
+    let mut reader: &[u8] = &cert_bytes;
+    let mut roots = rustls::RootCertStore::empty();
+    for c in rustls_pemfile::certs(&mut reader) {
+        roots.add(c.expect("cert PEM entry")).expect("add root");
+    }
+    std::sync::Arc::new(
+        rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    )
+}
+
+/// Reads exactly one HTTP/1.1 response (status line + headers, then
+/// `Content-Length` body bytes) from any reader — the TLS `rustls::Stream` or a
+/// plain socket. Generic sibling of `read_keepalive_response`, used so a
+/// keep-alive TLS connection can be read one response at a time.
+fn read_http_response_from<R: Read>(r: &mut R) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut tmp = [0u8; 2048];
+    let header_end = loop {
+        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            break pos + 4;
+        }
+        let n = match r.read(&mut tmp) {
+            Ok(n) => n,
+            Err(_) => return String::from_utf8_lossy(&buf).into_owned(),
+        };
+        if n == 0 {
+            return String::from_utf8_lossy(&buf).into_owned();
+        }
+        buf.extend_from_slice(&tmp[..n]);
+    };
+    let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+    let content_len = head
+        .lines()
+        .find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.trim()
+                .eq_ignore_ascii_case("content-length")
+                .then(|| v.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    while buf.len() < header_end + content_len {
+        let n = match r.read(&mut tmp) {
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+/// A blocking TLS client over one keep-alive connection to the test server. Owns
+/// the `rustls::ClientConnection` + `TcpStream` so multiple requests reuse a single
+/// TLS session (exercising keep-alive and, transitively, session state).
+struct TlsClient {
+    conn: rustls::ClientConnection,
+    sock: TcpStream,
+}
+
+impl TlsClient {
+    /// Connects to `addr` and prepares a client that trusts `cert_pem_path`'s
+    /// self-signed cert. The SNI/verification name is `localhost` (the cert's CN).
+    fn connect(addr: &str, cert_pem_path: &Path) -> Self {
+        let config = tls_client_config(cert_pem_path);
+        let server_name = rustls::pki_types::ServerName::try_from("localhost".to_string())
+            .expect("valid server name");
+        let conn = rustls::ClientConnection::new(config, server_name).expect("client conn");
+        let sock = TcpStream::connect(addr).expect("tcp connect");
+        sock.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        TlsClient { conn, sock }
+    }
+
+    /// Sends one raw HTTP/1.1 request over the TLS connection and returns the full
+    /// raw response text (one response: headers + `Content-Length` body).
+    fn request(&mut self, raw: &str) -> String {
+        let mut tls = rustls::Stream::new(&mut self.conn, &mut self.sock);
+        tls.write_all(raw.as_bytes()).expect("tls write");
+        read_http_response_from(&mut tls)
+    }
+}
+
+/// PR2: a `--web` server with `--tls-cert`/`--tls-key` serves the handler body
+/// over HTTPS (status 200 + expected body) to a client that trusts the cert.
+#[test]
+fn web_tls_serves_echo_body() {
+    let dir = make_test_dir("web_tls_echo");
+    let (cert, key) = generate_tls_pair(&dir);
+    let bin = compile_web(&dir, "<?php echo 'tls-ok';", "app");
+    let srv = spawn_tls_server(&bin, &cert, &key, "1");
+    let mut client = TlsClient::connect(srv.addr(), &cert);
+    let resp = client.request("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    assert!(resp.contains("200"), "expected HTTP 200 over TLS: {:?}", resp);
+    assert_eq!(http_body(&resp), "tls-ok", "TLS response body: {:?}", resp);
+}
+
+/// PR2: over TLS, `$_SERVER['HTTPS']` is `'on'` and `REQUEST_SCHEME` is `'https'`;
+/// the counter-test (same binary, no TLS flags) leaves the `HTTPS` key ABSENT and
+/// `REQUEST_SCHEME` `'http'` (PHP-FPM-exact — never `'off'`).
+#[test]
+fn web_tls_sets_https_superglobal() {
+    let dir = make_test_dir("web_tls_super");
+    let (cert, key) = generate_tls_pair(&dir);
+    let src = "<?php $h = isset($_SERVER['HTTPS']) ? $_SERVER['HTTPS'] : 'absent'; \
+               echo $h . '|' . $_SERVER['REQUEST_SCHEME'];";
+    let bin = compile_web(&dir, src, "app");
+    // TLS request: HTTPS='on', scheme https.
+    let srv = spawn_tls_server(&bin, &cert, &key, "1");
+    let mut client = TlsClient::connect(srv.addr(), &cert);
+    let resp = client.request("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    assert_eq!(
+        http_body(&resp),
+        "on|https",
+        "TLS request must set $_SERVER['HTTPS'] and REQUEST_SCHEME: {:?}",
+        resp
+    );
+    drop(srv);
+    // Plaintext counter-test (same binary, no TLS flags): HTTPS key absent.
+    let plain = spawn_server_with_flags(&bin, &["--workers", "1"]);
+    let presp = http_get(plain.addr(), "/");
+    assert_eq!(
+        http_body(&presp),
+        "absent|http",
+        "plaintext must leave the HTTPS key absent and scheme http: {:?}",
+        presp
+    );
+}
+
+/// PR2: a plaintext HTTP GET on the TLS port gets NO HTTP response (the handshake
+/// fails on the non-TLS bytes and the connection is dropped), and the worker
+/// SURVIVES — a subsequent real TLS request on the same server still succeeds.
+#[test]
+fn web_tls_plain_http_on_tls_port_fails() {
+    let dir = make_test_dir("web_tls_plainfail");
+    let (cert, key) = generate_tls_pair(&dir);
+    let bin = compile_web(&dir, "<?php echo 'secure';", "app");
+    let srv = spawn_tls_server(&bin, &cert, &key, "1");
+    // Plaintext GET on the TLS port: the server reads the bytes as a (bad) TLS
+    // ClientHello, fails the handshake, and drops the connection.
+    let mut raw = TcpStream::connect(srv.addr()).unwrap();
+    raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let _ = raw.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    let mut buf = Vec::new();
+    let _ = raw.read_to_end(&mut buf);
+    let text = String::from_utf8_lossy(&buf);
+    assert!(
+        !text.contains("HTTP/1.1 200"),
+        "a plaintext GET on the TLS port must not get an HTTP 200: {:?}",
+        text
+    );
+    assert!(
+        !text.contains("secure"),
+        "a plaintext GET must not receive the handler body: {:?}",
+        text
+    );
+    // The worker survived the failed handshake: a real TLS request still works.
+    let mut client = TlsClient::connect(srv.addr(), &cert);
+    let resp = client.request("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    assert_eq!(
+        http_body(&resp),
+        "secure",
+        "the worker must survive a failed handshake and serve the next TLS request: {:?}",
+        resp
+    );
+}
+
+/// PR2: passing only `--tls-cert` (no `--tls-key`) is a usage error — the binary
+/// exits 2 before serving and names the pairing requirement.
+#[test]
+fn web_tls_requires_both_flags() {
+    let dir = make_test_dir("web_tls_pair");
+    let (cert, _key) = generate_tls_pair(&dir);
+    let bin = compile_web(&dir, "<?php echo 'x';", "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let out = Command::new(&bin)
+        .arg("--listen")
+        .arg(&addr)
+        .arg("--tls-cert")
+        .arg(&cert)
+        .output()
+        .expect("run server binary");
+    assert_eq!(out.status.code(), Some(2), "one TLS flag without the other must exit 2");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("must be provided together"),
+        "stderr must name the pairing requirement: {}",
+        stderr
+    );
+}
+
+/// PR2: a garbage (non-PEM) certificate makes the master fail-fast — exit 2 BEFORE
+/// binding the port (the port stays free), with an explicit diagnostic.
+#[test]
+fn web_tls_bad_pem_fails_fast() {
+    let dir = make_test_dir("web_tls_badpem");
+    let bin = compile_web(&dir, "<?php echo 'x';", "app");
+    let cert = dir.join("garbage-cert.pem");
+    let key = dir.join("garbage-key.pem");
+    fs::write(&cert, b"this is not a PEM certificate\n").unwrap();
+    fs::write(&key, b"this is not a PEM key\n").unwrap();
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let out = Command::new(&bin)
+        .arg("--listen")
+        .arg(&addr)
+        .arg("--tls-cert")
+        .arg(&cert)
+        .arg("--tls-key")
+        .arg(&key)
+        .output()
+        .expect("run server binary");
+    assert_eq!(out.status.code(), Some(2), "a bad PEM must fail-fast with exit 2");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("failed to load TLS"),
+        "stderr must explain the TLS load failure: {}",
+        stderr
+    );
+    // Fail-fast happened before binding: the port is still free.
+    assert!(
+        std::net::TcpListener::bind(&addr).is_ok(),
+        "the port must remain free after a fail-fast TLS load error"
+    );
+}
+
+/// PR2: TLS works in `--web-worker=script` mode (covers `enter_worker_loop`), and
+/// keep-alive holds across two requests on ONE TLS connection — a PHP function
+/// `static` counter advances 1 → 2 without a reconnect.
+#[test]
+fn web_tls_worker_script_mode() {
+    let dir = make_test_dir("web_tls_script");
+    let (cert, key) = generate_tls_pair(&dir);
+    let src = "<?php function n(): int { static $c = 0; return ++$c; } echo n();";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let srv = spawn_tls_server(&bin, &cert, &key, "1");
+    let mut client = TlsClient::connect(srv.addr(), &cert);
+    // Two requests on the SAME TLS connection (keep-alive: no Connection: close).
+    let req = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    let r1 = client.request(req);
+    assert_eq!(http_body(&r1), "1", "first TLS keep-alive request: {:?}", r1);
+    let r2 = client.request(req);
+    assert_eq!(
+        http_body(&r2),
+        "2",
+        "second request on the same TLS keep-alive connection must persist the static: {:?}",
+        r2
+    );
+}
+
+/// PR2: `--workers 2` serves TLS from multiple prefork workers (the acceptor built
+/// pre-fork is shared soundly): several separate TLS connections all get 200.
+#[test]
+fn web_tls_multiple_workers() {
+    let dir = make_test_dir("web_tls_multi");
+    let (cert, key) = generate_tls_pair(&dir);
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let srv = spawn_tls_server(&bin, &cert, &key, "2");
+    for i in 0..6 {
+        let mut client = TlsClient::connect(srv.addr(), &cert);
+        let resp = client.request(&format!(
+            "GET /r{} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            i
+        ));
+        assert!(
+            resp.contains("200") && http_body(&resp) == "ok",
+            "request {} over TLS (workers=2) must be served: {:?}",
+            i,
+            resp
+        );
+    }
+}

@@ -65,9 +65,15 @@ elephc-web = { path = "crates/elephc-web" }
 # round-trip without shelling out to php.
 flate2 = "1"
 # The streams codegen tests host a local HTTPS fixture so https:// wrapper
-# success coverage does not depend on outbound network access.
+# success coverage does not depend on outbound network access. The web_tests TLS
+# suite also drives a self-contained blocking rustls client against the compiled
+# server, so no `openssl`/`curl` subprocess is required.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-pemfile = "2"
+# rcgen generates the self-signed server cert+key at RUNTIME for the web_tests TLS
+# suite, written to a temp dir and never committed. Ring backend only (no
+# aws-lc-rs), matching the runtime crypto provider and staying musl-friendly.
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
 
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of

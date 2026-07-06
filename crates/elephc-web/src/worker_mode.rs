@@ -335,7 +335,13 @@ pub(crate) fn enter_worker_loop() -> ! {
             // shot, so Nagle/delayed-ACK interaction would add latency to
             // keep-alive round-trips. Best-effort (matches classic --web).
             let _ = stream.set_nodelay(true);
-            let io = TokioIo::new(stream);
+            // TLS: read the process-wide acceptor (built pre-fork; `None` on
+            // plaintext). The handshake runs INSIDE the connection task below, never
+            // in this accept loop, so a slow client handshake cannot stall accepting
+            // others. `https` is threaded into the request path so PHP sees
+            // `$_SERVER['HTTPS']`.
+            let acceptor = crate::tls::tls_acceptor();
+            let https = acceptor.is_some();
             // Per-connection keep-alive rotation state (see `crate::worker::serve`),
             // allocated ONLY when the relevant feature is enabled so the default
             // (both off) hot path keeps the original zero-allocation, zero-bookkeeping
@@ -407,6 +413,7 @@ pub(crate) fn enter_worker_loop() -> ! {
                         server_addr: addr.ip().to_string(),
                         server_port: addr.port(),
                         protocol,
+                        https,
                     };
                     request_state::set_request(method, uri, path, query, headers, body, meta);
                     let resp_body = run_worker_handler();
@@ -476,24 +483,46 @@ pub(crate) fn enter_worker_loop() -> ! {
                     Ok::<_, Infallible>(response)
                 }
             });
-            // Idle watchdog: wrap the connection only when `--idle-timeout` is
-            // enabled (`watchdog_activity` is `Some`); with the timeout off the handle
-            // is `None`, so we spawn the original zero-overhead plain connection future
-            // (no timer, no per-connection wakeups) — identical to the pre-rotation
-            // path.
-            let conn = http.serve_connection(io, service);
-            match watchdog_activity {
-                Some(wa) => {
-                    tokio::task::spawn_local(serve_connection_with_idle(
-                        conn,
-                        wa,
-                        Duration::from_secs(idle_timeout_secs as u64),
-                    ));
+            // Clone the hyper builder so the connection task OWNS it: the handshake
+            // and `serve_connection` both run inside the spawned task (after the
+            // stream is accepted), so the future cannot borrow the loop-local
+            // `http`. The builder is a small config struct, so the per-connection
+            // clone is cheap.
+            let http = http.clone();
+            // Whole connection lifecycle in one task: run the TLS handshake (or the
+            // plaintext passthrough) on the accepted stream, then serve it. Doing the
+            // handshake here keeps the accept loop responsive; a failed handshake
+            // just drops the connection (the worker survives), with an optional log
+            // line under `--access-log`.
+            tokio::task::spawn_local(async move {
+                let io = match crate::tls::wrap_accepted(stream, acceptor).await {
+                    Some(io) => io,
+                    None => {
+                        if access_log {
+                            eprintln!("{} tls handshake failed", peer.ip());
+                        }
+                        return;
+                    }
+                };
+                let conn = http.serve_connection(TokioIo::new(io), service);
+                // Idle watchdog: wrap the connection only when `--idle-timeout` is
+                // enabled (`watchdog_activity` is `Some`); with the timeout off we
+                // await the original zero-overhead plain connection future (no timer,
+                // no per-connection wakeups) — identical to the pre-rotation path.
+                match watchdog_activity {
+                    Some(wa) => {
+                        serve_connection_with_idle(
+                            conn,
+                            wa,
+                            Duration::from_secs(idle_timeout_secs as u64),
+                        )
+                        .await;
+                    }
+                    None => {
+                        let _ = conn.await;
+                    }
                 }
-                None => {
-                    tokio::task::spawn_local(conn);
-                }
-            }
+            });
         }
     });
     std::process::exit(0);

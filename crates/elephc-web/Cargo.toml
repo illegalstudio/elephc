@@ -27,3 +27,18 @@ libc = "0.2"
 # flate2: optional gzip response compression (--gzip). Already in the workspace
 # dependency tree, so this adds no new external crate.
 flate2 = "1"
+# TLS termination (--tls-cert/--tls-key). rustls 0.23 with the ring provider and
+# default-features = false matches the elephc-tls client crate EXACTLY, so the
+# whole workspace pins one rustls/provider (musl-friendly for the Docker Linux
+# test images; never pulls the heavier aws-lc-rs). tokio-rustls 0.26 is the
+# tokio-aligned wrapper for the same rustls line; rustls-pemfile parses the
+# operator-supplied PEM cert chain + private key.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-pemfile = "2"
+
+[dev-dependencies]
+# rcgen generates a self-signed cert+key at RUNTIME for the tls.rs unit tests, so
+# no certificate/key material is ever committed. Ring backend only (no aws-lc-rs),
+# matching the runtime crypto provider and staying musl-friendly.
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }

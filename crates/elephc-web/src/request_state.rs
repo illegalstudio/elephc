@@ -272,6 +272,12 @@ static mut REQ_SERVER_PORT: i64 = 0;
 static mut REQ_PROTOCOL: Option<CString> = None;
 /// Request start time in whole Unix seconds (backs `$_SERVER['REQUEST_TIME']`).
 static mut REQ_TIME: i64 = 0;
+/// Whether the current request arrived over TLS: `1` for HTTPS, `0` for plaintext.
+/// A plain scalar rewritten by `set_request` each request (no owned allocation, so
+/// the drop-assign leak concern that applies to the `CString` slots does not apply
+/// here). Read by `elephc_web_https`, which drives `$_SERVER['HTTPS']` /
+/// `REQUEST_SCHEME` in the web prelude.
+static mut REQ_HTTPS: i64 = 0;
 
 /// Connection/server metadata passed to `set_request` alongside the HTTP fields.
 pub(crate) struct RequestMeta {
@@ -282,6 +288,10 @@ pub(crate) struct RequestMeta {
     /// HTTP protocol string, e.g. "HTTP/1.1". A `&'static str` (from the fixed set
     /// of HTTP versions) so the worker loop needs no per-request allocation for it.
     pub protocol: &'static str,
+    /// True when the connection is TLS (HTTPS); drives `$_SERVER['HTTPS'] = 'on'`
+    /// and `REQUEST_SCHEME = 'https'`. False on plaintext (the `HTTPS` key is then
+    /// left absent, matching PHP-FPM).
+    pub https: bool,
 }
 
 /// Stores the parsed request for the current worker thread. Called by the
@@ -324,6 +334,8 @@ pub(crate) fn set_request(
         *core::ptr::addr_of_mut!(REQ_SERVER_PORT) = meta.server_port as i64;
         *core::ptr::addr_of_mut!(REQ_PROTOCOL) = Some(field_cstr(meta.protocol));
         *core::ptr::addr_of_mut!(REQ_TIME) = now;
+        // Scalar drop-assign (no owned buffer to free): 1 = HTTPS, 0 = plaintext.
+        *core::ptr::addr_of_mut!(REQ_HTTPS) = if meta.https { 1 } else { 0 };
         // Invalidate the lazily-parsed multipart cache: it belongs to the prior
         // request. Drop-assign so a populated cache from the previous request is
         // freed here instead of leaked.
@@ -452,6 +464,15 @@ pub unsafe extern "C" fn elephc_web_server_port() -> i64 {
 #[no_mangle]
 pub unsafe extern "C" fn elephc_web_protocol() -> *const c_char {
     opt_ptr(core::ptr::addr_of!(REQ_PROTOCOL))
+}
+
+/// Returns `1` when the current request arrived over TLS (HTTPS), `0` otherwise.
+/// The web prelude uses this to set `$_SERVER['HTTPS'] = 'on'` and
+/// `REQUEST_SCHEME = 'https'` on TLS requests (and to leave the `HTTPS` key absent
+/// on plaintext, matching PHP-FPM). Defaults to `0` before the first request.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_https() -> i64 {
+    *core::ptr::addr_of!(REQ_HTTPS)
 }
 
 /// Returns the request start time in whole Unix seconds; backs `$_SERVER['REQUEST_TIME']`.
@@ -626,6 +647,7 @@ mod tests {
                 server_addr: "127.0.0.1".into(),
                 server_port: 8080,
                 protocol: "HTTP/1.1",
+                https: true,
             },
         );
         unsafe {
@@ -650,6 +672,8 @@ mod tests {
             assert_eq!(elephc_web_server_port(), 8080);
             assert_eq!(CStr::from_ptr(elephc_web_protocol()).to_str().unwrap(), "HTTP/1.1");
             assert!(elephc_web_request_time() > 0);
+            // https: true was passed, so the HTTPS getter must report 1.
+            assert_eq!(elephc_web_https(), 1);
         }
     }
 
@@ -679,6 +703,7 @@ mod tests {
                 server_addr: "127.0.0.1".into(),
                 server_port: 8080,
                 protocol: "HTTP/1.0",
+                https: true,
             },
         );
         set_request(
@@ -694,6 +719,7 @@ mod tests {
                 server_addr: "127.0.0.1".into(),
                 server_port: 8080,
                 protocol: "HTTP/1.1",
+                https: false,
             },
         );
         unsafe {
@@ -706,6 +732,9 @@ mod tests {
             let body = std::slice::from_raw_parts(elephc_web_body_ptr(), 1);
             assert_eq!(body, b"2");
             assert_eq!(elephc_web_remote_port(), 2);
+            // The first request was https: true; the second is https: false, so the
+            // scalar must have been reset (not retained) to 0.
+            assert_eq!(elephc_web_https(), 0);
         }
     }
 

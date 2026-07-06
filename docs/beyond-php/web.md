@@ -38,6 +38,8 @@ The produced binary accepts these arguments at runtime:
 | `--max-requests-per-connection N` | No | `0` (opt-in) | Close a keep-alive **connection** after N responses by sending `Connection: close`, so the client reconnects and `SO_REUSEPORT` re-picks a worker (see [Keep-alive and load distribution](#keep-alive-and-load-distribution-across-workers)); `0` = unlimited (off by default; no behavior change from before this flag existed). Same default in all three web modes. |
 | `--idle-timeout SECS` | No | `0` (opt-in) | Close a keep-alive connection that stays idle (no new request) for more than SECS seconds, so the client reconnects; `0` = never (off by default; no behavior change from before this flag existed). Same default in all three web modes. |
 | `--access-log` | No | off | Log one line per request to stderr (`<ip> "<method> <path>" <status> <ms>`). |
+| `--tls-cert FILE` | No | — | PEM certificate chain; enables TLS on `--listen` (see [TLS / HTTPS](#tls--https)). Requires `--tls-key`. |
+| `--tls-key FILE` | No | — | PEM private key matching `--tls-cert` (PKCS#8, PKCS#1, or SEC1, unencrypted). Requires `--tls-cert`. |
 | `--help`, `--version` | No | — | Print usage / version and exit 0. |
 
 ## Request model
@@ -68,7 +70,9 @@ every request and readable inside any function scope (no `global` needed):
   headers as `HTTP_*` keys (e.g. `HTTP_USER_AGENT`), `CONTENT_TYPE` /
   `CONTENT_LENGTH` when present, plus `REMOTE_ADDR`, `REMOTE_PORT`, `SERVER_ADDR`,
   `SERVER_PORT`, `SERVER_NAME`, `SERVER_PROTOCOL`, `REQUEST_TIME`, `REQUEST_SCHEME`,
-  `GATEWAY_INTERFACE`, and `SERVER_SOFTWARE`.
+  `GATEWAY_INTERFACE`, and `SERVER_SOFTWARE`. Over TLS (see [TLS / HTTPS](#tls--https))
+  `HTTPS` is `'on'` and `REQUEST_SCHEME` is `'https'`; on plaintext the `HTTPS` key
+  is absent (PHP-FPM-exact — test with `!empty($_SERVER['HTTPS'])`).
 - **`$_GET`** — the query string parsed into a string-keyed array, percent-decoded.
 - **`$_POST`** — an `application/x-www-form-urlencoded` request body parsed the
   same way; a `multipart/form-data` body also fills `$_POST` from its text fields.
@@ -278,8 +282,8 @@ two worker-mode defaults:
 
 All other runtime arguments (`--listen`, `--workers`, `--max-body-size`,
 `--max-requests-per-connection`, `--idle-timeout`, `--max-execution-time`,
-`--access-log`, `--gzip`, `--help`, `--version`) behave the same as in classic
-`--web`. In particular the keep-alive rotation flags
+`--access-log`, `--gzip`, `--tls-cert`, `--tls-key`, `--help`, `--version`)
+behave the same as in classic `--web`. In particular the keep-alive rotation flags
 (`--max-requests-per-connection`, `--idle-timeout`) keep their `0` / `0`
 (opt-in, off) defaults in worker mode — unlike `--max-requests`, they do not
 vary by mode.
@@ -505,15 +509,72 @@ available. The following are not yet available:
 - **`--listen` is TCP only** — Unix-domain-socket listening is not yet supported.
 - **No sessions** — `$_SESSION` / `session_start()` are not provided. Cookies
   (`$_COOKIE`, `setcookie()`) are, so you can build session handling yourself.
-- **Not supported in this release:** sessions, static file serving, in-process
-  TLS, HTTP/2–3 — front the server with a reverse proxy for these (below).
+- **Not supported in this release:** sessions, static file serving, HTTP/2–3,
+  automatic certificate management (ACME) — front the server with a reverse proxy
+  for these (below). In-process TLS **is** supported (see [TLS / HTTPS](#tls--https)).
+
+## TLS / HTTPS
+
+The produced binary can terminate TLS itself, so an exposed deployment needs no
+reverse proxy just for HTTPS. Pass a PEM certificate chain and its matching
+private key:
+
+```bash
+# Generate a self-signed cert for local testing (production: use a real CA).
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+  -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"
+
+elephc --web app.php
+./app --listen 127.0.0.1:8443 --tls-cert cert.pem --tls-key key.pem
+
+curl -k https://127.0.0.1:8443/     # 200 + body over TLS
+curl http://127.0.0.1:8443/         # fails — the port speaks TLS only
+```
+
+Behavior and semantics:
+
+- **Single listener.** TLS *replaces* plaintext on `--listen`; there is no
+  second cleartext port and no HTTP→HTTPS redirect. A plaintext client on the
+  TLS port has its connection dropped during the handshake (the worker survives).
+- **Both flags together.** `--tls-cert` without `--tls-key` (or vice versa) is a
+  usage error (exit 2). An unreadable file, malformed PEM, or a cert/key mismatch
+  makes the master fail-fast **before forking any worker** (exit 2) with a
+  diagnostic on stderr — the port is never bound on a bad config.
+- **PHP-visible.** Over TLS, `$_SERVER['HTTPS']` is `'on'` and
+  `$_SERVER['REQUEST_SCHEME']` is `'https'`; on plaintext the `HTTPS` key is
+  absent (never `'off'`), matching PHP-FPM. Frameworks that test
+  `!empty($_SERVER['HTTPS'])` (URL generation, `secure` cookies) work unchanged.
+- **All three modes.** The flags work identically under `--web`, `--web-worker`,
+  and `--web-worker=script`.
+- **Protocol.** HTTP/1.1 over TLS 1.2/1.3 (rustls, ring crypto). ALPN advertises
+  only `http/1.1`. `SERVER_PROTOCOL` stays `HTTP/1.1`.
+- **No hot reload.** Certificates are read once at startup; rotating a cert means
+  restarting the server (Let's Encrypt certs renew on a ~60-day cadence, so a
+  restart-on-renew hook suffices). Encrypted (passphrase-protected) PEM keys are
+  not supported — supply an unencrypted key file (permissions `0600`).
+
+Performance notes:
+
+- **Prefer ECDSA certificates** (P-256): a full handshake signs in ~50–100 µs
+  versus ~0.5–1 ms for RSA-2048, and the handshake runs on the worker's single
+  thread, so a burst of new connections serializes on it.
+- **Keep-alive is your friend.** In steady state the only added cost is record
+  encryption (AES-GCM, hardware-accelerated by ring), a few percent off plaintext
+  throughput. Encourage clients/load balancers to reuse connections.
+- **Session resumption** is enabled via TLS tickets. The ticket keys are built in
+  the master before fork, so every worker starts able to resume a peer worker's
+  ticket despite `SO_REUSEPORT` spreading connections. Caveat: the ticketer
+  rotates its keys per process over time, so after the first post-fork rotation
+  inter-worker resumption degrades to a full handshake (still correct, just
+  slower) — acceptable for v1.
 
 ## Behind a reverse proxy
 
-elephc-web speaks HTTP/1.1 in cleartext only. For TLS, HTTP/2/3, static asset
-serving, or virtual hosting, run it behind a reverse proxy (nginx, Caddy,
-HAProxy) that terminates TLS and forwards to `--listen`. A typical setup binds
-the server to `127.0.0.1:8080` and points the proxy at it.
+elephc-web terminates TLS itself (above) and speaks HTTP/1.1. For HTTP/2/3,
+automatic certificate management (ACME/Let's Encrypt), SNI multi-certificates,
+static asset serving, or virtual hosting, run it behind a reverse proxy (nginx,
+Caddy, HAProxy). A typical setup binds the server to `127.0.0.1:8080` and points
+the proxy at it.
 
 ## Mutual exclusions
 

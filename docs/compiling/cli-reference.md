@@ -58,6 +58,8 @@ arguments (not elephc compiler flags):
 | `--max-execution-time N` | No | `0` (none) | Kill a handler that runs longer than N seconds; the master respawns the worker. |
 | `--gzip` | No | off | Gzip-compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--access-log` | No | off | Log one line per request to stderr. |
+| `--tls-cert FILE` | No | — | PEM certificate chain; enables TLS on `--listen`. Requires `--tls-key`. See [TLS / HTTPS](../beyond-php/web.md#tls--https). |
+| `--tls-key FILE` | No | — | PEM private key (PKCS#8/PKCS#1/SEC1, unencrypted) matching `--tls-cert`. Requires `--tls-cert`. |
 | `--help`, `--version` | No | — | Print usage / version and exit. |
 
 ```bash
@@ -66,6 +68,7 @@ elephc --web-worker app.php
 elephc --web-worker=script app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4 --max-body-size 1048576 --access-log
+./app --listen 127.0.0.1:8443 --tls-cert cert.pem --tls-key key.pem
 ```
 
 The served program also receives `$_COOKIE`, `$_REQUEST`, and `$_ENV`, and can
