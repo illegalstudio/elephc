@@ -17,25 +17,28 @@ mod function_variants;
 mod literal_defaults;
 pub(crate) mod lower_inst;
 mod lower_term;
+mod runtime_callable_invoker;
 pub mod value_placement;
 mod web;
 
+pub(crate) use crate::codegen_support::collect_constants;
+pub use crate::codegen_support::platform;
+pub use crate::codegen_support::sentinels::{set_null_repr, NullRepr};
+pub(crate) use crate::codegen_support::sentinels::{
+    NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+};
 pub(crate) use crate::codegen_support::{
-    abi, callable_descriptor, callable_dispatch, callable_invoker_args, cdylib,
-    data_section, emit, hash_crypto, interface_wrappers, phar_stream, reflection, runtime,
-    runtime_callable_invoker, sentinels, stream_filters, tls, visibility,
+    abi, callable_descriptor, callable_dispatch, callable_invoker_args, cdylib, data_section, emit,
+    hash_crypto, interface_wrappers, phar_stream, reflection, runtime, sentinels, stream_filters,
+    tls, visibility,
 };
 pub(crate) use crate::codegen_support::{
     autoload_rule_count, declared_class_names, declared_interface_names, declared_trait_names,
-    emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
-    emit_box_runtime_payload_as_mixed, emit_deferred_closures,
+    emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,
+    emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, emit_callback_wrapper,
+    emit_extern_callback_trampoline, emit_fiber_wrapper,
     emit_release_pushed_refcounted_temp_after_array_push, emit_write_current_string_stderr,
-    emit_write_literal_stderr, runtime_value_tag, emit_array_value_type_stamp,
-    emit_callback_wrapper, emit_extern_callback_trampoline, emit_fiber_wrapper,
-};
-pub(crate) use crate::codegen_support::collect_constants;
-pub(crate) use crate::codegen_support::sentinels::{
-    NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    emit_write_literal_stderr, runtime_value_tag,
 };
 #[allow(unused_imports)]
 pub use crate::codegen_support::{
@@ -43,8 +46,6 @@ pub use crate::codegen_support::{
     required_libraries_for_runtime_features, runtime_features_for_program_and_classes,
     RuntimeFeatures,
 };
-pub use crate::codegen_support::platform;
-pub use crate::codegen_support::sentinels::{set_null_repr, NullRepr};
 pub use crate::codegen_support::{prepare_declared_name_order, set_autoload_rule_count};
 
 use std::collections::{HashMap, HashSet};
@@ -173,7 +174,13 @@ pub fn generate_user_asm_from_ir_with_options(
         regalloc_linear,
         web,
     )?;
-    Ok(finalize_user_asm(module, emitter, data, emit, exported_functions))
+    Ok(finalize_user_asm(
+        module,
+        emitter,
+        data,
+        emit,
+        exported_functions,
+    ))
 }
 
 /// Appends literal data and the minimal user-runtime metadata needed by linked helpers.
@@ -205,11 +212,7 @@ fn finalize_user_asm(
     if matches!(emit, Emit::Cdylib) {
         let mut sorted_exports: Vec<&ExportedFunction> = exported_functions.values().collect();
         sorted_exports.sort_by(|a, b| a.name.cmp(&b.name));
-        crate::codegen::cdylib::emit_cdylib_exports(
-            &mut emitter,
-            module.target,
-            &sorted_exports,
-        );
+        crate::codegen::cdylib::emit_cdylib_exports(&mut emitter, module.target, &sorted_exports);
     }
     let user_data = runtime::emit_runtime_data_user(
         &empty_globals,
@@ -365,10 +368,10 @@ fn emit_intrinsic_method_wrappers(module: &Module, emitter: &mut Emitter) {
         emitter.label(&symbol);
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("b {}", wrapper.helper));          // tail-call the runtime helper using the method ABI arguments
+                emitter.instruction(&format!("b {}", wrapper.helper)); // tail-call the runtime helper using the method ABI arguments
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("jmp {}", wrapper.helper));        // tail-call the runtime helper using the method ABI arguments
+                emitter.instruction(&format!("jmp {}", wrapper.helper)); // tail-call the runtime helper using the method ABI arguments
             }
         }
     }
@@ -429,8 +432,11 @@ fn intrinsic_method_wrapper_specs(module: &Module) -> Vec<IntrinsicMethodWrapper
         }
     }
     wrappers.sort_by(|left, right| {
-        (&left.class_name, &left.method_key, left.is_static)
-            .cmp(&(&right.class_name, &right.method_key, right.is_static))
+        (&left.class_name, &left.method_key, left.is_static).cmp(&(
+            &right.class_name,
+            &right.method_key,
+            right.is_static,
+        ))
     });
     wrappers.dedup_by(|left, right| {
         left.class_name == right.class_name
@@ -445,9 +451,11 @@ fn runtime_class_infos(module: &Module) -> HashMap<String, ClassInfo> {
     let emitted_methods = emitted_class_method_keys(module);
     let mut classes = module.class_infos.clone();
     for class_info in classes.values_mut() {
-        class_info.method_impl_classes.retain(|method_name, impl_class| {
-            emitted_methods.contains(&(impl_class.clone(), method_name.clone(), false))
-        });
+        class_info
+            .method_impl_classes
+            .retain(|method_name, impl_class| {
+                emitted_methods.contains(&(impl_class.clone(), method_name.clone(), false))
+            });
         class_info
             .static_method_impl_classes
             .retain(|method_name, impl_class| {
@@ -585,7 +593,13 @@ fn runtime_referenced_interfaces(
     expand_interface_dependencies(&mut names, &module.interface_infos);
     names
         .into_iter()
-        .filter_map(|name| module.interface_infos.get(&name).cloned().map(|info| (name, info)))
+        .filter_map(|name| {
+            module
+                .interface_infos
+                .get(&name)
+                .cloned()
+                .map(|info| (name, info))
+        })
         .collect()
 }
 
@@ -627,16 +641,15 @@ fn dynamic_instanceof_interface_names(module: &Module) -> HashSet<String> {
     module
         .interface_infos
         .keys()
-        .filter(|name| interface_metadata_supported_for_dynamic_instanceof(name, &module.interface_infos))
+        .filter(|name| {
+            interface_metadata_supported_for_dynamic_instanceof(name, &module.interface_infos)
+        })
         .cloned()
         .collect()
 }
 
 /// Returns true when class metadata can be emitted for dynamic `instanceof` lookup.
-fn class_metadata_supported_for_dynamic_instanceof(
-    class_name: &str,
-    module: &Module,
-) -> bool {
+fn class_metadata_supported_for_dynamic_instanceof(class_name: &str, module: &Module) -> bool {
     let emitted_methods = emitted_class_method_keys(module);
     let mut seen = HashSet::new();
     let mut current = Some(class_name);
@@ -650,7 +663,14 @@ fn class_metadata_supported_for_dynamic_instanceof(
         if !class_interfaces_supported_for_dynamic_instanceof(class_info, &module.interface_infos) {
             return false;
         }
-        if !class_method_symbols_supported(class_info, name, false, &class_info.vtable_methods, &class_info.method_impl_classes, &emitted_methods) {
+        if !class_method_symbols_supported(
+            class_info,
+            name,
+            false,
+            &class_info.vtable_methods,
+            &class_info.method_impl_classes,
+            &emitted_methods,
+        ) {
             return false;
         }
         if !class_method_symbols_supported(
@@ -774,11 +794,15 @@ fn referenced_static_property_class_names(module: &Module) -> HashSet<String> {
             let Some((class_name, _)) = label.rsplit_once("::") else {
                 continue;
             };
-            if let Some(class_name) = resolve_static_property_metadata_class(module, function, class_name) {
+            if let Some(class_name) =
+                resolve_static_property_metadata_class(module, function, class_name)
+            {
                 names.insert(class_name);
             }
             if class_name.trim_start_matches('\\') == "static" {
-                names.extend(redeclared_late_static_property_classes(module, function, label));
+                names.extend(redeclared_late_static_property_classes(
+                    module, function, label,
+                ));
             }
         }
     }
@@ -828,7 +852,8 @@ fn redeclared_late_static_property_classes(
         if !is_same_or_descendant(module, class_name, base_class) {
             continue;
         }
-        let Some(declaring_class) = class_info.static_property_declaring_classes.get(property) else {
+        let Some(declaring_class) = class_info.static_property_declaring_classes.get(property)
+        else {
             continue;
         };
         if declaring_class != fallback_declaring_class {
@@ -864,7 +889,9 @@ fn referenced_static_method_class_names(module: &Module) -> HashSet<String> {
             let Some((class_name, _)) = label.rsplit_once("::") else {
                 continue;
             };
-            if let Some(class_name) = resolve_static_method_metadata_class(module, function, class_name) {
+            if let Some(class_name) =
+                resolve_static_method_metadata_class(module, function, class_name)
+            {
                 names.insert(class_name);
             }
         }
@@ -906,7 +933,10 @@ fn is_same_or_descendant(module: &Module, class_name: &str, ancestor: &str) -> b
 
 /// Returns the class encoded in an EIR method function name.
 fn current_function_class(function: &Function) -> Option<&str> {
-    function.name.rsplit_once("::").map(|(class_name, _)| class_name)
+    function
+        .name
+        .rsplit_once("::")
+        .map(|(class_name, _)| class_name)
 }
 
 /// Returns class-name data entries attached to runtime object metadata opcodes.
@@ -1294,21 +1324,16 @@ fn instance_of_value_needs_runtime_metadata(
     let Some(value) = inst.operands.first() else {
         return false;
     };
-    function
-        .value(*value)
-        .is_some_and(|metadata| {
-            matches!(
-                metadata.php_type.codegen_repr(),
-                PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
-            )
-        })
+    function.value(*value).is_some_and(|metadata| {
+        matches!(
+            metadata.php_type.codegen_repr(),
+            PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+        )
+    })
 }
 
 /// Adds parent classes needed by runtime class-id tables.
-fn expand_class_dependencies(
-    names: &mut HashSet<String>,
-    classes: &HashMap<String, ClassInfo>,
-) {
+fn expand_class_dependencies(names: &mut HashSet<String>, classes: &HashMap<String, ClassInfo>) {
     loop {
         let mut changed = false;
         let snapshot = names.iter().cloned().collect::<Vec<_>>();

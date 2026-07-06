@@ -14,12 +14,11 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::abi;
-use crate::codegen::{
-    emit_box_current_value_as_mixed, emit_write_current_string_stderr,
-    emit_write_literal_stderr,
-};
 use crate::codegen::platform::{Arch, Target};
-use crate::codegen_support::context::TRY_HANDLER_SLOT_SIZE;
+use crate::codegen::{
+    emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
+};
+use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
 use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, Terminator, ValueDef};
 use crate::ir_passes::{allocate_registers, Allocation};
 use crate::types::PhpType;
@@ -233,7 +232,8 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
         emit_gc_stats(ctx);
     }
     if ctx.heap_debug {
-        ctx.emitter.comment("heap-debug: print allocator summary and leak report to stderr");
+        ctx.emitter
+            .comment("heap-debug: print allocator summary and leak report to stderr");
         abi::emit_call_label(ctx.emitter, "__rt_heap_debug_report");
     }
     abi::emit_exit(ctx.emitter, 0);
@@ -298,10 +298,12 @@ pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
         ctx.emitter.raw(".align 2");
     }
     ctx.emitter.blank();
-    ctx.emitter.comment("--web process entry: call elephc_web_run(argc, argv, &handler)");
+    ctx.emitter
+        .comment("--web process entry: call elephc_web_run(argc, argv, &handler)");
     ctx.emitter.entry_label();
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
-    ctx.emitter.comment("save argc/argv to globals for the bridge and handler");
+    ctx.emitter
+        .comment("save argc/argv to globals for the bridge and handler");
     abi::emit_store_process_args_to_globals(ctx.emitter);
     let argc_reg = abi::int_arg_reg_name(target, 0);
     let argv_reg = abi::int_arg_reg_name(target, 1);
@@ -403,7 +405,8 @@ fn emit_ref_cell_owner_epilogue_cleanup_for(
     owners: Vec<(String, LocalSlotId, PhpType, usize)>,
 ) {
     for (name, _, ty, offset) in owners {
-        ctx.emitter.comment(&format!("epilogue cleanup ref-cell owner ${}", name));
+        ctx.emitter
+            .comment(&format!("epilogue cleanup ref-cell owner ${}", name));
         emit_ref_cell_owner_cleanup(ctx, offset, &ty);
     }
 }
@@ -414,14 +417,14 @@ fn emit_ref_cell_owner_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty:
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset_scratch(ctx.emitter, "x9", offset, "x11");
-            ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip released or never-created fallback ref-cells
+            ctx.emitter.instruction(&format!("cbz x9, {}", done)); // skip released or never-created fallback ref-cells
             abi::emit_release_local_ref_cell(ctx.emitter, "x9", ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
         }
         Arch::X86_64 => {
             abi::load_at_offset_scratch(ctx.emitter, "r11", offset, "r10");
-            ctx.emitter.instruction("test r11, r11");                           // check whether this owner still holds a fallback ref-cell
-            ctx.emitter.instruction(&format!("je {}", done));                   // skip released or never-created fallback ref-cells
+            ctx.emitter.instruction("test r11, r11"); // check whether this owner still holds a fallback ref-cell
+            ctx.emitter.instruction(&format!("je {}", done)); // skip released or never-created fallback ref-cells
             abi::emit_release_local_ref_cell(ctx.emitter, "r11", ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
         }
@@ -452,7 +455,8 @@ fn ref_cell_owner_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId,
 /// Returns true when a local slot is written by an explicit EIR `StoreLocal`.
 fn local_slot_has_store(function: &Function, slot: LocalSlotId) -> bool {
     function.instructions.iter().any(|inst| {
-        inst.op == Op::StoreLocal && matches!(inst.immediate, Some(Immediate::LocalSlot(candidate)) if candidate == slot)
+        inst.op == Op::StoreLocal
+            && matches!(inst.immediate, Some(Immediate::LocalSlot(candidate)) if candidate == slot)
     })
 }
 
@@ -485,12 +489,14 @@ fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     abi::load_at_offset(ctx.emitter, ptr_reg, offset);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the local string pointer to the validating heap-free helper
+            ctx.emitter
+                .instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the local string pointer to the validating heap-free helper
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
         Arch::X86_64 => {
             if ptr_reg != result_reg {
-                ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the local string pointer to the validating heap-free helper
+                ctx.emitter
+                    .instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the local string pointer to the validating heap-free helper
             }
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
@@ -504,11 +510,13 @@ fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz {}, {}", result_reg, done));  // skip uninitialized refcounted locals
+            ctx.emitter
+                .instruction(&format!("cbz {}, {}", result_reg, done)); // skip uninitialized refcounted locals
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // check whether the refcounted local is initialized
-            ctx.emitter.instruction(&format!("je {}", done));                   // skip uninitialized refcounted locals
+            ctx.emitter
+                .instruction(&format!("test {}, {}", result_reg, result_reg)); // check whether the refcounted local is initialized
+            ctx.emitter.instruction(&format!("je {}", done)); // skip uninitialized refcounted locals
         }
     }
     abi::emit_decref_if_refcounted(ctx.emitter, ty);
@@ -611,7 +619,10 @@ fn function_cleanup_locals(
 fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
     matches!(
         kind,
-        LocalKind::PhpLocal | LocalKind::HiddenTemp | LocalKind::OwnedTemp | LocalKind::NamedArgTemp
+        LocalKind::PhpLocal
+            | LocalKind::HiddenTemp
+            | LocalKind::OwnedTemp
+            | LocalKind::NamedArgTemp
     )
 }
 
@@ -697,7 +708,8 @@ fn pop_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
 
 /// Emits allocation/free totals to stderr using the shared runtime counters.
 fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
-    ctx.emitter.comment("gc-stats: print allocation statistics to stderr");
+    ctx.emitter
+        .comment("gc-stats: print allocation statistics to stderr");
     let (allocs_label, allocs_len) = ctx.data.add_string(b"GC: allocs=");
     emit_write_literal_stderr(ctx.emitter, &allocs_label, allocs_len);
     let int_result_reg = abi::int_result_reg(ctx.emitter);
@@ -749,7 +761,11 @@ fn store_argc_local_if_present(ctx: &mut FunctionContext<'_>) {
     let Ok(offset) = ctx.local_offset(argc_slot) else {
         return;
     };
-    abi::store_at_offset(ctx.emitter, abi::process_argc_reg(ctx.emitter.target), offset);
+    abi::store_at_offset(
+        ctx.emitter,
+        abi::process_argc_reg(ctx.emitter.target),
+        offset,
+    );
 }
 
 /// Builds and stores the PHP `$argv` array when the EIR main function has that local.
@@ -768,9 +784,5 @@ fn store_argv_local_if_present(ctx: &mut FunctionContext<'_>) {
     };
     ctx.emitter.comment("build $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
-    abi::emit_store(
-        ctx.emitter,
-        &PhpType::Array(Box::new(PhpType::Str)),
-        offset,
-    );
+    abi::emit_store(ctx.emitter, &PhpType::Array(Box::new(PhpType::Str)), offset);
 }

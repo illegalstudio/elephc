@@ -11,10 +11,10 @@
 //!   callable values through a regex-specific callback wrapper.
 //! - `preg_split()` forces boxed Mixed element slots so dynamic flags cannot mismatch layout.
 
-use crate::codegen::{abi, callable_descriptor};
 use crate::codegen::platform::Arch;
+use crate::codegen::{abi, callable_descriptor};
 use crate::codegen::{CodegenIrError, Result};
-use crate::codegen_support::context::DeferredCallbackWrapper;
+use crate::codegen_support::DeferredCallbackWrapper;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::names::function_symbol;
 use crate::types::PhpType;
@@ -25,10 +25,7 @@ use super::super::callables;
 const PREG_SPLIT_FORCE_MIXED_RESULT: i64 = 1 << 30;
 
 /// Lowers `preg_match(pattern, subject)` through the shared regex runtime helper.
-pub(crate) fn lower_preg_match(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
+pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count_between(inst, "preg_match", 2, 3)?;
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
@@ -62,10 +59,7 @@ pub(crate) fn lower_preg_match_all(
 }
 
 /// Lowers `preg_replace(pattern, replacement, subject)` through the regex replacement helper.
-pub(crate) fn lower_preg_replace(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
+pub(crate) fn lower_preg_replace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "preg_replace", 3)?;
     let pattern = super::expect_operand(inst, 0)?;
     let replacement = super::expect_operand(inst, 1)?;
@@ -176,10 +170,7 @@ impl PregReplaceCallbackEnv {
 
     /// Returns true when the environment owns a descriptor pointer that must be released.
     fn releases_descriptor(&self) -> bool {
-        matches!(
-            self,
-            Self::RuntimeString(_) | Self::CallableArray { .. }
-        )
+        matches!(self, Self::RuntimeString(_) | Self::CallableArray { .. })
     }
 }
 
@@ -282,10 +273,10 @@ fn reserve_descriptor_callback_env(
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str x0, [sp]");                            // store the runtime callable descriptor for the regex callback wrapper
+            ctx.emitter.instruction("str x0, [sp]"); // store the runtime callable descriptor for the regex callback wrapper
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // store the runtime callable descriptor for the regex callback wrapper
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax"); // store the runtime callable descriptor for the regex callback wrapper
         }
     }
     Ok(16)
@@ -306,10 +297,13 @@ fn reserve_runtime_string_descriptor_callback_env(
     )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("str {descriptor_reg}, [sp]"));    // store the runtime string descriptor for the regex callback wrapper
+            ctx.emitter
+                .instruction(&format!("str {descriptor_reg}, [sp]")); // store the runtime string descriptor for the regex callback wrapper
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp], {descriptor_reg}")); // store the runtime string descriptor for the regex callback wrapper
+            ctx.emitter
+                .instruction(&format!("mov QWORD PTR [rsp], {descriptor_reg}"));
+            // store the runtime string descriptor for the regex callback wrapper
         }
     }
     Ok(16)
@@ -329,15 +323,22 @@ fn reserve_callable_array_descriptor_callback_env(
             "preg_replace_callback",
         )?;
     } else {
-        callables::emit_runtime_callable_array_descriptor_value(ctx, callable, "preg_replace_callback")?;
+        callables::emit_runtime_callable_array_descriptor_value(
+            ctx,
+            callable,
+            "preg_replace_callback",
+        )?;
     }
     let descriptor_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("str {descriptor_reg}, [sp]"));    // store the callable-array descriptor for the regex callback wrapper
+            ctx.emitter
+                .instruction(&format!("str {descriptor_reg}, [sp]")); // store the callable-array descriptor for the regex callback wrapper
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp], {descriptor_reg}")); // store the callable-array descriptor for the regex callback wrapper
+            ctx.emitter
+                .instruction(&format!("mov QWORD PTR [rsp], {descriptor_reg}"));
+            // store the callable-array descriptor for the regex callback wrapper
         }
     }
     Ok(16)
@@ -371,10 +372,7 @@ fn preg_matches_type() -> PhpType {
 }
 
 /// Lowers `preg_split(pattern, subject, limit?, flags?)` through the regex split helper.
-pub(crate) fn lower_preg_split(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
+pub(crate) fn lower_preg_split(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count_between(inst, "preg_split", 2, 4)?;
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
@@ -386,14 +384,18 @@ pub(crate) fn lower_preg_split(
             load_string_arg(ctx, subject, "x3", "x4", "preg_split subject")?;
             load_limit_arg(ctx, limit, "x5")?;
             load_flags_arg(ctx, flags, "x6")?;
-            ctx.emitter.instruction(&format!("orr x6, x6, #{}", PREG_SPLIT_FORCE_MIXED_RESULT)); // force boxed-Mixed split slots for EIR result layout
+            ctx.emitter
+                .instruction(&format!("orr x6, x6, #{}", PREG_SPLIT_FORCE_MIXED_RESULT));
+            // force boxed-Mixed split slots for EIR result layout
         }
         Arch::X86_64 => {
             load_string_arg(ctx, pattern, "rdi", "rsi", "preg_split pattern")?;
             load_string_arg(ctx, subject, "rdx", "rcx", "preg_split subject")?;
             load_limit_arg(ctx, limit, "r8")?;
             load_flags_arg(ctx, flags, "r9")?;
-            ctx.emitter.instruction(&format!("or r9, {}", PREG_SPLIT_FORCE_MIXED_RESULT)); // force boxed-Mixed split slots for EIR result layout
+            ctx.emitter
+                .instruction(&format!("or r9, {}", PREG_SPLIT_FORCE_MIXED_RESULT));
+            // force boxed-Mixed split slots for EIR result layout
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_split");
@@ -461,10 +463,7 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Resu
 }
 
 /// Returns a string literal value when `value` is defined by a `ConstStr` instruction.
-fn maybe_const_string_operand(
-    ctx: &FunctionContext<'_>,
-    value: ValueId,
-) -> Result<Option<String>> {
+fn maybe_const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<String>> {
     let Some(inst_ref) = value_source_instruction(ctx, value)? else {
         return Ok(None);
     };
@@ -497,8 +496,7 @@ fn value_source_instruction<'a>(
     let ValueDef::Instruction { inst, .. } = value_ref.def else {
         return Ok(None);
     };
-    ctx
-        .function
+    ctx.function
         .instruction(inst)
         .map(Some)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))
@@ -517,11 +515,7 @@ fn load_string_arg(
 }
 
 /// Loads the optional `preg_split()` limit, using PHP's default `-1`.
-fn load_limit_arg(
-    ctx: &mut FunctionContext<'_>,
-    limit: Option<ValueId>,
-    reg: &str,
-) -> Result<()> {
+fn load_limit_arg(ctx: &mut FunctionContext<'_>, limit: Option<ValueId>, reg: &str) -> Result<()> {
     let Some(limit) = limit else {
         abi::emit_load_int_immediate(ctx.emitter, reg, -1);
         return Ok(());
@@ -530,11 +524,7 @@ fn load_limit_arg(
 }
 
 /// Loads the optional `preg_split()` flags, using PHP's default `0`.
-fn load_flags_arg(
-    ctx: &mut FunctionContext<'_>,
-    flags: Option<ValueId>,
-    reg: &str,
-) -> Result<()> {
+fn load_flags_arg(ctx: &mut FunctionContext<'_>, flags: Option<ValueId>, reg: &str) -> Result<()> {
     let Some(flags) = flags else {
         abi::emit_load_int_immediate(ctx.emitter, reg, 0);
         return Ok(());
@@ -549,8 +539,7 @@ fn require_string(ty: PhpType, context: &str) -> Result<()> {
     }
     Err(CodegenIrError::unsupported(format!(
         "{} for PHP type {:?}",
-        context,
-        ty
+        context, ty
     )))
 }
 
@@ -561,7 +550,6 @@ fn require_integer_like(ty: PhpType, context: &str) -> Result<()> {
     }
     Err(CodegenIrError::unsupported(format!(
         "{} for PHP type {:?}",
-        context,
-        ty
+        context, ty
     )))
 }

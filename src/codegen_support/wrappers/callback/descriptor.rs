@@ -10,11 +10,11 @@
 //! - Descriptor invokers return boxed `Mixed`; wrappers cast or detach results before returning.
 
 use crate::codegen_support::abi;
-use crate::codegen_support::callable_descriptor;
-use crate::codegen_support::context::{DeferredCallbackWrapper, DeferredExternCallbackTrampoline};
-use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::arrays::emit_array_value_type_stamp;
+use crate::codegen_support::callable_descriptor;
+use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::{DeferredCallbackWrapper, DeferredExternCallbackTrampoline};
 use crate::types::PhpType;
 
 use super::{align16, frame_arg_slot_offset, incoming_env_reg, spill_visible_args};
@@ -53,8 +53,8 @@ fn emit_aarch64_descriptor_callback_wrapper(
     emitter.instruction(&format!("stp x21, x22, [sp, #{}]", saved_runtime_offset)); // preserve runtime-loop callee-saved registers across descriptor invocation
 
     let env_reg = incoming_env_reg(emitter, &wrapper.visible_arg_types);
-    emitter.instruction(&format!("mov x20, {}", env_reg));                      // keep the descriptor callback environment pointer across nested calls
-    emitter.instruction("ldr x19, [x20]");                                      // load the selected callable descriptor from env slot zero
+    emitter.instruction(&format!("mov x20, {}", env_reg)); // keep the descriptor callback environment pointer across nested calls
+    emitter.instruction("ldr x19, [x20]"); // load the selected callable descriptor from env slot zero
 
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, wrapper, frame_size, "x20");
@@ -93,8 +93,8 @@ fn emit_x86_64_descriptor_callback_wrapper(
     abi::store_at_offset(emitter, "r15", saved_runtime_count_offset);
 
     let env_reg = incoming_env_reg(emitter, &wrapper.visible_arg_types);
-    emitter.instruction(&format!("mov r13, {}", env_reg));                      // keep the descriptor callback environment pointer across nested calls
-    emitter.instruction("mov r12, QWORD PTR [r13]");                            // load the selected callable descriptor from env slot zero
+    emitter.instruction(&format!("mov r13, {}", env_reg)); // keep the descriptor callback environment pointer across nested calls
+    emitter.instruction("mov r12, QWORD PTR [r13]"); // load the selected callable descriptor from env slot zero
 
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, wrapper, frame_size, "r13");
@@ -135,19 +135,17 @@ fn emit_aarch64_extern_callback_trampoline(
     let saved_runtime_offset = frame_size - 32;
 
     emitter.blank();
-    emitter.comment(&format!("extern descriptor callback trampoline: {}", trampoline.label));
+    emitter.comment(&format!(
+        "extern descriptor callback trampoline: {}",
+        trampoline.label
+    ));
     emitter.raw(".align 2");
     emitter.label_global(&trampoline.label);
     abi::emit_frame_prologue(emitter, frame_size);
     emitter.instruction(&format!("stp x19, x20, [sp, #{}]", saved_descriptor_offset)); // preserve descriptor trampoline registers across invoker dispatch
     emitter.instruction(&format!("stp x21, x22, [sp, #{}]", saved_runtime_offset)); // preserve runtime-loop registers across descriptor invocation
 
-    abi::emit_load_symbol_to_reg(
-        emitter,
-        "x19",
-        &trampoline.descriptor_slot_label,
-        0,
-    );
+    abi::emit_load_symbol_to_reg(emitter, "x19", &trampoline.descriptor_slot_label, 0);
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "x20");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
@@ -175,7 +173,10 @@ fn emit_x86_64_extern_callback_trampoline(
     let saved_runtime_count_offset = slot_count * 16 + 40;
 
     emitter.blank();
-    emitter.comment(&format!("extern descriptor callback trampoline: {}", trampoline.label));
+    emitter.comment(&format!(
+        "extern descriptor callback trampoline: {}",
+        trampoline.label
+    ));
     emitter.raw(".align 16");
     emitter.label_global(&trampoline.label);
     abi::emit_frame_prologue(emitter, frame_size);
@@ -184,12 +185,7 @@ fn emit_x86_64_extern_callback_trampoline(
     abi::store_at_offset(emitter, "r14", saved_runtime_index_offset);
     abi::store_at_offset(emitter, "r15", saved_runtime_count_offset);
 
-    abi::emit_load_symbol_to_reg(
-        emitter,
-        "r12",
-        &trampoline.descriptor_slot_label,
-        0,
-    );
+    abi::emit_load_symbol_to_reg(emitter, "r12", &trampoline.descriptor_slot_label, 0);
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "r13");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
@@ -244,11 +240,7 @@ fn emit_build_descriptor_invoker_arg_array(
     for (idx, ty) in visible_arg_types.iter().enumerate() {
         load_spilled_visible_arg_to_result(emitter, frame_size, idx, ty);
         emit_box_visible_arg_as_mixed(emitter, ty);
-        emit_store_current_mixed_arg_array_element(
-            emitter,
-            array_frame_offset,
-            prefix_count + idx,
-        );
+        emit_store_current_mixed_arg_array_element(emitter, array_frame_offset, prefix_count + idx);
     }
 }
 
@@ -262,7 +254,12 @@ fn load_descriptor_prefix_arg_to_result(
     let slot_offset = (idx + 1) * 16;
     match ty.codegen_repr() {
         PhpType::Float => {
-            abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), env_reg, slot_offset);
+            abi::emit_load_from_address(
+                emitter,
+                abi::float_result_reg(emitter),
+                env_reg,
+                slot_offset,
+            );
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
@@ -271,7 +268,12 @@ fn load_descriptor_prefix_arg_to_result(
         }
         PhpType::Void | PhpType::Never => {}
         _ => {
-            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), env_reg, slot_offset);
+            abi::emit_load_from_address(
+                emitter,
+                abi::int_result_reg(emitter),
+                env_reg,
+                slot_offset,
+            );
         }
     }
 }
@@ -283,12 +285,12 @@ fn emit_allocate_descriptor_arg_array(emitter: &mut Emitter, visible_count: usiz
         Arch::AArch64 => {
             abi::emit_load_int_immediate(emitter, "x0", capacity);
             abi::emit_load_int_immediate(emitter, "x1", 8);
-            abi::emit_call_label(emitter, "__rt_array_new");                   // allocate the descriptor invoker argument array
+            abi::emit_call_label(emitter, "__rt_array_new"); // allocate the descriptor invoker argument array
         }
         Arch::X86_64 => {
             abi::emit_load_int_immediate(emitter, "rdi", capacity);
             abi::emit_load_int_immediate(emitter, "rsi", 8);
-            abi::emit_call_label(emitter, "__rt_array_new");                   // allocate the descriptor invoker argument array
+            abi::emit_call_label(emitter, "__rt_array_new"); // allocate the descriptor invoker argument array
         }
     }
 }
@@ -344,7 +346,12 @@ fn emit_store_current_mixed_arg_array_element(
     let elem_offset = 24 + idx * 8;
 
     abi::load_at_offset(emitter, array_reg, array_frame_offset);
-    abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), array_reg, elem_offset);
+    abi::emit_store_to_address(
+        emitter,
+        abi::int_result_reg(emitter),
+        array_reg,
+        elem_offset,
+    );
     abi::emit_load_int_immediate(emitter, len_reg, (idx + 1) as i64);
     abi::emit_store_to_address(emitter, len_reg, array_reg, 0);
 }
@@ -374,14 +381,15 @@ fn emit_call_descriptor_invoker_from_wrapper(emitter: &mut Emitter, descriptor_r
     let invoker_reg = abi::symbol_scratch_reg(emitter);
 
     if descriptor_reg != descriptor_arg_reg {
-        emitter.instruction(&format!("mov {}, {}", descriptor_arg_reg, descriptor_reg)); // pass the selected callable descriptor to the uniform invoker
+        emitter.instruction(&format!("mov {}, {}", descriptor_arg_reg, descriptor_reg));
+        // pass the selected callable descriptor to the uniform invoker
     }
     callable_descriptor::emit_load_invoker_from_descriptor(
         emitter,
         invoker_reg,
         descriptor_arg_reg,
     );
-    abi::emit_push_reg(emitter, array_arg_reg);                                 // preserve the boxed argument container for release after descriptor invocation
+    abi::emit_push_reg(emitter, array_arg_reg); // preserve the boxed argument container for release after descriptor invocation
     abi::emit_call_reg(emitter, invoker_reg);
     emit_release_preserved_mixed_argument_after_result(emitter);
 }
@@ -399,23 +407,23 @@ fn emit_release_preserved_mixed_argument_after_result(emitter: &mut Emitter) {
 fn emit_cast_descriptor_mixed_result_for_callback(emitter: &mut Emitter, return_ty: &PhpType) {
     match return_ty.codegen_repr() {
         PhpType::Bool => {
-            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // preserve the owned Mixed callback result while casting to bool
-            abi::emit_call_label(emitter, "__rt_mixed_cast_bool");             // convert the boxed callback result to PHP truthiness
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter)); // preserve the owned Mixed callback result while casting to bool
+            abi::emit_call_label(emitter, "__rt_mixed_cast_bool"); // convert the boxed callback result to PHP truthiness
             emit_release_preserved_mixed_result_after_cast(emitter, &PhpType::Bool);
         }
         PhpType::Int | PhpType::Resource(_) | PhpType::Pointer(_) => {
-            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // preserve the owned Mixed callback result while casting to int
-            abi::emit_call_label(emitter, "__rt_mixed_cast_int");              // convert the boxed callback result to an integer value
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter)); // preserve the owned Mixed callback result while casting to int
+            abi::emit_call_label(emitter, "__rt_mixed_cast_int"); // convert the boxed callback result to an integer value
             emit_release_preserved_mixed_result_after_cast(emitter, return_ty);
         }
         PhpType::Float => {
-            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // preserve the owned Mixed callback result while casting to float
-            abi::emit_call_label(emitter, "__rt_mixed_cast_float");            // convert the boxed callback result to a floating-point value
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter)); // preserve the owned Mixed callback result while casting to float
+            abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // convert the boxed callback result to a floating-point value
             emit_release_preserved_mixed_result_after_cast(emitter, &PhpType::Float);
         }
         PhpType::Str => {
-            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // preserve the owned Mixed callback result while casting to string
-            abi::emit_call_label(emitter, "__rt_mixed_cast_string");           // convert the boxed callback result to a string payload
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter)); // preserve the owned Mixed callback result while casting to string
+            abi::emit_call_label(emitter, "__rt_mixed_cast_string"); // convert the boxed callback result to a string payload
             emit_release_preserved_mixed_result_after_cast(emitter, &PhpType::Str);
         }
         PhpType::Void | PhpType::Never => {
@@ -429,8 +437,8 @@ fn emit_cast_descriptor_mixed_result_for_callback(emitter: &mut Emitter, return_
 fn emit_release_preserved_mixed_result_after_cast(emitter: &mut Emitter, cast_ty: &PhpType) {
     if matches!(cast_ty.codegen_repr(), PhpType::Str) {
         let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-        abi::emit_call_label(emitter, "__rt_str_persist");                     // detach the string result from the boxed Mixed owner before release
-        abi::emit_push_reg_pair(emitter, ptr_reg, len_reg);                    // preserve the detached string while releasing the boxed Mixed result
+        abi::emit_call_label(emitter, "__rt_str_persist"); // detach the string result from the boxed Mixed owner before release
+        abi::emit_push_reg_pair(emitter, ptr_reg, len_reg); // preserve the detached string while releasing the boxed Mixed result
         abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
         abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
         abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);

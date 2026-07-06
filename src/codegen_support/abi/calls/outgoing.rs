@@ -3,7 +3,7 @@
 //! Copies preevaluated argument values from temporary storage into ABI-visible locations.
 //!
 //! Called from:
-//! - `crate::codegen_support::expr::calls::args` and wrapper emitters
+//! - `crate::codegen` call lowerers and shared wrapper emitters.
 //!
 //! Key details:
 //! - Stack reservation and register ordering must preserve live values while matching target ABI limits.
@@ -16,8 +16,8 @@ use crate::types::PhpType;
 
 use super::super::frame::emit_adjust_sp;
 use super::super::registers::{
-    OutgoingArgAssignment, STACK_ARG_SENTINEL, float_arg_reg_limit, float_arg_reg_name,
-    int_arg_reg_limit, int_arg_reg_name, secondary_scratch_reg, tertiary_scratch_reg,
+    float_arg_reg_limit, float_arg_reg_name, int_arg_reg_limit, int_arg_reg_name,
+    secondary_scratch_reg, tertiary_scratch_reg, OutgoingArgAssignment, STACK_ARG_SENTINEL,
 };
 use super::stack::{emit_load_temporary_stack_slot, emit_store_to_sp};
 
@@ -230,12 +230,7 @@ pub fn materialize_outgoing_args(
         let mut staging_offset = 0usize;
         for idx in &overflow_indices {
             let src_offset = reserved_overflow_bytes + temp_offsets[*idx];
-            emit_copy_stack_arg_slot(
-                emitter,
-                &assignments[*idx].ty,
-                src_offset,
-                staging_offset,
-            );
+            emit_copy_stack_arg_slot(emitter, &assignments[*idx].ty, src_offset, staging_offset);
             staging_offset += slot_sizes[*idx];
         }
 

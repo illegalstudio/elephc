@@ -6,8 +6,8 @@
 //! Called from:
 //!  - `crate::codegen_support::runtime::generators` (frame slot reads/writes in the
 //!    `__rt_gen_*` helpers).
-//!  - `crate::codegen_support::functions::generator::emit` (wrapper allocation and
-//!    resume-function slot accesses).
+//!  - `crate::codegen` generator lowering (wrapper allocation and resume-function
+//!    slot accesses).
 //!
 //! Key details:
 //!  - Mixed-typed slots store **pre-boxed Mixed pointers** (8 bytes each), not

@@ -13,12 +13,12 @@
 
 use crate::codegen::abi;
 use crate::codegen::data_section::DataSection;
-use crate::codegen::emit_fiber_wrapper;
 use crate::codegen::emit::Emitter;
+use crate::codegen::emit_fiber_wrapper;
 use crate::codegen::platform::Arch;
 use crate::codegen::Emit;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
-use crate::codegen_support::context::DeferredFiberWrapper;
+use crate::codegen_support::DeferredFiberWrapper;
 use crate::ir::{BasicBlock, Function, InstId, Module};
 use crate::names::{
     enum_case_symbol, function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
@@ -63,7 +63,11 @@ pub(super) fn emit_module(
     web: bool,
 ) -> Result<()> {
     function_variants::emit_dispatchers(module, emitter, data);
-    for function in module.functions.iter().filter(|function| !is_main(function)) {
+    for function in module
+        .functions
+        .iter()
+        .filter(|function| !is_main(function))
+    {
         emit_user_function(module, function, emitter, data, regalloc_linear)?;
     }
     for method in &module.class_methods {
@@ -314,7 +318,14 @@ fn emit_generator_function(
         )));
     }
     emit_generator_constructor(emitter, entry_label, &callback_label, &param_types);
-    emit_generator_body(module, function, &body_label, emitter, data, regalloc_linear)?;
+    emit_generator_body(
+        module,
+        function,
+        &body_label,
+        emitter,
+        data,
+        regalloc_linear,
+    )?;
     emit_generator_callback(emitter, &callback_label, &body_label, &param_types);
     Ok(())
 }
@@ -418,24 +429,31 @@ fn emit_generator_constructor(
     // valid across it.
     let mut cursor = abi::IncomingArgCursor::for_target(target, 0);
     for (idx, ty) in param_types.iter().enumerate() {
-        abi::emit_store_incoming_param(emitter, &format!("arg{idx}"), ty, gen_param_slot(idx), false, &mut cursor);
+        abi::emit_store_incoming_param(
+            emitter,
+            &format!("arg{idx}"),
+            ty,
+            gen_param_slot(idx),
+            false,
+            &mut cursor,
+        );
     }
 
     // -- allocate the Generator coroutine object --
     match target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #0");                                  // no callable descriptor — the wrapper runs the compiled body
+            emitter.instruction("mov x0, #0"); // no callable descriptor — the wrapper runs the compiled body
             abi::emit_load_symbol_to_reg(emitter, "x1", "_generator_class_id", 0); // x1 = runtime class id of Generator
-            abi::emit_symbol_address(emitter, "x2", callback_label);            // x2 = generator coroutine entry wrapper
-            emitter.instruction("bl __rt_fiber_construct");                     // x0 = freshly allocated Generator coroutine object
-            emitter.instruction("mov x19, x0");                                 // cache the generator object across the per-parameter boxing calls
+            abi::emit_symbol_address(emitter, "x2", callback_label); // x2 = generator coroutine entry wrapper
+            emitter.instruction("bl __rt_fiber_construct"); // x0 = freshly allocated Generator coroutine object
+            emitter.instruction("mov x19, x0"); // cache the generator object across the per-parameter boxing calls
         }
         Arch::X86_64 => {
-            emitter.instruction("xor edi, edi");                                // no callable descriptor — the wrapper runs the compiled body
+            emitter.instruction("xor edi, edi"); // no callable descriptor — the wrapper runs the compiled body
             abi::emit_load_symbol_to_reg(emitter, "rsi", "_generator_class_id", 0); // rsi = runtime class id of Generator
-            abi::emit_symbol_address(emitter, "rdx", callback_label);          // rdx = generator coroutine entry wrapper
-            emitter.instruction("call __rt_fiber_construct");                   // rax = freshly allocated Generator coroutine object
-            emitter.instruction("mov r12, rax");                                // cache the generator object across the per-parameter boxing calls
+            abi::emit_symbol_address(emitter, "rdx", callback_label); // rdx = generator coroutine entry wrapper
+            emitter.instruction("call __rt_fiber_construct"); // rax = freshly allocated Generator coroutine object
+            emitter.instruction("mov r12, rax"); // cache the generator object across the per-parameter boxing calls
         }
     }
 
@@ -447,8 +465,8 @@ fn emit_generator_constructor(
             GenParamKind::Mixed => {
                 abi::load_at_offset(emitter, gen_reg, slot);
                 match target.arch {
-                    Arch::AArch64 => emitter.instruction("bl __rt_incref"),     // own a reference to the forwarded Mixed cell
-                    Arch::X86_64 => emitter.instruction("call __rt_incref"),    // own a reference to the forwarded Mixed cell
+                    Arch::AArch64 => emitter.instruction("bl __rt_incref"), // own a reference to the forwarded Mixed cell
+                    Arch::X86_64 => emitter.instruction("call __rt_incref"), // own a reference to the forwarded Mixed cell
                 }
             }
             GenParamKind::Float => {
@@ -477,28 +495,28 @@ fn emit_generator_constructor(
             }
         }
         match target.arch {
-            Arch::AArch64 => emitter
-                .instruction(&format!("str {}, [x19, #{}]", gen_reg, store_off)), // store the owned Mixed cell into the generator start_args slot
-            Arch::X86_64 => emitter.instruction(&format!(
-                "mov QWORD PTR [r12 + {}], {}",
-                store_off, gen_reg
-            )), // store the owned Mixed cell into the generator start_args slot
+            Arch::AArch64 => {
+                emitter.instruction(&format!("str {}, [x19, #{}]", gen_reg, store_off))
+            } // store the owned Mixed cell into the generator start_args slot
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov QWORD PTR [r12 + {}], {}", store_off, gen_reg))
+            } // store the owned Mixed cell into the generator start_args slot
         }
     }
 
     // -- publish the forwarded argument count and return the Generator object --
     match target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov x9, #{}", n));                    // number of boxed start arguments forwarded to the body
+            emitter.instruction(&format!("mov x9, #{}", n)); // number of boxed start arguments forwarded to the body
             emitter.instruction(&format!("str x9, [x19, #{}]", FIBER_START_ARG_COUNT_OFFSET)); // publish the start argument count
-            emitter.instruction("mov x0, x19");                                 // return the Generator object to the caller
+            emitter.instruction("mov x0, x19"); // return the Generator object to the caller
         }
         Arch::X86_64 => {
             emitter.instruction(&format!(
                 "mov QWORD PTR [r12 + {}], {}",
                 FIBER_START_ARG_COUNT_OFFSET, n
             )); // publish the start argument count
-            emitter.instruction("mov rax, r12");                                // return the Generator object to the caller
+            emitter.instruction("mov rax, r12"); // return the Generator object to the caller
         }
     }
     abi::load_at_offset(emitter, gen_cache, GEN_SAVE_OFF); // restore the caller's callee-saved generator-object cache register
@@ -565,13 +583,16 @@ fn emit_generator_callback(
     let assignments = abi::build_outgoing_arg_assignments_for_target(target, param_types, 0);
 
     emitter.blank();
-    emitter.comment(&format!("--- generator entry wrapper {} ---", callback_label));
+    emitter.comment(&format!(
+        "--- generator entry wrapper {} ---",
+        callback_label
+    ));
     emitter.label_global(callback_label);
     abi::emit_frame_prologue(emitter, frame_size);
     abi::store_at_offset(emitter, gen_cache, GEN_SAVE_OFF); // preserve the caller's callee-saved generator-object cache register
     match target.arch {
-        Arch::AArch64 => emitter.instruction("mov x19, x0"),                    // x19 = Generator object passed by __rt_fiber_entry
-        Arch::X86_64 => emitter.instruction("mov r12, rdi"),                    // r12 = Generator object passed by __rt_fiber_entry
+        Arch::AArch64 => emitter.instruction("mov x19, x0"), // x19 = Generator object passed by __rt_fiber_entry
+        Arch::X86_64 => emitter.instruction("mov r12, rdi"), // r12 = Generator object passed by __rt_fiber_entry
     };
 
     // -- unbox each start_args cell into its scratch frame slot --
@@ -580,10 +601,11 @@ fn emit_generator_callback(
         let load_off = FIBER_START_ARGS_OFFSET as usize + idx * 8;
         match target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("ldr x0, [x19, #{}]", load_off));  // load the boxed Mixed start argument
+                emitter.instruction(&format!("ldr x0, [x19, #{}]", load_off)); // load the boxed Mixed start argument
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", load_off)); // load the boxed Mixed start argument
+                emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", load_off));
+                // load the boxed Mixed start argument
             }
         }
         if gen_param_kind(ty) == GenParamKind::Mixed {
@@ -591,16 +613,16 @@ fn emit_generator_callback(
             continue;
         }
         match target.arch {
-            Arch::AArch64 => emitter.instruction("bl __rt_mixed_unbox"),        // x1 = primary payload, x2 = string length
-            Arch::X86_64 => emitter.instruction("call __rt_mixed_unbox"),       // rdi = primary payload, rdx = string length
+            Arch::AArch64 => emitter.instruction("bl __rt_mixed_unbox"), // x1 = primary payload, x2 = string length
+            Arch::X86_64 => emitter.instruction("call __rt_mixed_unbox"), // rdi = primary payload, rdx = string length
         }
         match (gen_param_kind(ty), target.arch) {
             (GenParamKind::Float, Arch::AArch64) => {
-                emitter.instruction("fmov d0, x1");                             // reinterpret the unboxed float payload bits
+                emitter.instruction("fmov d0, x1"); // reinterpret the unboxed float payload bits
                 abi::store_at_offset(emitter, "d0", slot);
             }
             (GenParamKind::Float, Arch::X86_64) => {
-                emitter.instruction("movq xmm0, rdi");                          // reinterpret the unboxed float payload bits
+                emitter.instruction("movq xmm0, rdi"); // reinterpret the unboxed float payload bits
                 abi::store_at_offset(emitter, "xmm0", slot);
             }
             (GenParamKind::Str, Arch::AArch64) => {
@@ -631,7 +653,7 @@ fn emit_generator_callback(
                     Arch::X86_64 => "xmm0",
                 };
                 abi::load_at_offset(emitter, freg, slot);
-                abi::emit_push_float_reg(emitter, freg);                        // stage the float parameter on the temporary call stack
+                abi::emit_push_float_reg(emitter, freg); // stage the float parameter on the temporary call stack
             }
             GenParamKind::Str => {
                 let (lo, hi) = match target.arch {
@@ -640,7 +662,7 @@ fn emit_generator_callback(
                 };
                 abi::load_at_offset(emitter, lo, slot);
                 abi::load_at_offset(emitter, hi, slot - 8);
-                abi::emit_push_reg_pair(emitter, lo, hi);                       // stage the string pointer/length pair on the temporary call stack
+                abi::emit_push_reg_pair(emitter, lo, hi); // stage the string pointer/length pair on the temporary call stack
             }
             GenParamKind::IntLike | GenParamKind::Mixed => {
                 let reg = match target.arch {
@@ -648,7 +670,7 @@ fn emit_generator_callback(
                     Arch::X86_64 => "r10",
                 };
                 abi::load_at_offset(emitter, reg, slot);
-                abi::emit_push_reg(emitter, reg);                               // stage the scalar/pointer parameter on the temporary call stack
+                abi::emit_push_reg(emitter, reg); // stage the scalar/pointer parameter on the temporary call stack
             }
         }
     }
@@ -665,10 +687,10 @@ fn emit_generator_callback(
     // -- run the body, park its return value, and yield a null fiber transfer value --
     match target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("bl {}", body_label));                 // run the generator body to completion; x0 = boxed return value
+            emitter.instruction(&format!("bl {}", body_label)); // run the generator body to completion; x0 = boxed return value
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("call {}", body_label));               // run the generator body to completion; rax = boxed return value
+            emitter.instruction(&format!("call {}", body_label)); // run the generator body to completion; rax = boxed return value
         }
     }
     abi::emit_release_temporary_stack(emitter, call_pad); // drop the ARM64 nested-call alignment pad
@@ -676,18 +698,20 @@ fn emit_generator_callback(
     match target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("str x0, [x19, #{}]", GEN_RETURN_VALUE_OFFSET)); // park the body return value for getReturn()
-            emitter.instruction("mov x0, #0");                                  // hand the fiber transfer value a null so it does not alias the return
+            emitter.instruction("mov x0, #0"); // hand the fiber transfer value a null so it does not alias the return
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rax", GEN_RETURN_VALUE_OFFSET)); // park the body return value for getReturn()
-            emitter.instruction("xor eax, eax");                                // hand the fiber transfer value a null so it does not alias the return
+            emitter.instruction(&format!(
+                "mov QWORD PTR [r12 + {}], rax",
+                GEN_RETURN_VALUE_OFFSET
+            )); // park the body return value for getReturn()
+            emitter.instruction("xor eax, eax"); // hand the fiber transfer value a null so it does not alias the return
         }
     }
     abi::load_at_offset(emitter, gen_cache, GEN_SAVE_OFF); // restore the caller's callee-saved generator-object cache register
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
 }
-
 
 /// Returns the runtime metadata entry label for an EIR class-method function.
 fn class_method_entry_symbol(function: &Function) -> Result<String> {
@@ -726,15 +750,7 @@ fn emit_main_function(
 ) -> Result<()> {
     let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
     let mut ctx = FunctionContext::new(
-        module,
-        function,
-        emitter,
-        data,
-        layout,
-        true,
-        gc_stats,
-        heap_debug,
-        None,
+        module, function, emitter, data, layout, true, gc_stats, heap_debug, None,
     );
     if web {
         ctx.web = true;
@@ -807,7 +823,10 @@ fn emit_enum_singleton_initializer(
     name_offset: usize,
     case: &EnumCaseInfo,
 ) {
-    ctx.emitter.comment(&format!("initialize enum singleton {}::{}", enum_name, case.name));
+    ctx.emitter.comment(&format!(
+        "initialize enum singleton {}::{}",
+        enum_name, case.name
+    ));
     emit_enum_object_allocation(ctx, class_id, property_count);
     if let Some(case_value) = &case.value {
         emit_enum_backing_value(ctx, case_value);
@@ -832,24 +851,33 @@ fn emit_enum_name_property(ctx: &mut FunctionContext<'_>, case_name: &str, offse
 }
 
 /// Allocates an object-shaped enum singleton and zeroes its property storage.
-fn emit_enum_object_allocation(ctx: &mut FunctionContext<'_>, class_id: u64, property_count: usize) {
+fn emit_enum_object_allocation(
+    ctx: &mut FunctionContext<'_>,
+    class_id: u64,
+    property_count: usize,
+) {
     let payload_size = 8 + property_count * 16;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov x0, #{}", payload_size));     // request enum singleton object payload storage
+            ctx.emitter
+                .instruction(&format!("mov x0, #{}", payload_size)); // request enum singleton object payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks enum singletons as object instances
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the enum singleton payload
-            ctx.emitter.instruction(&format!("mov x10, #{}", class_id));        // materialize the enum class id
-            ctx.emitter.instruction("str x10, [x0]");                           // store the enum class id at payload offset zero
+            ctx.emitter.instruction("mov x9, #4"); // heap kind 4 marks enum singletons as object instances
+            ctx.emitter.instruction("str x9, [x0, #-8]"); // stamp the heap header before the enum singleton payload
+            ctx.emitter.instruction(&format!("mov x10, #{}", class_id)); // materialize the enum class id
+            ctx.emitter.instruction("str x10, [x0]"); // store the enum class id at payload offset zero
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov rax, {}", payload_size));     // request enum singleton object payload storage
+            ctx.emitter
+                .instruction(&format!("mov rax, {}", payload_size)); // request enum singleton object payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the enum singleton payload
-            ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the enum class id
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the enum class id at payload offset zero
+            ctx.emitter.instruction(&format!(
+                "mov r10, 0x{:x}",
+                (X86_64_HEAP_MAGIC_HI32 << 32) | 4
+            )); // materialize the x86_64 object heap kind word
+            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10"); // stamp the heap header before the enum singleton payload
+            ctx.emitter.instruction(&format!("mov r10, {}", class_id)); // materialize the enum class id
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10"); // store the enum class id at payload offset zero
         }
     }
     let object_reg = abi::int_result_reg(ctx.emitter);
@@ -902,7 +930,10 @@ fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()
             if declaring_class != class_name {
                 continue;
             }
-            let default = class_info.static_defaults.get(index).and_then(Option::as_ref);
+            let default = class_info
+                .static_defaults
+                .get(index)
+                .and_then(Option::as_ref);
             if let Some(default_expr) = default {
                 default_initializers.push((
                     class_name.clone(),
@@ -925,11 +956,7 @@ fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()
 }
 
 /// Marks one typed static property without a default as uninitialized.
-fn emit_static_property_sentinel(
-    ctx: &mut FunctionContext<'_>,
-    class_name: &str,
-    property: &str,
-) {
+fn emit_static_property_sentinel(ctx: &mut FunctionContext<'_>, class_name: &str, property: &str) {
     ctx.emitter.comment(&format!(
         "mark static property {}::${} uninitialized",
         class_name, property
@@ -1062,7 +1089,10 @@ fn emit_static_property_default_value(
     }
     let symbol = static_property_symbol(class_name, property);
     abi::emit_store_result_to_symbol(ctx.emitter, &symbol, php_type, false);
-    if !matches!(php_type.codegen_repr(), PhpType::Str | PhpType::TaggedScalar) {
+    if !matches!(
+        php_type.codegen_repr(),
+        PhpType::Str | PhpType::TaggedScalar
+    ) {
         abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
     }
     Ok(())
@@ -1079,22 +1109,25 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
 /// Emits one EIR basic block.
 fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
-    ctx.emitter.label(&ctx.block_label(&block.name, block.id.as_raw()));
+    ctx.emitter
+        .label(&ctx.block_label(&block.name, block.id.as_raw()));
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
         lower_inst::lower_instruction(ctx, *inst_id)?;
     }
-    let terminator = block
-        .terminator
-        .as_ref()
-        .ok_or_else(|| CodegenIrError::invalid_module(format!("block '{}' has no terminator", block.name)))?;
+    let terminator = block.terminator.as_ref().ok_or_else(|| {
+        CodegenIrError::invalid_module(format!("block '{}' has no terminator", block.name))
+    })?;
     lower_term::lower_terminator(ctx, terminator)
 }
 
 /// Emits the source-map marker for an EIR instruction when it carries a real PHP span.
 fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
     let Some(inst) = ctx.function.instruction(inst_id) else {
-        return Err(CodegenIrError::missing_entry("instruction", inst_id.as_raw()));
+        return Err(CodegenIrError::missing_entry(
+            "instruction",
+            inst_id.as_raw(),
+        ));
     };
     let Some(span) = inst.span else {
         return Ok(());

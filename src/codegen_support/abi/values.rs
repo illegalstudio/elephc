@@ -3,7 +3,7 @@
 //! Normalizes scalar, string, array, object, and Mixed value movement across emitters.
 //!
 //! Called from:
-//! - `crate::codegen_support::expr`, `crate::codegen_support::stmt`, and function cleanup emitters
+//! - `crate::codegen`, runtime helpers, and shared wrapper emitters.
 //!
 //! Key details:
 //! - Refcounted values require balanced retain/release behavior around borrowed and owned temporaries.
@@ -27,23 +27,24 @@ use crate::codegen_support::sentinels::tagged_scalar_tag_reg;
 pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
         PhpType::Bool | PhpType::Int | PhpType::Resource(_) => {
-            store_at_offset(emitter, int_result_reg(emitter), offset);                  // store scalar integer-like value to stack
+            store_at_offset(emitter, int_result_reg(emitter), offset); // store scalar integer-like value to stack
         }
         PhpType::Float => {
-            store_at_offset(emitter, float_result_reg(emitter), offset);                // store float to stack
+            store_at_offset(emitter, float_result_reg(emitter), offset); // store float to stack
         }
         PhpType::Str => {
-            emit_call_label(emitter, "__rt_str_persist");                                // copy the current string payload into owned heap storage when needed
+            emit_call_label(emitter, "__rt_str_persist"); // copy the current string payload into owned heap storage when needed
             let (ptr_reg, len_reg) = string_result_regs(emitter);
-            store_at_offset(emitter, ptr_reg, offset);                                  // store string pointer
-            store_at_offset(emitter, len_reg, offset - 8);                              // store string length
+            store_at_offset(emitter, ptr_reg, offset); // store string pointer
+            store_at_offset(emitter, len_reg, offset - 8); // store string length
         }
         PhpType::Void | PhpType::Never => {
-            store_at_offset(emitter, int_result_reg(emitter), offset);                  // store null sentinel
+            store_at_offset(emitter, int_result_reg(emitter), offset); // store null sentinel
         }
         PhpType::TaggedScalar => {
-            store_at_offset(emitter, int_result_reg(emitter), offset);                  // store tagged scalar payload word
-            store_at_offset(emitter, tagged_scalar_tag_reg(emitter), offset - 8);       // store tagged scalar tag word
+            store_at_offset(emitter, int_result_reg(emitter), offset); // store tagged scalar payload word
+            store_at_offset(emitter, tagged_scalar_tag_reg(emitter), offset - 8);
+            // store tagged scalar tag word
         }
         PhpType::Iterable
         | PhpType::Mixed
@@ -55,7 +56,7 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         | PhpType::Object(_)
         | PhpType::Packed(_)
         | PhpType::Pointer(_) => {
-            store_at_offset(emitter, int_result_reg(emitter), offset);                  // store array/callable/object/pointer value
+            store_at_offset(emitter, int_result_reg(emitter), offset); // store array/callable/object/pointer value
         }
     }
 }
@@ -74,14 +75,14 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     if ty.is_refcounted() {
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction("str x0, [sp, #-16]!");                     // preserve heap pointer across incref helper call
-                emitter.instruction("bl __rt_incref");                          // retain shared heap value before creating a new owner
-                emitter.instruction("ldr x0, [sp], #16");                       // restore original heap pointer after incref
+                emitter.instruction("str x0, [sp, #-16]!"); // preserve heap pointer across incref helper call
+                emitter.instruction("bl __rt_incref"); // retain shared heap value before creating a new owner
+                emitter.instruction("ldr x0, [sp], #16"); // restore original heap pointer after incref
             }
             Arch::X86_64 => {
-                emit_push_reg(emitter, "rax");                                          // preserve the heap pointer in a 16-byte temporary slot to keep the SysV stack aligned across the helper call
-                emitter.instruction("call __rt_incref");                        // retain shared heap value before creating a new owner
-                emit_pop_reg(emitter, "rax");                                           // restore the original heap pointer after the aligned incref helper call
+                emit_push_reg(emitter, "rax"); // preserve the heap pointer in a 16-byte temporary slot to keep the SysV stack aligned across the helper call
+                emitter.instruction("call __rt_incref"); // retain shared heap value before creating a new owner
+                emit_pop_reg(emitter, "rax"); // restore the original heap pointer after the aligned incref helper call
             }
         }
     }
@@ -100,19 +101,19 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Mixed | PhpType::Union(_) => {
-            emit_call_label(emitter, "__rt_decref_mixed");                              // release mixed cell reference
+            emit_call_label(emitter, "__rt_decref_mixed"); // release mixed cell reference
         }
         PhpType::Array(_) => {
-            emit_call_label(emitter, "__rt_decref_array");                              // release indexed array reference
+            emit_call_label(emitter, "__rt_decref_array"); // release indexed array reference
         }
         PhpType::AssocArray { .. } => {
-            emit_call_label(emitter, "__rt_decref_hash");                               // release associative array reference
+            emit_call_label(emitter, "__rt_decref_hash"); // release associative array reference
         }
         PhpType::Object(_) => {
-            emit_call_label(emitter, "__rt_decref_object");                             // release object reference
+            emit_call_label(emitter, "__rt_decref_object"); // release object reference
         }
         PhpType::Iterable => {
-            emit_call_label(emitter, "__rt_decref_any");                                // release the erased iterable payload by inspecting its heap kind
+            emit_call_label(emitter, "__rt_decref_any"); // release the erased iterable payload by inspecting its heap kind
         }
         PhpType::Callable => {
             callable_descriptor::emit_release_current_descriptor(emitter);
@@ -129,11 +130,11 @@ pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 /// Pops the preserved cell pointer and calls `__rt_heap_free` to release the cell.
 /// Used during function epilogue for local variables that held borrowed or owned refs.
 pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_ty: &PhpType) {
-    emit_push_reg(emitter, cell_reg);                                           // preserve the owned reference cell pointer while releasing its payload
+    emit_push_reg(emitter, cell_reg); // preserve the owned reference cell pointer while releasing its payload
     match value_ty.codegen_repr() {
         PhpType::Str => {
             emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
-            emit_call_label(emitter, "__rt_heap_free_safe");                   // release the owned string payload stored inside the local reference cell
+            emit_call_label(emitter, "__rt_heap_free_safe"); // release the owned string payload stored inside the local reference cell
         }
         ty if ty.is_refcounted() => {
             emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
@@ -145,8 +146,8 @@ pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_
         }
         _ => {}
     }
-    emit_pop_reg(emitter, int_result_reg(emitter));                             // restore the owned reference cell pointer for heap release
-    emit_call_label(emitter, "__rt_heap_free");                                // release the local reference cell itself
+    emit_pop_reg(emitter, int_result_reg(emitter)); // restore the owned reference cell pointer for heap release
+    emit_call_label(emitter, "__rt_heap_free"); // release the local reference cell itself
 }
 
 /// Loads a value of the given type from a stack frame offset into result registers.
@@ -157,22 +158,23 @@ pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_
 pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
         PhpType::Bool | PhpType::Int | PhpType::Resource(_) => {
-            load_at_offset(emitter, int_result_reg(emitter), offset);                   // load scalar integer-like value from stack
+            load_at_offset(emitter, int_result_reg(emitter), offset); // load scalar integer-like value from stack
         }
         PhpType::Float => {
-            load_at_offset(emitter, float_result_reg(emitter), offset);                 // load float from stack
+            load_at_offset(emitter, float_result_reg(emitter), offset); // load float from stack
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = string_result_regs(emitter);
-            load_at_offset(emitter, ptr_reg, offset);                                   // load string pointer
-            load_at_offset(emitter, len_reg, offset - 8);                               // load string length
+            load_at_offset(emitter, ptr_reg, offset); // load string pointer
+            load_at_offset(emitter, len_reg, offset - 8); // load string length
         }
         PhpType::Void | PhpType::Never => {
-            load_at_offset(emitter, int_result_reg(emitter), offset);                   // load null sentinel
+            load_at_offset(emitter, int_result_reg(emitter), offset); // load null sentinel
         }
         PhpType::TaggedScalar => {
-            load_at_offset(emitter, int_result_reg(emitter), offset);                   // load tagged scalar payload word
-            load_at_offset(emitter, tagged_scalar_tag_reg(emitter), offset - 8);        // load tagged scalar tag word
+            load_at_offset(emitter, int_result_reg(emitter), offset); // load tagged scalar payload word
+            load_at_offset(emitter, tagged_scalar_tag_reg(emitter), offset - 8);
+            // load tagged scalar tag word
         }
         PhpType::Iterable
         | PhpType::Mixed
@@ -184,7 +186,7 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         | PhpType::Object(_)
         | PhpType::Packed(_)
         | PhpType::Pointer(_) => {
-            load_at_offset(emitter, int_result_reg(emitter), offset);                   // load array/callable/object/pointer value
+            load_at_offset(emitter, int_result_reg(emitter), offset); // load array/callable/object/pointer value
         }
     }
 }
@@ -196,11 +198,16 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbz {}, {}", int_result_reg(emitter), label)); // branch when the coerced integer truthiness result is zero
+            emitter.instruction(&format!("cbz {}, {}", int_result_reg(emitter), label));
+            // branch when the coerced integer truthiness result is zero
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter))); // test whether the coerced integer truthiness result is zero
-            emitter.instruction(&format!("je {}", label));                      // branch when the coerced integer truthiness result is zero
+            emitter.instruction(&format!(
+                "test {}, {}",
+                int_result_reg(emitter),
+                int_result_reg(emitter)
+            )); // test whether the coerced integer truthiness result is zero
+            emitter.instruction(&format!("je {}", label)); // branch when the coerced integer truthiness result is zero
         }
     }
 }
@@ -212,11 +219,16 @@ pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
 pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbnz {}, {}", int_result_reg(emitter), label)); // branch when the coerced integer truthiness result is non-zero
+            emitter.instruction(&format!("cbnz {}, {}", int_result_reg(emitter), label));
+            // branch when the coerced integer truthiness result is non-zero
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter))); // test whether the coerced integer truthiness result is non-zero
-            emitter.instruction(&format!("jne {}", label));                     // branch when the coerced integer truthiness result is non-zero
+            emitter.instruction(&format!(
+                "test {}, {}",
+                int_result_reg(emitter),
+                int_result_reg(emitter)
+            )); // test whether the coerced integer truthiness result is non-zero
+            emitter.instruction(&format!("jne {}", label)); // branch when the coerced integer truthiness result is non-zero
         }
     }
 }
@@ -227,10 +239,10 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
 pub fn emit_jump(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("b {}", label));                       // jump unconditionally to the target label
+            emitter.instruction(&format!("b {}", label)); // jump unconditionally to the target label
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("jmp {}", label));                     // jump unconditionally to the target label
+            emitter.instruction(&format!("jmp {}", label)); // jump unconditionally to the target label
         }
     }
 }
@@ -242,12 +254,20 @@ pub fn emit_jump(emitter: &mut Emitter, label: &str) {
 pub fn emit_int_result_to_float_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            let inst = format!("scvtf {}, {}", float_result_reg(emitter), int_result_reg(emitter));
-            emitter.instruction(&inst);                                         // promote the integer result into the floating-point result register
+            let inst = format!(
+                "scvtf {}, {}",
+                float_result_reg(emitter),
+                int_result_reg(emitter)
+            );
+            emitter.instruction(&inst); // promote the integer result into the floating-point result register
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            let inst = format!("cvtsi2sd {}, {}", float_result_reg(emitter), int_result_reg(emitter));
-            emitter.instruction(&inst);                                         // promote the integer result into the floating-point result register
+            let inst = format!(
+                "cvtsi2sd {}, {}",
+                float_result_reg(emitter),
+                int_result_reg(emitter)
+            );
+            emitter.instruction(&inst); // promote the integer result into the floating-point result register
         }
     }
 }
@@ -259,12 +279,20 @@ pub fn emit_int_result_to_float_result(emitter: &mut Emitter) {
 pub fn emit_float_result_to_int_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            let inst = format!("fcvtzs {}, {}", int_result_reg(emitter), float_result_reg(emitter));
-            emitter.instruction(&inst);                                         // truncate the floating-point result into the integer result register
+            let inst = format!(
+                "fcvtzs {}, {}",
+                int_result_reg(emitter),
+                float_result_reg(emitter)
+            );
+            emitter.instruction(&inst); // truncate the floating-point result into the integer result register
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            let inst = format!("cvttsd2si {}, {}", int_result_reg(emitter), float_result_reg(emitter));
-            emitter.instruction(&inst);                                         // truncate the floating-point result into the integer result register
+            let inst = format!(
+                "cvttsd2si {}, {}",
+                int_result_reg(emitter),
+                float_result_reg(emitter)
+            );
+            emitter.instruction(&inst); // truncate the floating-point result into the integer result register
         }
     }
 }
@@ -279,28 +307,31 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
     match emitter.target.arch {
         Arch::AArch64 => {
             if (0..=65535).contains(&value) {
-                emitter.instruction(&format!("mov {}, #{}", reg, value));       // load a small non-negative immediate directly into the target register
+                emitter.instruction(&format!("mov {}, #{}", reg, value)); // load a small non-negative immediate directly into the target register
             } else if (-65536..0).contains(&value) {
-                emitter.instruction(&format!("mov {}, #{}", reg, value));       // load a small negative immediate directly into the target register
+                emitter.instruction(&format!("mov {}, #{}", reg, value)); // load a small negative immediate directly into the target register
             } else {
                 let uval = value as u64;
                 emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF)); // seed the low 16 bits of the wider immediate value
                 if (uval >> 16) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(                               // patch bits 16-31 of the wider immediate value
+                    emitter.instruction(&format!(
+                        // patch bits 16-31 of the wider immediate value
                         "movk {}, #0x{:x}, lsl #16",
                         reg,
                         (uval >> 16) & 0xFFFF
                     ));
                 }
                 if (uval >> 32) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(                               // patch bits 32-47 of the wider immediate value
+                    emitter.instruction(&format!(
+                        // patch bits 32-47 of the wider immediate value
                         "movk {}, #0x{:x}, lsl #32",
                         reg,
                         (uval >> 32) & 0xFFFF
                     ));
                 }
                 if (uval >> 48) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(                               // patch bits 48-63 of the wider immediate value
+                    emitter.instruction(&format!(
+                        // patch bits 48-63 of the wider immediate value
                         "movk {}, #0x{:x}, lsl #48",
                         reg,
                         (uval >> 48) & 0xFFFF
@@ -309,7 +340,7 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
             }
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, {}", reg, value));            // load the immediate directly into the native x86_64 register
+            emitter.instruction(&format!("mov {}, {}", reg, value)); // load the immediate directly into the native x86_64 register
         }
     }
 }
@@ -335,7 +366,7 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
             emit_write_current_string_stdout(emitter);
         }
         PhpType::TaggedScalar => {
-            emit_call_label(emitter, "__rt_itoa");                                      // convert the tagged scalar payload; callers suppress the null case first
+            emit_call_label(emitter, "__rt_itoa"); // convert the tagged scalar payload; callers suppress the null case first
             emit_write_current_string_stdout(emitter);
         }
         PhpType::Resource(_) => {
@@ -353,7 +384,7 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
             emit_call_label(emitter, "__rt_mixed_write_stdout");
         }
         PhpType::Iterable => {
-            emit_call_label(emitter, "__rt_iterable_write_stdout");                     // dispatch echo iterable through the heap-kind-aware writer instead of the mixed-cell writer
+            emit_call_label(emitter, "__rt_iterable_write_stdout"); // dispatch echo iterable through the heap-kind-aware writer instead of the mixed-cell writer
         }
         PhpType::Void
         | PhpType::Never
@@ -378,15 +409,15 @@ fn emit_write_current_string_stdout(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             let (ptr_reg, len_reg) = string_result_regs(emitter);
-            emitter.instruction(&format!("mov x0, {}", ptr_reg));               // stdout_write ptr arg = current string pointer (copy before x1 is overwritten with the length, since ptr lives in x1)
-            emitter.instruction(&format!("mov x1, {}", len_reg));               // stdout_write len arg = current string length
-            emit_call_label(emitter, "__rt_stdout_write");                              // route the terminal write through the stdout-write indirection
+            emitter.instruction(&format!("mov x0, {}", ptr_reg)); // stdout_write ptr arg = current string pointer (copy before x1 is overwritten with the length, since ptr lives in x1)
+            emitter.instruction(&format!("mov x1, {}", len_reg)); // stdout_write len arg = current string length
+            emit_call_label(emitter, "__rt_stdout_write"); // route the terminal write through the stdout-write indirection
         }
         Arch::X86_64 => {
             let (ptr_reg, len_reg) = string_result_regs(emitter);
-            emitter.instruction(&format!("mov rsi, {}", len_reg));              // stdout_write len arg = current string length
-            emitter.instruction(&format!("mov rdi, {}", ptr_reg));              // stdout_write ptr arg = current string pointer
-            emit_call_label(emitter, "__rt_stdout_write");                              // route the terminal write through the stdout-write indirection
+            emitter.instruction(&format!("mov rsi, {}", len_reg)); // stdout_write len arg = current string length
+            emitter.instruction(&format!("mov rdi, {}", ptr_reg)); // stdout_write ptr arg = current string pointer
+            emit_call_label(emitter, "__rt_stdout_write"); // route the terminal write through the stdout-write indirection
         }
     }
 }

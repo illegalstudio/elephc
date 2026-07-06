@@ -9,12 +9,13 @@
 //! - Wrapper signatures must satisfy both the external ABI and the internal PHP function lowering contract.
 
 use crate::codegen_support::abi;
-use crate::codegen_support::context::{DeferredCallbackWrapper, DeferredExternCallbackTrampoline};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::types::PhpType;
 
 mod descriptor;
+
+use super::{DeferredCallbackWrapper, DeferredExternCallbackTrampoline};
 
 /// Emits a native callback wrapper that adapts an external ABI caller into a PHP-callable
 /// function body. Dispatches to the x86_64 variant; ARM64 uses the general path below.
@@ -45,8 +46,8 @@ pub(crate) fn emit_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCal
     emitter.instruction(&format!("stp x19, x20, [sp, #{}]", saved_callee_offset)); // preserve wrapper callee-saved registers
 
     let env_reg = incoming_env_reg(emitter, &wrapper.visible_arg_types);
-    emitter.instruction(&format!("mov x20, {}", env_reg));                      // keep the callback environment pointer across argument reshuffling
-    emitter.instruction("ldr x19, [x20]");                                      // load the original captured closure entry point from env slot zero
+    emitter.instruction(&format!("mov x20, {}", env_reg)); // keep the callback environment pointer across argument reshuffling
+    emitter.instruction("ldr x19, [x20]"); // load the original captured closure entry point from env slot zero
 
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     spill_captures(
@@ -64,7 +65,7 @@ pub(crate) fn emit_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCal
         frame_size,
     );
     abi::emit_call_reg(emitter, "x19");
-    abi::emit_release_temporary_stack(emitter, overflow_bytes);                 // drop stack-passed closure arguments after the adapted callback returns
+    abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the adapted callback returns
 
     emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_callee_offset)); // restore wrapper callee-saved registers
     abi::emit_frame_restore(emitter, frame_size);
@@ -103,8 +104,8 @@ fn emit_x86_64_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCallbac
     abi::store_at_offset(emitter, "r13", saved_env_offset);
 
     let env_reg = incoming_env_reg(emitter, &wrapper.visible_arg_types);
-    emitter.instruction(&format!("mov r13, {}", env_reg));                      // keep the callback environment pointer across argument reshuffling
-    emitter.instruction("mov r12, QWORD PTR [r13]");                            // load the original captured closure entry point from env slot zero
+    emitter.instruction(&format!("mov r13, {}", env_reg)); // keep the callback environment pointer across argument reshuffling
+    emitter.instruction("mov r12, QWORD PTR [r13]"); // load the original captured closure entry point from env slot zero
 
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     spill_captures(
@@ -121,7 +122,7 @@ fn emit_x86_64_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCallbac
         &wrapper.capture_types,
     );
     abi::emit_call_reg(emitter, "r12");
-    abi::emit_release_temporary_stack(emitter, overflow_bytes);                 // drop stack-passed closure arguments after the adapted callback returns
+    abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the adapted callback returns
 
     abi::load_at_offset(emitter, "r13", saved_env_offset);
     abi::load_at_offset(emitter, "r12", saved_callback_offset);
@@ -152,10 +153,13 @@ fn wrapper_target_visible_arg_types(wrapper: &DeferredCallbackWrapper) -> Vec<Ph
 /// the incoming type list; this function reverses the outgoing assignment logic to find
 /// which register it occupies on entry.
 fn incoming_env_reg(emitter: &Emitter, visible_arg_types: &[PhpType]) -> &'static str {
-    let mut incoming_types: Vec<PhpType> =
-        visible_arg_types.iter().map(PhpType::codegen_repr).collect();
+    let mut incoming_types: Vec<PhpType> = visible_arg_types
+        .iter()
+        .map(PhpType::codegen_repr)
+        .collect();
     incoming_types.push(PhpType::Pointer(None));
-    let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, &incoming_types, 0);
+    let assignments =
+        abi::build_outgoing_arg_assignments_for_target(emitter.target, &incoming_types, 0);
     let env_assignment = assignments
         .last()
         .expect("callback wrapper always has an environment pointer argument");
@@ -167,23 +171,34 @@ fn incoming_env_reg(emitter: &Emitter, visible_arg_types: &[PhpType]) -> &'stati
 /// wrapper frame. This must happen before `spill_captures` loads from the environment struct,
 /// because the environment pointer lives in a register that may clobber one of the arg regs.
 fn spill_visible_args(emitter: &mut Emitter, visible_arg_types: &[PhpType]) {
-    let visible_types: Vec<PhpType> = visible_arg_types.iter().map(PhpType::codegen_repr).collect();
-    let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, &visible_types, 0);
+    let visible_types: Vec<PhpType> = visible_arg_types
+        .iter()
+        .map(PhpType::codegen_repr)
+        .collect();
+    let assignments =
+        abi::build_outgoing_arg_assignments_for_target(emitter.target, &visible_types, 0);
     for (idx, (ty, assignment)) in visible_types.iter().zip(assignments.iter()).enumerate() {
         debug_assert!(assignment.in_register());
         match (emitter.target.arch, ty) {
             (Arch::AArch64, PhpType::Float) => {
                 let reg = abi::float_arg_reg_name(emitter.target, assignment.start_reg);
-                emitter.instruction(&format!("str {}, [sp, #{}]", reg, idx * 16)); // spill the incoming float callback argument before loading captures
+                emitter.instruction(&format!("str {}, [sp, #{}]", reg, idx * 16));
+                // spill the incoming float callback argument before loading captures
             }
             (Arch::AArch64, PhpType::Str) => {
                 let ptr_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
                 let len_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1);
-                emitter.instruction(&format!("stp {}, {}, [sp, #{}]", ptr_reg, len_reg, idx * 16)); // spill the incoming string callback argument before loading captures
+                emitter.instruction(&format!(
+                    "stp {}, {}, [sp, #{}]",
+                    ptr_reg,
+                    len_reg,
+                    idx * 16
+                )); // spill the incoming string callback argument before loading captures
             }
             (Arch::AArch64, _) => {
                 let reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
-                emitter.instruction(&format!("str {}, [sp, #{}]", reg, idx * 16)); // spill the incoming scalar callback argument before loading captures
+                emitter.instruction(&format!("str {}, [sp, #{}]", reg, idx * 16));
+                // spill the incoming scalar callback argument before loading captures
             }
             (Arch::X86_64, PhpType::Float) => {
                 let reg = abi::float_arg_reg_name(emitter.target, assignment.start_reg);
@@ -218,31 +233,47 @@ fn spill_captures(
         match (emitter.target.arch, ty) {
             (Arch::AArch64, PhpType::Float) => {
                 emitter.instruction(&format!("ldr d0, [{}, #{}]", env_reg, env_offset)); // load a captured float from the callback environment
-                emitter.instruction(&format!("str d0, [sp, #{}]", arg_idx * 16)); // spill the captured float for the final closure call
+                emitter.instruction(&format!("str d0, [sp, #{}]", arg_idx * 16));
+                // spill the captured float for the final closure call
             }
             (Arch::AArch64, PhpType::Str) => {
                 emitter.instruction(&format!("ldr x9, [{}, #{}]", env_reg, env_offset)); // load the captured string pointer from the callback environment
                 emitter.instruction(&format!("ldr x10, [{}, #{}]", env_reg, env_offset + 8)); // load the captured string length from the callback environment
-                emitter.instruction(&format!("stp x9, x10, [sp, #{}]", arg_idx * 16)); // spill the captured string pair for the final closure call
+                emitter.instruction(&format!("stp x9, x10, [sp, #{}]", arg_idx * 16));
+                // spill the captured string pair for the final closure call
             }
             (Arch::AArch64, PhpType::Void | PhpType::Never) => {}
             (Arch::AArch64, _) => {
                 emitter.instruction(&format!("ldr x9, [{}, #{}]", env_reg, env_offset)); // load a captured scalar/pointer from the callback environment
-                emitter.instruction(&format!("str x9, [sp, #{}]", arg_idx * 16)); // spill the captured scalar/pointer for the final closure call
+                emitter.instruction(&format!("str x9, [sp, #{}]", arg_idx * 16));
+                // spill the captured scalar/pointer for the final closure call
             }
             (Arch::X86_64, PhpType::Float) => {
-                emitter.instruction(&format!("movsd xmm0, QWORD PTR [{} + {}]", env_reg, env_offset)); // load a captured float from the callback environment
+                emitter.instruction(&format!(
+                    "movsd xmm0, QWORD PTR [{} + {}]",
+                    env_reg, env_offset
+                )); // load a captured float from the callback environment
                 abi::store_at_offset(emitter, "xmm0", frame_arg_slot_offset(arg_idx));
             }
             (Arch::X86_64, PhpType::Str) => {
-                emitter.instruction(&format!("mov r10, QWORD PTR [{} + {}]", env_reg, env_offset)); // load the captured string pointer from the callback environment
-                emitter.instruction(&format!("mov r11, QWORD PTR [{} + {}]", env_reg, env_offset + 8)); // load the captured string length from the callback environment
+                emitter.instruction(&format!(
+                    "mov r10, QWORD PTR [{} + {}]",
+                    env_reg, env_offset
+                )); // load the captured string pointer from the callback environment
+                emitter.instruction(&format!(
+                    "mov r11, QWORD PTR [{} + {}]",
+                    env_reg,
+                    env_offset + 8
+                )); // load the captured string length from the callback environment
                 abi::store_at_offset(emitter, "r10", frame_arg_slot_offset(arg_idx));
                 abi::store_at_offset(emitter, "r11", frame_arg_slot_offset(arg_idx) - 8);
             }
             (Arch::X86_64, PhpType::Void | PhpType::Never) => {}
             (Arch::X86_64, _) => {
-                emitter.instruction(&format!("mov r10, QWORD PTR [{} + {}]", env_reg, env_offset)); // load a captured scalar/pointer from the callback environment
+                emitter.instruction(&format!(
+                    "mov r10, QWORD PTR [{} + {}]",
+                    env_reg, env_offset
+                )); // load a captured scalar/pointer from the callback environment
                 abi::store_at_offset(emitter, "r10", frame_arg_slot_offset(arg_idx));
             }
         }
@@ -371,25 +402,25 @@ fn push_aarch64_visible_arg_as_target(
     abi::load_at_offset(emitter, "x0", frame_slot_offset);
     match target_ty.codegen_repr() {
         PhpType::Bool => {
-            abi::emit_call_label(emitter, "__rt_mixed_cast_bool");              // cast boxed callback argument to bool for the target closure
-            abi::emit_push_reg(emitter, "x0");                                  // push the converted bool callback argument
+            abi::emit_call_label(emitter, "__rt_mixed_cast_bool"); // cast boxed callback argument to bool for the target closure
+            abi::emit_push_reg(emitter, "x0"); // push the converted bool callback argument
         }
         PhpType::Int | PhpType::Resource(_) => {
-            abi::emit_call_label(emitter, "__rt_mixed_cast_int");               // cast boxed callback argument to int for the target closure
-            abi::emit_push_reg(emitter, "x0");                                  // push the converted int callback argument
+            abi::emit_call_label(emitter, "__rt_mixed_cast_int"); // cast boxed callback argument to int for the target closure
+            abi::emit_push_reg(emitter, "x0"); // push the converted int callback argument
         }
         PhpType::Float => {
-            abi::emit_call_label(emitter, "__rt_mixed_cast_float");             // cast boxed callback argument to float for the target closure
-            abi::emit_push_float_reg(emitter, "d0");                            // push the converted float callback argument
+            abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // cast boxed callback argument to float for the target closure
+            abi::emit_push_float_reg(emitter, "d0"); // push the converted float callback argument
         }
         PhpType::Str => {
-            abi::emit_call_label(emitter, "__rt_mixed_cast_string");            // cast boxed callback argument to string for the target closure
-            abi::emit_push_reg_pair(emitter, "x1", "x2");                      // push the converted string callback argument
+            abi::emit_call_label(emitter, "__rt_mixed_cast_string"); // cast boxed callback argument to string for the target closure
+            abi::emit_push_reg_pair(emitter, "x1", "x2"); // push the converted string callback argument
         }
         PhpType::Void | PhpType::Never => {}
         _ => {
-            abi::emit_call_label(emitter, "__rt_mixed_unbox");                  // unwrap boxed callback argument for pointer-like target parameters
-            abi::emit_push_reg(emitter, "x1");                                  // push the unboxed callback payload pointer
+            abi::emit_call_label(emitter, "__rt_mixed_unbox"); // unwrap boxed callback argument for pointer-like target parameters
+            abi::emit_push_reg(emitter, "x1"); // push the unboxed callback payload pointer
         }
     }
 }
@@ -399,17 +430,17 @@ fn push_aarch64_prepared_arg(emitter: &mut Emitter, frame_slot_offset: usize, ty
     match ty.codegen_repr() {
         PhpType::Float => {
             abi::load_at_offset(emitter, "d0", frame_slot_offset);
-            abi::emit_push_float_reg(emitter, "d0");                            // push the prepared float argument onto the standard temporary call stack
+            abi::emit_push_float_reg(emitter, "d0"); // push the prepared float argument onto the standard temporary call stack
         }
         PhpType::Str => {
             abi::load_at_offset(emitter, "x9", frame_slot_offset);
             abi::load_at_offset(emitter, "x10", frame_slot_offset - 8);
-            abi::emit_push_reg_pair(emitter, "x9", "x10");                     // push the prepared string argument pair onto the standard temporary call stack
+            abi::emit_push_reg_pair(emitter, "x9", "x10"); // push the prepared string argument pair onto the standard temporary call stack
         }
         PhpType::Void | PhpType::Never => {}
         _ => {
             abi::load_at_offset(emitter, "x9", frame_slot_offset);
-            abi::emit_push_reg(emitter, "x9");                                  // push the prepared scalar/pointer argument onto the standard temporary call stack
+            abi::emit_push_reg(emitter, "x9"); // push the prepared scalar/pointer argument onto the standard temporary call stack
         }
     }
 }
@@ -433,25 +464,25 @@ fn push_x86_64_visible_arg_as_target(
     abi::load_at_offset(emitter, "rax", slot_offset);
     match target_ty.codegen_repr() {
         PhpType::Bool => {
-            abi::emit_call_label(emitter, "__rt_mixed_cast_bool");              // cast boxed callback argument to bool for the target closure
-            abi::emit_push_reg(emitter, "rax");                                 // push the converted bool callback argument
+            abi::emit_call_label(emitter, "__rt_mixed_cast_bool"); // cast boxed callback argument to bool for the target closure
+            abi::emit_push_reg(emitter, "rax"); // push the converted bool callback argument
         }
         PhpType::Int | PhpType::Resource(_) => {
-            abi::emit_call_label(emitter, "__rt_mixed_cast_int");               // cast boxed callback argument to int for the target closure
-            abi::emit_push_reg(emitter, "rax");                                 // push the converted int callback argument
+            abi::emit_call_label(emitter, "__rt_mixed_cast_int"); // cast boxed callback argument to int for the target closure
+            abi::emit_push_reg(emitter, "rax"); // push the converted int callback argument
         }
         PhpType::Float => {
-            abi::emit_call_label(emitter, "__rt_mixed_cast_float");             // cast boxed callback argument to float for the target closure
-            abi::emit_push_float_reg(emitter, "xmm0");                          // push the converted float callback argument
+            abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // cast boxed callback argument to float for the target closure
+            abi::emit_push_float_reg(emitter, "xmm0"); // push the converted float callback argument
         }
         PhpType::Str => {
-            abi::emit_call_label(emitter, "__rt_mixed_cast_string");            // cast boxed callback argument to string for the target closure
-            abi::emit_push_reg_pair(emitter, "rax", "rdx");                    // push the converted string callback argument
+            abi::emit_call_label(emitter, "__rt_mixed_cast_string"); // cast boxed callback argument to string for the target closure
+            abi::emit_push_reg_pair(emitter, "rax", "rdx"); // push the converted string callback argument
         }
         PhpType::Void | PhpType::Never => {}
         _ => {
-            abi::emit_call_label(emitter, "__rt_mixed_unbox");                  // unwrap boxed callback argument for pointer-like target parameters
-            abi::emit_push_reg(emitter, "rdi");                                 // push the unboxed callback payload pointer
+            abi::emit_call_label(emitter, "__rt_mixed_unbox"); // unwrap boxed callback argument for pointer-like target parameters
+            abi::emit_push_reg(emitter, "rdi"); // push the unboxed callback payload pointer
         }
     }
 }
@@ -461,17 +492,17 @@ fn push_x86_64_prepared_arg(emitter: &mut Emitter, slot_offset: usize, ty: &PhpT
     match ty.codegen_repr() {
         PhpType::Float => {
             abi::load_at_offset(emitter, "xmm0", slot_offset);
-            abi::emit_push_float_reg(emitter, "xmm0");                          // push the prepared float argument onto the standard temporary call stack
+            abi::emit_push_float_reg(emitter, "xmm0"); // push the prepared float argument onto the standard temporary call stack
         }
         PhpType::Str => {
             abi::load_at_offset(emitter, "r10", slot_offset);
             abi::load_at_offset(emitter, "r11", slot_offset - 8);
-            abi::emit_push_reg_pair(emitter, "r10", "r11");                    // push the prepared string argument pair onto the standard temporary call stack
+            abi::emit_push_reg_pair(emitter, "r10", "r11"); // push the prepared string argument pair onto the standard temporary call stack
         }
         PhpType::Void | PhpType::Never => {}
         _ => {
             abi::load_at_offset(emitter, "r10", slot_offset);
-            abi::emit_push_reg(emitter, "r10");                                 // push the prepared scalar/pointer argument onto the standard temporary call stack
+            abi::emit_push_reg(emitter, "r10"); // push the prepared scalar/pointer argument onto the standard temporary call stack
         }
     }
 }

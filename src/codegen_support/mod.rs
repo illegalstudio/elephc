@@ -10,27 +10,17 @@
 
 pub(crate) mod abi;
 pub(crate) mod arrays;
-pub(crate) mod builtins;
-pub(crate) mod cdylib;
 pub(crate) mod callable_descriptor;
 pub(crate) mod callable_dispatch;
 pub(crate) mod callable_invoker_args;
-pub(crate) mod hash_crypto;
-pub(crate) mod phar_stream;
-pub(crate) mod runtime_callable_invoker;
-pub(crate) mod stream_filters;
-pub(crate) mod tls;
-mod callables;
-/// Codegen context module.
-pub mod context;
+pub(crate) mod cdylib;
 pub(crate) mod data_section;
 mod driver_support;
+pub(crate) mod dynamic_new;
 pub(crate) mod emit;
-mod expr;
-mod ffi;
-mod fiber_sigs;
-mod functions;
+pub(crate) mod hash_crypto;
 pub(crate) mod interface_wrappers;
+pub(crate) mod phar_stream;
 /// Platform module.
 pub mod platform;
 mod prescan;
@@ -39,7 +29,9 @@ pub(crate) mod reflection;
 pub(crate) mod runtime;
 mod runtime_features;
 pub(crate) mod sentinels;
-mod stmt;
+pub(crate) mod stream_filters;
+pub(crate) mod tls;
+pub(crate) mod try_handlers;
 mod value_boxing;
 pub(crate) mod visibility;
 mod wrappers;
@@ -47,7 +39,10 @@ mod wrappers;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
-pub(crate) use wrappers::{emit_callback_wrapper, emit_extern_callback_trampoline};
+pub(crate) use wrappers::{
+    emit_callback_wrapper, emit_extern_callback_trampoline, DeferredCallbackWrapper,
+    DeferredExternCallbackTrampoline, DeferredFiberWrapper,
+};
 
 thread_local! {
     /// Number of `spl_autoload_register` closure rules the autoload pass
@@ -81,7 +76,7 @@ fn set_declared_name_order(classes: Vec<String>, interfaces: Vec<String>, traits
     DECLARED_TRAIT_NAMES.with(|names| *names.borrow_mut() = traits);
 }
 
-/// Prepares declaration-order registries shared by legacy and EIR introspection builtins.
+/// Prepares declaration-order registries shared by EIR introspection builtins.
 pub fn prepare_declared_name_order(
     program: &Program,
     classes: &HashMap<String, ClassInfo>,
@@ -130,32 +125,25 @@ pub(crate) fn declared_trait_uses(name: &str) -> Vec<String> {
 
 use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
 use crate::types::{ClassInfo, InterfaceInfo};
-use driver_support::align16;
-pub(crate) use driver_support::{
-    emit_box_current_expr_value_as_mixed_for_container, emit_deferred_closures,
-    emit_write_current_string_stderr, emit_write_literal_stderr,
-    emit_normalized_hash_key,
+pub(crate) use arrays::emit_array_value_type_stamp;
+pub(crate) use driver_support::{emit_write_current_string_stderr, emit_write_literal_stderr};
+#[allow(unused_imports)]
+pub use driver_support::{
+    generate_runtime, generate_runtime_with_features, generate_runtime_with_features_pic,
 };
+pub(crate) use prescan::collect_constants;
+use program_usage::{collect_required_class_names, collect_required_class_names_in_stmts};
+pub use runtime_features::RuntimeFeatures;
+pub use runtime_features::{
+    required_libraries_for_runtime_features, runtime_features_for_program_and_classes,
+};
+pub(crate) use sentinels::{NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL};
 pub(crate) use value_boxing::{
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     emit_box_iterable_value_for_mixed_container, emit_box_runtime_payload_as_mixed,
     emit_release_pushed_refcounted_temp_after_array_push, runtime_value_tag,
 };
-pub(crate) use arrays::emit_array_value_type_stamp;
 pub(crate) use wrappers::emit_fiber_wrapper;
-pub(crate) use sentinels::{NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL};
-#[allow(unused_imports)]
-pub use driver_support::{
-    generate_runtime, generate_runtime_with_features, generate_runtime_with_features_pic,
-};
-pub use runtime_features::{
-    required_libraries_for_runtime_features, runtime_features_for_program_and_classes,
-};
-pub use runtime_features::RuntimeFeatures;
-pub(crate) use prescan::collect_constants;
-use program_usage::{
-    collect_required_class_names, collect_required_class_names_in_stmts,
-};
 
 /// Collects user-declared class and enum names from the program AST, merges them
 /// with internal class names, and returns the combined list in declaration order
@@ -422,9 +410,9 @@ fn collect_dynamic_object_factory_classes_in_stmt(
     match &stmt.kind {
         StmtKind::ClassDecl { methods, .. }
         | StmtKind::TraitDecl { methods, .. }
-        | StmtKind::InterfaceDecl { methods, .. } => methods
-            .iter()
-            .for_each(|method| collect_dynamic_object_factory_classes(&method.body, classes, names)),
+        | StmtKind::InterfaceDecl { methods, .. } => methods.iter().for_each(|method| {
+            collect_dynamic_object_factory_classes(&method.body, classes, names)
+        }),
         StmtKind::FunctionDecl { body, .. }
         | StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. }
@@ -581,8 +569,7 @@ fn collect_dynamic_object_factory_classes_in_expr(
         | ExprKind::PtrCast { expr, .. } => {
             collect_dynamic_object_factory_classes_in_expr(expr, classes, names);
         }
-        ExprKind::NullCoalesce { value, default }
-        | ExprKind::ShortTernary { value, default } => {
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             collect_dynamic_object_factory_classes_in_expr(value, classes, names);
             collect_dynamic_object_factory_classes_in_expr(default, classes, names);
         }
@@ -614,7 +601,7 @@ fn collect_dynamic_object_factory_classes_in_expr(
             }
         }
         ExprKind::NewDynamic { name_expr, args } => {
-            for class_name in expr::objects::supported_dynamic_new_builtin_class_names() {
+            for class_name in dynamic_new::supported_dynamic_new_builtin_class_names() {
                 if classes.contains_key(*class_name) {
                     names.insert((*class_name).to_string());
                 }
@@ -670,7 +657,9 @@ fn collect_dynamic_object_factory_classes_in_expr(
             collect_dynamic_object_factory_classes_in_expr(then_expr, classes, names);
             collect_dynamic_object_factory_classes_in_expr(else_expr, classes, names);
         }
-        ExprKind::Closure { body, .. } => collect_dynamic_object_factory_classes(body, classes, names),
+        ExprKind::Closure { body, .. } => {
+            collect_dynamic_object_factory_classes(body, classes, names)
+        }
         ExprKind::NamedArg { value, .. } => {
             collect_dynamic_object_factory_classes_in_expr(value, classes, names);
         }
@@ -691,8 +680,7 @@ fn collect_dynamic_object_factory_classes_in_expr(
             }
         }
         ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Method {
-            object,
-            ..
+            object, ..
         }) => collect_dynamic_object_factory_classes_in_expr(object, classes, names),
         ExprKind::BufferNew { len, .. } => {
             collect_dynamic_object_factory_classes_in_expr(len, classes, names);

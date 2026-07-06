@@ -10,22 +10,20 @@
 //!   dispatch to refcount-aware runtime variants when payloads own heap values.
 //! - Associative key filters require hash operands because their runtime helpers copy hash entries.
 
+use crate::codegen::platform::Arch;
 use crate::codegen::{
     abi, callable_descriptor, callable_dispatch, emit_box_current_owned_value_as_mixed,
     emit_box_current_value_as_mixed,
 };
-use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
-use crate::codegen_support::context::DeferredCallbackWrapper;
+use crate::codegen_support::DeferredCallbackWrapper;
 use crate::ir::{BlockId, Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::names::{function_symbol, method_symbol, php_symbol_key, static_method_symbol};
 use crate::types::{array_key_type_from_value_type, PhpType};
 
 use super::super::super::context::FunctionContext;
-use super::super::{
-    expect_operand, resolve_int_operand_to_result, store_if_result,
-};
 use super::super::callables::runtime_string_descriptor_cases;
+use super::super::{expect_operand, resolve_int_operand_to_result, store_if_result};
 
 mod column;
 mod key_exists;
@@ -84,7 +82,8 @@ pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let array = expect_operand(inst, 0)?;
     let length = expect_operand(inst, 1)?;
     let source_elem_ty = array_chunk_source_element_type(ctx.value_php_type(array)?)?;
-    let result_elem_ty = result_array_element_type("array_chunk", &inst.result_php_type.codegen_repr())?;
+    let result_elem_ty =
+        result_array_element_type("array_chunk", &inst.result_php_type.codegen_repr())?;
     let result_inner_elem_ty = array_chunk_result_inner_element_type(&result_elem_ty)?;
     require_array_chunk_result_type(&source_elem_ty, &result_inner_elem_ty)?;
     lower_array_chunk_call(ctx, array, length, &source_elem_ty)?;
@@ -104,7 +103,8 @@ pub(crate) fn lower_array_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let pad_value = expect_operand(inst, 2)?;
     let source_elem_ty = array_pad_source_element_type(ctx.value_php_type(array)?)?;
     let pad_value_ty = ctx.value_php_type(pad_value)?.codegen_repr();
-    let result_elem_ty = result_array_element_type("array_pad", &inst.result_php_type.codegen_repr())?;
+    let result_elem_ty =
+        result_array_element_type("array_pad", &inst.result_php_type.codegen_repr())?;
     require_array_pad_value_type(&source_elem_ty, &pad_value_ty)?;
     require_array_pad_result_type(&source_elem_ty, &result_elem_ty)?;
     lower_array_pad_call(ctx, array, target_size, pad_value, &source_elem_ty)?;
@@ -136,7 +136,10 @@ pub(crate) fn lower_array_fill(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `array_fill_keys()` through the legacy hash-building runtime helpers.
-pub(crate) fn lower_array_fill_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_fill_keys(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     super::ensure_arg_count(inst, "array_fill_keys", 2)?;
     let keys = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
@@ -144,7 +147,11 @@ pub(crate) fn lower_array_fill_keys(ctx: &mut FunctionContext<'_>, inst: &Instru
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
     require_array_fill_keys_key_layout(&key_elem_ty)?;
     require_array_fill_keys_value_type(&value_ty)?;
-    require_array_fill_keys_result_type(&key_elem_ty, &value_ty, &inst.result_php_type.codegen_repr())?;
+    require_array_fill_keys_result_type(
+        &key_elem_ty,
+        &value_ty,
+        &inst.result_php_type.codegen_repr(),
+    )?;
     lower_array_fill_keys_call(ctx, keys, value, &value_ty)?;
     store_if_result(ctx, inst)
 }
@@ -176,7 +183,7 @@ pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
     require_array_flip_result_type(&value_elem_ty, &inst.result_php_type.codegen_repr())?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the flip helper argument
+        ctx.emitter.instruction("mov rdi, rax"); // pass the source indexed-array pointer as the flip helper argument
     }
     abi::emit_call_label(ctx.emitter, array_flip_runtime_helper(&value_elem_ty));
     store_if_result(ctx, inst)
@@ -186,10 +193,11 @@ pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
 pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_reverse", 1)?;
     let array = expect_operand(inst, 0)?;
-    let elem_ty = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
+    let elem_ty =
+        eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the reverse helper argument
+        ctx.emitter.instruction("mov rdi, rax"); // pass the source indexed-array pointer as the reverse helper argument
     }
     abi::emit_call_label(ctx.emitter, array_reverse_runtime_helper(&elem_ty));
     store_if_result(ctx, inst)
@@ -199,10 +207,11 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
 pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_unique", 1)?;
     let array = expect_operand(inst, 0)?;
-    let elem_ty = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
+    let elem_ty =
+        eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the dedup helper argument
+        ctx.emitter.instruction("mov rdi, rax"); // pass the source indexed-array pointer as the dedup helper argument
     }
     abi::emit_call_label(ctx.emitter, array_unique_runtime_helper(&elem_ty));
     store_if_result(ctx, inst)
@@ -285,8 +294,12 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
             _ => {}
         }
     }
-    let callback_binding =
-        static_sort_callback_binding(ctx, callback, "array_filter callback", callback_arg_types.as_deref())?;
+    let callback_binding = static_sort_callback_binding(
+        ctx,
+        callback,
+        "array_filter callback",
+        callback_arg_types.as_deref(),
+    )?;
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -346,7 +359,10 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, array_map_runtime_label(&callback_elem_ty, env_bytes));
+                    abi::emit_call_label(
+                        ctx.emitter,
+                        array_map_runtime_label(&callback_elem_ty, env_bytes),
+                    );
                     Ok(())
                 },
             )?;
@@ -422,11 +438,8 @@ fn lower_array_map_descriptor_callback(
     callback_elem_ty: &PhpType,
     result_elem_ty: &PhpType,
 ) -> Result<()> {
-    let wrapper_label = emit_descriptor_callback_wrapper(
-        ctx,
-        vec![elem_ty.clone()],
-        callback_elem_ty.clone(),
-    );
+    let wrapper_label =
+        emit_descriptor_callback_wrapper(ctx, vec![elem_ty.clone()], callback_elem_ty.clone());
     let env_bytes = reserve_descriptor_callback_env(ctx, callback)?;
     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -434,7 +447,10 @@ fn lower_array_map_descriptor_callback(
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    abi::emit_call_label(ctx.emitter, array_map_runtime_label(callback_elem_ty, env_bytes));
+    abi::emit_call_label(
+        ctx.emitter,
+        array_map_runtime_label(callback_elem_ty, env_bytes),
+    );
     abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     normalize_indexed_array_result(ctx, "array_map", callback_elem_ty, result_elem_ty)?;
     box_array_result_for_mixed_builtin(ctx, inst, result_elem_ty);
@@ -451,11 +467,8 @@ fn lower_array_map_callable_array_descriptor_callback(
     callback_elem_ty: &PhpType,
     result_elem_ty: &PhpType,
 ) -> Result<()> {
-    let wrapper_label = emit_descriptor_callback_wrapper(
-        ctx,
-        vec![elem_ty.clone()],
-        callback_elem_ty.clone(),
-    );
+    let wrapper_label =
+        emit_descriptor_callback_wrapper(ctx, vec![elem_ty.clone()], callback_elem_ty.clone());
     super::super::callables::emit_runtime_callable_array_descriptor_value(
         ctx,
         callback,
@@ -469,7 +482,10 @@ fn lower_array_map_callable_array_descriptor_callback(
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    abi::emit_call_label(ctx.emitter, array_map_runtime_label(callback_elem_ty, env_bytes));
+    abi::emit_call_label(
+        ctx.emitter,
+        array_map_runtime_label(callback_elem_ty, env_bytes),
+    );
     release_descriptor_callback_env_preserving_result(ctx);
     abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     normalize_indexed_array_result(ctx, "array_map", callback_elem_ty, result_elem_ty)?;
@@ -523,10 +539,10 @@ fn reserve_descriptor_callback_env(
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str x0, [sp]");                            // store the runtime callable descriptor for the descriptor callback wrapper
+            ctx.emitter.instruction("str x0, [sp]"); // store the runtime callable descriptor for the descriptor callback wrapper
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // store the runtime callable descriptor for the descriptor callback wrapper
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax"); // store the runtime callable descriptor for the descriptor callback wrapper
         }
     }
     Ok(16)
@@ -594,11 +610,8 @@ where
             &matched_label,
             ctx.data,
         );
-        let wrapper_label = emit_descriptor_callback_wrapper(
-            ctx,
-            visible_arg_types.clone(),
-            return_ty.clone(),
-        );
+        let wrapper_label =
+            emit_descriptor_callback_wrapper(ctx, visible_arg_types.clone(), return_ty.clone());
         let env_bytes = reserve_descriptor_callback_env_from_reg(ctx, call_reg);
         emit_call(ctx, &wrapper_label, env_bytes)?;
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
@@ -620,10 +633,13 @@ fn reserve_descriptor_callback_env_from_reg(
     abi::emit_reserve_temporary_stack(ctx.emitter, 16);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("str {}, [sp]", descriptor_reg));  // store the selected runtime string descriptor for the descriptor callback wrapper
+            ctx.emitter
+                .instruction(&format!("str {}, [sp]", descriptor_reg)); // store the selected runtime string descriptor for the descriptor callback wrapper
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp], {}", descriptor_reg)); // store the selected runtime string descriptor for the descriptor callback wrapper
+            ctx.emitter
+                .instruction(&format!("mov QWORD PTR [rsp], {}", descriptor_reg));
+            // store the selected runtime string descriptor for the descriptor callback wrapper
         }
     }
     16
@@ -638,19 +654,21 @@ fn emit_dynamic_string_callback_abort(ctx: &mut FunctionContext<'_>, owner: &str
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the unresolved runtime callback diagnostic to stderr
-            ctx.emitter.adrp("x1", &message_label);                             // load the runtime callback diagnostic page
-            ctx.emitter.add_lo12("x1", "x1", &message_label);                  // resolve the runtime callback diagnostic address
-            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the runtime callback diagnostic byte length to write
+            ctx.emitter.instruction("mov x0, #2"); // write the unresolved runtime callback diagnostic to stderr
+            ctx.emitter.adrp("x1", &message_label); // load the runtime callback diagnostic page
+            ctx.emitter.add_lo12("x1", "x1", &message_label); // resolve the runtime callback diagnostic address
+            ctx.emitter
+                .instruction(&format!("mov x2, #{}", message_len)); // pass the runtime callback diagnostic byte length to write
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the unresolved runtime callback diagnostic to Linux stderr
+            ctx.emitter.instruction("mov edi, 2"); // write the unresolved runtime callback diagnostic to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
-            ctx.emitter.instruction(&format!("mov edx, {}", message_len));      // pass the runtime callback diagnostic byte length to write
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the fatal diagnostic before terminating
+            ctx.emitter
+                .instruction(&format!("mov edx, {}", message_len)); // pass the runtime callback diagnostic byte length to write
+            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall"); // emit the fatal diagnostic before terminating
             abi::emit_exit(ctx.emitter, 1);
         }
     }
@@ -678,8 +696,10 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
     let initial = expect_operand(inst, 2)?;
-    let elem_ty = eight_byte_callback_array_element_type(ctx.value_php_type(array)?, "array_reduce")?;
-    let initial_ty = eight_byte_callback_value_type(ctx.value_php_type(initial)?, "array_reduce initial")?;
+    let elem_ty =
+        eight_byte_callback_array_element_type(ctx.value_php_type(array)?, "array_reduce")?;
+    let initial_ty =
+        eight_byte_callback_value_type(ctx.value_php_type(initial)?, "array_reduce initial")?;
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Callable => {
             lower_descriptor_callback_runtime(
@@ -857,7 +877,10 @@ pub(crate) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `array_intersect()` for two compatible indexed arrays with pointer-sized payload slots.
-pub(crate) fn lower_array_intersect(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_intersect(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     lower_indexed_array_set_op(
         ctx,
         inst,
@@ -868,12 +891,18 @@ pub(crate) fn lower_array_intersect(ctx: &mut FunctionContext<'_>, inst: &Instru
 }
 
 /// Lowers `array_diff_key()` for two associative arrays by filtering first-operand keys.
-pub(crate) fn lower_array_diff_key(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_diff_key(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     lower_assoc_array_key_set_op(ctx, inst, "array_diff_key", "__rt_array_diff_key")
 }
 
 /// Lowers `array_intersect_key()` for two associative arrays by keeping shared first-operand keys.
-pub(crate) fn lower_array_intersect_key(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_intersect_key(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     lower_assoc_array_key_set_op(ctx, inst, "array_intersect_key", "__rt_array_intersect_key")
 }
 
@@ -894,7 +923,8 @@ pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
         None
     };
     let source_elem_ty = array_slice_source_element_type(ctx.value_php_type(array)?)?;
-    let result_elem_ty = result_array_element_type("array_slice", &inst.result_php_type.codegen_repr())?;
+    let result_elem_ty =
+        result_array_element_type("array_slice", &inst.result_php_type.codegen_repr())?;
     require_array_slice_result_type(&source_elem_ty, &result_elem_ty)?;
     lower_array_slice_call(ctx, array, offset, length, &source_elem_ty)?;
     normalize_indexed_array_result(ctx, "array_slice", &source_elem_ty, &result_elem_ty)?;
@@ -910,7 +940,8 @@ fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     } else {
         None
     };
-    let result_elem_ty = result_array_element_type("array_slice", &inst.result_php_type.codegen_repr())?;
+    let result_elem_ty =
+        result_array_element_type("array_slice", &inst.result_php_type.codegen_repr())?;
     require_array_slice_result_type(&PhpType::Mixed, &result_elem_ty)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_mixed_array_slice_aarch64(ctx, array, offset, length)?,
@@ -960,11 +991,7 @@ fn lower_mixed_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         Arch::AArch64 => lower_mixed_array_splice_aarch64(ctx, array, offset, length)?,
         Arch::X86_64 => lower_mixed_array_splice_x86_64(ctx, array, offset, length)?,
     }
-    normalize_array_splice_result(
-        ctx,
-        &PhpType::Mixed,
-        &inst.result_php_type.codegen_repr(),
-    )?;
+    normalize_array_splice_result(ctx, &PhpType::Mixed, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }
 
@@ -985,7 +1012,7 @@ pub(crate) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction
     require_indexed_array_builtin(ctx.value_php_type(array)?, "array_rand")?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the random-key helper argument
+        ctx.emitter.instruction("mov rdi, rax"); // pass the indexed-array pointer as the random-key helper argument
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_rand");
     store_if_result(ctx, inst)
@@ -1007,12 +1034,12 @@ pub(crate) fn lower_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     resolve_int_operand_to_result(ctx, end, "range end")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, x0");                              // move the resolved range end into the second runtime argument
-            abi::emit_pop_reg(ctx.emitter, "x0");                                   // restore the resolved range start into the first runtime argument
+            ctx.emitter.instruction("mov x1, x0"); // move the resolved range end into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x0"); // restore the resolved range start into the first runtime argument
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, rax");                            // move the resolved range end into the second runtime argument
-            abi::emit_pop_reg(ctx.emitter, "rdi");                                  // restore the resolved range start into the first runtime argument
+            ctx.emitter.instruction("mov rsi, rax"); // move the resolved range end into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rdi"); // restore the resolved range start into the first runtime argument
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_range");
@@ -1108,7 +1135,10 @@ pub(crate) fn lower_uasort(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `array_key_exists()` through the dedicated key-existence builtin emitter.
-pub(crate) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_key_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     key_exists::lower_array_key_exists(ctx, inst)
 }
 
@@ -1127,12 +1157,18 @@ pub(crate) fn lower_array_is_list(ctx: &mut FunctionContext<'_>, inst: &Instruct
 }
 
 /// Lowers `array_key_first()` through the shared edge-key helper with selector `0`.
-pub(crate) fn lower_array_key_first(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_key_first(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     lower_array_edge_key(ctx, inst, "array_key_first", 0)
 }
 
 /// Lowers `array_key_last()` through the shared edge-key helper with selector `1`.
-pub(crate) fn lower_array_key_last(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_key_last(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     lower_array_edge_key(ctx, inst, "array_key_last", 1)
 }
 
@@ -1193,7 +1229,7 @@ fn two_hash_operand_needs_conversion(ty: PhpType, name: &str) -> Result<bool> {
 /// register already is that register, but on x86_64 the value lives in `rax` and must move to `rdi`.
 fn emit_convert_indexed_to_hash(ctx: &mut FunctionContext<'_>) {
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // move the array pointer into the first SysV argument register
+        ctx.emitter.instruction("mov rdi, rax"); // move the array pointer into the first SysV argument register
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
 }
@@ -1235,17 +1271,17 @@ fn lower_two_hash_arg_builtin(
         // -- fast path: both inputs are already hashes, no temporaries to free --
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction("mov x1, x0");                          // second hash pointer into the second argument register
+                ctx.emitter.instruction("mov x1, x0"); // second hash pointer into the second argument register
                 abi::emit_pop_reg(ctx.emitter, "x0");
                 if let Some(m) = mode {
-                    ctx.emitter.instruction(&format!("mov x2, #{}", m));        // mode selector into the third argument register
+                    ctx.emitter.instruction(&format!("mov x2, #{}", m)); // mode selector into the third argument register
                 }
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("mov rsi, rax");                        // second hash pointer into the second SysV argument register
+                ctx.emitter.instruction("mov rsi, rax"); // second hash pointer into the second SysV argument register
                 abi::emit_pop_reg(ctx.emitter, "rdi");
                 if let Some(m) = mode {
-                    ctx.emitter.instruction(&format!("mov edx, {}", m));        // mode selector into the third SysV argument register
+                    ctx.emitter.instruction(&format!("mov edx, {}", m)); // mode selector into the third SysV argument register
                 }
             }
         }
@@ -1257,43 +1293,43 @@ fn lower_two_hash_arg_builtin(
     abi::emit_push_reg(ctx.emitter, result_reg);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // first hash pointer kept on the stack for freeing
-            ctx.emitter.instruction("ldr x1, [sp]");                            // second hash pointer kept on the stack for freeing
+            ctx.emitter.instruction("ldr x0, [sp, #16]"); // first hash pointer kept on the stack for freeing
+            ctx.emitter.instruction("ldr x1, [sp]"); // second hash pointer kept on the stack for freeing
             if let Some(m) = mode {
-                ctx.emitter.instruction(&format!("mov x2, #{}", m));            // mode selector into the third argument register
+                ctx.emitter.instruction(&format!("mov x2, #{}", m)); // mode selector into the third argument register
             }
             abi::emit_call_label(ctx.emitter, runtime_label);
-            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // spill the result; stack holds [result, h2, h1]
+            ctx.emitter.instruction("str x0, [sp, #-16]!"); // spill the result; stack holds [result, h2, h1]
             if conv1 {
-                ctx.emitter.instruction("ldr x0, [sp, #16]");                   // reload the converted second hash temporary
+                ctx.emitter.instruction("ldr x0, [sp, #16]"); // reload the converted second hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             if conv0 {
-                ctx.emitter.instruction("ldr x0, [sp, #32]");                   // reload the converted first hash temporary
+                ctx.emitter.instruction("ldr x0, [sp, #32]"); // reload the converted first hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
-            ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the result hash pointer
-            ctx.emitter.instruction("add sp, sp, #32");                         // discard the two spilled input hash pointers
+            ctx.emitter.instruction("ldr x0, [sp], #16"); // restore the result hash pointer
+            ctx.emitter.instruction("add sp, sp, #32"); // discard the two spilled input hash pointers
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // first hash pointer kept on the stack for freeing
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                // second hash pointer kept on the stack for freeing
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]"); // first hash pointer kept on the stack for freeing
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]"); // second hash pointer kept on the stack for freeing
             if let Some(m) = mode {
-                ctx.emitter.instruction(&format!("mov edx, {}", m));            // mode selector into the third SysV argument register
+                ctx.emitter.instruction(&format!("mov edx, {}", m)); // mode selector into the third SysV argument register
             }
             abi::emit_call_label(ctx.emitter, runtime_label);
-            ctx.emitter.instruction("sub rsp, 16");                             // reserve a slot for the result
-            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // spill the result; stack holds [result, h2, h1]
+            ctx.emitter.instruction("sub rsp, 16"); // reserve a slot for the result
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax"); // spill the result; stack holds [result, h2, h1]
             if conv1 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");       // reload the converted second hash temporary
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]"); // reload the converted second hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             if conv0 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");       // reload the converted first hash temporary
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]"); // reload the converted first hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the result hash pointer
-            ctx.emitter.instruction("add rsp, 48");                             // discard the result slot and the two spilled inputs
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]"); // restore the result hash pointer
+            ctx.emitter.instruction("add rsp, 48"); // discard the result slot and the two spilled inputs
         }
     }
     store_if_result(ctx, inst)
@@ -1319,8 +1355,17 @@ pub(crate) fn lower_array_replace_recursive(
 }
 
 /// Lowers `array_diff_assoc()` via the shared associative diff/intersect helper (mode 0 = diff).
-pub(crate) fn lower_array_diff_assoc(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_two_hash_arg_builtin(ctx, inst, "array_diff_assoc", "__rt_assoc_diff_intersect", Some(0))
+pub(crate) fn lower_array_diff_assoc(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_two_hash_arg_builtin(
+        ctx,
+        inst,
+        "array_diff_assoc",
+        "__rt_assoc_diff_intersect",
+        Some(0),
+    )
 }
 
 /// Lowers `array_intersect_assoc()` via the shared associative diff/intersect helper (mode 1 = intersect).
@@ -1432,7 +1477,14 @@ fn lower_single_array_callback_builtin(
                 visible_arg_types,
                 return_ty,
                 |ctx, wrapper_label, env_bytes| {
-                    emit_single_array_callback_call(ctx, wrapper_label, array, env_bytes, mode, runtime_label)
+                    emit_single_array_callback_call(
+                        ctx,
+                        wrapper_label,
+                        array,
+                        env_bytes,
+                        mode,
+                        runtime_label,
+                    )
                 },
             )?;
             store_if_result(ctx, inst)
@@ -1446,7 +1498,14 @@ fn lower_single_array_callback_builtin(
                 return_ty,
                 name,
                 |ctx, wrapper_label, env_bytes| {
-                    emit_single_array_callback_call(ctx, wrapper_label, array, env_bytes, mode, runtime_label)
+                    emit_single_array_callback_call(
+                        ctx,
+                        wrapper_label,
+                        array,
+                        env_bytes,
+                        mode,
+                        runtime_label,
+                    )
                 },
             )?;
             store_if_result(ctx, inst)
@@ -1459,7 +1518,14 @@ fn lower_single_array_callback_builtin(
                 Some(&visible_arg_types),
             )?;
             let env_bytes = reserve_static_callback_env(ctx, binding.env_source)?;
-            emit_single_array_callback_call(ctx, &binding.label, array, env_bytes, mode, runtime_label)?;
+            emit_single_array_callback_call(
+                ctx,
+                &binding.label,
+                array,
+                env_bytes,
+                mode,
+                runtime_label,
+            )?;
             if env_bytes != 0 {
                 abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
             }
@@ -1514,7 +1580,10 @@ pub(crate) fn lower_array_all(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 
 /// Lowers `array_walk_recursive()`: invokes the callback on each scalar leaf of a (possibly nested)
 /// array, descending into array-valued elements. Returns void; leaves are passed as 8-byte scalars.
-pub(crate) fn lower_array_walk_recursive(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_walk_recursive(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     super::ensure_arg_count(inst, "array_walk_recursive", 2)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
@@ -1635,7 +1704,10 @@ pub(crate) fn lower_array_udiff(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Lowers `array_uintersect()`: keeps first-array elements equal (per comparator) to some second-array element.
-pub(crate) fn lower_array_uintersect(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_uintersect(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     lower_two_array_comparator_builtin(ctx, inst, "array_uintersect", 1)
 }
 
@@ -1643,7 +1715,10 @@ pub(crate) fn lower_array_uintersect(ctx: &mut FunctionContext<'_>, inst: &Instr
 /// in tandem, both in place. Both arguments are by-reference, so each is copy-on-write split with
 /// `ensure_unique_sort_source` and the (possibly relocated) pointer is written back to its local
 /// before the runtime mutates the storage. Returns `true`. Supports 8-byte scalar indexed arrays.
-pub(crate) fn lower_array_multisort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_multisort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     super::ensure_arg_count(inst, "array_multisort", 2)?;
     let arr1 = expect_operand(inst, 0)?;
     let arr2 = expect_operand(inst, 1)?;
@@ -1688,7 +1763,13 @@ pub(crate) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let array = expect_operand(inst, 1)?;
     let needle_ty = ctx.value_php_type(needle)?;
     let array_ty = ctx.value_php_type(array)?;
-    if search::try_lower_assoc_array_search(ctx, needle, array, needle_ty.clone(), array_ty.clone())? {
+    if search::try_lower_assoc_array_search(
+        ctx,
+        needle,
+        array,
+        needle_ty.clone(),
+        array_ty.clone(),
+    )? {
         store_if_result(ctx, inst)?;
         return Ok(());
     }
@@ -1734,7 +1815,7 @@ fn lower_indexed_array_aggregate(
     require_supported_indexed_array(ctx.value_php_type(array)?, name)?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the runtime helper argument
+        ctx.emitter.instruction("mov rdi, rax"); // pass the indexed-array pointer as the runtime helper argument
     }
     abi::emit_call_label(ctx.emitter, helper);
     store_if_result(ctx, inst)
@@ -1816,7 +1897,8 @@ fn lower_indexed_array_sort(
 ) -> Result<()> {
     super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
-    let elem_ty = indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
+    let elem_ty =
+        indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
     let source_local = source_load_local_slot(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     if let Some(slot) = source_local {
@@ -1889,8 +1971,12 @@ fn lower_user_sort_static_callback(
     let callback_ty = ctx.value_php_type(callback)?.codegen_repr();
     let callback_owner = format!("{} callback", name);
     if callback_ty == PhpType::Callable && static_callback_operand_is_recoverable(ctx, callback) {
-        let callback_binding =
-            static_sort_callback_binding(ctx, callback, &callback_owner, Some(&[PhpType::Int, PhpType::Int]))?;
+        let callback_binding = static_sort_callback_binding(
+            ctx,
+            callback,
+            &callback_owner,
+            Some(&[PhpType::Int, PhpType::Int]),
+        )?;
         return lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding);
     }
     match callback_ty {
@@ -1948,8 +2034,12 @@ fn lower_user_sort_static_callback(
         }
         _ => {}
     }
-    let callback_binding =
-        static_sort_callback_binding(ctx, callback, &callback_owner, Some(&[PhpType::Int, PhpType::Int]))?;
+    let callback_binding = static_sort_callback_binding(
+        ctx,
+        callback,
+        &callback_owner,
+        Some(&[PhpType::Int, PhpType::Int]),
+    )?;
     lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding)
 }
 
@@ -2007,11 +2097,7 @@ fn lower_array_key_sort(
 }
 
 /// Returns the indexed-array element type accepted by the selected sort helper.
-fn indexed_sort_element_type(
-    ty: PhpType,
-    name: &str,
-    allow_strings: bool,
-) -> Result<PhpType> {
+fn indexed_sort_element_type(ty: PhpType, name: &str, allow_strings: bool) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
@@ -2022,11 +2108,13 @@ fn indexed_sort_element_type(
             }
             Err(CodegenIrError::unsupported(format!(
                 "{} indexed-array element PHP type {:?}",
-                name,
-                elem
+                name, elem
             )))
         }
-        other => Err(CodegenIrError::unsupported(format!("{} for PHP type {:?}", name, other))),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            name, other
+        ))),
     }
 }
 
@@ -2054,7 +2142,10 @@ fn user_sort_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
                 name, elem
             )))
         }
-        other => Err(CodegenIrError::unsupported(format!("{} for PHP type {:?}", name, other))),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            name, other
+        ))),
     }
 }
 
@@ -2062,7 +2153,10 @@ fn user_sort_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
 fn require_array_key_sort_type(ty: PhpType, name: &str) -> Result<()> {
     match ty.codegen_repr() {
         PhpType::Array(_) | PhpType::AssocArray { .. } => Ok(()),
-        other => Err(CodegenIrError::unsupported(format!("{} for PHP type {:?}", name, other))),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            name, other
+        ))),
     }
 }
 
@@ -2083,11 +2177,12 @@ fn ensure_unique_sort_source(ctx: &mut FunctionContext<'_>, array: ValueId) -> R
 /// Verifies the aggregate can use the current raw integer-slot runtime helper.
 fn require_supported_indexed_array(ty: PhpType, name: &str) -> Result<()> {
     match ty.codegen_repr() {
-        PhpType::Array(elem) if matches!(*elem, PhpType::Int | PhpType::Bool | PhpType::Never) => Ok(()),
+        PhpType::Array(elem) if matches!(*elem, PhpType::Int | PhpType::Bool | PhpType::Never) => {
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
-            name,
-            other
+            name, other
         ))),
     }
 }
@@ -2127,8 +2222,7 @@ fn require_array_filter_result_type(source_elem_ty: &PhpType, result_ty: &PhpTyp
         }
         other => Err(CodegenIrError::unsupported(format!(
             "array_filter result PHP type {:?} for source element PHP type {:?}",
-            other,
-            source_elem_ty
+            other, source_elem_ty
         ))),
     }
 }
@@ -2167,7 +2261,10 @@ fn array_filter_callback_arg_types(
 }
 
 /// Returns a compile-time `array_filter()` mode when it is visible in EIR.
-fn static_array_filter_mode(ctx: &FunctionContext<'_>, mode: Option<ValueId>) -> Result<Option<i64>> {
+fn static_array_filter_mode(
+    ctx: &FunctionContext<'_>,
+    mode: Option<ValueId>,
+) -> Result<Option<i64>> {
     let Some(mode) = mode else {
         return Ok(Some(0));
     };
@@ -2186,7 +2283,9 @@ fn array_filter_mode_const_i64(ctx: &FunctionContext<'_>, value: ValueId) -> Res
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
     let inst_ref = if inst_ref.op == Op::LoadLocal {
-        let Some(inst_ref) = array_filter_local_mode_source_instruction(ctx, block, index, inst_ref)? else {
+        let Some(inst_ref) =
+            array_filter_local_mode_source_instruction(ctx, block, index, inst_ref)?
+        else {
             return Ok(None);
         };
         inst_ref
@@ -2254,7 +2353,10 @@ fn array_filter_local_mode_source_instruction<'a>(
 fn eight_byte_callback_array_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => eight_byte_callback_value_type(*elem, name),
-        other => Err(CodegenIrError::unsupported(format!("{} for PHP type {:?}", name, other))),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            name, other
+        ))),
     }
 }
 
@@ -2263,7 +2365,15 @@ fn array_map_callback_array_element_type(ty: PhpType) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
-            if matches!(elem, PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Void | PhpType::Never | PhpType::Mixed) {
+            if matches!(
+                elem,
+                PhpType::Int
+                    | PhpType::Bool
+                    | PhpType::Str
+                    | PhpType::Void
+                    | PhpType::Never
+                    | PhpType::Mixed
+            ) {
                 return Ok(elem);
             }
             Err(CodegenIrError::unsupported(format!(
@@ -2281,13 +2391,15 @@ fn array_map_callback_array_element_type(ty: PhpType) -> Result<PhpType> {
 /// Returns a scalar callback value type that fits in one integer ABI register.
 fn eight_byte_callback_value_type(ty: PhpType, name: &str) -> Result<PhpType> {
     let ty = ty.codegen_repr();
-    if matches!(ty, PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never) {
+    if matches!(
+        ty,
+        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never
+    ) {
         Ok(ty)
     } else {
         Err(CodegenIrError::unsupported(format!(
             "{} PHP type {:?}",
-            name,
-            ty
+            name, ty
         )))
     }
 }
@@ -2340,7 +2452,10 @@ fn array_map_descriptor_callback_result_element_type(inst: &Instruction) -> Resu
     match inst.result_php_type.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
-            if matches!(elem, PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Mixed) {
+            if matches!(
+                elem,
+                PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Mixed
+            ) {
                 Ok(elem)
             } else {
                 Err(CodegenIrError::unsupported(format!(
@@ -2358,7 +2473,10 @@ fn array_map_descriptor_callback_result_element_type(inst: &Instruction) -> Resu
 }
 
 /// Returns the element type expected by the EIR `array_map()` result slot.
-fn array_map_result_element_type(inst: &Instruction, callback_elem_ty: &PhpType) -> Result<PhpType> {
+fn array_map_result_element_type(
+    inst: &Instruction,
+    callback_elem_ty: &PhpType,
+) -> Result<PhpType> {
     match inst.result_php_type.codegen_repr() {
         PhpType::Array(elem) => {
             let result_elem_ty = elem.codegen_repr();
@@ -2367,8 +2485,7 @@ fn array_map_result_element_type(inst: &Instruction, callback_elem_ty: &PhpType)
             } else {
                 Err(CodegenIrError::unsupported(format!(
                     "array_map result element PHP type {:?} for callback result PHP type {:?}",
-                    result_elem_ty,
-                    callback_elem_ty
+                    result_elem_ty, callback_elem_ty
                 )))
             }
         }
@@ -2422,9 +2539,11 @@ fn static_sort_callback_binding(
         });
     }
     if callback.kind == StaticCallbackOperandKind::FirstClassCallable {
-        if let Some(target) = instance_method_sort_callback_target(ctx, &callback, owner, visible_arg_types)? {
-            let visible_arg_types =
-                visible_arg_types.expect("instance sort callback target requires known argument types");
+        if let Some(target) =
+            instance_method_sort_callback_target(ctx, &callback, owner, visible_arg_types)?
+        {
+            let visible_arg_types = visible_arg_types
+                .expect("instance sort callback target requires known argument types");
             let label = emit_instance_method_callback_wrapper(ctx, &target, visible_arg_types);
             return Ok(StaticSortCallbackBinding {
                 label,
@@ -2432,9 +2551,11 @@ fn static_sort_callback_binding(
                 return_ty: target.return_ty,
             });
         }
-        if let Some(target) = static_method_sort_callback_target(ctx, &callback.name, owner, visible_arg_types)? {
-            let visible_arg_types =
-                visible_arg_types.expect("static sort callback target requires known argument types");
+        if let Some(target) =
+            static_method_sort_callback_target(ctx, &callback.name, owner, visible_arg_types)?
+        {
+            let visible_arg_types = visible_arg_types
+                .expect("static sort callback target requires known argument types");
             let label = emit_static_method_callback_wrapper(ctx, &target, visible_arg_types);
             return Ok(StaticSortCallbackBinding {
                 label,
@@ -2445,8 +2566,7 @@ fn static_sort_callback_binding(
     }
     Err(CodegenIrError::unsupported(format!(
         "{} '{}' is not a user function or supported first-class static method",
-        owner,
-        callback.name
+        owner, callback.name
     )))
 }
 
@@ -2499,7 +2619,8 @@ fn static_callable_array_source(
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
     let candidate = if inst_ref.op == Op::LoadLocal {
-        let Some(stored) = static_callback_local_stored_value(ctx, block, index, inst_ref, owner)? else {
+        let Some(stored) = static_callback_local_stored_value(ctx, block, index, inst_ref, owner)?
+        else {
             return Ok(None);
         };
         stored
@@ -2509,7 +2630,11 @@ fn static_callable_array_source(
     let array = strip_static_callback_acquire(ctx, candidate)?;
     if value_defining_op(ctx, array)? == Some(Op::ArrayNew) {
         let (array_block, _) = value_instruction_location(ctx, array)?;
-        let limit_index = if array_block == block { index } else { u32::MAX };
+        let limit_index = if array_block == block {
+            index
+        } else {
+            u32::MAX
+        };
         Ok(Some((array, array_block, limit_index)))
     } else {
         Ok(None)
@@ -2626,10 +2751,7 @@ fn value_instruction<'a>(
 }
 
 /// Returns the block and instruction index that define an instruction-backed SSA value.
-fn value_instruction_location(
-    ctx: &FunctionContext<'_>,
-    value: ValueId,
-) -> Result<(BlockId, u32)> {
+fn value_instruction_location(ctx: &FunctionContext<'_>, value: ValueId) -> Result<(BlockId, u32)> {
     let Some(value_ref) = ctx.function.value(value) else {
         return Err(CodegenIrError::missing_entry("value", value.as_raw()));
     };
@@ -2754,7 +2876,11 @@ fn static_callback_name_operand(
         .get(data.as_raw() as usize)
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?;
-    Ok(StaticCallbackName { name, kind, receiver })
+    Ok(StaticCallbackName {
+        name,
+        kind,
+        receiver,
+    })
 }
 
 /// Returns the literal callback-producing instruction for a callback operand.
@@ -2897,7 +3023,10 @@ fn static_callback_local_source_instruction<'a>(
 }
 
 /// Verifies an instruction directly materializes a callback identity supported by the runtime.
-fn require_static_callback_source<'a>(inst: &'a Instruction, owner: &str) -> Result<&'a Instruction> {
+fn require_static_callback_source<'a>(
+    inst: &'a Instruction,
+    owner: &str,
+) -> Result<&'a Instruction> {
     if matches!(inst.op, Op::ConstStr | Op::FirstClassCallableNew) {
         Ok(inst)
     } else {
@@ -2966,47 +3095,38 @@ fn static_method_callback_target_inner(
     if matches!(receiver, "self" | "parent" | "static" | "object") {
         return Err(CodegenIrError::unsupported(format!(
             "{} with lexical or receiver-bound static method callback '{}'",
-            owner,
-            callback_name
+            owner, callback_name
         )));
     }
     let visible_arg_types = visible_arg_types.ok_or_else(|| {
         CodegenIrError::unsupported(format!(
             "{} '{}' with dynamic callback argument shape",
-            owner,
-            callback_name
+            owner, callback_name
         ))
     })?;
     require_static_method_callback_arg_types(owner, callback_name, visible_arg_types)?;
-    let receiver_info = ctx
-        .module
-        .class_infos
-        .get(receiver)
-        .ok_or_else(|| CodegenIrError::unsupported(format!(
+    let receiver_info = ctx.module.class_infos.get(receiver).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
             "{} with unknown static method callback class '{}'",
-            owner,
-            receiver
-        )))?;
+            owner, receiver
+        ))
+    })?;
     let method_key = php_symbol_key(method);
     let impl_class = receiver_info
         .static_method_impl_classes
         .get(&method_key)
         .map(String::as_str)
         .unwrap_or(receiver);
-    let impl_info = ctx
-        .module
-        .class_infos
-        .get(impl_class)
-        .ok_or_else(|| CodegenIrError::unsupported(format!(
+    let impl_info = ctx.module.class_infos.get(impl_class).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
             "{} with unknown static method implementation class '{}'",
-            owner,
-            impl_class
-        )))?;
+            owner, impl_class
+        ))
+    })?;
     let sig = impl_info.static_methods.get(&method_key).ok_or_else(|| {
         CodegenIrError::unsupported(format!(
             "{} with unknown static method callback '{}'",
-            owner,
-            callback_name
+            owner, callback_name
         ))
     })?;
     if sig.params.len() != visible_arg_types.len() {
@@ -3040,40 +3160,32 @@ fn static_late_bound_method_callback_target(
     let visible_arg_types = visible_arg_types.ok_or_else(|| {
         CodegenIrError::unsupported(format!(
             "{} '{}' with dynamic callback argument shape",
-            owner,
-            callback_name
+            owner, callback_name
         ))
     })?;
     require_static_method_callback_arg_types(owner, &callback_name, visible_arg_types)?;
-    let receiver_info = ctx
-        .module
-        .class_infos
-        .get(receiver)
-        .ok_or_else(|| CodegenIrError::unsupported(format!(
+    let receiver_info = ctx.module.class_infos.get(receiver).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
             "{} with unknown static callback receiver class '{}'",
-            owner,
-            receiver
-        )))?;
+            owner, receiver
+        ))
+    })?;
     let method_key = php_symbol_key(method);
     let impl_class = receiver_info
         .static_method_impl_classes
         .get(&method_key)
         .map(String::as_str)
         .unwrap_or(receiver);
-    let impl_info = ctx
-        .module
-        .class_infos
-        .get(impl_class)
-        .ok_or_else(|| CodegenIrError::unsupported(format!(
+    let impl_info = ctx.module.class_infos.get(impl_class).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
             "{} with unknown static method implementation class '{}'",
-            owner,
-            impl_class
-        )))?;
+            owner, impl_class
+        ))
+    })?;
     let sig = impl_info.static_methods.get(&method_key).ok_or_else(|| {
         CodegenIrError::unsupported(format!(
             "{} with unknown static method callback '{}'",
-            owner,
-            callback_name
+            owner, callback_name
         ))
     })?;
     if sig.params.len() != visible_arg_types.len() {
@@ -3101,10 +3213,12 @@ fn current_callback_class<'a>(ctx: &'a FunctionContext<'_>) -> Result<&'a str> {
         .name
         .rsplit_once("::")
         .map(|(class_name, _)| class_name)
-        .ok_or_else(|| CodegenIrError::unsupported(format!(
-            "static callback outside class method {}",
-            ctx.function.name
-        )))
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "static callback outside class method {}",
+                ctx.function.name
+            ))
+        })
 }
 
 /// Returns the current called-class id source available to a late-static callback.
@@ -3137,15 +3251,13 @@ fn instance_method_sort_callback_target(
     let Some(receiver) = callback.receiver else {
         return Err(CodegenIrError::unsupported(format!(
             "{} '{}' without captured receiver operand",
-            owner,
-            callback.name
+            owner, callback.name
         )));
     };
     let visible_arg_types = visible_arg_types.ok_or_else(|| {
         CodegenIrError::unsupported(format!(
             "{} '{}' with dynamic callback argument shape",
-            owner,
-            callback.name
+            owner, callback.name
         ))
     })?;
     require_static_method_callback_arg_types(owner, &callback.name, visible_arg_types)?;
@@ -3153,27 +3265,21 @@ fn instance_method_sort_callback_target(
     let PhpType::Object(class_name) = receiver_ty else {
         return Err(CodegenIrError::unsupported(format!(
             "{} '{}' with receiver PHP type {:?}",
-            owner,
-            callback.name,
-            receiver_ty
+            owner, callback.name, receiver_ty
         )));
     };
     let normalized = class_name.trim_start_matches('\\');
-    let class_info = ctx
-        .module
-        .class_infos
-        .get(normalized)
-        .ok_or_else(|| CodegenIrError::unsupported(format!(
+    let class_info = ctx.module.class_infos.get(normalized).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
             "{} with unknown instance callback class '{}'",
-            owner,
-            normalized
-        )))?;
+            owner, normalized
+        ))
+    })?;
     let method_key = php_symbol_key(method);
     let sig = class_info.methods.get(&method_key).ok_or_else(|| {
         CodegenIrError::unsupported(format!(
             "{} with unknown instance method callback '{}'",
-            owner,
-            callback.name
+            owner, callback.name
         ))
     })?;
     if sig.params.len() != visible_arg_types.len() {
@@ -3194,8 +3300,7 @@ fn instance_method_sort_callback_target(
     if !instance_method_already_emitted(ctx, impl_class, &method_key) {
         return Err(CodegenIrError::unsupported(format!(
             "{} '{}' without emitted EIR method body",
-            owner,
-            callback.name
+            owner, callback.name
         )));
     }
     Ok(Some(InstanceMethodCallbackTarget {
@@ -3206,13 +3311,19 @@ fn instance_method_sort_callback_target(
 }
 
 /// Returns true when the instance callback target has a generated EIR method body.
-fn instance_method_already_emitted(ctx: &FunctionContext<'_>, class_name: &str, method_key: &str) -> bool {
+fn instance_method_already_emitted(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_key: &str,
+) -> bool {
     ctx.module.class_methods.iter().any(|function| {
         !function.flags.is_static
             && function
                 .name
                 .rsplit_once("::")
-                .is_some_and(|(class, method)| class == class_name && php_symbol_key(method) == method_key)
+                .is_some_and(|(class, method)| {
+                    class == class_name && php_symbol_key(method) == method_key
+                })
     })
 }
 
@@ -3238,8 +3349,7 @@ fn require_static_method_callback_arg_types(
     {
         return Err(CodegenIrError::unsupported(format!(
             "{} '{}' with string callback args outside the one-argument ABI",
-            owner,
-            callback_name
+            owner, callback_name
         )));
     }
     for ty in visible_arg_types {
@@ -3271,7 +3381,10 @@ fn require_static_method_callback_param_types(
         if matches!(visible_ty, PhpType::Void | PhpType::Never) {
             continue;
         }
-        if matches!((&param_ty, &visible_ty), (PhpType::Int | PhpType::Bool, PhpType::Int | PhpType::Bool)) {
+        if matches!(
+            (&param_ty, &visible_ty),
+            (PhpType::Int | PhpType::Bool, PhpType::Int | PhpType::Bool)
+        ) {
             continue;
         }
         if matches!((&param_ty, &visible_ty), (PhpType::Str, PhpType::Str)) {
@@ -3279,10 +3392,7 @@ fn require_static_method_callback_param_types(
         }
         return Err(CodegenIrError::unsupported(format!(
             "{} '{}' with callback param type {:?} for runtime arg type {:?}",
-            owner,
-            callback_name,
-            param_ty,
-            visible_ty
+            owner, callback_name, param_ty, visible_ty
         )));
     }
     Ok(())
@@ -3309,15 +3419,15 @@ fn shift_callback_args_after_hidden_aarch64(
 ) {
     match visible_arg_types {
         [ty] if matches!(ty.codegen_repr(), PhpType::Str) => {
-            ctx.emitter.instruction("mov x2, x1");                              // shift the callback string length after the hidden receiver/class id
-            ctx.emitter.instruction("mov x1, x0");                              // shift the callback string pointer after the hidden receiver/class id
+            ctx.emitter.instruction("mov x2, x1"); // shift the callback string length after the hidden receiver/class id
+            ctx.emitter.instruction("mov x1, x0"); // shift the callback string pointer after the hidden receiver/class id
         }
         [_] => {
-            ctx.emitter.instruction("mov x1, x0");                              // shift the scalar callback argument after the hidden receiver/class id
+            ctx.emitter.instruction("mov x1, x0"); // shift the scalar callback argument after the hidden receiver/class id
         }
         [_, _] => {
-            ctx.emitter.instruction("mov x2, x1");                              // shift the second scalar callback argument after the hidden receiver/class id
-            ctx.emitter.instruction("mov x1, x0");                              // shift the first scalar callback argument after the hidden receiver/class id
+            ctx.emitter.instruction("mov x2, x1"); // shift the second scalar callback argument after the hidden receiver/class id
+            ctx.emitter.instruction("mov x1, x0"); // shift the first scalar callback argument after the hidden receiver/class id
         }
         _ => {}
     }
@@ -3330,15 +3440,15 @@ fn shift_callback_args_after_hidden_x86_64(
 ) {
     match visible_arg_types {
         [ty] if matches!(ty.codegen_repr(), PhpType::Str) => {
-            ctx.emitter.instruction("mov rdx, rsi");                            // shift the callback string length after the hidden receiver/class id
-            ctx.emitter.instruction("mov rsi, rdi");                            // shift the callback string pointer after the hidden receiver/class id
+            ctx.emitter.instruction("mov rdx, rsi"); // shift the callback string length after the hidden receiver/class id
+            ctx.emitter.instruction("mov rsi, rdi"); // shift the callback string pointer after the hidden receiver/class id
         }
         [_] => {
-            ctx.emitter.instruction("mov rsi, rdi");                            // shift the scalar callback argument after the hidden receiver/class id
+            ctx.emitter.instruction("mov rsi, rdi"); // shift the scalar callback argument after the hidden receiver/class id
         }
         [_, _] => {
-            ctx.emitter.instruction("mov rdx, rsi");                            // shift the second scalar callback argument after the hidden receiver/class id
-            ctx.emitter.instruction("mov rsi, rdi");                            // shift the first scalar callback argument after the hidden receiver/class id
+            ctx.emitter.instruction("mov rdx, rsi"); // shift the second scalar callback argument after the hidden receiver/class id
+            ctx.emitter.instruction("mov rsi, rdi"); // shift the first scalar callback argument after the hidden receiver/class id
         }
         _ => {}
     }
@@ -3355,7 +3465,9 @@ fn emit_static_method_callback_wrapper(
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&wrapper_label);
     match ctx.emitter.target.arch {
-        Arch::AArch64 => emit_static_method_callback_wrapper_aarch64(ctx, target, visible_arg_types),
+        Arch::AArch64 => {
+            emit_static_method_callback_wrapper_aarch64(ctx, target, visible_arg_types)
+        }
         Arch::X86_64 => emit_static_method_callback_wrapper_x86_64(ctx, target, visible_arg_types),
     }
     ctx.emitter.label(&done_label);
@@ -3368,23 +3480,26 @@ fn emit_static_method_callback_wrapper_aarch64(
     target: &StaticMethodCallbackTarget,
     visible_arg_types: &[PhpType],
 ) {
-    let env_reg = abi::int_arg_reg_name(ctx.emitter.target, callback_arg_abi_slots(visible_arg_types));
-    ctx.emitter.instruction("sub sp, sp, #16");                                 // reserve wrapper spill space for the runtime callback return address
-    ctx.emitter.instruction("str x30, [sp, #8]");                               // preserve the runtime helper return address across the static method call
+    let env_reg = abi::int_arg_reg_name(
+        ctx.emitter.target,
+        callback_arg_abi_slots(visible_arg_types),
+    );
+    ctx.emitter.instruction("sub sp, sp, #16"); // reserve wrapper spill space for the runtime callback return address
+    ctx.emitter.instruction("str x30, [sp, #8]"); // preserve the runtime helper return address across the static method call
     match target.called_class {
         StaticCallbackCalledClass::Immediate(class_id) => {
             abi::emit_load_int_immediate(ctx.emitter, "x3", class_id as i64);
         }
         StaticCallbackCalledClass::Env => {
-            ctx.emitter.instruction(&format!("ldr x3, [{}]", env_reg));         // load the late-static called-class id from the callback environment
+            ctx.emitter.instruction(&format!("ldr x3, [{}]", env_reg)); // load the late-static called-class id from the callback environment
         }
     }
     shift_callback_args_after_hidden_aarch64(ctx, visible_arg_types);
-    ctx.emitter.instruction("mov x0, x3");                                      // pass the called-class id as the hidden static method argument
+    ctx.emitter.instruction("mov x0, x3"); // pass the called-class id as the hidden static method argument
     emit_static_callback_dispatch(ctx, target);
-    ctx.emitter.instruction("ldr x30, [sp, #8]");                               // restore the runtime helper return address after the static method call
-    ctx.emitter.instruction("add sp, sp, #16");                                 // release the wrapper spill space before returning to the runtime helper
-    ctx.emitter.instruction("ret");                                             // return the static method result to the runtime callback helper
+    ctx.emitter.instruction("ldr x30, [sp, #8]"); // restore the runtime helper return address after the static method call
+    ctx.emitter.instruction("add sp, sp, #16"); // release the wrapper spill space before returning to the runtime helper
+    ctx.emitter.instruction("ret"); // return the static method result to the runtime callback helper
 }
 
 /// Emits the x86_64 static-method callback ABI adapter.
@@ -3393,22 +3508,26 @@ fn emit_static_method_callback_wrapper_x86_64(
     target: &StaticMethodCallbackTarget,
     visible_arg_types: &[PhpType],
 ) {
-    let env_reg = abi::int_arg_reg_name(ctx.emitter.target, callback_arg_abi_slots(visible_arg_types));
-    ctx.emitter.instruction("push rbp");                                        // preserve the runtime helper frame pointer for the nested static method call
-    ctx.emitter.instruction("mov rbp, rsp");                                    // establish a wrapper frame while shifting callback arguments
+    let env_reg = abi::int_arg_reg_name(
+        ctx.emitter.target,
+        callback_arg_abi_slots(visible_arg_types),
+    );
+    ctx.emitter.instruction("push rbp"); // preserve the runtime helper frame pointer for the nested static method call
+    ctx.emitter.instruction("mov rbp, rsp"); // establish a wrapper frame while shifting callback arguments
     match target.called_class {
         StaticCallbackCalledClass::Immediate(class_id) => {
             abi::emit_load_int_immediate(ctx.emitter, "rcx", class_id as i64);
         }
         StaticCallbackCalledClass::Env => {
-            ctx.emitter.instruction(&format!("mov rcx, QWORD PTR [{}]", env_reg)); // load the late-static called-class id from the callback environment
+            ctx.emitter
+                .instruction(&format!("mov rcx, QWORD PTR [{}]", env_reg)); // load the late-static called-class id from the callback environment
         }
     }
     shift_callback_args_after_hidden_x86_64(ctx, visible_arg_types);
-    ctx.emitter.instruction("mov rdi, rcx");                                    // pass the called-class id as the hidden static method argument
+    ctx.emitter.instruction("mov rdi, rcx"); // pass the called-class id as the hidden static method argument
     emit_static_callback_dispatch(ctx, target);
-    ctx.emitter.instruction("pop rbp");                                         // restore the runtime helper frame pointer before returning
-    ctx.emitter.instruction("ret");                                             // return the static method result to the runtime callback helper
+    ctx.emitter.instruction("pop rbp"); // restore the runtime helper frame pointer before returning
+    ctx.emitter.instruction("ret"); // return the static method result to the runtime callback helper
 }
 
 /// Emits a local wrapper that prepends the captured object receiver.
@@ -3422,8 +3541,12 @@ fn emit_instance_method_callback_wrapper(
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&wrapper_label);
     match ctx.emitter.target.arch {
-        Arch::AArch64 => emit_instance_method_callback_wrapper_aarch64(ctx, target, visible_arg_types),
-        Arch::X86_64 => emit_instance_method_callback_wrapper_x86_64(ctx, target, visible_arg_types),
+        Arch::AArch64 => {
+            emit_instance_method_callback_wrapper_aarch64(ctx, target, visible_arg_types)
+        }
+        Arch::X86_64 => {
+            emit_instance_method_callback_wrapper_x86_64(ctx, target, visible_arg_types)
+        }
     }
     ctx.emitter.label(&done_label);
     wrapper_label
@@ -3435,16 +3558,19 @@ fn emit_instance_method_callback_wrapper_aarch64(
     target: &InstanceMethodCallbackTarget,
     visible_arg_types: &[PhpType],
 ) {
-    let env_reg = abi::int_arg_reg_name(ctx.emitter.target, callback_arg_abi_slots(visible_arg_types));
-    ctx.emitter.instruction("sub sp, sp, #16");                                 // reserve wrapper spill space for the runtime callback return address
-    ctx.emitter.instruction("str x30, [sp, #8]");                               // preserve the runtime helper return address across the instance method call
-    ctx.emitter.instruction(&format!("ldr x3, [{}]", env_reg));                 // load the captured object receiver from the callback environment
+    let env_reg = abi::int_arg_reg_name(
+        ctx.emitter.target,
+        callback_arg_abi_slots(visible_arg_types),
+    );
+    ctx.emitter.instruction("sub sp, sp, #16"); // reserve wrapper spill space for the runtime callback return address
+    ctx.emitter.instruction("str x30, [sp, #8]"); // preserve the runtime helper return address across the instance method call
+    ctx.emitter.instruction(&format!("ldr x3, [{}]", env_reg)); // load the captured object receiver from the callback environment
     shift_callback_args_after_hidden_aarch64(ctx, visible_arg_types);
-    ctx.emitter.instruction("mov x0, x3");                                      // pass the captured object receiver as the method receiver
+    ctx.emitter.instruction("mov x0, x3"); // pass the captured object receiver as the method receiver
     abi::emit_call_label(ctx.emitter, &target.entry_label);
-    ctx.emitter.instruction("ldr x30, [sp, #8]");                               // restore the runtime helper return address after the instance method call
-    ctx.emitter.instruction("add sp, sp, #16");                                 // release the wrapper spill space before returning to the runtime helper
-    ctx.emitter.instruction("ret");                                             // return the instance method result to the runtime callback helper
+    ctx.emitter.instruction("ldr x30, [sp, #8]"); // restore the runtime helper return address after the instance method call
+    ctx.emitter.instruction("add sp, sp, #16"); // release the wrapper spill space before returning to the runtime helper
+    ctx.emitter.instruction("ret"); // return the instance method result to the runtime callback helper
 }
 
 /// Emits the x86_64 instance-method callback ABI adapter.
@@ -3453,19 +3579,26 @@ fn emit_instance_method_callback_wrapper_x86_64(
     target: &InstanceMethodCallbackTarget,
     visible_arg_types: &[PhpType],
 ) {
-    let env_reg = abi::int_arg_reg_name(ctx.emitter.target, callback_arg_abi_slots(visible_arg_types));
-    ctx.emitter.instruction("push rbp");                                        // preserve the runtime helper frame pointer for the nested instance method call
-    ctx.emitter.instruction("mov rbp, rsp");                                    // establish a wrapper frame while shifting callback arguments
-    ctx.emitter.instruction(&format!("mov rcx, QWORD PTR [{}]", env_reg));      // load the captured object receiver from the callback environment
+    let env_reg = abi::int_arg_reg_name(
+        ctx.emitter.target,
+        callback_arg_abi_slots(visible_arg_types),
+    );
+    ctx.emitter.instruction("push rbp"); // preserve the runtime helper frame pointer for the nested instance method call
+    ctx.emitter.instruction("mov rbp, rsp"); // establish a wrapper frame while shifting callback arguments
+    ctx.emitter
+        .instruction(&format!("mov rcx, QWORD PTR [{}]", env_reg)); // load the captured object receiver from the callback environment
     shift_callback_args_after_hidden_x86_64(ctx, visible_arg_types);
-    ctx.emitter.instruction("mov rdi, rcx");                                    // pass the captured object receiver as the method receiver
+    ctx.emitter.instruction("mov rdi, rcx"); // pass the captured object receiver as the method receiver
     abi::emit_call_label(ctx.emitter, &target.entry_label);
-    ctx.emitter.instruction("pop rbp");                                         // restore the runtime helper frame pointer before returning
-    ctx.emitter.instruction("ret");                                             // return the instance method result to the runtime callback helper
+    ctx.emitter.instruction("pop rbp"); // restore the runtime helper frame pointer before returning
+    ctx.emitter.instruction("ret"); // return the instance method result to the runtime callback helper
 }
 
 /// Emits either a direct static-method callback call or a late-static vtable call.
-fn emit_static_callback_dispatch(ctx: &mut FunctionContext<'_>, target: &StaticMethodCallbackTarget) {
+fn emit_static_callback_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    target: &StaticMethodCallbackTarget,
+) {
     if let Some(slot) = target.dynamic_slot {
         emit_static_callback_dynamic_call(ctx, slot);
     } else {
@@ -3478,14 +3611,23 @@ fn emit_static_callback_dynamic_call(ctx: &mut FunctionContext<'_>, slot: usize)
     let hidden_called_class_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let class_id_scratch = abi::temp_int_reg(ctx.emitter.target);
     let dispatch_scratch = abi::symbol_scratch_reg(ctx.emitter);
-    ctx.emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); // preserve the forwarded called-class id across static-vtable address materialization
+    ctx.emitter.instruction(&format!(
+        "mov {}, {}",
+        class_id_scratch, hidden_called_class_reg
+    )); // preserve the forwarded called-class id across static-vtable address materialization
     abi::emit_symbol_address(ctx.emitter, dispatch_scratch, "_class_static_vtable_ptrs");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+            ctx.emitter.instruction(&format!(
+                "ldr {}, [{}, {}, lsl #3]",
+                dispatch_scratch, dispatch_scratch, class_id_scratch
+            )); // load the class-specific static-vtable pointer from the global table
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+            ctx.emitter.instruction(&format!(
+                "mov {}, QWORD PTR [{} + {} * 8]",
+                dispatch_scratch, dispatch_scratch, class_id_scratch
+            )); // load the class-specific static-vtable pointer from the global table
         }
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_scratch, dispatch_scratch, slot * 8);
@@ -3538,10 +3680,10 @@ fn reserve_static_callback_env(
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str x0, [sp]");                            // store the callback environment payload for the runtime helper
+            ctx.emitter.instruction("str x0, [sp]"); // store the callback environment payload for the runtime helper
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // store the callback environment payload for the runtime helper
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax"); // store the callback environment payload for the runtime helper
         }
     }
     Ok(16)
@@ -3575,11 +3717,13 @@ fn set_op_indexed_array_element_type(ty: PhpType, name: &str) -> Result<PhpType>
             }
             Err(CodegenIrError::unsupported(format!(
                 "{} indexed-array element PHP type {:?}",
-                name,
-                elem
+                name, elem
             )))
         }
-        other => Err(CodegenIrError::unsupported(format!("{} for PHP type {:?}", name, other))),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            name, other
+        ))),
     }
 }
 
@@ -3597,21 +3741,21 @@ fn require_set_op_compatible_element_types(
     }
     Err(CodegenIrError::unsupported(format!(
         "{} for incompatible indexed-array element PHP types {:?} and {:?}",
-        name,
-        first,
-        second
+        name, first, second
     )))
 }
 
 /// Verifies the EIR result preserves the first operand element metadata.
-fn require_set_op_result_type(name: &str, first_elem_ty: &PhpType, result_ty: &PhpType) -> Result<()> {
+fn require_set_op_result_type(
+    name: &str,
+    first_elem_ty: &PhpType,
+    result_ty: &PhpType,
+) -> Result<()> {
     match result_ty {
         PhpType::Array(elem) if elem.codegen_repr() == first_elem_ty.codegen_repr() => Ok(()),
         other => Err(CodegenIrError::unsupported(format!(
             "{} result PHP type {:?} for first element PHP type {:?}",
-            name,
-            other,
-            first_elem_ty
+            name, other, first_elem_ty
         ))),
     }
 }
@@ -3651,8 +3795,7 @@ fn require_range_endpoint(ty: PhpType, name: &str) -> Result<()> {
         PhpType::Int | PhpType::Bool | PhpType::Mixed | PhpType::Union(_) => Ok(()),
         other => Err(CodegenIrError::unsupported(format!(
             "range {} PHP type {:?}",
-            name,
-            other
+            name, other
         ))),
     }
 }
@@ -3687,9 +3830,7 @@ fn compatible_eight_byte_indexed_array_element_type(
     }
     Err(CodegenIrError::unsupported(format!(
         "{} for incompatible indexed-array element PHP types {:?} and {:?}",
-        name,
-        first,
-        second
+        name, first, second
     )))
 }
 
@@ -3883,8 +4024,7 @@ fn require_array_combine_result_type(value_elem_ty: &PhpType, result_ty: &PhpTyp
         PhpType::AssocArray { value, .. } if value.codegen_repr() == *value_elem_ty => Ok(()),
         other => Err(CodegenIrError::unsupported(format!(
             "array_combine result PHP type {:?} for value element PHP type {:?}",
-            other,
-            value_elem_ty
+            other, value_elem_ty
         ))),
     }
 }
@@ -3900,8 +4040,7 @@ fn require_array_flip_result_type(value_elem_ty: &PhpType, result_ty: &PhpType) 
         }
         other => Err(CodegenIrError::unsupported(format!(
             "array_flip result PHP type {:?} for value element PHP type {:?}",
-            other,
-            value_elem_ty
+            other, value_elem_ty
         ))),
     }
 }
@@ -3913,8 +4052,7 @@ fn require_array_fill_result_type(value_ty: &PhpType, result_elem_ty: &PhpType) 
     }
     Err(CodegenIrError::unsupported(format!(
         "array_fill result element PHP type {:?} for value PHP type {:?}",
-        result_elem_ty,
-        value_ty
+        result_elem_ty, value_ty
     )))
 }
 
@@ -4022,12 +4160,13 @@ fn materialize_array_fill_assoc_value_words(
             ctx.load_value_to_result(value)?;
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("fmov {}, d0", lo_reg));   // pass the floating-point fill bits as the assoc-fill value low word
-                    ctx.emitter.instruction(&format!("mov {}, #0", hi_reg));    // clear the unused assoc-fill value high word
+                    ctx.emitter.instruction(&format!("fmov {}, d0", lo_reg)); // pass the floating-point fill bits as the assoc-fill value low word
+                    ctx.emitter.instruction(&format!("mov {}, #0", hi_reg)); // clear the unused assoc-fill value high word
                 }
                 Arch::X86_64 => {
                     ctx.emitter.instruction(&format!("movq {}, xmm0", lo_reg)); // pass the floating-point fill bits as the assoc-fill value low word
-                    ctx.emitter.instruction(&format!("xor {}, {}", hi_reg, hi_reg)); // clear the unused assoc-fill value high word
+                    ctx.emitter
+                        .instruction(&format!("xor {}, {}", hi_reg, hi_reg)); // clear the unused assoc-fill value high word
                 }
             }
             Ok(())
@@ -4036,10 +4175,11 @@ fn materialize_array_fill_assoc_value_words(
             ctx.load_value_to_reg(value, lo_reg)?;
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("mov {}, #0", hi_reg));    // clear the unused assoc-fill value high word
+                    ctx.emitter.instruction(&format!("mov {}, #0", hi_reg)); // clear the unused assoc-fill value high word
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction(&format!("xor {}, {}", hi_reg, hi_reg)); // clear the unused assoc-fill value high word
+                    ctx.emitter
+                        .instruction(&format!("xor {}, {}", hi_reg, hi_reg)); // clear the unused assoc-fill value high word
                 }
             }
             Ok(())
@@ -4156,11 +4296,13 @@ fn eight_byte_indexed_array_element_type(ty: PhpType, name: &str) -> Result<PhpT
             }
             Err(CodegenIrError::unsupported(format!(
                 "{} for indexed-array element PHP type {:?}",
-                name,
-                elem
+                name, elem
             )))
         }
-        other => Err(CodegenIrError::unsupported(format!("{} for PHP type {:?}", name, other))),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            name, other
+        ))),
     }
 }
 
@@ -4306,11 +4448,7 @@ fn require_array_slice_element_layout(elem: &PhpType) -> Result<()> {
 fn require_array_chunk_element_layout(elem: &PhpType) -> Result<()> {
     if matches!(
         elem,
-        PhpType::Int
-            | PhpType::Bool
-            | PhpType::Float
-            | PhpType::Callable
-            | PhpType::Void
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable | PhpType::Void
     ) || elem.is_refcounted()
     {
         return Ok(());
@@ -4325,11 +4463,7 @@ fn require_array_chunk_element_layout(elem: &PhpType) -> Result<()> {
 fn require_array_pad_element_layout(elem: &PhpType) -> Result<()> {
     if matches!(
         elem,
-        PhpType::Int
-            | PhpType::Bool
-            | PhpType::Float
-            | PhpType::Callable
-            | PhpType::Void
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable | PhpType::Void
     ) || elem.is_refcounted()
     {
         return Ok(());
@@ -4341,14 +4475,16 @@ fn require_array_pad_element_layout(elem: &PhpType) -> Result<()> {
 }
 
 /// Verifies the destination element type matches the copied layout or is a Mixed widening.
-fn require_array_slice_result_type(source_elem_ty: &PhpType, result_elem_ty: &PhpType) -> Result<()> {
+fn require_array_slice_result_type(
+    source_elem_ty: &PhpType,
+    result_elem_ty: &PhpType,
+) -> Result<()> {
     if source_elem_ty == result_elem_ty || result_elem_ty == &PhpType::Mixed {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(
         "array_slice result element PHP type {:?} for source element PHP type {:?}",
-        result_elem_ty,
-        source_elem_ty
+        result_elem_ty, source_elem_ty
     )))
 }
 
@@ -4359,8 +4495,7 @@ fn require_array_pad_value_type(source_elem_ty: &PhpType, pad_value_ty: &PhpType
     }
     Err(CodegenIrError::unsupported(format!(
         "array_pad value PHP type {:?} for source element PHP type {:?}",
-        pad_value_ty,
-        source_elem_ty
+        pad_value_ty, source_elem_ty
     )))
 }
 
@@ -4371,20 +4506,21 @@ fn require_array_pad_result_type(source_elem_ty: &PhpType, result_elem_ty: &PhpT
     }
     Err(CodegenIrError::unsupported(format!(
         "array_pad result element PHP type {:?} for source element PHP type {:?}",
-        result_elem_ty,
-        source_elem_ty
+        result_elem_ty, source_elem_ty
     )))
 }
 
 /// Verifies the produced chunk inner arrays retain the source element type.
-fn require_array_chunk_result_type(source_elem_ty: &PhpType, result_inner_elem_ty: &PhpType) -> Result<()> {
+fn require_array_chunk_result_type(
+    source_elem_ty: &PhpType,
+    result_inner_elem_ty: &PhpType,
+) -> Result<()> {
     if source_elem_ty == result_inner_elem_ty {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(
         "array_chunk result inner element PHP type {:?} for source element PHP type {:?}",
-        result_inner_elem_ty,
-        source_elem_ty
+        result_inner_elem_ty, source_elem_ty
     )))
 }
 
@@ -4436,13 +4572,13 @@ fn lower_slice_like_args(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
-            abi::emit_pop_reg(ctx.emitter, "x2");                                   // restore the resolved length into the third runtime argument
-            abi::emit_pop_reg(ctx.emitter, "x1");                                   // restore the resolved offset into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x2"); // restore the resolved length into the third runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x1"); // restore the resolved offset into the second runtime argument
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(array, "rdi")?;
-            abi::emit_pop_reg(ctx.emitter, "rdx");                                  // restore the resolved length into the third runtime argument
-            abi::emit_pop_reg(ctx.emitter, "rsi");                                  // restore the resolved offset into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rdx"); // restore the resolved length into the third runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rsi"); // restore the resolved offset into the second runtime argument
         }
     }
     Ok(())
@@ -4466,7 +4602,11 @@ fn resolve_slice_length_to_result(
         emit_array_slice_until_end_sentinel(ctx, reg);
         return Ok(());
     }
-    resolve_int_operand_to_result(ctx, length.expect("length present"), &format!("{} length", name))
+    resolve_int_operand_to_result(
+        ctx,
+        length.expect("length present"),
+        &format!("{} length", name),
+    )
 }
 
 /// Resolves the offset/length arguments for a boxed-Mixed `array_slice`/`array_splice` into the
@@ -4490,14 +4630,14 @@ fn materialize_mixed_slice_args(
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_pop_reg(ctx.emitter, "x2");                                   // restore the resolved length into the third runtime argument
-            abi::emit_pop_reg(ctx.emitter, "x1");                                   // restore the resolved offset into the second runtime argument
-            abi::emit_pop_reg(ctx.emitter, "x0");                                   // restore the converted array pointer into the first runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x2"); // restore the resolved length into the third runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x1"); // restore the resolved offset into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x0"); // restore the converted array pointer into the first runtime argument
         }
         Arch::X86_64 => {
-            abi::emit_pop_reg(ctx.emitter, "rdx");                                  // restore the resolved length into the third runtime argument
-            abi::emit_pop_reg(ctx.emitter, "rsi");                                  // restore the resolved offset into the second runtime argument
-            abi::emit_pop_reg(ctx.emitter, "rdi");                                  // restore the converted array pointer into the first runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rdx"); // restore the resolved length into the third runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rsi"); // restore the resolved offset into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rdi"); // restore the converted array pointer into the first runtime argument
         }
     }
     Ok(())
@@ -4515,20 +4655,20 @@ fn lower_mixed_array_slice_aarch64(
     ctx.load_value_to_reg(array, "x0")?;
     abi::emit_push_reg(ctx.emitter, "x0");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp x0, #4");                                      // require an indexed-array payload before slicing the Mixed cell
-    ctx.emitter.instruction(&format!("b.ne {}", empty_label));                  // return an empty slice for non-array Mixed payloads
-    ctx.emitter.instruction(&format!("cbz x1, {}", empty_label));               // return an empty slice for null array payloads
-    ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed-array payload to the Mixed conversion helper
-    ctx.emitter.instruction("ldr x1, [x0, #-8]");                               // load indexed-array metadata before Mixed-slot conversion
-    ctx.emitter.instruction("lsr x1, x1, #8");                                  // move the runtime value_type tag into the low bits
-    ctx.emitter.instruction("and x1, x1, #0x7f");                               // isolate the indexed-array value_type tag
+    ctx.emitter.instruction("cmp x0, #4"); // require an indexed-array payload before slicing the Mixed cell
+    ctx.emitter.instruction(&format!("b.ne {}", empty_label)); // return an empty slice for non-array Mixed payloads
+    ctx.emitter.instruction(&format!("cbz x1, {}", empty_label)); // return an empty slice for null array payloads
+    ctx.emitter.instruction("mov x0, x1"); // pass the unboxed indexed-array payload to the Mixed conversion helper
+    ctx.emitter.instruction("ldr x1, [x0, #-8]"); // load indexed-array metadata before Mixed-slot conversion
+    ctx.emitter.instruction("lsr x1, x1, #8"); // move the runtime value_type tag into the low bits
+    ctx.emitter.instruction("and x1, x1, #0x7f"); // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     abi::emit_pop_reg(ctx.emitter, "x10");
-    ctx.emitter.instruction("str x0, [x10, #8]");                               // publish the converted unique array back into the Mixed cell
+    ctx.emitter.instruction("str x0, [x10, #8]"); // publish the converted unique array back into the Mixed cell
     abi::emit_push_reg(ctx.emitter, "x0");
     materialize_mixed_slice_args(ctx, offset, length, "array_slice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_slice_refcounted");
-    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array fallback after slicing the boxed payload
+    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the empty-array fallback after slicing the boxed payload
     ctx.emitter.label(&empty_label);
     abi::emit_pop_reg(ctx.emitter, "x9");
     allocate_empty_mixed_array_result(ctx);
@@ -4548,20 +4688,20 @@ fn lower_mixed_array_slice_x86_64(
     ctx.load_value_to_reg(array, "rax")?;
     abi::emit_push_reg(ctx.emitter, "rax");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp rax, 4");                                      // require an indexed-array payload before slicing the Mixed cell
-    ctx.emitter.instruction(&format!("jne {}", empty_label));                   // return an empty slice for non-array Mixed payloads
-    ctx.emitter.instruction("test rdi, rdi");                                   // verify the unboxed indexed-array payload is present
-    ctx.emitter.instruction(&format!("je {}", empty_label));                    // return an empty slice for null array payloads
-    ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");                    // load indexed-array metadata before Mixed-slot conversion
-    ctx.emitter.instruction("shr rsi, 8");                                      // move the runtime value_type tag into the low bits
-    ctx.emitter.instruction("and rsi, 0x7f");                                   // isolate the indexed-array value_type tag
+    ctx.emitter.instruction("cmp rax, 4"); // require an indexed-array payload before slicing the Mixed cell
+    ctx.emitter.instruction(&format!("jne {}", empty_label)); // return an empty slice for non-array Mixed payloads
+    ctx.emitter.instruction("test rdi, rdi"); // verify the unboxed indexed-array payload is present
+    ctx.emitter.instruction(&format!("je {}", empty_label)); // return an empty slice for null array payloads
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]"); // load indexed-array metadata before Mixed-slot conversion
+    ctx.emitter.instruction("shr rsi, 8"); // move the runtime value_type tag into the low bits
+    ctx.emitter.instruction("and rsi, 0x7f"); // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // publish the converted unique array back into the Mixed cell
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax"); // publish the converted unique array back into the Mixed cell
     abi::emit_push_reg(ctx.emitter, "rax");
     materialize_mixed_slice_args(ctx, offset, length, "array_slice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_slice_refcounted");
-    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array fallback after slicing the boxed payload
+    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the empty-array fallback after slicing the boxed payload
     ctx.emitter.label(&empty_label);
     abi::emit_pop_reg(ctx.emitter, "r11");
     allocate_empty_mixed_array_result(ctx);
@@ -4581,20 +4721,20 @@ fn lower_mixed_array_splice_aarch64(
     ctx.load_value_to_reg(array, "x0")?;
     abi::emit_push_reg(ctx.emitter, "x0");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp x0, #4");                                      // require an indexed-array payload before splicing the Mixed cell
-    ctx.emitter.instruction(&format!("b.ne {}", drop_label));                   // return an empty removed-elements array for non-array Mixed payloads
-    ctx.emitter.instruction(&format!("cbz x1, {}", drop_label));                // return an empty removed-elements array for null array payloads
-    ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed-array payload to the Mixed conversion helper
-    ctx.emitter.instruction("ldr x1, [x0, #-8]");                               // load indexed-array metadata before Mixed-slot conversion
-    ctx.emitter.instruction("lsr x1, x1, #8");                                  // move the runtime value_type tag into the low bits
-    ctx.emitter.instruction("and x1, x1, #0x7f");                               // isolate the indexed-array value_type tag
+    ctx.emitter.instruction("cmp x0, #4"); // require an indexed-array payload before splicing the Mixed cell
+    ctx.emitter.instruction(&format!("b.ne {}", drop_label)); // return an empty removed-elements array for non-array Mixed payloads
+    ctx.emitter.instruction(&format!("cbz x1, {}", drop_label)); // return an empty removed-elements array for null array payloads
+    ctx.emitter.instruction("mov x0, x1"); // pass the unboxed indexed-array payload to the Mixed conversion helper
+    ctx.emitter.instruction("ldr x1, [x0, #-8]"); // load indexed-array metadata before Mixed-slot conversion
+    ctx.emitter.instruction("lsr x1, x1, #8"); // move the runtime value_type tag into the low bits
+    ctx.emitter.instruction("and x1, x1, #0x7f"); // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     abi::emit_pop_reg(ctx.emitter, "x10");
-    ctx.emitter.instruction("str x0, [x10, #8]");                               // publish the converted unique array back into the Mixed cell
+    ctx.emitter.instruction("str x0, [x10, #8]"); // publish the converted unique array back into the Mixed cell
     abi::emit_push_reg(ctx.emitter, "x0");
     materialize_mixed_slice_args(ctx, offset, length, "array_splice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_splice_refcounted");
-    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array fallback after splicing the boxed payload
+    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the empty-array fallback after splicing the boxed payload
     ctx.emitter.label(&drop_label);
     abi::emit_pop_reg(ctx.emitter, "x9");
     allocate_empty_mixed_array_result(ctx);
@@ -4614,20 +4754,20 @@ fn lower_mixed_array_splice_x86_64(
     ctx.load_value_to_reg(array, "rax")?;
     abi::emit_push_reg(ctx.emitter, "rax");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp rax, 4");                                      // require an indexed-array payload before splicing the Mixed cell
-    ctx.emitter.instruction(&format!("jne {}", drop_label));                    // return an empty removed-elements array for non-array Mixed payloads
-    ctx.emitter.instruction("test rdi, rdi");                                   // verify the unboxed indexed-array payload is present
-    ctx.emitter.instruction(&format!("je {}", drop_label));                     // return an empty removed-elements array for null array payloads
-    ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");                    // load indexed-array metadata before Mixed-slot conversion
-    ctx.emitter.instruction("shr rsi, 8");                                      // move the runtime value_type tag into the low bits
-    ctx.emitter.instruction("and rsi, 0x7f");                                   // isolate the indexed-array value_type tag
+    ctx.emitter.instruction("cmp rax, 4"); // require an indexed-array payload before splicing the Mixed cell
+    ctx.emitter.instruction(&format!("jne {}", drop_label)); // return an empty removed-elements array for non-array Mixed payloads
+    ctx.emitter.instruction("test rdi, rdi"); // verify the unboxed indexed-array payload is present
+    ctx.emitter.instruction(&format!("je {}", drop_label)); // return an empty removed-elements array for null array payloads
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]"); // load indexed-array metadata before Mixed-slot conversion
+    ctx.emitter.instruction("shr rsi, 8"); // move the runtime value_type tag into the low bits
+    ctx.emitter.instruction("and rsi, 0x7f"); // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // publish the converted unique array back into the Mixed cell
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax"); // publish the converted unique array back into the Mixed cell
     abi::emit_push_reg(ctx.emitter, "rax");
     materialize_mixed_slice_args(ctx, offset, length, "array_splice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_splice_refcounted");
-    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array fallback after splicing the boxed payload
+    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the empty-array fallback after splicing the boxed payload
     ctx.emitter.label(&drop_label);
     abi::emit_pop_reg(ctx.emitter, "r11");
     allocate_empty_mixed_array_result(ctx);
@@ -4726,10 +4866,10 @@ fn lower_array_pad_call(
 fn emit_array_slice_until_end_sentinel(ctx: &mut FunctionContext<'_>, reg: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, #-1", reg));              // use -1 as the array_slice() runtime sentinel for length until the end
+            ctx.emitter.instruction(&format!("mov {}, #-1", reg)); // use -1 as the array_slice() runtime sentinel for length until the end
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, -1", reg));               // use -1 as the x86_64 array_slice() runtime sentinel for length until the end
+            ctx.emitter.instruction(&format!("mov {}, -1", reg)); // use -1 as the x86_64 array_slice() runtime sentinel for length until the end
         }
     }
 }
@@ -4781,11 +4921,11 @@ fn normalize_indexed_array_result(
         let source_tag = runtime_value_tag(name, source_elem_ty)?;
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("mov x1, #{}", source_tag));   // pass the source slot value_type tag to widen the indexed-array result to Mixed
+                ctx.emitter.instruction(&format!("mov x1, #{}", source_tag)); // pass the source slot value_type tag to widen the indexed-array result to Mixed
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("mov rdi, rax");                        // pass the produced indexed-array pointer to the Mixed-widening helper
-                ctx.emitter.instruction(&format!("mov rsi, {}", source_tag));   // pass the source slot value_type tag to widen the indexed-array result to Mixed
+                ctx.emitter.instruction("mov rdi, rax"); // pass the produced indexed-array pointer to the Mixed-widening helper
+                ctx.emitter.instruction(&format!("mov rsi, {}", source_tag)); // pass the source slot value_type tag to widen the indexed-array result to Mixed
             }
         }
         abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
@@ -4825,8 +4965,7 @@ fn require_indexed_array_builtin(ty: PhpType, name: &str) -> Result<()> {
         PhpType::Array(_) => Ok(()),
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
-            name,
-            other
+            name, other
         ))),
     }
 }
@@ -4896,13 +5035,13 @@ fn lower_array_pop_aarch64(
     let empty_label = ctx.next_label("array_pop_empty");
     let done_label = ctx.next_label("array_pop_done");
     ctx.load_value_to_reg(array, "x0")?;
-    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the indexed-array length before deciding whether pop is empty
-    ctx.emitter.instruction(&format!("cbz x9, {}", empty_label));               // return boxed null when array_pop() runs on an empty array
-    ctx.emitter.instruction("sub x9, x9, #1");                                  // convert the old length into the removed last-element index
-    ctx.emitter.instruction("str x9, [x0]");                                    // persist the shortened indexed-array length in the header
+    ctx.emitter.instruction("ldr x9, [x0]"); // load the indexed-array length before deciding whether pop is empty
+    ctx.emitter.instruction(&format!("cbz x9, {}", empty_label)); // return boxed null when array_pop() runs on an empty array
+    ctx.emitter.instruction("sub x9, x9, #1"); // convert the old length into the removed last-element index
+    ctx.emitter.instruction("str x9, [x0]"); // persist the shortened indexed-array length in the header
     emit_array_pop_value_aarch64(ctx, elem_ty)?;
     crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, elem_ty);
-    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array boxed-null path after loading the removed value
+    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the empty-array boxed-null path after loading the removed value
     ctx.emitter.label(&empty_label);
     emit_array_pop_null(ctx);
     ctx.emitter.label(&done_label);
@@ -4918,14 +5057,14 @@ fn lower_array_pop_x86_64(
     let empty_label = ctx.next_label("array_pop_empty");
     let done_label = ctx.next_label("array_pop_done");
     ctx.load_value_to_reg(array, "rax")?;
-    ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the indexed-array length before deciding whether pop is empty
-    ctx.emitter.instruction("test r10, r10");                                   // check whether the indexed array has any live elements
-    ctx.emitter.instruction(&format!("jz {}", empty_label));                    // return boxed null when array_pop() runs on an empty array
-    ctx.emitter.instruction("sub r10, 1");                                      // convert the old length into the removed last-element index
-    ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // persist the shortened indexed-array length in the header
+    ctx.emitter.instruction("mov r10, QWORD PTR [rax]"); // load the indexed-array length before deciding whether pop is empty
+    ctx.emitter.instruction("test r10, r10"); // check whether the indexed array has any live elements
+    ctx.emitter.instruction(&format!("jz {}", empty_label)); // return boxed null when array_pop() runs on an empty array
+    ctx.emitter.instruction("sub r10, 1"); // convert the old length into the removed last-element index
+    ctx.emitter.instruction("mov QWORD PTR [rax], r10"); // persist the shortened indexed-array length in the header
     emit_array_pop_value_x86_64(ctx, elem_ty)?;
     crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, elem_ty);
-    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array boxed-null path after loading the removed value
+    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the empty-array boxed-null path after loading the removed value
     ctx.emitter.label(&empty_label);
     emit_array_pop_null(ctx);
     ctx.emitter.label(&done_label);
@@ -4936,26 +5075,26 @@ fn lower_array_pop_x86_64(
 fn emit_array_pop_value_aarch64(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
     match elem_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
-            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first pointer-sized payload slot in the indexed array
-            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the removed pointer-sized payload into the result register
+            ctx.emitter.instruction("add x10, x0, #24"); // compute the first pointer-sized payload slot in the indexed array
+            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]"); // load the removed pointer-sized payload into the result register
         }
         PhpType::Float => {
-            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first float payload slot in the indexed array
-            ctx.emitter.instruction("ldr d0, [x10, x9, lsl #3]");               // load the removed float payload into the result register
+            ctx.emitter.instruction("add x10, x0, #24"); // compute the first float payload slot in the indexed array
+            ctx.emitter.instruction("ldr d0, [x10, x9, lsl #3]"); // load the removed float payload into the result register
         }
         PhpType::Str => {
-            ctx.emitter.instruction("lsl x10, x9, #4");                         // scale the removed index by the 16-byte string slot size
-            ctx.emitter.instruction("add x10, x0, x10");                        // advance from the array base to the removed string slot
-            ctx.emitter.instruction("add x10, x10, #24");                       // skip the indexed-array header before loading string payloads
-            ctx.emitter.instruction("ldr x1, [x10]");                           // load the removed string pointer into the mixed payload register
-            ctx.emitter.instruction("ldr x2, [x10, #8]");                       // load the removed string length into the mixed payload high word
+            ctx.emitter.instruction("lsl x10, x9, #4"); // scale the removed index by the 16-byte string slot size
+            ctx.emitter.instruction("add x10, x0, x10"); // advance from the array base to the removed string slot
+            ctx.emitter.instruction("add x10, x10, #24"); // skip the indexed-array header before loading string payloads
+            ctx.emitter.instruction("ldr x1, [x10]"); // load the removed string pointer into the mixed payload register
+            ctx.emitter.instruction("ldr x2, [x10, #8]"); // load the removed string length into the mixed payload high word
         }
         PhpType::Void | PhpType::Never => {
-            ctx.emitter.instruction("mov x0, #0");                              // materialize a null payload for impossible void-array live elements
+            ctx.emitter.instruction("mov x0, #0"); // materialize a null payload for impossible void-array live elements
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first refcounted payload slot in the indexed array
-            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the removed heap pointer into the result register
+            ctx.emitter.instruction("add x10, x0, #24"); // compute the first refcounted payload slot in the indexed array
+            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]"); // load the removed heap pointer into the result register
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -4971,26 +5110,29 @@ fn emit_array_pop_value_aarch64(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType
 fn emit_array_pop_value_x86_64(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
     match elem_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
-            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first pointer-sized payload slot in the indexed array
-            ctx.emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8]");      // load the removed pointer-sized payload into the result register
+            ctx.emitter.instruction("lea r11, [rax + 24]"); // compute the first pointer-sized payload slot in the indexed array
+            ctx.emitter
+                .instruction("mov rax, QWORD PTR [r11 + r10 * 8]"); // load the removed pointer-sized payload into the result register
         }
         PhpType::Float => {
-            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first float payload slot in the indexed array
-            ctx.emitter.instruction("movsd xmm0, QWORD PTR [r11 + r10 * 8]");   // load the removed float payload into the result register
+            ctx.emitter.instruction("lea r11, [rax + 24]"); // compute the first float payload slot in the indexed array
+            ctx.emitter
+                .instruction("movsd xmm0, QWORD PTR [r11 + r10 * 8]"); // load the removed float payload into the result register
         }
         PhpType::Str => {
-            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first string payload slot in the indexed array
-            ctx.emitter.instruction("shl r10, 4");                              // scale the removed index by the 16-byte string slot size
-            ctx.emitter.instruction("add r11, r10");                            // advance to the removed string slot payload
-            ctx.emitter.instruction("mov rax, QWORD PTR [r11]");                // load the removed string pointer into the string result register
-            ctx.emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");            // load the removed string length into the string result register
+            ctx.emitter.instruction("lea r11, [rax + 24]"); // compute the first string payload slot in the indexed array
+            ctx.emitter.instruction("shl r10, 4"); // scale the removed index by the 16-byte string slot size
+            ctx.emitter.instruction("add r11, r10"); // advance to the removed string slot payload
+            ctx.emitter.instruction("mov rax, QWORD PTR [r11]"); // load the removed string pointer into the string result register
+            ctx.emitter.instruction("mov rdx, QWORD PTR [r11 + 8]"); // load the removed string length into the string result register
         }
         PhpType::Void | PhpType::Never => {
-            ctx.emitter.instruction("xor eax, eax");                            // materialize a null payload for impossible void-array live elements
+            ctx.emitter.instruction("xor eax, eax"); // materialize a null payload for impossible void-array live elements
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first refcounted payload slot in the indexed array
-            ctx.emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8]");      // load the removed heap pointer into the result register
+            ctx.emitter.instruction("lea r11, [rax + 24]"); // compute the first refcounted payload slot in the indexed array
+            ctx.emitter
+                .instruction("mov rax, QWORD PTR [r11 + r10 * 8]"); // load the removed heap pointer into the result register
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -5009,7 +5151,10 @@ fn emit_array_pop_null(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Returns the local slot loaded by an `array_pop()` argument when it came from `load_local`.
-fn source_load_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<LocalSlotId>> {
+fn source_load_local_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<LocalSlotId>> {
     let Some(value_ref) = ctx.function.value(value) else {
         return Err(CodegenIrError::missing_entry("value", value.as_raw()));
     };
@@ -5046,8 +5191,7 @@ fn supported_array_search_case(needle_ty: PhpType, array_ty: PhpType) -> Result<
             PhpType::Str if needle_ty == PhpType::Str => Ok(ArraySearchCase::String),
             elem_ty => Err(CodegenIrError::unsupported(format!(
                 "array_search needle PHP type {:?} for indexed-array element PHP type {:?}",
-                needle_ty,
-                elem_ty
+                needle_ty, elem_ty
             ))),
         },
         other => Err(CodegenIrError::unsupported(format!(
@@ -5102,31 +5246,32 @@ fn lower_array_search_string_aarch64(
     let done_label = ctx.next_label("array_search_str_done");
 
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed string-array payload slot
-    ctx.emitter.instruction("mov x12, #0");                                     // start the string search at index zero
+    ctx.emitter.instruction("ldr x9, [x10]"); // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("add x10, x10, #24"); // point at the first indexed string-array payload slot
+    ctx.emitter.instruction("mov x12, #0"); // start the string search at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("b.ge {}", miss_label));                   // finish with false after all string elements are scanned
-    ctx.emitter.instruction("lsl x13, x12, #4");                                // scale the element index by the 16-byte string slot width
-    ctx.emitter.instruction("ldr x1, [x10, x13]");                              // load the current string element pointer for comparison
-    ctx.emitter.instruction("add x14, x13, #8");                                // compute the current string element length-slot offset
-    ctx.emitter.instruction("ldr x2, [x10, x14]");                              // load the current string element length for comparison
+    ctx.emitter.instruction("cmp x12, x9"); // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("b.ge {}", miss_label)); // finish with false after all string elements are scanned
+    ctx.emitter.instruction("lsl x13, x12, #4"); // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("ldr x1, [x10, x13]"); // load the current string element pointer for comparison
+    ctx.emitter.instruction("add x14, x13, #8"); // compute the current string element length-slot offset
+    ctx.emitter.instruction("ldr x2, [x10, x14]"); // load the current string element length for comparison
     abi::emit_push_reg_pair(ctx.emitter, "x9", "x10");
     abi::emit_push_reg(ctx.emitter, "x12");
     ctx.load_string_value_to_regs(needle, "x3", "x4")?;
     abi::emit_call_label(ctx.emitter, "__rt_str_eq");
     abi::emit_pop_reg(ctx.emitter, "x12");
     abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");
-    ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));              // stop as soon as the searched string matches an element
-    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next indexed string element
-    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning remaining string payload slots
+    ctx.emitter
+        .instruction(&format!("cbnz x0, {}", found_label)); // stop as soon as the searched string matches an element
+    ctx.emitter.instruction("add x12, x12, #1"); // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("b {}", loop_label)); // continue scanning remaining string payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov x1, x12");                                     // move the found index into the mixed helper payload register
-    ctx.emitter.instruction("mov x2, #0");                                      // integer mixed payloads do not use a high word
-    ctx.emitter.instruction("mov x0, #0");                                      // runtime tag 0 = integer
+    ctx.emitter.instruction("mov x1, x12"); // move the found index into the mixed helper payload register
+    ctx.emitter.instruction("mov x2, #0"); // integer mixed payloads do not use a high word
+    ctx.emitter.instruction("mov x0, #0"); // runtime tag 0 = integer
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip false boxing after producing the found index
+    ctx.emitter.instruction(&format!("b {}", done_label)); // skip false boxing after producing the found index
     ctx.emitter.label(&miss_label);
     box_array_search_miss(ctx);
     ctx.emitter.label(&done_label);
@@ -5145,32 +5290,33 @@ fn lower_array_search_string_x86_64(
     let done_label = ctx.next_label("array_search_str_done");
 
     ctx.load_value_to_reg(array, "r10")?;
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("lea r12, [r10 + 24]");                             // point at the first indexed string-array payload slot
-    ctx.emitter.instruction("xor r13d, r13d");                                  // start the string search at index zero
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]"); // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("lea r12, [r10 + 24]"); // point at the first indexed string-array payload slot
+    ctx.emitter.instruction("xor r13d, r13d"); // start the string search at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp r13, r11");                                    // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("jge {}", miss_label));                    // finish with false after all string elements are scanned
-    ctx.emitter.instruction("mov rcx, r13");                                    // copy the scan index before scaling it to a byte offset
-    ctx.emitter.instruction("shl rcx, 4");                                      // scale the element index by the 16-byte string slot width
-    ctx.emitter.instruction("mov rdi, QWORD PTR [r12 + rcx]");                  // load the current string element pointer for comparison
-    ctx.emitter.instruction("mov rsi, QWORD PTR [r12 + rcx + 8]");              // load the current string element length for comparison
+    ctx.emitter.instruction("cmp r13, r11"); // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("jge {}", miss_label)); // finish with false after all string elements are scanned
+    ctx.emitter.instruction("mov rcx, r13"); // copy the scan index before scaling it to a byte offset
+    ctx.emitter.instruction("shl rcx, 4"); // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("mov rdi, QWORD PTR [r12 + rcx]"); // load the current string element pointer for comparison
+    ctx.emitter
+        .instruction("mov rsi, QWORD PTR [r12 + rcx + 8]"); // load the current string element length for comparison
     abi::emit_push_reg_pair(ctx.emitter, "r11", "r12");
     abi::emit_push_reg(ctx.emitter, "r13");
     ctx.load_string_value_to_regs(needle, "rdx", "rcx")?;
     abi::emit_call_label(ctx.emitter, "__rt_str_eq");
     abi::emit_pop_reg(ctx.emitter, "r13");
     abi::emit_pop_reg_pair(ctx.emitter, "r11", "r12");
-    ctx.emitter.instruction("test rax, rax");                                   // check whether the current string element matched the needle
-    ctx.emitter.instruction(&format!("jne {}", found_label));                   // stop as soon as the searched string matches an element
-    ctx.emitter.instruction("add r13, 1");                                      // advance to the next indexed string element
-    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning remaining string payload slots
+    ctx.emitter.instruction("test rax, rax"); // check whether the current string element matched the needle
+    ctx.emitter.instruction(&format!("jne {}", found_label)); // stop as soon as the searched string matches an element
+    ctx.emitter.instruction("add r13, 1"); // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("jmp {}", loop_label)); // continue scanning remaining string payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov rdi, r13");                                    // move the found index into the mixed helper payload register
-    ctx.emitter.instruction("xor esi, esi");                                    // integer mixed payloads do not use a high word
-    ctx.emitter.instruction("xor eax, eax");                                    // runtime tag 0 = integer
+    ctx.emitter.instruction("mov rdi, r13"); // move the found index into the mixed helper payload register
+    ctx.emitter.instruction("xor esi, esi"); // integer mixed payloads do not use a high word
+    ctx.emitter.instruction("xor eax, eax"); // runtime tag 0 = integer
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip false boxing after producing the found index
+    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip false boxing after producing the found index
     ctx.emitter.label(&miss_label);
     box_array_search_miss(ctx);
     ctx.emitter.label(&done_label);
@@ -5183,26 +5329,26 @@ fn box_array_search_result(ctx: &mut FunctionContext<'_>) {
     let end_label = ctx.next_label("array_search_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #0");                              // distinguish a found index from the array_search() not-found sentinel
-            ctx.emitter.instruction(&format!("b.ge {}", found_label));          // box a found index as an integer mixed result
+            ctx.emitter.instruction("cmp x0, #0"); // distinguish a found index from the array_search() not-found sentinel
+            ctx.emitter.instruction(&format!("b.ge {}", found_label)); // box a found index as an integer mixed result
             box_array_search_miss(ctx);
-            ctx.emitter.instruction(&format!("b {}", end_label));               // skip integer boxing after producing false for a miss
+            ctx.emitter.instruction(&format!("b {}", end_label)); // skip integer boxing after producing false for a miss
             ctx.emitter.label(&found_label);
-            ctx.emitter.instruction("mov x1, x0");                              // move the found index into the mixed helper payload register
-            ctx.emitter.instruction("mov x2, #0");                              // integer mixed payloads do not use a high word
-            ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 = integer
+            ctx.emitter.instruction("mov x1, x0"); // move the found index into the mixed helper payload register
+            ctx.emitter.instruction("mov x2, #0"); // integer mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #0"); // runtime tag 0 = integer
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&end_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 0");                              // distinguish a found index from the array_search() not-found sentinel
-            ctx.emitter.instruction(&format!("jge {}", found_label));           // box a found index as an integer mixed result
+            ctx.emitter.instruction("cmp rax, 0"); // distinguish a found index from the array_search() not-found sentinel
+            ctx.emitter.instruction(&format!("jge {}", found_label)); // box a found index as an integer mixed result
             box_array_search_miss(ctx);
-            ctx.emitter.instruction(&format!("jmp {}", end_label));             // skip integer boxing after producing false for a miss
+            ctx.emitter.instruction(&format!("jmp {}", end_label)); // skip integer boxing after producing false for a miss
             ctx.emitter.label(&found_label);
-            ctx.emitter.instruction("mov rdi, rax");                            // move the found index into the mixed helper payload register
-            ctx.emitter.instruction("xor esi, esi");                            // integer mixed payloads do not use a high word
-            ctx.emitter.instruction("xor eax, eax");                            // runtime tag 0 = integer
+            ctx.emitter.instruction("mov rdi, rax"); // move the found index into the mixed helper payload register
+            ctx.emitter.instruction("xor esi, esi"); // integer mixed payloads do not use a high word
+            ctx.emitter.instruction("xor eax, eax"); // runtime tag 0 = integer
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&end_label);
         }
@@ -5213,15 +5359,15 @@ fn box_array_search_result(ctx: &mut FunctionContext<'_>) {
 fn box_array_search_miss(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, #0");                              // false mixed payload is zero
-            ctx.emitter.instruction("mov x2, #0");                              // bool mixed payloads do not use a high word
-            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = bool
+            ctx.emitter.instruction("mov x1, #0"); // false mixed payload is zero
+            ctx.emitter.instruction("mov x2, #0"); // bool mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #3"); // runtime tag 3 = bool
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("xor edi, edi");                            // false mixed payload is zero
-            ctx.emitter.instruction("xor esi, esi");                            // bool mixed payloads do not use a high word
-            ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = bool
+            ctx.emitter.instruction("xor edi, edi"); // false mixed payload is zero
+            ctx.emitter.instruction("xor esi, esi"); // bool mixed payloads do not use a high word
+            ctx.emitter.instruction("mov eax, 3"); // runtime tag 3 = bool
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
         }
     }
@@ -5252,8 +5398,7 @@ fn supported_in_array_case(needle_ty: PhpType, array_ty: PhpType) -> Result<InAr
             PhpType::Mixed if needle_ty == PhpType::Str => Ok(InArrayCase::MixedString),
             elem_ty => Err(CodegenIrError::unsupported(format!(
                 "in_array needle PHP type {:?} for indexed-array element PHP type {:?}",
-                needle_ty,
-                elem_ty
+                needle_ty, elem_ty
             ))),
         },
         other => Err(CodegenIrError::unsupported(format!(
@@ -5274,16 +5419,16 @@ fn lower_in_array_scalar(
             ctx.load_value_to_reg(array, "x0")?;
             ctx.load_value_to_reg(needle, "x1")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_search");
-            ctx.emitter.instruction("cmp x0, #0");                              // check whether indexed-array search returned a non-negative match index
-            ctx.emitter.instruction("cset x0, ge");                             // materialize in_array() as true for any found index
+            ctx.emitter.instruction("cmp x0, #0"); // check whether indexed-array search returned a non-negative match index
+            ctx.emitter.instruction("cset x0, ge"); // materialize in_array() as true for any found index
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(array, "rdi")?;
             ctx.load_value_to_reg(needle, "rsi")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_search");
-            ctx.emitter.instruction("cmp rax, 0");                              // check whether indexed-array search returned a non-negative match index
-            ctx.emitter.instruction("setge al");                                // materialize in_array() as true for any found index
-            ctx.emitter.instruction("movzx rax, al");                           // widen the membership flag into the integer result register
+            ctx.emitter.instruction("cmp rax, 0"); // check whether indexed-array search returned a non-negative match index
+            ctx.emitter.instruction("setge al"); // materialize in_array() as true for any found index
+            ctx.emitter.instruction("movzx rax, al"); // widen the membership flag into the integer result register
         }
     }
     Ok(())
@@ -5313,30 +5458,31 @@ fn lower_in_array_string_aarch64(
     let done_label = ctx.next_label("in_array_str_done");
 
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed string-array payload slot
-    ctx.emitter.instruction("mov x12, #0");                                     // start the string membership scan at index zero
+    ctx.emitter.instruction("ldr x9, [x10]"); // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("add x10, x10, #24"); // point at the first indexed string-array payload slot
+    ctx.emitter.instruction("mov x12, #0"); // start the string membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false after all string elements are scanned
-    ctx.emitter.instruction("lsl x13, x12, #4");                                // scale the element index by the 16-byte string slot width
-    ctx.emitter.instruction("ldr x1, [x10, x13]");                              // load the current string element pointer for comparison
-    ctx.emitter.instruction("add x14, x13, #8");                                // compute the current string element length-slot offset
-    ctx.emitter.instruction("ldr x2, [x10, x14]");                              // load the current string element length for comparison
+    ctx.emitter.instruction("cmp x12, x9"); // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label)); // finish with false after all string elements are scanned
+    ctx.emitter.instruction("lsl x13, x12, #4"); // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("ldr x1, [x10, x13]"); // load the current string element pointer for comparison
+    ctx.emitter.instruction("add x14, x13, #8"); // compute the current string element length-slot offset
+    ctx.emitter.instruction("ldr x2, [x10, x14]"); // load the current string element length for comparison
     abi::emit_push_reg_pair(ctx.emitter, "x9", "x10");
     abi::emit_push_reg(ctx.emitter, "x12");
     ctx.load_string_value_to_regs(needle, "x3", "x4")?;
     abi::emit_call_label(ctx.emitter, "__rt_str_eq");
     abi::emit_pop_reg(ctx.emitter, "x12");
     abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");
-    ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));              // stop as soon as the searched string matches an element
-    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next indexed string element
-    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning remaining string payload slots
+    ctx.emitter
+        .instruction(&format!("cbnz x0, {}", found_label)); // stop as soon as the searched string matches an element
+    ctx.emitter.instruction("add x12, x12, #1"); // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("b {}", loop_label)); // continue scanning remaining string payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding the searched string
-    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the not-found result after a match
+    ctx.emitter.instruction("mov x0, #1"); // return true after finding the searched string
+    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("mov x0, #0");                                      // return false when no indexed string element matches
+    ctx.emitter.instruction("mov x0, #0"); // return false when no indexed string element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -5370,34 +5516,36 @@ fn lower_in_array_mixed_string_aarch64(
     let done_label = ctx.next_label("in_array_mix_done");
 
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]");                                   // load array<Mixed> length before scanning boxed slots
-    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first boxed Mixed cell slot
-    ctx.emitter.instruction("mov x12, #0");                                     // start the membership scan at index zero
+    ctx.emitter.instruction("ldr x9, [x10]"); // load array<Mixed> length before scanning boxed slots
+    ctx.emitter.instruction("add x10, x10, #24"); // point at the first boxed Mixed cell slot
+    ctx.emitter.instruction("mov x12, #0"); // start the membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against the array length
-    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false once every cell is scanned
-    ctx.emitter.instruction("ldr x0, [x10, x12, lsl #3]");                      // load the current boxed Mixed cell pointer from its 8-byte slot
+    ctx.emitter.instruction("cmp x12, x9"); // compare the scan index against the array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label)); // finish with false once every cell is scanned
+    ctx.emitter.instruction("ldr x0, [x10, x12, lsl #3]"); // load the current boxed Mixed cell pointer from its 8-byte slot
     abi::emit_push_reg_pair(ctx.emitter, "x9", "x10");
     abi::emit_push_reg(ctx.emitter, "x12");
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // unbox the cell → x0=tag, x1=string ptr, x2=string len
-    ctx.emitter.instruction("cmp x0, #1");                                      // is this cell a string value (runtime tag 1)?
-    ctx.emitter.instruction(&format!("b.ne {}", not_string_label));             // non-string cells can never equal a string needle
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox"); // unbox the cell → x0=tag, x1=string ptr, x2=string len
+    ctx.emitter.instruction("cmp x0, #1"); // is this cell a string value (runtime tag 1)?
+    ctx.emitter
+        .instruction(&format!("b.ne {}", not_string_label)); // non-string cells can never equal a string needle
     ctx.load_string_value_to_regs(needle, "x3", "x4")?;
-    abi::emit_call_label(ctx.emitter, "__rt_str_eq");                           // compare the unboxed string element (x1/x2) against the needle (x3/x4)
-    ctx.emitter.instruction(&format!("b {}", have_flag_label));                 // carry the str-eq result into the shared match-flag join
+    abi::emit_call_label(ctx.emitter, "__rt_str_eq"); // compare the unboxed string element (x1/x2) against the needle (x3/x4)
+    ctx.emitter.instruction(&format!("b {}", have_flag_label)); // carry the str-eq result into the shared match-flag join
     ctx.emitter.label(&not_string_label);
-    ctx.emitter.instruction("mov x0, #0");                                      // a non-string cell yields a not-matched flag
+    ctx.emitter.instruction("mov x0, #0"); // a non-string cell yields a not-matched flag
     ctx.emitter.label(&have_flag_label);
     abi::emit_pop_reg(ctx.emitter, "x12");
     abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");
-    ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));              // stop as soon as a cell matches the needle
-    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next boxed Mixed cell
-    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning the remaining cells
+    ctx.emitter
+        .instruction(&format!("cbnz x0, {}", found_label)); // stop as soon as a cell matches the needle
+    ctx.emitter.instruction("add x12, x12, #1"); // advance to the next boxed Mixed cell
+    ctx.emitter.instruction(&format!("b {}", loop_label)); // continue scanning the remaining cells
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding a matching cell
-    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the not-found result after a match
+    ctx.emitter.instruction("mov x0, #1"); // return true after finding a matching cell
+    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("mov x0, #0");                                      // return false when no cell matches the needle
+    ctx.emitter.instruction("mov x0, #0"); // return false when no cell matches the needle
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -5416,36 +5564,37 @@ fn lower_in_array_mixed_string_x86_64(
     let done_label = ctx.next_label("in_array_mix_done");
 
     ctx.load_value_to_reg(array, "r10")?;
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load array<Mixed> length before scanning boxed slots
-    ctx.emitter.instruction("lea r12, [r10 + 24]");                             // point at the first boxed Mixed cell slot
-    ctx.emitter.instruction("xor r13d, r13d");                                  // start the membership scan at index zero
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]"); // load array<Mixed> length before scanning boxed slots
+    ctx.emitter.instruction("lea r12, [r10 + 24]"); // point at the first boxed Mixed cell slot
+    ctx.emitter.instruction("xor r13d, r13d"); // start the membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp r13, r11");                                    // compare the scan index against the array length
-    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false once every cell is scanned
-    ctx.emitter.instruction("mov rax, QWORD PTR [r12 + r13*8]");                // load the boxed Mixed cell pointer into rax (the unbox input register)
+    ctx.emitter.instruction("cmp r13, r11"); // compare the scan index against the array length
+    ctx.emitter.instruction(&format!("jge {}", end_label)); // finish with false once every cell is scanned
+    ctx.emitter.instruction("mov rax, QWORD PTR [r12 + r13*8]"); // load the boxed Mixed cell pointer into rax (the unbox input register)
     abi::emit_push_reg_pair(ctx.emitter, "r11", "r12");
     abi::emit_push_reg(ctx.emitter, "r13");
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // unbox the cell → rax=tag, rdi=string ptr, rdx=string len
-    ctx.emitter.instruction("cmp rax, 1");                                      // is this cell a string value (runtime tag 1)?
-    ctx.emitter.instruction(&format!("jne {}", not_string_label));              // non-string cells can never equal a string needle
-    ctx.emitter.instruction("mov rsi, rdx");                                    // move the unboxed string length into the comparison argument
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox"); // unbox the cell → rax=tag, rdi=string ptr, rdx=string len
+    ctx.emitter.instruction("cmp rax, 1"); // is this cell a string value (runtime tag 1)?
+    ctx.emitter
+        .instruction(&format!("jne {}", not_string_label)); // non-string cells can never equal a string needle
+    ctx.emitter.instruction("mov rsi, rdx"); // move the unboxed string length into the comparison argument
     ctx.load_string_value_to_regs(needle, "rdx", "rcx")?;
-    abi::emit_call_label(ctx.emitter, "__rt_str_eq");                           // compare the unboxed string element (rdi/rsi) against the needle (rdx/rcx)
-    ctx.emitter.instruction(&format!("jmp {}", have_flag_label));               // carry the str-eq result into the shared match-flag join
+    abi::emit_call_label(ctx.emitter, "__rt_str_eq"); // compare the unboxed string element (rdi/rsi) against the needle (rdx/rcx)
+    ctx.emitter.instruction(&format!("jmp {}", have_flag_label)); // carry the str-eq result into the shared match-flag join
     ctx.emitter.label(&not_string_label);
-    ctx.emitter.instruction("xor eax, eax");                                    // a non-string cell yields a not-matched flag
+    ctx.emitter.instruction("xor eax, eax"); // a non-string cell yields a not-matched flag
     ctx.emitter.label(&have_flag_label);
     abi::emit_pop_reg(ctx.emitter, "r13");
     abi::emit_pop_reg_pair(ctx.emitter, "r11", "r12");
-    ctx.emitter.instruction("test rax, rax");                                   // did the current cell match the needle?
-    ctx.emitter.instruction(&format!("jne {}", found_label));                   // stop as soon as a cell matches the needle
-    ctx.emitter.instruction("add r13, 1");                                      // advance to the next boxed Mixed cell
-    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning the remaining cells
+    ctx.emitter.instruction("test rax, rax"); // did the current cell match the needle?
+    ctx.emitter.instruction(&format!("jne {}", found_label)); // stop as soon as a cell matches the needle
+    ctx.emitter.instruction("add r13, 1"); // advance to the next boxed Mixed cell
+    ctx.emitter.instruction(&format!("jmp {}", loop_label)); // continue scanning the remaining cells
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding a matching cell
-    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the not-found result after a match
+    ctx.emitter.instruction("mov rax, 1"); // return true after finding a matching cell
+    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("xor eax, eax");                                    // return false when no cell matches the needle
+    ctx.emitter.instruction("xor eax, eax"); // return false when no cell matches the needle
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -5462,31 +5611,32 @@ fn lower_in_array_string_x86_64(
     let done_label = ctx.next_label("in_array_str_done");
 
     ctx.load_value_to_reg(array, "r10")?;
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("lea r12, [r10 + 24]");                             // point at the first indexed string-array payload slot
-    ctx.emitter.instruction("xor r13d, r13d");                                  // start the string membership scan at index zero
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]"); // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("lea r12, [r10 + 24]"); // point at the first indexed string-array payload slot
+    ctx.emitter.instruction("xor r13d, r13d"); // start the string membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp r13, r11");                                    // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false after all string elements are scanned
-    ctx.emitter.instruction("mov rcx, r13");                                    // copy the scan index before scaling it to a byte offset
-    ctx.emitter.instruction("shl rcx, 4");                                      // scale the element index by the 16-byte string slot width
-    ctx.emitter.instruction("mov rdi, QWORD PTR [r12 + rcx]");                  // load the current string element pointer for comparison
-    ctx.emitter.instruction("mov rsi, QWORD PTR [r12 + rcx + 8]");              // load the current string element length for comparison
+    ctx.emitter.instruction("cmp r13, r11"); // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("jge {}", end_label)); // finish with false after all string elements are scanned
+    ctx.emitter.instruction("mov rcx, r13"); // copy the scan index before scaling it to a byte offset
+    ctx.emitter.instruction("shl rcx, 4"); // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("mov rdi, QWORD PTR [r12 + rcx]"); // load the current string element pointer for comparison
+    ctx.emitter
+        .instruction("mov rsi, QWORD PTR [r12 + rcx + 8]"); // load the current string element length for comparison
     abi::emit_push_reg_pair(ctx.emitter, "r11", "r12");
     abi::emit_push_reg(ctx.emitter, "r13");
     ctx.load_string_value_to_regs(needle, "rdx", "rcx")?;
     abi::emit_call_label(ctx.emitter, "__rt_str_eq");
     abi::emit_pop_reg(ctx.emitter, "r13");
     abi::emit_pop_reg_pair(ctx.emitter, "r11", "r12");
-    ctx.emitter.instruction("test rax, rax");                                   // check whether the current string element matched the needle
-    ctx.emitter.instruction(&format!("jne {}", found_label));                   // stop as soon as the searched string matches an element
-    ctx.emitter.instruction("add r13, 1");                                      // advance to the next indexed string element
-    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning remaining string payload slots
+    ctx.emitter.instruction("test rax, rax"); // check whether the current string element matched the needle
+    ctx.emitter.instruction(&format!("jne {}", found_label)); // stop as soon as the searched string matches an element
+    ctx.emitter.instruction("add r13, 1"); // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("jmp {}", loop_label)); // continue scanning remaining string payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding the searched string
-    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the not-found result after a match
+    ctx.emitter.instruction("mov rax, 1"); // return true after finding the searched string
+    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("xor eax, eax");                                    // return false when no indexed string element matches
+    ctx.emitter.instruction("xor eax, eax"); // return false when no indexed string element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }

@@ -1,11 +1,9 @@
 //! Purpose:
-//! Lowers `fopen()` calls whose path is a `phar://` URL by reading the named
-//! entry out of a PHAR archive at compile time and materializing it as a
-//! readable stream through the shared `__rt_data_stream` runtime helper.
+//! Parses `phar://` URLs and PHAR archive metadata for EIR I/O lowering.
+//! Provides compile-time entry extraction and write-template construction.
 //!
 //! Called from:
-//! - `crate::codegen_support::builtins::io::fopen::emit()` when the path literal
-//!   begins with `phar://`.
+//! - `crate::codegen::lower_inst::builtins::io` for literal PHAR read/write paths.
 //!
 //! Key details:
 //! - The URL must be a string literal. The archive file is read and parsed at
@@ -30,77 +28,11 @@
 //!   `manifest_start + 4 + manifest_len`, holding each entry's bytes
 //!   consecutively in manifest order.
 
-use crate::codegen_support::context::Context;
-use crate::codegen_support::data_section::DataSection;
-use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::expr::emit_expr;
-use crate::codegen_support::{abi, platform::Arch};
-use crate::parser::ast::{Expr, ExprKind};
-use crate::types::PhpType;
-
 /// PHAR per-entry flag bit: the entry's data is stored as raw DEFLATE (what PHP
 /// writes for gzip-compressed entries — no zlib or gzip header).
 const PHAR_FLAG_GZIP: u32 = 0x0000_1000;
 /// PHAR per-entry flag bit: the entry's data is bzip2 compressed.
 const PHAR_FLAG_BZIP2: u32 = 0x0000_2000;
-
-/// Emits a `fopen("phar://...", ...)` call. The path is known to be a string
-/// literal beginning with `phar://`. Mirrors `data_stream::emit`: the resolved
-/// entry bytes are embedded and served through `__rt_data_stream`.
-pub fn emit(
-    args: &[Expr],
-    emitter: &mut Emitter,
-    ctx: &mut Context,
-    data: &mut DataSection,
-) -> Option<PhpType> {
-    emitter.comment("fopen() phar:// stream");
-    // Write/append/create modes lower to the PHAR write runtime/bridge, which
-    // can update native PHAR, tar, and ZIP archives while preserving siblings.
-    if let ExprKind::StringLiteral(mode) = &args[1].kind {
-        if is_phar_write_mode(mode) {
-            return emit_write(args, emitter, ctx, data);
-        }
-    }
-    let bytes = match &args[0].kind {
-        ExprKind::StringLiteral(path) => extract_phar_entry(path),
-        _ => None,
-    };
-    // Read-mode literal phar:// URLs embed the resolved payload; optional fopen
-    // args are still evaluated for PHP-visible side effects.
-    crate::codegen_support::builtins::io::fopen::emit_mode_and_ignored_optional_args(args, emitter, ctx, data);
-    match bytes {
-        Some(payload) => {
-            let (symbol, len) = data.add_string(&payload);
-            match emitter.target.arch {
-                Arch::AArch64 => {
-                    abi::emit_symbol_address(emitter, "x0", &symbol);
-                    emitter.instruction(&format!("mov x1, #{}", len));          // embedded entry length
-                }
-                Arch::X86_64 => {
-                    abi::emit_symbol_address(emitter, "rdi", &symbol);
-                    emitter.instruction(&format!("mov rsi, {}", len));          // embedded entry length
-                }
-            }
-            abi::emit_call_label(emitter, "__rt_data_stream");                  // build the readable phar entry descriptor
-        }
-        None => match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction("mov x0, #-1"),                // unresolved phar:// entry lowers to PHP false
-            Arch::X86_64 => emitter.instruction("mov rax, -1"),                 // unresolved phar:// entry lowers to PHP false
-        },
-    }
-    crate::codegen_support::builtins::io::fopen::box_fopen_result(emitter, ctx);
-    Some(PhpType::Mixed)
-}
-
-/// Returns true for `fopen()` modes that open a `phar://` entry for writing.
-/// `w`/`a`/`c`/`x` and their `+` variants use the runtime write bridge, while
-/// `r`/`r+` use the read path.
-fn is_phar_write_mode(mode: &str) -> bool {
-    matches!(
-        mode.as_bytes().first(),
-        Some(b'w') | Some(b'a') | Some(b'c') | Some(b'x')
-    )
-}
 
 /// Splits a `phar://<archive>/<entry>` write URL into `(archive_path, entry)`.
 /// Unlike the read path the archive need not exist yet, so the split happens at
@@ -124,131 +56,8 @@ pub(crate) fn resolve_write_target(url: &str) -> Option<(String, String)> {
     Some((archive.to_string(), entry.to_string()))
 }
 
-/// Emits the `fopen("phar://...", "w")` write path. The output archive path and
-/// the single-entry template are embedded at compile time; the runtime
-/// `__rt_phar_write_open` seeds the in-memory archive buffer, `fwrite` appends
-/// the entry content, and `fclose` runs `__rt_phar_write_finalize`. Returns the
-/// synthetic descriptor `0x50000000` (boxed as a resource), or PHP false when
-/// the write target cannot be resolved.
-fn emit_write(
-    args: &[Expr],
-    emitter: &mut Emitter,
-    ctx: &mut Context,
-    data: &mut DataSection,
-) -> Option<PhpType> {
-    // The mode is a string literal here; evaluate it plus optional args for
-    // parity with the read path.
-    crate::codegen_support::builtins::io::fopen::emit_mode_and_ignored_optional_args(args, emitter, ctx, data);
-    let target = match &args[0].kind {
-        ExprKind::StringLiteral(url) => resolve_write_target(url),
-        _ => None,
-    };
-    match target {
-        Some((archive, entry)) => {
-            let tpl = build_phar_write_template(&entry);
-            let (tpl_sym, tpl_len) = data.add_string(&tpl);
-            let (path_sym, path_len) = data.add_string(archive.as_bytes());
-            // The phar signature is computed with elephc-crypto SHA1, so publish
-            // its entry pointers before __rt_phar_write_finalize runs at fclose().
-            crate::codegen_support::hash_crypto::publish_elephc_crypto_function_pointers(emitter);
-            match emitter.target.arch {
-                Arch::AArch64 => {
-                    abi::emit_symbol_address(emitter, "x9", &path_sym);
-                    abi::emit_symbol_address(emitter, "x10", "_phar_write_path_ptr");
-                    emitter.instruction("str x9, [x10]");                       // record the on-disk archive path pointer
-                    emitter.instruction(&format!("mov x9, #{}", path_len));     // archive path length
-                    abi::emit_symbol_address(emitter, "x10", "_phar_write_path_len");
-                    emitter.instruction("str x9, [x10]");                       // record the on-disk archive path length
-                    abi::emit_symbol_address(emitter, "x0", &tpl_sym);
-                    emitter.instruction(&format!("mov x1, #{}", tpl_len));      // template prefix length
-                    abi::emit_call_label(emitter, "__rt_phar_write_open");
-                    emitter.instruction("mov w0, #0x5000");                     // low half of the phar-write descriptor 0x50000000
-                    emitter.instruction("lsl w0, w0, #16");                     // form the full 0x50000000 phar-write descriptor
-                }
-                Arch::X86_64 => {
-                    abi::emit_symbol_address(emitter, "r9", &path_sym);
-                    abi::emit_symbol_address(emitter, "r10", "_phar_write_path_ptr");
-                    emitter.instruction("mov QWORD PTR [r10], r9");             // record the on-disk archive path pointer
-                    abi::emit_symbol_address(emitter, "r10", "_phar_write_path_len");
-                    emitter.instruction(&format!("mov QWORD PTR [r10], {}", path_len)); // record the archive path length
-                    abi::emit_symbol_address(emitter, "rdi", &tpl_sym);
-                    emitter.instruction(&format!("mov rsi, {}", tpl_len));      // template prefix length
-                    abi::emit_call_label(emitter, "__rt_phar_write_open");
-                    emitter.instruction("mov eax, 0x50000000");                 // the phar-write synthetic descriptor
-                }
-            }
-        }
-        None => match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction("mov x0, #-1"),                // unresolved phar:// write target → PHP false
-            Arch::X86_64 => emitter.instruction("mov rax, -1"),                 // unresolved phar:// write target → PHP false
-        },
-    }
-    crate::codegen_support::builtins::io::fopen::box_fopen_result(emitter, ctx);
-    Some(PhpType::Mixed)
-}
-
-/// Emits `file_put_contents("phar://archive/entry", $data)` as a one-shot phar
-/// write: it reuses the same runtime as the `fopen`+`fwrite`+`fclose` path —
-/// `__rt_phar_write_open` seeds the in-memory archive with the entry template,
-/// `__rt_phar_write_append` appends the data, and `__rt_phar_write_finalize`
-/// assembles, SHA1-signs, and writes the archive. Returns `Int` (the byte count
-/// written), or `None` when `url` is not a resolvable phar write target (the
-/// caller then falls back to a normal file write).
-pub(crate) fn emit_file_put_contents_write(
-    url: &str,
-    data_arg: &Expr,
-    emitter: &mut Emitter,
-    ctx: &mut Context,
-    data: &mut DataSection,
-) -> Option<PhpType> {
-    let (archive, entry) = resolve_write_target(url)?;
-    let tpl = build_phar_write_template(&entry);
-    let (tpl_sym, tpl_len) = data.add_string(&tpl);
-    let (path_sym, path_len) = data.add_string(archive.as_bytes());
-    // The phar signature is computed with elephc-crypto SHA1, so publish its
-    // entry pointers before the inline finalize signs the archive.
-    crate::codegen_support::hash_crypto::publish_elephc_crypto_function_pointers(emitter);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, "x9", &path_sym);
-            abi::emit_symbol_address(emitter, "x10", "_phar_write_path_ptr");
-            emitter.instruction("str x9, [x10]");                               // record the on-disk archive path pointer
-            emitter.instruction(&format!("mov x9, #{}", path_len));             // archive path length
-            abi::emit_symbol_address(emitter, "x10", "_phar_write_path_len");
-            emitter.instruction("str x9, [x10]");                               // record the on-disk archive path length
-            abi::emit_symbol_address(emitter, "x0", &tpl_sym);
-            emitter.instruction(&format!("mov x1, #{}", tpl_len));              // template prefix length
-            abi::emit_call_label(emitter, "__rt_phar_write_open");              // seed the archive buffer with the entry template
-            emit_expr(data_arg, emitter, ctx, data);                            // $data → x1 = ptr, x2 = len (string ABI)
-            abi::emit_call_label(emitter, "__rt_phar_write_append");            // append the entry content; x0 = byte count
-            abi::emit_push_reg(emitter, "x0");                                   // preserve the byte count across finalize
-            abi::emit_call_label(emitter, "__rt_phar_write_finalize");          // assemble + SHA1-sign + write the archive
-            abi::emit_pop_reg(emitter, "x0");                                    // restore the byte count as the file_put_contents result
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(emitter, "r9", &path_sym);
-            abi::emit_symbol_address(emitter, "r10", "_phar_write_path_ptr");
-            emitter.instruction("mov QWORD PTR [r10], r9");                     // record the on-disk archive path pointer
-            abi::emit_symbol_address(emitter, "r10", "_phar_write_path_len");
-            emitter.instruction(&format!("mov QWORD PTR [r10], {}", path_len)); // record the archive path length
-            abi::emit_symbol_address(emitter, "rdi", &tpl_sym);
-            emitter.instruction(&format!("mov rsi, {}", tpl_len));              // template prefix length
-            abi::emit_call_label(emitter, "__rt_phar_write_open");              // seed the archive buffer with the entry template
-            emit_expr(data_arg, emitter, ctx, data);                            // $data → rax = ptr, rdx = len (string ABI)
-            emitter.instruction("mov rsi, rax");                                // append payload pointer (rdx already holds the length)
-            abi::emit_call_label(emitter, "__rt_phar_write_append");            // append the entry content; rax = byte count
-            abi::emit_push_reg(emitter, "rax");                                 // preserve the byte count across finalize
-            abi::emit_call_label(emitter, "__rt_phar_write_finalize");          // assemble + SHA1-sign + write the archive
-            abi::emit_pop_reg(emitter, "rax");                                  // restore the byte count as the file_put_contents result
-        }
-    }
-    Some(PhpType::Int)
-}
-
-/// Resolves a `phar://<archive>/<entry>` URL to the entry's uncompressed bytes.
-/// Splits the archive (the longest leading path that names an existing file)
-/// from the inner entry, reads and parses the archive, and returns the entry
-/// payload, or `None` on any failure.
+/// Extracts the bytes for a literal `phar://` URL from a native, tar-based, or
+/// zip-based PHAR archive.
 pub(crate) fn extract_phar_entry(url: &str) -> Option<Vec<u8>> {
     if let Some(bytes) = elephc_phar::extract_url_bytes(url.as_bytes()) {
         return Some(bytes);

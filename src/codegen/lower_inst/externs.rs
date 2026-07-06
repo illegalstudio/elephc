@@ -16,7 +16,7 @@
 use crate::codegen::abi;
 use crate::codegen::callable_descriptor;
 use crate::codegen::platform::Arch;
-use crate::codegen_support::context::DeferredExternCallbackTrampoline;
+use crate::codegen_support::DeferredExternCallbackTrampoline;
 use crate::ir::{
     ExternDecl, ExternParamDecl, Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId,
 };
@@ -31,10 +31,7 @@ use super::{
 use crate::codegen::{CodegenIrError, Result};
 
 /// Lowers an EIR extern call to a platform-mangled C symbol call.
-pub(super) fn lower_extern_call(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
+pub(super) fn lower_extern_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let decl = extern_decl(ctx, inst)?.clone();
     validate_extern_shape(&decl)?;
     if inst.operands.len() != decl.params.len() {
@@ -46,11 +43,7 @@ pub(super) fn lower_extern_call(
         )));
     }
 
-    let c_param_types = decl
-        .params
-        .iter()
-        .map(c_abi_param_type)
-        .collect::<Vec<_>>();
+    let c_param_types = decl.params.iter().map(c_abi_param_type).collect::<Vec<_>>();
     let string_arg_count = decl
         .params
         .iter()
@@ -92,10 +85,7 @@ pub(super) fn lower_extern_call(
 }
 
 /// Returns the extern declaration addressed by the instruction's function-name immediate.
-fn extern_decl<'a>(
-    ctx: &'a FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<&'a ExternDecl> {
+fn extern_decl<'a>(ctx: &'a FunctionContext<'_>, inst: &Instruction) -> Result<&'a ExternDecl> {
     let data = expect_data(inst)?;
     let name = ctx.function_name_data(data)?;
     let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
@@ -129,9 +119,7 @@ fn validate_supported_extern_type(name: &str, ty: &PhpType, position: &str) -> R
         ) => Ok(()),
         (_, other) => Err(CodegenIrError::unsupported(format!(
             "extern {} {} type {:?}",
-            name,
-            position,
-            other
+            name, position, other
         ))),
     }
 }
@@ -179,7 +167,10 @@ fn materialize_extern_arg(
             abi::emit_call_label(ctx.emitter, "__rt_str_to_cstr");
             return Ok(PhpType::Pointer(None));
         }
-        (PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str, PhpType::Mixed | PhpType::Union(_)) => {
+        (
+            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str,
+            PhpType::Mixed | PhpType::Union(_),
+        ) => {
             materialize_mixed_extern_arg(ctx, value, &target_ty)?;
             if target_ty == PhpType::Str {
                 return Ok(PhpType::Pointer(None));
@@ -207,9 +198,7 @@ fn materialize_extern_arg(
         (expected, actual) => {
             return Err(CodegenIrError::unsupported(format!(
                 "extern parameter ${} expects {:?}, got {:?}",
-                param.name,
-                expected,
-                actual
+                param.name, expected, actual
             )))
         }
     }
@@ -255,15 +244,15 @@ fn materialize_extern_string_callable_arg(
     let callback_name = const_string_value(ctx, value).ok_or_else(|| {
         CodegenIrError::unsupported("extern callable parameter from runtime string value")
     })?;
-    let Some((function_name, signature)) =
-        ctx.callable_function_by_name(callback_name)
-            .filter(|function| !function.flags.is_main)
-            .map(|function| {
-                (
-                    function.name.clone(),
-                    callable_wrapper_sig(&super::function_signature_from_eir(function)),
-                )
-            })
+    let Some((function_name, signature)) = ctx
+        .callable_function_by_name(callback_name)
+        .filter(|function| !function.flags.is_main)
+        .map(|function| {
+            (
+                function.name.clone(),
+                callable_wrapper_sig(&super::function_signature_from_eir(function)),
+            )
+        })
     else {
         abi::emit_symbol_address(
             ctx.emitter,
@@ -297,7 +286,11 @@ fn materialize_extern_static_function_descriptor_callback(
         ),
         Some(&invoker_label),
     );
-    abi::emit_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), &descriptor_label);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &descriptor_label,
+    );
     emit_stateful_extern_callback_trampoline(ctx, &signature);
     Ok(())
 }
@@ -315,7 +308,11 @@ fn const_string_value<'a>(ctx: &'a FunctionContext<'_>, value: ValueId) -> Optio
     let Some(Immediate::Data(data)) = inst.immediate else {
         return None;
     };
-    ctx.module.data.strings.get(data.as_raw() as usize).map(String::as_str)
+    ctx.module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .map(String::as_str)
 }
 
 /// Materializes an EIR callable descriptor as a C-compatible callback function pointer.
@@ -354,14 +351,29 @@ fn emit_stateful_extern_callback_trampoline(
     crate::codegen::emit_extern_callback_trampoline(ctx.emitter, &trampoline);
     ctx.emitter.label(&done_label);
 
-    ctx.emitter.comment("extern callback: bind descriptor trampoline");
+    ctx.emitter
+        .comment("extern callback: bind descriptor trampoline");
     callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot_label, 0);
+    abi::emit_load_symbol_to_reg(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &slot_label,
+        0,
+    );
     callable_descriptor::emit_release_current_descriptor(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot_label, 0);
-    abi::emit_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), &trampoline_label);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &slot_label,
+        0,
+    );
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &trampoline_label,
+    );
 }
 
 /// Returns the C-visible extern callback parameter types used before PHP boxing.
@@ -405,10 +417,7 @@ fn callable_signature_for_value_seen(
 }
 
 /// Returns the instruction that defines an SSA value.
-fn value_instruction<'a>(
-    ctx: &'a FunctionContext<'_>,
-    value: ValueId,
-) -> Option<&'a Instruction> {
+fn value_instruction<'a>(ctx: &'a FunctionContext<'_>, value: ValueId) -> Option<&'a Instruction> {
     let value = ctx.function.value(value)?;
     let ValueDef::Instruction { inst, .. } = value.def else {
         return None;
@@ -436,12 +445,16 @@ fn stored_callable_signature_for_slot(
 ) -> Option<FunctionSig> {
     let mut signature = None;
     for inst in &ctx.function.instructions {
-        if !matches!(inst.op, Op::StoreLocal) || inst.immediate != Some(Immediate::LocalSlot(slot)) {
+        if !matches!(inst.op, Op::StoreLocal) || inst.immediate != Some(Immediate::LocalSlot(slot))
+        {
             continue;
         }
         let value = *inst.operands.first()?;
         let candidate = callable_signature_for_value_seen(ctx, value, seen)?;
-        if signature.as_ref().is_some_and(|existing| existing != &candidate) {
+        if signature
+            .as_ref()
+            .is_some_and(|existing| existing != &candidate)
+        {
             return None;
         }
         signature = Some(candidate);
@@ -470,7 +483,11 @@ fn first_class_callable_target<'a>(
     let Some(Immediate::Data(data)) = inst.immediate else {
         return None;
     };
-    ctx.module.data.strings.get(data.as_raw() as usize).map(String::as_str)
+    ctx.module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .map(String::as_str)
 }
 
 /// Recovers a first-class method callable signature from receiver metadata.
@@ -592,10 +609,10 @@ fn pop_ffi_return_value(ctx: &mut FunctionContext<'_>, return_ty: &PhpType) {
 fn emit_sign_extend_i32_result(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("sxtw x0, w0");                             // sign-extend the C int return into PHP's 64-bit integer result
+            ctx.emitter.instruction("sxtw x0, w0"); // sign-extend the C int return into PHP's 64-bit integer result
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("movsxd rax, eax");                         // sign-extend the C int return into PHP's 64-bit integer result
+            ctx.emitter.instruction("movsxd rax, eax"); // sign-extend the C int return into PHP's 64-bit integer result
         }
     }
 }
