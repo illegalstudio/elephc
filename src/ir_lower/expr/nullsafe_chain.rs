@@ -21,7 +21,7 @@ use super::{
     branch_to, lower_array_access_from_value, lower_boxed_null,
     lower_dynamic_property_get_from_value, lower_expr, lower_expr_call_from_value,
     lower_method_call_with_receiver, lower_property_get_from_value, store_value_into_temp,
-    value_is_definitely_null, value_is_nullable,
+    take_owned_temp, value_is_definitely_null, value_is_nullable,
 };
 
 /// Lowers `expr` when it is a postfix chain containing `?->`.
@@ -190,7 +190,7 @@ fn lower_nullsafe_postfix_chain(
     warn_on_missing: bool,
 ) -> LoweredValue {
     let result_type = PhpType::Mixed;
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let null_block = ctx.builder.create_named_block("nullsafe.chain.null", Vec::new());
     let done = ctx.builder.create_named_block("nullsafe.chain.done", Vec::new());
     let mut current = Some(lower_expr(ctx, chain.base));
@@ -224,7 +224,7 @@ fn lower_nullsafe_postfix_chain(
     branch_to(ctx, done);
 
     ctx.builder.position_at_end(done);
-    ctx.load_local(&temp_name, Some(expr.span))
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers one segment of an already flattened nullsafe postfix chain.

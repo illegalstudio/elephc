@@ -144,6 +144,7 @@ mod mixed_free_deep;
 mod mixed_count;
 mod mixed_is_empty;
 mod mixed_numeric_binops;
+mod int_checked_binops;
 mod mixed_strict_eq;
 mod mixed_unbox;
 mod mixed_write_stdout;
@@ -409,6 +410,8 @@ pub use mixed_is_empty::emit_mixed_is_empty;
 /// Emit Mixed emptiness check helper.
 pub use mixed_numeric_binops::emit_mixed_numeric_binops;
 /// Emit Mixed numeric binary operations helper.
+pub use int_checked_binops::emit_int_checked_binops;
+/// Emit checked integer add/sub/mul helpers with overflow-to-float promotion.
 pub use mixed_strict_eq::emit_mixed_strict_eq;
 /// Emit Mixed strict equality check helper.
 pub use mixed_unbox::emit_mixed_unbox;

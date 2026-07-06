@@ -12,11 +12,12 @@
 //!   assignments retain refcounted values before publishing a second owner.
 
 use crate::codegen::abi;
+use crate::codegen::platform::Arch;
 use crate::ir::{Instruction, LocalSlot, LocalSlotId, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
-use super::{expect_local_slot, expect_operand, store_if_result};
+use super::{coerce_loaded_local_to_result_type, expect_local_slot, expect_operand};
 use crate::codegen_ir::{CodegenIrError, Result};
 
 /// Resolved function static-local metadata for symbol-backed storage.
@@ -31,8 +32,13 @@ struct StaticLocalSlot {
 pub(super) fn lower_load_static_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = resolve_static_local_slot(ctx, inst)?;
     ensure_static_local_type_supported(&slot, inst)?;
+    let result = inst.result.ok_or_else(|| {
+        CodegenIrError::invalid_module("load_static_local missing result value")
+    })?;
     abi::emit_load_symbol_to_result(ctx.emitter, &slot.symbol, &slot.php_type);
-    store_if_result(ctx, inst)
+    let result_ty = ctx.value_php_type(result)?;
+    coerce_loaded_local_to_result_type(ctx, &slot.php_type, &result_ty)?;
+    ctx.store_result_value(result)
 }
 
 /// Lowers a static-local assignment from one SSA operand into symbol-backed storage.
@@ -41,7 +47,32 @@ pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Ins
     let slot = resolve_static_local_slot(ctx, inst)?;
     ensure_static_local_type_supported(&slot, inst)?;
     ensure_static_local_value_supported(ctx, &slot, value, inst)?;
-    let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
+    let mut loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
+    // Narrow Mixed to Int when the static local slot is Int-typed
+    // (from checked integer arithmetic that may overflow to float).
+    if matches!(slot.php_type.codegen_repr(), PhpType::Int)
+        && matches!(loaded_ty, PhpType::Mixed)
+    {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                // x0 already holds the Mixed pointer
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            }
+            Arch::X86_64 => {
+                // rax holds the Mixed pointer; __rt_mixed_cast_int expects rdi
+                ctx.emitter.instruction("mov rdi, rax");                         // move the Mixed pointer into the first SysV argument register
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            }
+        }
+        // Release the original Mixed box after narrowing.
+        // The value SSA still holds the Mixed pointer; reload it and decref.
+        // But the narrowed int is in the result reg, so save it first.
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        ctx.load_value_to_result(value)?;
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        loaded_ty = PhpType::Int;
+    }
     if loaded_ty.is_refcounted() {
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty);
     }
@@ -61,8 +92,34 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &initialized_label);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
-    ctx.load_value_to_result(value)?;
-    abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, false);
+    let mut loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
+    // Narrow Mixed to Int when the static local slot is Int-typed.
+    if matches!(slot.php_type.codegen_repr(), PhpType::Int)
+        && matches!(loaded_ty, PhpType::Mixed)
+    {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                         // move the Mixed pointer into the first SysV argument register
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            }
+        }
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        ctx.load_value_to_result(value)?;
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        loaded_ty = PhpType::Int;
+    }
+    // Box Int/Float/Bool/Void as Mixed when the static local slot is Mixed-typed.
+    if matches!(slot.php_type.codegen_repr(), PhpType::Mixed)
+        && !matches!(loaded_ty, PhpType::Mixed)
+    {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &loaded_ty);
+    }
+    let store_ty = slot.php_type.codegen_repr();
+    abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &store_ty, false);
     clear_static_local_high_word_if_needed(ctx, &slot);
     ctx.emitter.label(&initialized_label);
     Ok(())
@@ -151,6 +208,16 @@ fn ensure_static_local_value_supported(
 /// Returns true when a stored value can use the static-local symbol layout.
 fn static_local_value_type_matches(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     if value_ty == slot_ty {
+        return true;
+    }
+    // PHP coercive mode: Mixed (from checked arithmetic) can be narrowed to Int,
+    // and Int/Bool/Void/Float can be boxed to Mixed for init.
+    if matches!(slot_ty, PhpType::Int) && matches!(value_ty, PhpType::Mixed) {
+        return true;
+    }
+    if matches!(slot_ty, PhpType::Mixed)
+        && matches!(value_ty, PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Float)
+    {
         return true;
     }
     matches!(

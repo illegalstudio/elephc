@@ -10,8 +10,9 @@
 //! - Unsupported opcodes fail explicitly instead of falling back to legacy AST codegen.
 
 use crate::codegen::{
-    abi, callable_descriptor, emit_box_current_value_as_mixed,
-    emit_box_runtime_payload_as_mixed, runtime, runtime_value_tag,
+    abi, callable_descriptor, emit_box_current_owned_value_as_mixed,
+    emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, runtime,
+    runtime_value_tag,
 };
 use crate::codegen::builtins::arrays::call_user_func_array::INVOKER_ARG_REF_CELL_TAG;
 use crate::codegen::context::{
@@ -89,6 +90,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::IAdd => arithmetic::lower_int_binop(ctx, &inst, "add", "add"),
         Op::ISub => arithmetic::lower_int_binop(ctx, &inst, "sub", "sub"),
         Op::IMul => arithmetic::lower_int_binop(ctx, &inst, "mul", "imul"),
+        Op::ICheckedAdd => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_add_checked"),
+        Op::ICheckedSub => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_sub_checked"),
+        Op::ICheckedMul => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_mul_checked"),
         Op::IDiv => arithmetic::lower_int_div_to_float(ctx, &inst),
         Op::ISMod => arithmetic::lower_int_mod(ctx, &inst),
         Op::INeg => arithmetic::lower_int_unary(ctx, &inst, "neg", "neg"),
@@ -1623,6 +1627,7 @@ fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
             }
             PhpType::Array(_)
             | PhpType::AssocArray { .. }
+            | PhpType::Callable
             | PhpType::Iterable
             | PhpType::Object(_) => {
                 emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
@@ -5695,7 +5700,7 @@ fn load_ref_cell_local_to_result_as(
 }
 
 /// Converts a loaded local slot value to the SSA result representation requested by EIR.
-fn coerce_loaded_local_to_result_type(
+pub(super) fn coerce_loaded_local_to_result_type(
     ctx: &mut FunctionContext<'_>,
     source_ty: &PhpType,
     result_ty: &PhpType,
@@ -5728,6 +5733,7 @@ fn coerce_loaded_local_to_result_type(
         }
         (PhpType::Mixed, PhpType::Array(_))
         | (PhpType::Mixed, PhpType::AssocArray { .. })
+        | (PhpType::Mixed, PhpType::Callable)
         | (PhpType::Mixed, PhpType::Object(_)) => {
             emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
             Ok(())
@@ -6021,18 +6027,77 @@ fn coerce_ref_cell_store_value(
     if source_ty == PhpType::Mixed {
         match target_ty {
             PhpType::Int => {
+                // Save the Mixed pointer on the stack, narrow to int, then
+                // release the Mixed box to avoid leaking the checked-arithmetic temporary.
                 move_int_result_to_first_arg(ctx);
+                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                let result_reg = abi::int_result_reg(ctx.emitter);
+                // Stack layout after pushes: [result_placeholder | saved_mixed_ptr]
+                abi::emit_push_reg(ctx.emitter, result_reg); // placeholder for int result
+                abi::emit_push_reg(ctx.emitter, arg_reg);     // save the Mixed pointer
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+                // Save int result to placeholder (at sp+16).
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("str x0, [sp, #16]");              // save the int result to the placeholder slot above the saved Mixed pointer
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");    // save the int result to the placeholder slot above the saved Mixed pointer
+                    }
+                }
+                // Pop the saved Mixed pointer into result_reg for decref_mixed.
+                abi::emit_pop_reg(ctx.emitter, result_reg);
+                abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+                // Restore the int result from the placeholder.
+                abi::emit_pop_reg(ctx.emitter, result_reg);
                 return Ok(());
             }
             PhpType::Bool => {
                 move_int_result_to_first_arg(ctx);
+                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                let result_reg = abi::int_result_reg(ctx.emitter);
+                abi::emit_push_reg(ctx.emitter, result_reg);
+                abi::emit_push_reg(ctx.emitter, arg_reg);
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("str x0, [sp, #16]");              // save the bool result to the placeholder slot
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");    // save the bool result to the placeholder slot
+                    }
+                }
+                abi::emit_pop_reg(ctx.emitter, result_reg);
+                abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+                abi::emit_pop_reg(ctx.emitter, result_reg);
                 return Ok(());
             }
             PhpType::Float => {
                 move_int_result_to_first_arg(ctx);
+                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                let int_reg = abi::int_result_reg(ctx.emitter);
+                abi::emit_push_reg(ctx.emitter, int_reg); // placeholder for float result
+                abi::emit_push_reg(ctx.emitter, arg_reg); // save Mixed pointer
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("str d0, [sp, #16]");               // save the float result to the placeholder slot
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("movsd QWORD PTR [rsp + 16], xmm0"); // save the float result to the placeholder slot
+                    }
+                }
+                abi::emit_pop_reg(ctx.emitter, int_reg); // pop Mixed pointer into int_reg
+                abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("ldr d0, [sp], #16");              // restore the float result and release the placeholder slot
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("movsd xmm0, QWORD PTR [rsp]");     // restore the float result from the placeholder
+                        ctx.emitter.instruction("add rsp, 16");                    // release the float result placeholder slot
+                    }
+                }
                 return Ok(());
             }
             PhpType::Str => {
@@ -6056,7 +6121,7 @@ fn reject_multiword_ref_param_local(ty: &PhpType, action: &str) -> Result<()> {
 fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data = expect_global_name(inst)?;
     let name = ctx.global_name_data(data)?;
-    let symbol = ir_global_symbol(name);
+    let symbol = ir_global_symbol(&name);
     let result = inst.result.ok_or_else(|| {
         CodegenIrError::invalid_module("load_global missing result value")
     })?;
@@ -6069,12 +6134,26 @@ fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
 /// Lowers a global storage store from one SSA operand.
 fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data = expect_global_name(inst)?;
-    let name = ctx.global_name_data(data)?;
-    let symbol = ir_global_symbol(name);
+    let name = ctx.global_name_data(data)?.to_string();
+    let symbol = ir_global_symbol(&name);
     let value = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(value)?;
-    ctx.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &ty, false);
+    let store_ty = if crate::superglobals::is_superglobal(&name) {
+        ty.codegen_repr()
+    } else {
+        let source_ty = ty.codegen_repr();
+        if source_ty != PhpType::Mixed {
+            if ctx.value_ownership(value)? == Ownership::Owned {
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
+            } else {
+                emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+            }
+        }
+        PhpType::Mixed
+    };
+    ctx.data
+        .add_comm(symbol.clone(), store_ty.codegen_repr().stack_size().max(8));
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &store_ty, true);
     Ok(())
 }
 

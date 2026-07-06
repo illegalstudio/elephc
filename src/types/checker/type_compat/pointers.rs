@@ -186,7 +186,10 @@ impl Checker {
     }
 
     /// Validates that `ty` is a valid word-pointer value for `ptr_set()`: must be `Int`,
-    /// `Bool`, `Void`, or `Pointer`. Emits a specific error otherwise.
+    /// `Bool`, `Void`, `Pointer`, or boxed runtime `Mixed`.
+    ///
+    /// Checked integer arithmetic is typed as `Mixed` because it may overflow to a float,
+    /// but pointer word writes still need to accept the non-overflowing int payload path.
     pub(crate) fn ensure_word_pointer_value(
         &self,
         ty: &PhpType,
@@ -194,7 +197,12 @@ impl Checker {
     ) -> Result<(), CompileError> {
         if matches!(
             ty,
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Pointer(_)
+            PhpType::Int
+                | PhpType::Bool
+                | PhpType::Void
+                | PhpType::Pointer(_)
+                | PhpType::Mixed
+                | PhpType::Union(_)
         ) {
             Ok(())
         } else {

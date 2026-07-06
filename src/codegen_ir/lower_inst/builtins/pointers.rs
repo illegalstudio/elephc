@@ -89,7 +89,7 @@ pub(crate) fn lower_ptr_offset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let offset = expect_operand(inst, 1)?;
     load_pointer_payload(ctx, pointer, "ptr_offset")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    require_integer_offset(ctx.load_value_to_result(offset)?, "ptr_offset")?;
+    super::super::resolve_int_operand_to_result(ctx, offset, "ptr_offset offset")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x10, x0");                             // preserve the byte offset while restoring the base pointer
@@ -416,6 +416,12 @@ fn materialize_word_value(
             ctx.load_value_to_result(value)?;
             Ok(())
         }
+        PhpType::Mixed | PhpType::Union(_) if matches!(policy, WordValuePolicy::Word) => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            emit_mixed_payload_to_result(ctx);
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} value PHP type {:?}",
             name,
@@ -520,18 +526,6 @@ fn ensure_arg_count(inst: &Instruction, name: &str, expected: usize) -> Result<(
         expected,
         inst.operands.len()
     )))
-}
-
-/// Verifies `ptr_offset()` received an integer-like byte offset operand.
-fn require_integer_offset(ty: PhpType, name: &str) -> Result<()> {
-    match ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool => Ok(()),
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} offset PHP type {:?}",
-            name,
-            other
-        ))),
-    }
 }
 
 /// Verifies a pointer string-copy length operand is a concrete PHP integer.

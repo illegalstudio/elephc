@@ -1059,6 +1059,75 @@ echo "done";
     );
 }
 
+/// Regression test: a local widened to boxed Mixed by loop arithmetic must be
+/// released on return paths that return another value instead of that local.
+#[test]
+fn test_widened_loop_local_cleaned_on_alternate_return_path() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box {}
+class Sink {
+    public array $objects;
+
+    public function __construct() {
+        $this->objects = [];
+    }
+
+    public function idx(mixed $object): int {
+        $i = 0;
+        $limit = count($this->objects);
+        while ($i < $limit) {
+            if ($this->objects[$i] === $object) {
+                return $i;
+            }
+            $i++;
+        }
+        return -1;
+    }
+}
+
+$box = new Box();
+$sink = new Sink();
+echo $sink->idx($box);
+unset($sink);
+unset($box);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "-1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: ordinary PHP global overwrites release the previous Mixed box
+/// and the final global value is released before heap-debug leak reporting.
+#[test]
+fn test_ordinary_global_reassignment_releases_previous_mixed() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$g = 0;
+function set_global(int $value): void {
+    global $g;
+    $g = $value;
+}
+for ($i = 0; $i < 200; $i++) {
+    set_global($i);
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for issue #408 (in-place promotion): a string-key write that
 /// promotes a freshly built indexed array literal to hash storage must also free
 /// the source array. Repeated promotion in a loop keeps GC allocs and frees

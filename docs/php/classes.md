@@ -696,7 +696,7 @@ echo Color::from(2) === Color::Green; // 1
 ```
 Pure and backed enums. Every case exposes the read-only `->name` property (the case identifier); backed cases also expose `->value`. Plus `::from()`, `::tryFrom()`, `::cases()`. Only `int` and `string` backing types.
 
-Like PHP, an `int`-backed enum's `::from()` / `::tryFrom()` accept a numeric string and coerce it to the integer backing value (`Color::from("2")` returns `Color::Green`). A numeric string with no matching case throws `ValueError`; a non-numeric string (e.g. `"x"` or `"1abc"`) throws `TypeError`, matching PHP's coercive typing. (Edge case: the exotic strings `"0x1"`, `"INF"`, and `"NAN"` are currently accepted as numeric rather than raising `TypeError`.)
+Like PHP, an `int`-backed enum's `::from()` / `::tryFrom()` accept a numeric string and coerce it to the integer backing value (`Color::from("2")` returns `Color::Green`). A numeric string with no matching case throws `ValueError`; a non-numeric string (e.g. `"x"`, `"1abc"`, `"0x1"`, `"INF"`, or `"NAN"`) throws `TypeError`, matching PHP's coercive typing.
 
 A dynamically-typed (`mixed`) argument — such as a `foreach` value or an untyped parameter — is also accepted and coerced on its runtime type: an integer or numeric string resolves (or throws `ValueError`), a float truncates, a bool/null coerces, and an array/object/resource/closure throws `TypeError` naming the given type (objects report `object` rather than the class name).
 

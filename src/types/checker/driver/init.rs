@@ -74,6 +74,7 @@ impl Checker {
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),
+            resolving_functions: HashSet::new(),
             constants,
             closure_return_types: HashMap::new(),
             callable_sigs: HashMap::new(),

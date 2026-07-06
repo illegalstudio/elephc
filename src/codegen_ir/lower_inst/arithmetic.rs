@@ -42,6 +42,41 @@ pub(super) fn lower_int_binop(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a checked integer binary operation that may overflow to float.
+///
+/// Loads both I64 operands into ABI argument registers, calls the target runtime
+/// helper (e.g. `__rt_int_add_checked`), and stores the boxed Mixed result.
+/// The helper returns a `Heap(Mixed)` pointer in the integer result register.
+pub(super) fn lower_int_checked_binop(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    helper: &str,
+) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let lhs_reg = abi::int_result_reg(ctx.emitter);
+    let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
+    load_integer_operand(ctx, lhs, lhs_reg, inst)?;
+    load_integer_operand(ctx, rhs, rhs_reg, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // AArch64 ABI: x0 = first arg, x1 = second arg.
+            // lhs is already in x0 (int_result_reg), but rhs is in x10 (secondary_scratch_reg).
+            // Move rhs to x1 to match the helper's expected calling convention.
+            ctx.emitter.instruction("mov x1, x10");                               // place the right integer operand in the ABI argument register x1
+            abi::emit_call_label(ctx.emitter, helper);
+        }
+        Arch::X86_64 => {
+            // x86_64 SysV ABI: rdi = first arg, rsi = second arg.
+            // Move lhs to rdi, rhs to rsi before the call.
+            ctx.emitter.instruction(&format!("mov rdi, {}", lhs_reg));           // place the left integer operand in the first SysV argument register
+            ctx.emitter.instruction(&format!("mov rsi, {}", rhs_reg));          // place the right integer operand in the second SysV argument register
+            abi::emit_call_label(ctx.emitter, helper);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a signed integer modulo operation with the legacy backend's zero-divisor guard.
 pub(super) fn lower_int_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;

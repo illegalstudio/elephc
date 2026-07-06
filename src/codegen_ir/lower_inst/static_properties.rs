@@ -518,6 +518,11 @@ fn ensure_static_property_value_supported(
     if matches!(slot.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return Ok(());
     }
+    if matches!(slot.php_type.codegen_repr(), PhpType::Int)
+        && matches!(value_ty.codegen_repr(), PhpType::Mixed)
+    {
+        return Ok(());
+    }
     if is_empty_array_for_array_static_property(value_ty, &slot.php_type) {
         return Ok(());
     }
@@ -596,8 +601,55 @@ fn load_static_property_store_value_to_result(
         return Ok(());
     }
     ctx.load_value_to_result(value)?;
+    if matches!(slot_ty.codegen_repr(), PhpType::Int)
+        && matches!(value_ty.codegen_repr(), PhpType::Mixed)
+    {
+        emit_mixed_result_as_int(ctx, value)?;
+        return Ok(());
+    }
     box_static_property_value_if_needed(ctx, slot_ty, &value_ty);
     Ok(())
+}
+
+/// Narrows a loaded Mixed result to int for coercive typed static-property stores.
+fn emit_mixed_result_as_int(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // move the Mixed pointer into the first SysV argument register
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        }
+    }
+    if value_is_owned_mixed_store_temporary(ctx, value)? {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        ctx.load_value_to_result(value)?;
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    }
+    Ok(())
+}
+
+/// Returns true when a Mixed store source is a temporary that must be released after narrowing.
+fn value_is_owned_mixed_store_temporary(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    Ok(matches!(
+        inst_ref.op,
+        crate::ir::Op::ICheckedAdd
+            | crate::ir::Op::ICheckedSub
+            | crate::ir::Op::ICheckedMul
+            | crate::ir::Op::MixedNumericBinop
+            | crate::ir::Op::MixedBox
+    ))
 }
 
 /// Reorders `__rt_mixed_unbox` output into the tagged-scalar result register pair.

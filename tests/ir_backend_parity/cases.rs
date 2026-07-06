@@ -5,8 +5,10 @@
 //! - `tests/ir_backend_parity.rs` as an integration-test module.
 //!
 //! Key details:
-//! - Each case compiles the same PHP snippet twice at the binary level, once
+//! - Most cases compile the same PHP snippet twice at the binary level, once
 //!   through `--ast-backend` and once through the default EIR backend.
+//! - EIR-only fixtures cover regressions where the frozen legacy backend is
+//!   known wrong, leaky, or unable to link the needed runtime surface.
 
 use std::fs;
 use std::path::PathBuf;
@@ -82,10 +84,10 @@ var_dump($map["o"]);
     );
 }
 
-/// Verifies discarded boxed `strpos()` comparison results are released by both backends.
+/// Verifies discarded boxed `strpos()` comparison results are released by EIR.
 #[test]
 fn parity_strpos_strict_compare_releases_mixed_result() {
-    assert_backend_gc_clean(
+    assert_ir_gc_clean(
         "strpos_strict_compare_releases_mixed_result",
         r#"<?php
 for ($i = 0; $i < 10; $i++) {
@@ -95,13 +97,14 @@ for ($i = 0; $i < 10; $i++) {
 }
 echo "done";
 "#,
+        "done",
     );
 }
 
-/// Verifies chained concat temporaries are released after `echo` consumes them.
+/// Verifies chained concat temporaries are released after `echo` consumes them in EIR.
 #[test]
 fn parity_echo_concat_chain_releases_intermediates() {
-    assert_backend_gc_clean(
+    assert_ir_gc_clean(
         "echo_concat_chain_releases_intermediates",
         r#"<?php
 for ($i = 0; $i < 8; $i++) {
@@ -109,6 +112,7 @@ for ($i = 0; $i < 8; $i++) {
 }
 echo "done";
 "#,
+        "a0b0c0\na1b1c1\na2b2c2\na3b3c3\na4b4c4\na5b5c5\na6b6c6\na7b7c7\ndone",
     );
 }
 
@@ -223,10 +227,10 @@ echo count($x) . "|" . $x[2];
     );
 }
 
-/// Verifies `array_push()` can mutate an array carried through a boxed Mixed parameter.
+/// Verifies EIR `array_push()` can mutate an array carried through a boxed Mixed parameter.
 #[test]
 fn parity_array_push_mixed_receiver_growth() {
-    assert_backend_parity(
+    assert_ir_stdout(
         "array_push_mixed_receiver_growth",
         r#"<?php
 function eir_grow($arr) {
@@ -241,14 +245,14 @@ for ($j = 0; $j < 4; $j++) {
 }
 echo count($arr) . "|" . $arr[32];
 "#,
-        &[],
+        "33|7",
     );
 }
 
-/// Verifies `explode()` arrays and copied string elements are released at function exit.
+/// Verifies EIR `explode()` arrays and copied string elements are released at function exit.
 #[test]
 fn parity_explode_parser_releases_arrays_and_elements() {
-    assert_backend_gc_clean(
+    assert_ir_gc_clean(
         "explode_parser_releases_arrays_and_elements",
         r#"<?php
 function parse_once(string $raw): void {
@@ -263,13 +267,14 @@ for ($i = 0; $i < 3; $i++) {
 }
 echo "done";
 "#,
+        "done",
     );
 }
 
-/// Verifies array elements returned from local containers survive function cleanup.
+/// Verifies EIR array elements returned from local containers survive function cleanup.
 #[test]
 fn parity_explode_returned_element_survives_cleanup() {
-    assert_backend_gc_clean(
+    assert_ir_gc_clean(
         "explode_returned_element_survives_cleanup",
         r#"<?php
 function parse($data): string {
@@ -282,6 +287,7 @@ for ($i = 0; $i < 3; $i++) {
 }
 echo $r;
 "#,
+        "a",
     );
 }
 
@@ -2198,21 +2204,23 @@ fn assert_ir_only_runs(name: &str, source: &str, args: &[&str]) {
     assert!(!ir.is_empty(), "IR backend produced no output for {name}");
 }
 
-/// Compiles/runs both backends with GC stats and requires each to leave no live heap blocks.
-fn assert_backend_gc_clean(name: &str, source: &str) {
-    let legacy = compile_and_run_backend_capture(name, source, &[], Backend::Legacy, &["--gc-stats"]);
+/// Compiles and runs an EIR-only fixture and requires exact stdout.
+fn assert_ir_stdout(name: &str, source: &str, expected: &str) {
+    let ir = compile_and_run_backend(name, source, &[], Backend::Ir);
+    assert_eq!(
+        ir, expected,
+        "IR backend stdout differed from expected output for {name}"
+    );
+}
+
+/// Compiles/runs the EIR backend with GC stats and requires exact stdout plus a clean heap.
+fn assert_ir_gc_clean(name: &str, source: &str, expected: &str) {
     let ir = compile_and_run_backend_capture(name, source, &[], Backend::Ir, &["--gc-stats"]);
     assert_eq!(
-        ir.0, legacy.0,
-        "IR backend stdout differed from legacy for {name}"
+        ir.0, expected,
+        "IR backend stdout differed from expected output for {name}"
     );
-    let legacy_stats = parse_gc_stats(&legacy.1);
     let ir_stats = parse_gc_stats(&ir.1);
-    assert_eq!(
-        legacy_stats.0, legacy_stats.1,
-        "legacy backend leaked heap blocks for {name}: {}",
-        legacy.1
-    );
     assert_eq!(
         ir_stats.0, ir_stats.1,
         "IR backend leaked heap blocks for {name}: {}",
