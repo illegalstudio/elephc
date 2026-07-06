@@ -296,8 +296,8 @@ pub(crate) fn compile_and_run_files_with_defines(
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let resolved = elephc::autoload::run(resolved, base_dir, &autoload_registry)
-        .expect("autoload failed");
+    let resolved =
+        elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -406,7 +406,8 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    let check_result =
+        elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
@@ -494,9 +495,6 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
 //
 // Routes through `compile_source_to_asm_with_options` so it shares the production
 // EIR backend (and the full frontend, including the preludes) with `compile_and_run`.
-// Compiling here through the frozen legacy AST backend would miss EIR-only builtins
-// (e.g. `serialize`/`unserialize` reached transitively through synthetic SPL method
-// bodies), emitting them as undefined `_fn_*` symbols and failing at link time.
 /// Provides the Compile and run in dir helper used by the projects module.
 pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);

@@ -35,7 +35,7 @@ AREAS: list[str] = [
 ]
 
 
-# Sub-area mapping: file path under src/codegen_ir/lower_inst/builtins/ or
+# Sub-area mapping: file path under src/codegen/lower_inst/builtins/ or
 # src/types/checker/builtins/ → (area, sub_area). When multiple files match
 # the same key, the first one wins.
 AREA_BY_FILE: Dict[str, Optional[Tuple[str, str]]] = {

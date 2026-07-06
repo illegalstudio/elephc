@@ -952,11 +952,11 @@ and 0.x validation rather than by speculative pass work.
 - [x] Statically-known catchable `Error` conditions (issue #383) — private/protected method access from an inaccessible scope and readonly property writes outside the declaring constructor raise a catchable `Error` at runtime instead of being rejected at compile time, matching PHP
 - [ ] Tail-call optimization — direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding)
 - [ ] Performance within 2x of C -O0 on compute benchmarks
-- [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before deleting the frozen legacy backend
+- [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before release
 - [ ] Real-world CLI tools compiled as validation
 - [x] Audit remaining references to `--ast-backend` and legacy AST emitters so docs, help text, and release notes no longer present a selectable fallback
 - [x] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
-- [ ] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
+- [x] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
 - [x] Rename `src/codegen_ir/` to `src/codegen/`
 - [x] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
 - [x] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0

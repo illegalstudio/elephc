@@ -103,7 +103,7 @@ _NON_HOME_FILES = {
 
 _NAME_RE = re.compile(r'name:\s*"([^"]+)"')
 # The `lower` hook dispatches to the real emitter via a fully-qualified path,
-# e.g. `crate::codegen_ir::lower_inst::builtins::math::lower_abs(ctx, inst)`
+# e.g. `crate::codegen::lower_inst::builtins::math::lower_abs(ctx, inst)`
 # (the `(ctx` may be on the following line — `\s*` spans newlines).
 _EMITTER_RE = re.compile(r"lower_inst::builtins::([A-Za-z0-9_:]+)\s*\(\s*ctx\b")
 
@@ -245,7 +245,7 @@ def resolve_area(
     area = AREA_BY_NAME.get(canonical, ("Misc", "Misc"))
     if area == ("Misc", "Misc") and lowering.codegen_file:
         cf = lowering.codegen_file
-        prefix = "src/codegen_ir/lower_inst/builtins"
+        prefix = "src/codegen/lower_inst/builtins"
         rel_under = cf[len(prefix) + 1 :] if cf.startswith(prefix + "/") else cf
         file_area = parse_area_for_file(rel_under)
         if file_area[0] is not None and (file_area[0] != "Misc" or file_area[1] != "Misc"):
@@ -474,8 +474,8 @@ LANGUAGE_CONSTRUCTS: dict[str, dict] = {
 def build_registry(repo: Path) -> list[Builtin]:
     """Build the full list of builtins from the registry + language constructs."""
     src = repo / "src"
-    dispatch = src / "codegen_ir" / "lower_inst" / "builtins.rs"
-    lowering_dir = src / "codegen_ir" / "lower_inst" / "builtins"
+    dispatch = src / "codegen" / "lower_inst" / "builtins.rs"
+    lowering_dir = src / "codegen" / "lower_inst" / "builtins"
 
     gen = run_gen_builtins(repo)
     home_map = build_home_lowering_map(repo)
