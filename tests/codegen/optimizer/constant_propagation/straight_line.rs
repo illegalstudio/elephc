@@ -196,3 +196,22 @@ echo $base ** 3;
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Regression for #384: a by-reference call used as a `match` subject mutates the
+/// argument variable while evaluating the subject. Constant propagation must not
+/// keep the pre-call constant (`$i = 0`) for a read of `$i` sequenced after the
+/// `match`, so `echo match(bump($i)) {..} . "|" . $i` reports the post-call value.
+#[test]
+fn test_constant_propagation_match_subject_byref_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$i) { $i++; return $i; }
+$i = 0;
+echo match (bump($i)) {
+    1 => "one",
+    default => "other",
+} . "|" . $i;
+"#,
+    );
+    assert_eq!(out, "one|1");
+}
