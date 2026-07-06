@@ -601,3 +601,13 @@ MIT
 [![Nuno Maduro: PHP Is Getting a Compiler?](https://img.youtube.com/vi/x06307Ui3uY/maxresdefault.jpg)](https://www.youtube.com/watch?v=x06307Ui3uY)
 
 **[Nuno Maduro: PHP Is Getting a Compiler?](https://www.youtube.com/watch?v=x06307Ui3uY)**
+
+## Star History
+
+<a href="https://star-history.com/#illegalstudio/elephc&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=illegalstudio/elephc&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=illegalstudio/elephc&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=illegalstudio/elephc&type=Date" />
+ </picture>
+</a>
