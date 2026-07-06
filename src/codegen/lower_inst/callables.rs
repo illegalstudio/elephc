@@ -25,9 +25,10 @@ use crate::types::{FunctionSig, PhpType};
 use super::super::context::FunctionContext;
 use super::{
     class_method_already_emitted, class_method_body_exists, direct_call_stack_pad_bytes,
-    emit_instance_method_descriptor_entry_wrapper, emit_legacy_deferred_callable_support_inline,
-    emit_ref_arg_writebacks, emit_runtime_callable_invoker_inline,
-    emit_runtime_descriptor_with_receiver_capture, expect_operand, legacy_context_from_eir_module,
+    emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
+    emit_runtime_builtin_wrapper_inline, emit_runtime_callable_invoker_inline,
+    emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
+    emit_static_method_descriptor_entry_wrapper, expect_operand, function_signature_from_eir,
     materialize_direct_call_args,
     materialize_method_call_args_with_receiver_reg_and_refs, store_call_result,
 };
@@ -239,7 +240,7 @@ fn lower_runtime_string_descriptor_invoke(
     arg_mixed: ValueId,
     op_name: &str,
 ) -> Result<()> {
-    let cases = runtime_string_descriptor_cases(ctx);
+    let cases = runtime_string_descriptor_cases(ctx, None);
     if cases.is_empty() {
         return Err(CodegenIrError::unsupported(
             "callable_descriptor_invoke for runtime string with no descriptor targets",
@@ -258,15 +259,15 @@ fn lower_runtime_string_descriptor_invoke(
         len_offset: 8,
         call_reg,
     };
-    let mut legacy_ctx = legacy_context_from_eir_module(ctx.module);
     for case in &cases {
         let next_case = ctx.next_label("runtime_string_descriptor_next");
+        let matched_label = ctx.next_label("callable_string_match");
         callable_dispatch::emit_branch_if_callable_case_mismatch(
             &selector,
             case,
             &next_case,
             ctx.emitter,
-            &mut legacy_ctx,
+            &matched_label,
             ctx.data,
         );
         emit_static_descriptor_case_invoke(ctx, inst, arg_mixed, &case.descriptor_label)?;
@@ -284,18 +285,169 @@ fn lower_runtime_string_descriptor_invoke(
 }
 
 /// Builds runtime callable descriptor cases for string-name dynamic invocation.
-fn runtime_string_descriptor_cases(
+pub(super) fn runtime_string_descriptor_cases(
+    ctx: &mut FunctionContext<'_>,
+    source_arg_ty: Option<&PhpType>,
+) -> Vec<callable_dispatch::RuntimeCallableCase> {
+    let mut cases = runtime_extern_descriptor_cases(ctx);
+    cases.extend(runtime_builtin_descriptor_cases(ctx, source_arg_ty));
+    cases.extend(runtime_user_function_descriptor_cases(ctx, source_arg_ty));
+    cases.extend(runtime_static_method_descriptor_cases(ctx).into_iter().map(|case| case.case));
+    cases.sort_by(|left, right| left.label.cmp(&right.label));
+    cases.dedup_by(|left, right| left.label == right.label);
+    cases
+}
+
+/// Builds runtime descriptor cases for extern functions declared in the EIR module.
+fn runtime_extern_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
 ) -> Vec<callable_dispatch::RuntimeCallableCase> {
-    let mut legacy_ctx = legacy_context_from_eir_module(ctx.module);
-    legacy_ctx.functions.retain(|name, _| {
-        ctx.module
-            .functions
+    let mut decls = ctx.module.extern_decls.iter().collect::<Vec<_>>();
+    decls.sort_by(|left, right| left.name.cmp(&right.name));
+
+    let mut cases = Vec::new();
+    for decl in decls {
+        let wrapper_sig = crate::types::callable_wrapper_sig(&extern_decl_signature(decl));
+        let entry_label = emit_runtime_extern_wrapper_inline(ctx, &decl.name, &wrapper_sig);
+        let invoker_label = emit_runtime_callable_invoker_inline(ctx, &wrapper_sig, &[]);
+        let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+            ctx.data,
+            &entry_label,
+            Some(&decl.name),
+            callable_descriptor::CALLABLE_DESC_KIND_EXTERN,
+            Some(&wrapper_sig),
+            &[],
+            &[],
+            callable_descriptor::CallableDescriptorInvocation::named(
+                callable_descriptor::CallableDescriptorShape::Extern,
+                &decl.name,
+            ),
+            Some(&invoker_label),
+        );
+        cases.push(callable_dispatch::RuntimeCallableCase {
+            label: entry_label,
+            descriptor_label,
+            php_name: Some(decl.name.clone()),
+            sig: wrapper_sig,
+            captures: Vec::new(),
+            has_invoker: true,
+            invoker_label: Some(invoker_label),
+        });
+    }
+    cases
+}
+
+/// Converts an EIR extern declaration into the PHP-facing wrapper signature.
+fn extern_decl_signature(decl: &crate::ir::ExternDecl) -> FunctionSig {
+    FunctionSig {
+        params: decl
+            .params
             .iter()
-            .any(|function| !function.flags.is_main && function.name == *name)
-    });
-    let cases = callable_dispatch::runtime_callable_cases(&mut legacy_ctx, ctx.data, &[], None);
-    emit_legacy_deferred_callable_support_inline(ctx, &mut legacy_ctx);
+            .map(|param| (param.name.clone(), param.php_type.clone()))
+            .collect(),
+        defaults: vec![None; decl.params.len()],
+        return_type: decl.return_php_type.clone(),
+        declared_return: true,
+        by_ref_return: false,
+        ref_params: vec![false; decl.params.len()],
+        declared_params: vec![true; decl.params.len()],
+        variadic: None,
+        deprecation: None,
+    }
+}
+
+/// Builds runtime descriptor cases for PHP builtins that support callable dispatch.
+fn runtime_builtin_descriptor_cases(
+    ctx: &mut FunctionContext<'_>,
+    source_arg_ty: Option<&PhpType>,
+) -> Vec<callable_dispatch::RuntimeCallableCase> {
+    let mut cases = Vec::new();
+    for name in crate::types::checker::builtins::supported_builtin_function_names() {
+        if callable_dispatch::runtime_builtin_wrapper_excluded(name)
+            || ctx
+                .module
+                .extern_decls
+                .iter()
+                .any(|decl| php_symbol_key(&decl.name) == php_symbol_key(name))
+        {
+            continue;
+        }
+        let Some(sig) = crate::types::first_class_callable_builtin_sig(name) else {
+            continue;
+        };
+        let wrapper_sig = crate::types::callable_wrapper_sig(&sig);
+        let case_sig = callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
+        let entry_label = emit_runtime_builtin_wrapper_inline(ctx, name, &case_sig);
+        let invoker_label = emit_runtime_callable_invoker_inline(ctx, &case_sig, &[]);
+        let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+            ctx.data,
+            &entry_label,
+            Some(name),
+            callable_descriptor::CALLABLE_DESC_KIND_BUILTIN,
+            Some(&case_sig),
+            &[],
+            &[],
+            callable_descriptor::CallableDescriptorInvocation::named(
+                callable_descriptor::CallableDescriptorShape::Builtin,
+                name,
+            ),
+            Some(&invoker_label),
+        );
+        cases.push(callable_dispatch::RuntimeCallableCase {
+            label: entry_label,
+            descriptor_label,
+            php_name: Some(name.to_string()),
+            sig: case_sig,
+            captures: Vec::new(),
+            has_invoker: true,
+            invoker_label: Some(invoker_label),
+        });
+    }
+    cases
+}
+
+/// Builds runtime descriptor cases for user functions emitted in the EIR module.
+fn runtime_user_function_descriptor_cases(
+    ctx: &mut FunctionContext<'_>,
+    source_arg_ty: Option<&PhpType>,
+) -> Vec<callable_dispatch::RuntimeCallableCase> {
+    let mut functions = ctx
+        .module
+        .functions
+        .iter()
+        .filter(|function| !function.flags.is_main && !function.name.starts_with("_class_propinit_"))
+        .collect::<Vec<_>>();
+    functions.sort_by(|left, right| left.name.cmp(&right.name));
+
+    let mut cases = Vec::new();
+    for function in functions {
+        let wrapper_sig = crate::types::callable_wrapper_sig(&function_signature_from_eir(function));
+        let case_sig = callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
+        let invoker_label = emit_runtime_callable_invoker_inline(ctx, &case_sig, &[]);
+        let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+            ctx.data,
+            &function_symbol(&function.name),
+            Some(&function.name),
+            callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
+            Some(&case_sig),
+            &[],
+            &[],
+            callable_descriptor::CallableDescriptorInvocation::named(
+                callable_descriptor::CallableDescriptorShape::Function,
+                &function.name,
+            ),
+            Some(&invoker_label),
+        );
+        cases.push(callable_dispatch::RuntimeCallableCase {
+            label: function_symbol(&function.name),
+            descriptor_label,
+            php_name: Some(function.name.clone()),
+            sig: case_sig,
+            captures: Vec::new(),
+            has_invoker: true,
+            invoker_label: Some(invoker_label),
+        });
+    }
     cases
 }
 
@@ -306,7 +458,7 @@ pub(super) fn emit_runtime_string_descriptor_value(
     dest_reg: &str,
     op_name: &str,
 ) -> Result<()> {
-    let cases = runtime_string_descriptor_cases(ctx);
+    let cases = runtime_string_descriptor_cases(ctx, None);
     if cases.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
             "{} for runtime string with no descriptor targets",
@@ -325,15 +477,15 @@ pub(super) fn emit_runtime_string_descriptor_value(
         len_offset: 8,
         call_reg: dest_reg,
     };
-    let mut legacy_ctx = legacy_context_from_eir_module(ctx.module);
     for case in &cases {
         let next_case = ctx.next_label("runtime_string_descriptor_next");
+        let matched_label = ctx.next_label("callable_string_match");
         callable_dispatch::emit_branch_if_callable_case_mismatch(
             &selector,
             case,
             &next_case,
             ctx.emitter,
-            &mut legacy_ctx,
+            &matched_label,
             ctx.data,
         );
         abi::emit_jump(ctx.emitter, &done_label);
@@ -756,13 +908,88 @@ fn runtime_array_instance_method_targets_for_descriptor(
     targets
 }
 
-/// Builds public static-method descriptor cases using the shared legacy metadata builder.
+/// Builds public static-method descriptor cases directly from EIR class metadata.
 fn runtime_static_method_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
 ) -> Vec<callable_dispatch::RuntimeStaticMethodCallableCase> {
-    let mut legacy_ctx = legacy_context_from_eir_module(ctx.module);
-    let cases = callable_dispatch::runtime_public_static_method_cases(&mut legacy_ctx, ctx.data);
-    emit_legacy_deferred_callable_support_inline(ctx, &mut legacy_ctx);
+    let mut methods = Vec::new();
+    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by(|left, right| left.0.cmp(right.0));
+    for (class_name, class_info) in classes {
+        let mut static_methods = class_info.static_methods.iter().collect::<Vec<_>>();
+        static_methods.sort_by(|left, right| left.0.cmp(right.0));
+        for (method_name, sig) in static_methods {
+            if !class_info
+                .static_method_visibilities
+                .get(method_name)
+                .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+            {
+                continue;
+            }
+            let method_key = php_symbol_key(method_name);
+            let impl_class = class_info
+                .static_method_impl_classes
+                .get(&method_key)
+                .cloned()
+                .unwrap_or_else(|| class_name.clone());
+            if !class_method_already_emitted(ctx, &impl_class, &method_key, true) {
+                continue;
+            }
+            methods.push((
+                class_name.clone(),
+                method_name.clone(),
+                method_key,
+                impl_class,
+                class_info.class_id,
+                sig.clone(),
+            ));
+        }
+    }
+
+    let mut cases = Vec::new();
+    for (class_name, method_name, method_key, impl_class, class_id, sig) in methods {
+        let wrapper_sig = callable_dispatch::static_method_runtime_wrapper_sig(&sig);
+        let Ok(entry_label) = emit_static_method_descriptor_entry_wrapper(
+            ctx,
+            &impl_class,
+            &method_key,
+            &wrapper_sig,
+            class_id,
+        ) else {
+            continue;
+        };
+        let php_name = format!("{}::{}", class_name, method_name);
+        let invoker_label = emit_runtime_callable_invoker_inline(ctx, &wrapper_sig, &[]);
+        let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+            ctx.data,
+            &entry_label,
+            Some(&php_name),
+            callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
+            Some(&wrapper_sig),
+            &[],
+            &[],
+            callable_descriptor::CallableDescriptorInvocation::method(
+                callable_descriptor::CallableDescriptorShape::StaticMethod,
+                Some(class_name.clone()),
+                method_name.as_str(),
+            ),
+            Some(&invoker_label),
+        );
+        let case = callable_dispatch::RuntimeCallableCase {
+            label: entry_label,
+            descriptor_label,
+            php_name: Some(php_name),
+            sig: wrapper_sig,
+            captures: Vec::new(),
+            has_invoker: true,
+            invoker_label: Some(invoker_label),
+        };
+        cases.push(callable_dispatch::RuntimeStaticMethodCallableCase {
+            class_name,
+            method_name,
+            case,
+        });
+    }
     cases
 }
 
@@ -1544,11 +1771,18 @@ fn emit_normalized_invoker_arg_container(
                 ctx.emitter.comment("receiver_mixed_assoc_args");
             }
             ctx.load_value_to_reg(arg_container, dest_reg)?;
-            let mut legacy_ctx = legacy_context_from_eir_module(ctx.module);
+            let mut labels = [
+                ctx.next_label("invoker_normalize_mixed_indexed"),
+                ctx.next_label("invoker_normalize_mixed_assoc"),
+                ctx.next_label("invoker_normalize_mixed_done"),
+            ]
+            .into_iter();
             callable_invoker_args::emit_clone_runtime_mixed_invoker_arg_as_mixed(
                 dest_reg,
                 ctx.emitter,
-                &mut |prefix| legacy_ctx.next_label(prefix),
+                &mut |_| labels
+                    .next()
+                    .expect("codegen bug: missing preallocated invoker-normalization label"),
                 ctx.data,
             );
             Ok(())

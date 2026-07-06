@@ -23,8 +23,9 @@ use crate::types::{array_key_type_from_value_type, PhpType};
 
 use super::super::super::context::FunctionContext;
 use super::super::{
-    expect_operand, legacy_context_from_eir_module, resolve_int_operand_to_result, store_if_result,
+    expect_operand, resolve_int_operand_to_result, store_if_result,
 };
+use super::super::callables::runtime_string_descriptor_cases;
 
 mod column;
 mod key_exists;
@@ -574,15 +575,7 @@ where
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
     let call_reg = abi::nested_call_reg(ctx.emitter);
-    let mut legacy_ctx = legacy_context_from_eir_module(ctx.module);
-    legacy_ctx.functions.retain(|name, _| {
-        ctx.module
-            .functions
-            .iter()
-            .any(|function| !function.flags.is_main && function.name == *name)
-    });
-    let cases = callable_dispatch::runtime_callable_cases(&mut legacy_ctx, ctx.data, &[], source_arg_ty);
-    emit_legacy_deferred_runtime_callable_support(ctx, &mut legacy_ctx);
+    let cases = runtime_string_descriptor_cases(ctx, source_arg_ty);
 
     let done_label = ctx.next_label(&format!("{}_runtime_string_callback_done", owner));
     let selector = callable_dispatch::RuntimeCallableSelector::StringNameStack {
@@ -592,12 +585,13 @@ where
     };
     for case in &cases {
         let next_case = ctx.next_label(&format!("{}_runtime_string_callback_next", owner));
+        let matched_label = ctx.next_label("callable_string_match");
         callable_dispatch::emit_branch_if_callable_case_mismatch(
             &selector,
             case,
             &next_case,
             ctx.emitter,
-            &mut legacy_ctx,
+            &matched_label,
             ctx.data,
         );
         let wrapper_label = emit_descriptor_callback_wrapper(
@@ -616,25 +610,6 @@ where
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
-}
-
-/// Emits legacy deferred callable wrappers/invokers inline and branches around them.
-fn emit_legacy_deferred_runtime_callable_support(
-    ctx: &mut FunctionContext<'_>,
-    legacy_ctx: &mut crate::codegen_support::context::Context,
-) {
-    if legacy_ctx.deferred_closures.is_empty()
-        && legacy_ctx.deferred_fiber_wrappers.is_empty()
-        && legacy_ctx.deferred_callback_wrappers.is_empty()
-        && legacy_ctx.deferred_extern_callback_trampolines.is_empty()
-        && legacy_ctx.deferred_runtime_callable_invokers.is_empty()
-    {
-        return;
-    }
-    let done_label = ctx.next_label("runtime_callable_support_done");
-    abi::emit_jump(ctx.emitter, &done_label);
-    crate::codegen::emit_deferred_closures(ctx.emitter, ctx.data, legacy_ctx);
-    ctx.emitter.label(&done_label);
 }
 
 /// Reserves a descriptor callback environment using a descriptor already held in a register.

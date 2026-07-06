@@ -622,8 +622,9 @@ fn emit_string_case_selection(
         len_offset: 8,
         call_reg,
     };
+    let matched_label = ctx.next_label("callable_string_match");
     callable_dispatch::emit_branch_if_callable_case_mismatch(
-        &selector, case, &next_case, emitter, ctx, data,
+        &selector, case, &next_case, emitter, &matched_label, data,
     );
     let result_reg = abi::int_result_reg(emitter);
     if call_reg != result_reg {

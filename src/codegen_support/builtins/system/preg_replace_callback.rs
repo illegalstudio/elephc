@@ -364,12 +364,13 @@ fn emit_runtime_string_preg_callback(
 
     for case in &cases {
         let next_case = ctx.next_label("preg_runtime_string_next");
+        let matched_label = ctx.next_label("callable_string_match");
         crate::codegen_support::callable_dispatch::emit_branch_if_callable_case_mismatch(
             &selector,
             case,
             &next_case,
             emitter,
-            ctx,
+            &matched_label,
             data,
         );
         emit_runtime_string_preg_case(case, emitter, ctx);

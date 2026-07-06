@@ -287,12 +287,13 @@ fn emit_runtime_string_descriptor_map(
 
     for case in &cases {
         let next_case = ctx.next_label("array_map_runtime_string_next");
+        let matched_label = ctx.next_label("callable_string_match");
         callable_dispatch::emit_branch_if_callable_case_mismatch(
             &selector,
             case,
             &next_case,
             emitter,
-            ctx,
+            &matched_label,
             data,
         );
         abi::emit_load_temporary_stack_slot(emitter, array_arg_reg, 0);

@@ -557,7 +557,7 @@ pub(crate) fn runtime_instance_method_case(
 /// which does not know these names and would emit an unresolved `bl _fn_<name>` reference.
 /// They are never invoked dynamically, so excluding them from the dynamic-call descriptor table
 /// is both safe and semantically correct.
-fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
+pub(crate) fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
     matches!(
         name,
         // call_user_func / call_user_func_array had no pre-migration first-class-callable wrapper:
@@ -836,7 +836,7 @@ pub(crate) fn ensure_runtime_builtin_wrapper(
 }
 
 /// Ensures a PHP-ABI extern wrapper is available before runtime descriptor dispatch uses it.
-fn ensure_runtime_extern_wrapper(
+pub(crate) fn ensure_runtime_extern_wrapper(
     ctx: &mut Context,
     name: &str,
     sig: &FunctionSig,
@@ -1077,7 +1077,7 @@ pub(crate) fn emit_branch_if_callable_case_mismatch(
     case: &RuntimeCallableCase,
     next_case: &str,
     emitter: &mut Emitter,
-    ctx: &mut Context,
+    matched_label: &str,
     data: &mut DataSection,
 ) {
     match selector {
@@ -1095,8 +1095,8 @@ pub(crate) fn emit_branch_if_callable_case_mismatch(
                 *len_offset,
                 call_reg,
                 next_case,
+                matched_label,
                 emitter,
-                ctx,
                 data,
             );
         }
@@ -1104,7 +1104,7 @@ pub(crate) fn emit_branch_if_callable_case_mismatch(
 }
 
 /// Computes the callable signature metadata for specialized runtime case.
-fn specialized_runtime_case_sig(
+pub(crate) fn specialized_runtime_case_sig(
     sig: &FunctionSig,
     source_elem_ty: Option<&PhpType>,
 ) -> FunctionSig {
@@ -1180,8 +1180,8 @@ fn emit_branch_if_string_name_mismatch(
     len_offset: usize,
     call_reg: &str,
     next_case: &str,
+    matched_label: &str,
     emitter: &mut Emitter,
-    ctx: &mut Context,
     data: &mut DataSection,
 ) {
     let Some(php_name) = case.php_name.as_ref() else {
@@ -1189,7 +1189,6 @@ fn emit_branch_if_string_name_mismatch(
         return;
     };
 
-    let matched_label = ctx.next_label("callable_string_match");
     let mut candidates = vec![php_name.clone()];
     if !php_name.starts_with('\\') {
         candidates.push(format!("\\{}", php_name));

@@ -1817,12 +1817,13 @@ pub(crate) fn emit_loaded_array_string_callback_call(
 
     for case in &cases {
         let next_case = ctx.next_label("cufa_string_next");
+        let matched_label = ctx.next_label("callable_string_match");
         callable_dispatch::emit_branch_if_callable_case_mismatch(
             &selector,
             case,
             &next_case,
             emitter,
-            ctx,
+            &matched_label,
             data,
         );
         emit_call_descriptor_array_invoker(
@@ -2068,12 +2069,13 @@ fn emit_loaded_indexed_array_unknown_callback_call(
     let selector = RuntimeCallableSelector::Address(call_reg);
     for case in cases {
         let next_case = ctx.next_label("cufa_unknown_indexed_next");
+        let matched_label = ctx.next_label("callable_string_match");
         callable_dispatch::emit_branch_if_callable_case_mismatch(
             &selector,
             case,
             &next_case,
             emitter,
-            ctx,
+            &matched_label,
             data,
         );
         if let Some(invoker_label) =
@@ -2242,12 +2244,13 @@ fn emit_loaded_assoc_array_unknown_callback_call(
     let selector = RuntimeCallableSelector::Address(call_reg);
     for case in &cases {
         let next_case = ctx.next_label("cufa_unknown_assoc_next");
+        let matched_label = ctx.next_label("callable_string_match");
         callable_dispatch::emit_branch_if_callable_case_mismatch(
             &selector,
             case,
             &next_case,
             emitter,
-            ctx,
+            &matched_label,
             data,
         );
         if let Some(invoker_label) =

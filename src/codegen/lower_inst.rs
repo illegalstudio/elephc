@@ -541,7 +541,7 @@ fn store_current_result_to_ref_cell(
 }
 
 /// Reconstructs callable signature metadata from an emitted EIR function.
-fn function_signature_from_eir(function: &crate::ir::Function) -> FunctionSig {
+pub(super) fn function_signature_from_eir(function: &crate::ir::Function) -> FunctionSig {
     function_signature_from_eir_with_param_count(function, function.params.len())
 }
 
@@ -870,6 +870,30 @@ fn emit_static_late_bound_descriptor_entry_wrapper(
     Ok(wrapper_label)
 }
 
+/// Emits an entry wrapper that prepends a concrete called-class id before calling a static method.
+pub(super) fn emit_static_method_descriptor_entry_wrapper(
+    ctx: &mut FunctionContext<'_>,
+    impl_class: &str,
+    method_key: &str,
+    sig: &FunctionSig,
+    called_class_id: u64,
+) -> Result<String> {
+    let visible_arg_types = descriptor_visible_arg_types(sig);
+    let wrapper_label = ctx.next_label("static_method_descriptor_entry");
+    let done_label = ctx.next_label("static_method_descriptor_entry_done");
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&wrapper_label);
+    emit_static_method_descriptor_entry_wrapper_body(
+        ctx,
+        impl_class,
+        method_key,
+        &visible_arg_types,
+        called_class_id,
+    );
+    ctx.emitter.label(&done_label);
+    Ok(wrapper_label)
+}
+
 /// Emits an entry wrapper that receives visible args followed by the captured receiver.
 fn emit_instance_method_descriptor_entry_wrapper(
     ctx: &mut FunctionContext<'_>,
@@ -945,6 +969,68 @@ fn emit_instance_method_descriptor_entry_wrapper_body(
     abi::emit_return(ctx.emitter);
 }
 
+/// Emits a static descriptor entry wrapper body by prepending a constant class id.
+fn emit_static_method_descriptor_entry_wrapper_body(
+    ctx: &mut FunctionContext<'_>,
+    impl_class: &str,
+    method_key: &str,
+    visible_arg_types: &[PhpType],
+    called_class_id: u64,
+) {
+    let actual_types = {
+        let mut types = Vec::with_capacity(visible_arg_types.len() + 1);
+        types.push(PhpType::Int);
+        types.extend_from_slice(visible_arg_types);
+        types
+    };
+    let incoming_assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, visible_arg_types, 0);
+    let actual_assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &actual_types, 0);
+    let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
+    let (actual_stack_offsets, actual_overflow_bytes) =
+        descriptor_entry_stack_offsets(&actual_assignments);
+    let frame_size = descriptor_entry_frame_size(visible_arg_types.len());
+
+    abi::emit_frame_prologue(ctx.emitter, frame_size);
+    for (idx, (ty, assignment)) in visible_arg_types.iter().zip(incoming_assignments.iter()).enumerate() {
+        store_descriptor_entry_incoming_arg(
+            ctx.emitter,
+            ty,
+            assignment,
+            descriptor_entry_slot_offset(idx),
+            incoming_stack_offsets[idx],
+        );
+    }
+    if actual_overflow_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, actual_overflow_bytes);
+    }
+    for (idx, (ty, assignment)) in actual_types.iter().zip(actual_assignments.iter()).enumerate() {
+        if idx == 0 {
+            load_descriptor_entry_static_class_id(
+                ctx.emitter,
+                called_class_id,
+                assignment,
+                actual_stack_offsets[idx],
+            );
+        } else {
+            load_descriptor_entry_actual_arg(
+                ctx.emitter,
+                ty,
+                assignment,
+                descriptor_entry_slot_offset(idx - 1),
+                actual_stack_offsets[idx],
+            );
+        }
+    }
+    abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, method_key));
+    if actual_overflow_bytes > 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, actual_overflow_bytes);
+    }
+    abi::emit_frame_restore(ctx.emitter, frame_size);
+    abi::emit_return(ctx.emitter);
+}
+
 /// Emits a static descriptor entry wrapper body by prepending the called-class id.
 fn emit_static_late_bound_descriptor_entry_wrapper_body(
     ctx: &mut FunctionContext<'_>,
@@ -998,6 +1084,24 @@ fn emit_static_late_bound_descriptor_entry_wrapper_body(
     }
     abi::emit_frame_restore(ctx.emitter, frame_size);
     abi::emit_return(ctx.emitter);
+}
+
+/// Loads the concrete called-class id into a descriptor wrapper's outgoing ABI slot.
+fn load_descriptor_entry_static_class_id(
+    emitter: &mut crate::codegen::emit::Emitter,
+    class_id: u64,
+    assignment: &abi::OutgoingArgAssignment,
+    stack_offset: Option<usize>,
+) {
+    let reg = if assignment.in_register() {
+        abi::int_arg_reg_name(emitter.target, assignment.start_reg)
+    } else {
+        abi::secondary_scratch_reg(emitter)
+    };
+    abi::emit_load_int_immediate(emitter, reg, class_id as i64);
+    if let Some(out_offset) = stack_offset {
+        abi::emit_store_to_sp(emitter, reg, out_offset);
+    }
 }
 
 /// Returns the runtime receiver type threaded through the descriptor entry wrapper.
@@ -1254,7 +1358,7 @@ fn emit_runtime_callable_invoker_inline(
 }
 
 /// Emits a legacy builtin wrapper inline so EIR descriptors can point at PHP-ABI code.
-fn emit_runtime_builtin_wrapper_inline(
+pub(super) fn emit_runtime_builtin_wrapper_inline(
     ctx: &mut FunctionContext<'_>,
     name: &str,
     sig: &FunctionSig,
@@ -1269,18 +1373,16 @@ fn emit_runtime_builtin_wrapper_inline(
     label
 }
 
-/// Emits a legacy static-method wrapper inline for descriptor-compatible callbacks.
-fn emit_runtime_static_method_wrapper_inline(
+/// Emits a legacy extern wrapper inline so EIR descriptors can point at PHP-ABI code.
+pub(super) fn emit_runtime_extern_wrapper_inline(
     ctx: &mut FunctionContext<'_>,
-    class_name: &str,
-    method_name: &str,
+    name: &str,
     sig: &FunctionSig,
 ) -> String {
     let mut legacy_ctx = legacy_context_from_eir_module(ctx.module);
-    let label = crate::codegen::callable_dispatch::ensure_runtime_static_method_wrapper(
+    let label = crate::codegen::callable_dispatch::ensure_runtime_extern_wrapper(
         &mut legacy_ctx,
-        class_name,
-        method_name,
+        name,
         sig,
     );
     emit_legacy_deferred_callable_support_inline(ctx, &mut legacy_ctx);
@@ -1519,12 +1621,14 @@ fn first_class_static_method_descriptor(
         .get(&method_key)?
         .clone();
     let wrapper_sig = crate::codegen::callable_dispatch::static_method_runtime_wrapper_sig(&sig);
-    let entry_label = emit_runtime_static_method_wrapper_inline(
+    let entry_label = emit_static_method_descriptor_entry_wrapper(
         ctx,
-        receiver.as_str(),
+        impl_class,
         &method_key,
         &wrapper_sig,
-    );
+        receiver_info.class_id,
+    )
+    .ok()?;
     Some(FirstClassCallableDescriptor {
         entry_label,
         kind: callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
