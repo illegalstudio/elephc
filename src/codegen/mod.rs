@@ -200,42 +200,51 @@ fn finalize_user_asm(
     emit: Emit,
     exported_functions: &HashMap<String, ExportedFunction>,
 ) -> String {
-    eval_property_helpers::emit_eval_property_helpers(module, &mut emitter, &mut data);
-    eval_static_property_helpers::emit_eval_static_property_helpers(module, &mut emitter, &mut data);
-    eval_class_constant_helpers::emit_eval_class_constant_helpers(
-        module,
-        &mut emitter,
-        &mut data,
-    );
+    let eval_bridge = module.required_runtime_features.eval_bridge;
+    if eval_bridge {
+        eval_property_helpers::emit_eval_property_helpers(module, &mut emitter, &mut data);
+        eval_static_property_helpers::emit_eval_static_property_helpers(
+            module,
+            &mut emitter,
+            &mut data,
+        );
+        eval_class_constant_helpers::emit_eval_class_constant_helpers(
+            module,
+            &mut emitter,
+            &mut data,
+        );
+    }
     let eval_callable_support_needed =
-        eval_callable_helpers::module_needs_eval_callable_descriptor_support(module);
+        eval_bridge && eval_callable_helpers::module_needs_eval_callable_descriptor_support(module);
     let eval_callable_support = eval_callable_helpers::emit_eval_callable_descriptor_support(
         module,
         &mut emitter,
         &mut data,
         eval_callable_support_needed,
     );
-    eval_constructor_helpers::emit_eval_constructor_helpers(
-        module,
-        &mut emitter,
-        &mut data,
-        &eval_callable_support,
-    );
-    eval_method_helpers::emit_eval_method_helpers(
-        module,
-        &mut emitter,
-        &mut data,
-        &eval_callable_support,
-    );
-    eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);
-    eval_reflection_owner_helpers::emit_eval_reflection_owner_helpers(module, &mut emitter);
+    if eval_bridge {
+        eval_constructor_helpers::emit_eval_constructor_helpers(
+            module,
+            &mut emitter,
+            &mut data,
+            &eval_callable_support,
+        );
+        eval_method_helpers::emit_eval_method_helpers(
+            module,
+            &mut emitter,
+            &mut data,
+            &eval_callable_support,
+        );
+        eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);
+        eval_reflection_owner_helpers::emit_eval_reflection_owner_helpers(module, &mut emitter);
+    }
     let data_output = data.emit();
     let empty_globals = HashSet::<String>::new();
     let empty_static_vars = HashMap::<(String, String), PhpType>::new();
     let user_functions = runtime_user_function_sigs(module);
     let function_variant_groups = runtime_function_variant_groups(module);
     let mut allowed_class_names = runtime_referenced_class_names(module);
-    if module_uses_dynamic_callable_lookup(module) || module.required_runtime_features.eval {
+    if module_uses_dynamic_callable_lookup(module) || module.required_runtime_features.eval_bridge {
         allowed_class_names.extend(module.class_infos.keys().cloned());
     }
     let runtime_interfaces = runtime_referenced_interfaces(module, &allowed_class_names);
@@ -843,7 +852,7 @@ fn runtime_referenced_interfaces(
     class_names: &HashSet<String>,
 ) -> HashMap<String, InterfaceInfo> {
     let mut names = HashSet::new();
-    if module.required_runtime_features.eval {
+    if module.required_runtime_features.eval_bridge {
         names.extend(module.interface_infos.keys().cloned());
     }
     if module_uses_dynamic_instanceof(module) {

@@ -111,7 +111,7 @@ fn emit_eval_native_frame_called_class_override_probe(
     ctx: &mut FunctionContext<'_>,
     done_label: &str,
 ) {
-    if !ctx.module.required_runtime_features.eval {
+    if !ctx.module.required_runtime_features.eval_bridge {
         return;
     }
     let Some(frame_class) = current_late_static_frame_class(ctx).map(str::to_string) else {

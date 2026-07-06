@@ -1167,7 +1167,7 @@ fn store_argv_global_if_needed(ctx: &mut FunctionContext<'_>) {
 
 /// Returns true when a process superglobal needs program-global storage.
 fn superglobal_storage_needed(ctx: &FunctionContext<'_>, name: &str) -> bool {
-    ctx.module.required_runtime_features.eval
+    ctx.module.required_runtime_features.eval_bridge
         || ctx
             .module
             .data

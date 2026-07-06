@@ -348,7 +348,7 @@ fn emit_eval_native_frame_static_property_get_if_needed(
     inst: &Instruction,
     slot: &StaticPropertySlot,
 ) -> Result<Option<String>> {
-    if !slot.late_bound || !ctx.module.required_runtime_features.eval {
+    if !slot.late_bound || !ctx.module.required_runtime_features.eval_bridge {
         return Ok(None);
     }
     let frame_class = super::current_method_class(ctx)?.to_string();
@@ -373,7 +373,7 @@ fn emit_eval_native_frame_static_property_set_if_needed(
     value: ValueId,
     slot: &StaticPropertySlot,
 ) -> Result<Option<String>> {
-    if !slot.late_bound || !ctx.module.required_runtime_features.eval {
+    if !slot.late_bound || !ctx.module.required_runtime_features.eval_bridge {
         return Ok(None);
     }
     let frame_class = super::current_method_class(ctx)?.to_string();

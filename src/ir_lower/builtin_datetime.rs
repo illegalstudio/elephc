@@ -195,7 +195,7 @@ fn eval_date_alias_builtin_datetime_methods(module: &Module) -> Vec<(String, Str
 
 /// Returns true when the lowered module has any dependency on the eval bridge.
 fn module_uses_eval(module: &Module) -> bool {
-    module.required_runtime_features.eval
+    module.required_runtime_features.eval_bridge
         || module
             .functions
             .iter()
