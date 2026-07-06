@@ -346,7 +346,8 @@ fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Returns main local slots that receive owned refcounted values through `StoreLocal`.
+/// Returns main local slots that receive owned refcounted values through `StoreLocal`
+/// or take ownership of a caught exception through `CatchBind`.
 fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, PhpType, usize)> {
     let param_names = ctx
         .function
@@ -449,10 +450,14 @@ fn ref_cell_owner_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId,
     locals
 }
 
-/// Returns true when a local slot is written by an explicit EIR `StoreLocal`.
+/// Returns true when a local slot is written by an explicit EIR `StoreLocal` or takes
+/// ownership of the in-flight exception through a `CatchBind` (issue #448). Both make
+/// the slot own a reference that the epilogue must release (and that the prologue must
+/// zero-initialize, since a catch may never fire on some paths).
 fn local_slot_has_store(function: &Function, slot: LocalSlotId) -> bool {
     function.instructions.iter().any(|inst| {
-        inst.op == Op::StoreLocal && matches!(inst.immediate, Some(Immediate::LocalSlot(candidate)) if candidate == slot)
+        matches!(inst.op, Op::StoreLocal | Op::CatchBind)
+            && matches!(inst.immediate, Some(Immediate::LocalSlot(candidate)) if candidate == slot)
     })
 }
 
@@ -557,7 +562,8 @@ fn emit_function_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Returns function local slots that receive owned refcounted values through `StoreLocal`.
+/// Returns function local slots that receive owned refcounted values through `StoreLocal`
+/// or take ownership of a caught exception through `CatchBind`.
 ///
 /// `include_returned` controls whether slots directly returned by a `Return` terminator are
 /// part of the set. The zero-initialization pass requests them (`true`) so a returned slot
@@ -607,7 +613,7 @@ fn function_cleanup_locals(
     locals
 }
 
-/// Returns whether a local kind can own values through ordinary `StoreLocal`.
+/// Returns whether a local kind can own values through ordinary `StoreLocal` or `CatchBind`.
 fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
     matches!(
         kind,
