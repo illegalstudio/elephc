@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel superseded runs for the same ref (e.g. when a branch is force-pushed or
+# rebased) so stale jobs stop consuming runners the moment a newer commit lands.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   BRIDGE_CRATES: >-
@@ -18,23 +24,13 @@ env:
     -p elephc-web
 
 jobs:
-  non-codegen-tests:
-    name: Build & Non-Codegen Tests (${{ matrix.platform.name }})
-    runs-on: ${{ matrix.platform.runner }}
+  # Compile each platform once, then let that platform's tests start as soon as
+  # its archive is uploaded. This avoids a matrix-wide barrier where Linux tests
+  # wait for a queued or slower macOS archive job.
+  build-archive-macos-aarch64:
+    name: Build & Archive Tests (macos-aarch64)
+    runs-on: macos-14
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - name: macos-aarch64
-            runner: macos-14
-            nextest_jobs: 1
-          - name: linux-x86_64
-            runner: ubuntu-24.04
-            nextest_jobs: 1
-          - name: linux-aarch64
-            runner: ubuntu-24.04-arm
-            nextest_jobs: 1
     steps:
       - uses: actions/checkout@v4
 
@@ -48,19 +44,74 @@ jobs:
             ~/.cargo/git
             ~/.cargo/registry
             target
-          key: rust-${{ matrix.platform.name }}-${{ hashFiles('Cargo.lock') }}
+          key: rust-macos-aarch64-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            rust-${{ matrix.platform.name }}-
+            rust-macos-aarch64-
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Install native test dependencies (macOS)
-        if: runner.os == 'macOS'
+      - name: Install native test dependencies
         run: brew install pcre2
 
-      - name: Install native test dependencies (Linux)
-        if: runner.os == 'Linux'
+      - name: Check (no warnings)
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
+          ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Build bridge/native support crates
+        # The codegen test runner links compiled programs against bridge
+        # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
+        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a. Build
+        # them before archiving so the archive can capture the .a files (see the
+        # archive include list in .config/nextest.toml).
+        run: cargo build $BRIDGE_CRATES
+
+      - name: Archive test binaries
+        run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+
+      - name: Run doctests
+        # Doctests cannot run from a nextest archive, so run them here where the
+        # workspace is already built.
+        run: cargo test --workspace --doc
+
+      - name: Upload test archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          retention-days: 1
+          if-no-files-found: error
+
+  build-archive-linux-x86_64:
+    name: Build & Archive Tests (linux-x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-linux-x86_64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-linux-x86_64-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -86,35 +137,31 @@ jobs:
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
         # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a.
-        # Build all of them up front so every CI platform validates native support
-        # crates before integration tests need them.
+        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a. Build
+        # them before archiving so the archive can capture the .a files (see the
+        # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
 
-      - name: Run non-codegen tests
-        run: cargo nextest run --profile ci --workspace -E 'not binary(codegen_tests)' --no-fail-fast --retries 1 --flaky-result pass -j ${{ matrix.platform.nextest_jobs }}
+      - name: Archive test binaries
+        run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
 
       - name: Run doctests
+        # Doctests cannot run from a nextest archive, so run them here where the
+        # workspace is already built.
         run: cargo test --workspace --doc
 
-  codegen-tests:
-    name: Codegen Tests (${{ matrix.platform.name }} ${{ matrix.shard }}/16)
-    runs-on: ${{ matrix.platform.runner }}
-    timeout-minutes: 75
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - name: macos-aarch64
-            runner: macos-14
-            nextest_jobs: 1
-          - name: linux-x86_64
-            runner: ubuntu-24.04
-            nextest_jobs: 1
-          - name: linux-aarch64
-            runner: ubuntu-24.04-arm
-            nextest_jobs: 1
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+      - name: Upload test archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          retention-days: 1
+          if-no-files-found: error
+
+  build-archive-linux-aarch64:
+    name: Build & Archive Tests (linux-aarch64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -128,19 +175,14 @@ jobs:
             ~/.cargo/git
             ~/.cargo/registry
             target
-          key: rust-${{ matrix.platform.name }}-${{ hashFiles('Cargo.lock') }}
+          key: rust-linux-aarch64-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            rust-${{ matrix.platform.name }}-
+            rust-linux-aarch64-
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Install native test dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install pcre2
-
-      - name: Install native test dependencies (Linux)
-        if: runner.os == 'Linux'
+      - name: Install native test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -154,18 +196,271 @@ jobs:
             tzdata \
             zlib1g-dev
 
+      - name: Check (no warnings)
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
+          ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
         # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a.
-        # Build all of them up front so every CI platform validates native support
-        # crates before integration tests need them.
+        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a. Build
+        # them before archiving so the archive can capture the .a files (see the
+        # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
 
+      - name: Archive test binaries
+        run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+
+      - name: Run doctests
+        # Doctests cannot run from a nextest archive, so run them here where the
+        # workspace is already built.
+        run: cargo test --workspace --doc
+
+      - name: Upload test archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archive-linux-aarch64
+          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          retention-days: 1
+          if-no-files-found: error
+
+  non-codegen-tests-macos-aarch64:
+    name: Non-Codegen Tests (macos-aarch64)
+    needs: build-archive-macos-aarch64
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: brew install pcre2
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run non-codegen tests
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'not binary(codegen_tests)' \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
+
+  non-codegen-tests-linux-x86_64:
+    name: Non-Codegen Tests (linux-x86_64)
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Run non-codegen tests
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'not binary(codegen_tests)' \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
+
+  non-codegen-tests-linux-aarch64:
+    name: Non-Codegen Tests (linux-aarch64)
+    needs: build-archive-linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run non-codegen tests
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'not binary(codegen_tests)' \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
+
+  codegen-tests-macos-aarch64:
+    name: Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
+    needs: build-archive-macos-aarch64
+    runs-on: macos-14
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: brew install pcre2
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
       - name: Run codegen test shard
-        run: cargo nextest run --profile ci --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast --retries 1 --flaky-result pass -j ${{ matrix.platform.nextest_jobs }}
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(codegen_tests)' \
+            --partition hash:${{ matrix.shard }}/16 \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
+
+  codegen-tests-linux-x86_64:
+    name: Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Run codegen test shard
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(codegen_tests)' \
+            --partition hash:${{ matrix.shard }}/16 \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
+
+  codegen-tests-linux-aarch64:
+    name: Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
+    needs: build-archive-linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run codegen test shard
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(codegen_tests)' \
+            --partition hash:${{ matrix.shard }}/16 \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
 
   image-api-sync:
     name: Image API stubs in sync
@@ -241,22 +536,39 @@ jobs:
     name: Build & Test
     runs-on: ubuntu-latest
     needs:
-      - non-codegen-tests
-      - codegen-tests
+      - build-archive-macos-aarch64
+      - build-archive-linux-x86_64
+      - build-archive-linux-aarch64
+      - non-codegen-tests-macos-aarch64
+      - non-codegen-tests-linux-x86_64
+      - non-codegen-tests-linux-aarch64
+      - codegen-tests-macos-aarch64
+      - codegen-tests-linux-x86_64
+      - codegen-tests-linux-aarch64
       - image-api-sync
       - builtins-docs-sync
     if: always()
     steps:
       - name: Verify test jobs
         run: |
-          test "${{ needs.non-codegen-tests.result }}" = "success"
-          test "${{ needs.codegen-tests.result }}" = "success"
+          test "${{ needs.build-archive-macos-aarch64.result }}" = "success"
+          test "${{ needs.build-archive-linux-x86_64.result }}" = "success"
+          test "${{ needs.build-archive-linux-aarch64.result }}" = "success"
+          test "${{ needs.non-codegen-tests-macos-aarch64.result }}" = "success"
+          test "${{ needs.non-codegen-tests-linux-x86_64.result }}" = "success"
+          test "${{ needs.non-codegen-tests-linux-aarch64.result }}" = "success"
+          test "${{ needs.codegen-tests-macos-aarch64.result }}" = "success"
+          test "${{ needs.codegen-tests-linux-x86_64.result }}" = "success"
+          test "${{ needs.codegen-tests-linux-aarch64.result }}" = "success"
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite
     runs-on: macos-14  # Apple Silicon runner
+    # The benchmark suite does a full release build and only tracks trends, so it
+    # runs on pushes to main rather than on every pull request.
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
