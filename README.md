@@ -145,11 +145,9 @@ xattr -cr elephc
 
 ## Usage
 
-> **Important:** Starting with v0.23.10, elephc uses the new EIR backend by default.
-> The legacy AST backend is frozen: it will not receive new language or runtime
-> features, and it is scheduled for complete removal in v0.26.0. If you need to
-> compare behavior with the old backend during the transition, compile with
-> `--ast-backend`.
+> **Important:** elephc uses the EIR backend exclusively. The old direct AST
+> backend has been removed from the CLI; `--ast-backend` is reported as
+> unsupported.
 
 ```bash
 # Compile a PHP file to a native binary
@@ -512,8 +510,8 @@ src/
 │
 ├── ir/                  # EIR data model, builder, validator, and printer
 ├── ir_lower/            # Active AST → EIR lowering
-├── codegen_ir/          # Active EIR → target assembly backend
-├── codegen/             # Frozen legacy AST backend plus shared ABI/runtime/target helpers
+├── codegen/             # Active EIR → target assembly backend
+├── codegen_support/     # Shared ABI/runtime/target helpers used by codegen
 │   ├── mod.rs           # Pipeline entry, main/global codegen orchestration
 │   ├── driver_support.rs # Pipeline glue and orchestration helpers
 │   ├── prescan.rs       # Pre-pass collecting program-wide codegen metadata

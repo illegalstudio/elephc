@@ -756,9 +756,9 @@ imposed. See `docs/internals/the-ir.md`.
 - [x] Register-pressure mitigations: caller-saved reuse for non-call-crossing intervals; better spill heuristic. The linear-scan allocator now classifies each live interval as call-free (never crosses a clobber point — an instruction/terminator whose lowering emits a call or touches a caller-saved register, per the safe-by-default allowlist in `src/ir_passes/clobber.rs`) and assigns call-free intervals from caller-saved pools that need no prologue save/restore (`x12`–`x15`/`d16`–`d23` on aarch64, `rsi`/`rdi`/`r8`/`r9`/`xmm2`–`xmm7` on x86_64), falling back to callee-saved (`x21`–`x28`/`d8`–`d14`/`rbx`) for cross-call values. This notably unlocks register allocation for x86_64 floats (no callee-saved XMM) and integers (callee pool is only `rbx`). The spill heuristic is now use-weighted: under pressure the rarely-used, furthest-reaching interval is evicted first, keeping hot values in registers
 
 Expected outcome: EIR is the default and only active implementation backend in
-v0.24.x. The legacy AST backend is frozen behind `--ast-backend` for diagnostics
-and removal work only, and ≥15% performance improvement on compute benchmarks
-after Phase 06 by end of v0.24.x.
+v0.24.x. The legacy AST backend is frozen for diagnostics and removal work only,
+and ≥15% performance improvement on compute benchmarks after Phase 06 by end of
+v0.24.x.
 
 ## v0.25.x — EIR optimization passes and Image support
 
@@ -933,7 +933,7 @@ runtime helpers are reused and driven through EIR lowering.
 Optimization work should now be driven by benchmarks, generated assembly size,
 and 0.x validation rather than by speculative pass work.
 
-- [x] Generators reimplemented on stackful coroutines (issue #329) — a generator body is compiled by the normal EIR backend and runs on its own coroutine stack (reusing the Fiber runtime), replacing the v1 state-machine lowering on the EIR path. `Generator::throw()` now raises the exception at the suspended `yield`, so a `try`/`catch` inside the generator body handles it and resumes instead of always terminating the generator and propagating to the caller; in-generator method calls, arbitrary control flow, and `try`/`finally` around `yield` work like ordinary functions. `yield from` over generators delegates through `__rt_gen_delegate` (forwarding sent values and returning the inner `getReturn()`) and over arrays desugars into an iterator loop; `send()`/`getReturn()`/closure captures preserved; Generator GC frees the coroutine stack and boxed key/value/return cells. The frozen legacy AST backend keeps its own `GeneratorFrame` state machine.
+- [x] Generators reimplemented on stackful coroutines (issue #329) — a generator body is compiled by the normal EIR backend and runs on its own coroutine stack (reusing the Fiber runtime), replacing the v1 state-machine lowering on the EIR path. `Generator::throw()` now raises the exception at the suspended `yield`, so a `try`/`catch` inside the generator body handles it and resumes instead of always terminating the generator and propagating to the caller; in-generator method calls, arbitrary control flow, and `try`/`finally` around `yield` work like ordinary functions. `yield from` over generators delegates through `__rt_gen_delegate` (forwarding sent values and returning the inner `getReturn()`) and over arrays desugars into an iterator loop; `send()`/`getReturn()`/closure captures preserved; Generator GC frees the coroutine stack and boxed key/value/return cells.
 - [x] Closure rebinding — `Closure::bind()`, `bindTo()`, and `Closure::call()` rebind a closure to a new receiver; a top-level closure that captures `$this` now binds it correctly instead of losing the receiver, and a by-reference `Closure::bind` stored in a variable and called later is tracked as a static callable so the call carries the bound cell directly (`__rt_closure_bind`) rather than going through the generic descriptor invoker
 - [x] New magic methods `__callStatic`, `__isset`, and `__unset` — a static call to an undeclared method dispatches to `__callStatic`; `isset()`/`empty()` on an undeclared property route through `__isset` (and only read `__get` when `__isset` is truthy, so an unset virtual property is empty without ever being read); and `unset($obj->prop)` on a virtual property calls `__unset`
 - [x] Reflection over functions — `ReflectionFunction` (name and parameter counts), `getParameters()`, `ReflectionParameter`, `ReflectionParameter::getType()`, and `ReflectionNamedType`; attribute arguments are exposed in reflection metadata, including float, positional-array, named-argument and associative-array values, references to global and class constants, and enum-case references
@@ -954,12 +954,12 @@ and 0.x validation rather than by speculative pass work.
 - [ ] Performance within 2x of C -O0 on compute benchmarks
 - [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before deleting the frozen legacy backend
 - [ ] Real-world CLI tools compiled as validation
-- [ ] Audit remaining references to `--ast-backend` and legacy AST emitters so docs, help text, and release notes present them as frozen diagnostic-only fallback before removal
-- [ ] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
+- [x] Audit remaining references to `--ast-backend` and legacy AST emitters so docs, help text, and release notes no longer present a selectable fallback
+- [x] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
 - [ ] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
-- [ ] Rename `src/codegen_ir/` to `src/codegen/`
-- [ ] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
-- [ ] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
+- [x] Rename `src/codegen_ir/` to `src/codegen/`
+- [x] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
+- [x] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [ ] Installation / packaging documentation for the supported host platforms
 

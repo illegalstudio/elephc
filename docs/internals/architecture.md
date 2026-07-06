@@ -137,9 +137,9 @@ PHP source (.php)
        │
        ▼
 ┌─────────────┐
-│ EIR Codegen │  src/codegen_ir/ + shared src/codegen/abi/
-│             │  Emits target assembly text from EIR. The legacy AST backend
-│             │  remains in src/codegen/ behind --ast-backend.
+│ EIR Codegen │  src/codegen/ + shared src/codegen_support/abi/
+│             │  Emits target assembly text from EIR. EIR is the only
+│             │  selectable backend.
 └──────┬──────┘
      │
      ▼
@@ -190,7 +190,8 @@ src/
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
 ├── ir_lower/                  Active checked-AST to EIR lowering
 ├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation
-├── codegen_ir/                Active EIR to target assembly backend
+├── codegen/                   Active EIR to target assembly backend
+├── codegen_support/           Shared ABI, runtime, platform, metadata, and callable support
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
 ├── termination.rs             Structured terminal-effect analysis shared by checker and optimizer
@@ -259,10 +260,14 @@ src/
 │       ├── yield_validation/  Generator return coercion and yield-scope validation
 │       └── ...
 │
-├── codegen/
-│   ├── mod.rs                 Frozen legacy AST-backend orchestration plus shared runtime feature scans
-│   ├── driver_support.rs      Pipeline glue and orchestration helpers
-│   ├── main_emission.rs       Top-level program, globals, and deferred-body emission
+├── codegen_support/
+│   ├── mod.rs                 Shared codegen metadata registries and support re-exports
+│   ├── driver_support.rs      Retained codegen orchestration helpers while legacy emitters are disentangled
+│   ├── arrays.rs              Shared array value-type metadata stamping helpers
+│   ├── callable_invoker_args.rs Descriptor-invoker argument cloning and Mixed boxing helpers
+│   ├── value_boxing.rs        Shared runtime-value and owned-value boxing into Mixed cells
+│   ├── wrappers/              Shared callback and fiber wrapper emitters
+│   ├── main_emission.rs       Historical top-level emission support retained for disentangling
 │   ├── class_methods.rs       Instance/static method emission orchestration
 │   ├── function_variants.rs   Include-loaded function variant dispatchers
 │   ├── interface_wrappers.rs  Interface dispatch return-shape adapters
@@ -307,10 +312,8 @@ src/
 │   │   └── storage/           `locals.rs`, `extern_globals.rs`
 │   ├── functions/             User function emission
 │   │   ├── mod.rs             Function lowering entry point
-│   │   ├── callback_wrapper.rs Captured callback environment wrappers
 │   │   ├── cleanup.rs         Epilogue / ownership cleanup helpers
 │   │   ├── control_flow.rs    Return / early-exit lowering
-│   │   ├── fiber_wrapper.rs   Fiber callback entry wrappers
 │   │   ├── locals.rs          Local slot layout
 │   │   └── types/             Function-local type inference helpers
 │   ├── abi/                   Target-aware calling convention helpers

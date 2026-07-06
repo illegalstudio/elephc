@@ -157,15 +157,15 @@ wrapper that dispatches to the actual emitter:
 
 ```rust
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::lower_strlen(ctx, inst)
+    crate::codegen::lower_inst::builtins::lower_strlen(ctx, inst)
 }
 ```
 
-Write the emitter itself under `src/codegen_ir/lower_inst/builtins/<area>/`, following
+Write the emitter itself under `src/codegen/lower_inst/builtins/<area>/`, following
 the target-aware codegen conventions in `CLAUDE.md` (support every target through
 `emitter.target`, one emitter per leaf file, an inline `//` comment on every
 `emitter.instruction(...)`). If the builtin needs a runtime routine, add it under
-`src/codegen/runtime/<category>/`. The registry dispatches `spec.lower` first, so no
+`src/codegen_support/runtime/<category>/`. The registry dispatches `spec.lower` first, so no
 match arm needs editing.
 
 ### 5. What derives automatically
