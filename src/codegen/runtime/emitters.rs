@@ -200,6 +200,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_random_uniform(emitter);
     arrays::emit_sort_int(emitter, false);
     arrays::emit_sort_int(emitter, true);
+    arrays::emit_sort_float(emitter, false);
+    arrays::emit_sort_float(emitter, true);
     arrays::emit_sort_str(emitter, false);
     arrays::emit_sort_str(emitter, true);
     arrays::emit_hash_fnv1a(emitter);
@@ -228,12 +230,16 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_reverse(emitter);
     arrays::emit_array_reverse_refcounted(emitter);
     arrays::emit_array_sum(emitter);
+    arrays::emit_array_sum_float(emitter);
     arrays::emit_array_product(emitter);
+    arrays::emit_array_product_float(emitter);
     arrays::emit_array_shift(emitter);
     arrays::emit_array_unshift(emitter);
     arrays::emit_array_merge(emitter);
     arrays::emit_array_merge_refcounted(emitter);
+    arrays::emit_array_merge_str(emitter);
     arrays::emit_array_slice(emitter);
+    arrays::emit_array_slice_preserve(emitter);
     arrays::emit_array_slice_refcounted(emitter);
     arrays::emit_range(emitter);
     arrays::emit_shuffle(emitter);
@@ -279,6 +285,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_ksort(emitter);
     arrays::emit_natsort(emitter);
     arrays::emit_array_map(emitter);
+    arrays::emit_array_map2(emitter);
+    arrays::emit_array_map2_str(emitter);
     arrays::emit_array_map_mixed(emitter);
     arrays::emit_array_map_str(emitter);
     arrays::emit_array_map_str_owned(emitter);

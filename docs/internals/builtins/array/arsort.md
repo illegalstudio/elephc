@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/arsort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/arsort.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1091](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1091) (`lower_arsort`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1262](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1262) (`lower_arsort`)
 - **Function symbol**: `lower_arsort()`
 
 

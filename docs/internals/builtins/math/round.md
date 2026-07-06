@@ -25,12 +25,12 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function round(float $num, int $precision = 0): float
+function round(float $num, int $precision = 0, int $mode = 1): float
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–2 arguments (1 optional).
+- **Arity**: takes 1–3 arguments (2 optional).
 
 ## Cross-references
 

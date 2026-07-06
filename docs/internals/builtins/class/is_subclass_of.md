@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `is_a()` and `is_subclass_of()` for object operands and literal targets.
+- Lowers `is_a()` and `is_subclass_of()` for object, boxed-Mixed, and string-class-name operands.
 
 ## Runtime helpers
 

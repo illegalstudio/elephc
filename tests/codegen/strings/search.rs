@@ -33,6 +33,40 @@ fn test_substr_negative_offset() {
     assert_eq!(out, "World");
 }
 
+/// Verifies a negative `length` drops that many characters from the end, matching PHP
+/// (not clamped to an empty string). A length of exactly -1 must not be mistaken for an
+/// omitted length argument.
+#[test]
+fn test_substr_negative_length_drops_from_end() {
+    assert_eq!(compile_and_run(r#"<?php echo substr("hello", 0, -1);"#), "hell");
+    assert_eq!(compile_and_run(r#"<?php echo substr("hello", 1, -1);"#), "ell");
+    assert_eq!(compile_and_run(r#"<?php echo substr("hello", -3, -1);"#), "ll");
+}
+
+/// Verifies a negative `length` that removes more characters than remain yields an empty
+/// string (PHP clamps the result length to zero, it does not wrap).
+#[test]
+fn test_substr_negative_length_underflow_is_empty() {
+    assert_eq!(compile_and_run(r#"<?php echo "[", substr("hello", 0, -10), "]";"#), "[]");
+    assert_eq!(compile_and_run(r#"<?php echo "[", substr("hello", 2, -5), "]";"#), "[]");
+}
+
+/// Verifies positive `length` still keeps `min(length, remaining)` after the negative-length
+/// fix (regression guard for the common case).
+#[test]
+fn test_substr_positive_length_unaffected() {
+    assert_eq!(compile_and_run(r#"<?php echo substr("hello", 1, 2);"#), "el");
+    assert_eq!(compile_and_run(r#"<?php echo substr("hello", 1, 99);"#), "ello");
+}
+
+/// Verifies a runtime (non-constant) negative length also drops characters from the end,
+/// exercising the codegen path rather than any constant handling.
+#[test]
+fn test_substr_runtime_negative_length() {
+    let out = compile_and_run(r#"<?php $n = -2; echo substr("hello", 0, $n);"#);
+    assert_eq!(out, "hel");
+}
+
 /// Verifies substr accepts a non-negative integer offset derived from a function return via addition.
 /// Regression test: int-to-integer coercion path for the offset expression `$o + 1`.
 /// Fixture: queries with `?` delimiter, strpos + intval, then substr with +1 offset.

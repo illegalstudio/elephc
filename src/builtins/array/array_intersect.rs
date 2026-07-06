@@ -7,12 +7,11 @@
 //!
 //! Key details:
 //! - The PHP golden signature is `variadic(&["array"], "arrays")` (one regular `array`
-//!   param plus a variadic `arrays`). The legacy CHECK arm required exactly 2 arguments,
-//!   so `min_args: 2, max_args: 2` reproduce that enforcement in `check_arity` only;
-//!   `function_sig` and the parity gate keep the variadic shape from the golden.
-//! - `check` reproduces the legacy rule: the first argument must be an indexed or
-//!   associative array, and the result preserves that first-operand type. A check hook
-//!   is required because the return type depends on the inferred first-argument type.
+//!   param plus a variadic `arrays`). `min_args: 2` enforces at least two arrays; the variadic
+//!   shape (unbounded max) accepts three or more (`a ∩ b ∩ c`), matching PHP.
+//! - `check` requires every argument to be an indexed or associative array; the result preserves
+//!   the first-operand type. A three-plus-array call is lowered by rewriting it into left-nested
+//!   two-array calls (see `src/ir_lower/expr/mod.rs`).
 //! - `lower` is a thin wrapper over the shared `arrays::lower_array_intersect` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -28,7 +27,6 @@ builtin! {
     params: [array: Mixed],
     variadic: "arrays",
     min_args: 2,
-    max_args: 2,
     returns: Mixed,
     check: check,
     lower: lower,
@@ -36,20 +34,27 @@ builtin! {
     php_manual: "https://www.php.net/manual/en/function.array-intersect.php",
 }
 
-/// Validates the first argument is an array and returns its (preserved) type.
+/// Validates every argument is an array and returns the first operand's (preserved) type.
 ///
-/// Arity (exactly 2 args) is pre-validated by `check_arity`. The first argument is
-/// re-inferred here to drive the return type; the registry already inferred every
-/// argument once for side effects. The result preserves the first-operand array shape.
+/// Arity (>= 2 args) is pre-validated by `check_arity`. Every argument must be an array
+/// (`array_intersect(a, b, c)` intersects `a` with both `b` and `c`); the result preserves the
+/// first-operand array shape. Types are re-inferred here to validate and drive the return type;
+/// the registry already inferred every argument once for side effects.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(ty1, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-        return Err(CompileError::new(
-            cx.span,
-            &format!("{}() first argument must be array", cx.name),
-        ));
+    let mut first = None;
+    for arg in cx.args {
+        let ty = cx.checker.infer_type(arg, cx.env)?;
+        if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            return Err(CompileError::new(
+                cx.span,
+                &format!("{}() arguments must be arrays", cx.name),
+            ));
+        }
+        if first.is_none() {
+            first = Some(ty);
+        }
     }
-    Ok(ty1)
+    Ok(first.expect("array_intersect requires at least two array arguments"))
 }
 
 /// Lowers an `array_intersect` call by dispatching to the shared array emitter.

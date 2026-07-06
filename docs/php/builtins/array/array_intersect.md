@@ -8,7 +8,7 @@ sidebar:
 ## array_intersect()
 
 ```php
-function array_intersect(array $array, ...$arrays): array
+function array_intersect(array $array, ...$arrays): mixed
 ```
 
 Computes the intersection of arrays.
@@ -17,7 +17,7 @@ Computes the intersection of arrays.
 - `$array` (`array`)
 - `...$arrays` — variadic: collects excess arguments into `$arrays`.
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

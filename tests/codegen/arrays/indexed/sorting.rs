@@ -118,3 +118,22 @@ echo $a[0] . "," . $a[1] . "," . $a[2] . "," . $a[3];
     );
     assert_eq!(out, "date,cherry,banana,apple");
 }
+
+/// Verifies `sort()`/`rsort()` over a float-element array order by IEEE numeric value
+/// (negatives and fractions included), using the `__rt_sort_float`/`__rt_rsort_float` helpers.
+/// Matches PHP: ascending `-1.25,0.5,2,3.5`; descending `3.5,2,0.5,-1.25`.
+#[test]
+fn test_sort_and_rsort_float_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3.5, -1.25, 2.0, 0.5];
+sort($a);
+echo $a[0]; echo ","; echo $a[1]; echo ","; echo $a[2]; echo ","; echo $a[3];
+echo "|";
+$b = [3.5, -1.25, 2.0, 0.5];
+rsort($b);
+echo $b[0]; echo ","; echo $b[1]; echo ","; echo $b[2]; echo ","; echo $b[3];
+"#,
+    );
+    assert_eq!(out, "-1.25,0.5,2,3.5|3.5,2,0.5,-1.25");
+}

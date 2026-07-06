@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/range.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/range.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1020](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1020) (`lower_range`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1177](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1177) (`lower_range`)
 - **Function symbol**: `lower_range()`
 
 

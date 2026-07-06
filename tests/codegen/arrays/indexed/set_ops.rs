@@ -136,3 +136,29 @@ echo $saved[0] . "|" . $saved[1];
     );
     assert_eq!(out, "5|6");
 }
+
+/// Verifies `array_diff` with three or more arrays removes elements present in ANY later array
+/// (`a \ b \ c`), lowered by folding into left-nested two-array calls.
+#[test]
+fn test_array_diff_three_or_more_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_diff([1, 2, 3, 4, 5, 6], [2], [4], [6]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "1,3,5");
+}
+
+/// Verifies `array_intersect` with three or more arrays keeps only elements present in EVERY array
+/// (`a ∩ b ∩ c`), lowered by folding into left-nested two-array calls.
+#[test]
+fn test_array_intersect_three_or_more_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_intersect([1, 2, 3, 4], [1, 2, 3], [2, 3, 4], [3, 2]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "2,3");
+}

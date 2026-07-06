@@ -58,11 +58,61 @@ fn test_intdiv_negative() {
     assert_eq!(out, "-3");
 }
 
-/// Verifies float division by zero produces `INF`.
+/// Verifies float division by zero raises an (uncatchable) fatal instead of producing INF,
+/// matching PHP's DivisionByZeroError as closely as elephc can (no exception unwinding yet).
 #[test]
-fn test_division_by_zero_inf() {
-    let out = compile_and_run("<?php echo 1.0 / 0.0;");
-    assert_eq!(out, "INF");
+fn test_float_division_by_zero_fatals() {
+    let err = compile_and_run_expect_failure("<?php echo 1.0 / 0.0;");
+    assert!(
+        err.contains("division by zero"),
+        "float division by zero should fatal, got: {err}"
+    );
+}
+
+/// Verifies integer `/` by zero (the int→float promotion path) raises the shared fatal.
+#[test]
+fn test_int_division_by_zero_fatals() {
+    let err = compile_and_run_expect_failure("<?php $z = $argc - 1; echo 5 / $z;");
+    assert!(
+        err.contains("division by zero"),
+        "integer division by zero should fatal, got: {err}"
+    );
+}
+
+/// Verifies `%` by zero raises an (uncatchable) fatal (`modulo by zero`) instead of returning 0.
+#[test]
+fn test_modulo_by_zero_fatals() {
+    let err = compile_and_run_expect_failure("<?php $z = $argc - 1; echo 5 % $z;");
+    assert!(
+        err.contains("modulo by zero"),
+        "modulo by zero should fatal, got: {err}"
+    );
+}
+
+/// Verifies intdiv() by zero raises an (uncatchable) fatal (the shared fatal helper path).
+#[test]
+fn test_intdiv_by_zero() {
+    let err = compile_and_run_expect_failure("<?php echo intdiv(5, 0);");
+    assert!(
+        err.contains("division by zero"),
+        "intdiv by zero should fatal, got: {err}"
+    );
+}
+
+/// Verifies `x % -1` folds to `0` (always zero in PHP) without the `i64::MIN % -1` overflow panic.
+/// A runtime-unknown dividend keeps the fold path from collapsing the whole expression away.
+#[test]
+fn test_modulo_negative_one_is_zero() {
+    let out = compile_and_run("<?php echo PHP_INT_MIN % -1; echo \"|\"; echo (7 * $argc) % -1;");
+    assert_eq!(out, "0|0");
+}
+
+/// Verifies float division by a NaN divisor yields NAN (not a fatal): the zero-divisor guard must
+/// skip the unordered (NaN) case, since `x / NaN = NaN` in PHP.
+#[test]
+fn test_float_division_by_nan_is_not_fatal() {
+    let out = compile_and_run("<?php $n = NAN; echo 5.0 / $n;");
+    assert_eq!(out, "NAN");
 }
 
 /// Regression: `intdiv()` must unbox a `Mixed` operand before dividing.

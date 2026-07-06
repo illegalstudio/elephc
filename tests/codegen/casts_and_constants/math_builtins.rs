@@ -106,6 +106,25 @@ fn test_number_format_no_decimals() {
     assert_eq!(out, "1,234,567");
 }
 
+/// Verifies `number_format` rounds exact-half cases away from zero (PHP `PHP_ROUND_HALF_UP`), not
+/// half-to-even like a bare `snprintf("%.*f")`: `2.5 -> 3`, `0.5 -> 1`, `-2.5 -> -3`, `2.55 -> 2.6`.
+#[test]
+fn test_number_format_rounds_half_away_from_zero() {
+    let out = compile_and_run(
+        r#"<?php
+echo number_format(2.5, 0); echo ",";
+echo number_format(3.5, 0); echo ",";
+echo number_format(0.5, 0); echo ",";
+echo number_format(1.5, 0); echo ",";
+echo number_format(-2.5, 0); echo ",";
+echo number_format(2.45, 1); echo ",";
+echo number_format(2.55, 1); echo ",";
+echo number_format(1234.5, 0);
+"#,
+    );
+    assert_eq!(out, "3,4,1,2,-3,2.5,2.6,1,235");
+}
+
 /// Verifies `number_format(1234.5678, 2)` rounds to 2 decimal places: expects `1,234.57`.
 #[test]
 fn test_number_format_with_decimals() {
@@ -146,6 +165,32 @@ fn test_number_format_no_thousands() {
 fn test_number_format_space_thousands() {
     let out = compile_and_run(r#"<?php echo number_format(1234567, 0, ".", " ");"#);
     assert_eq!(out, "1 234 567");
+}
+
+/// Verifies a multi-byte (UTF-8 non-breaking space, `\xc2\xa0`) thousands separator survives intact
+/// rather than being truncated to its first byte, matching PHP's `fr_FR`-style grouping.
+#[test]
+fn test_number_format_multibyte_thousands_separator() {
+    let out = compile_and_run(
+        "<?php echo number_format(1234567.891, 2, \",\", \"\\xc2\\xa0\");",
+    );
+    assert_eq!(out, "1\u{a0}234\u{a0}567,89");
+}
+
+/// Verifies a multi-byte decimal separator is inserted whole (both separators are `(ptr, len)`
+/// strings now, not single bytes).
+#[test]
+fn test_number_format_multibyte_decimal_separator() {
+    let out = compile_and_run(r#"<?php echo number_format(1234.5, 2, "__", " ");"#);
+    assert_eq!(out, "1 234__50");
+}
+
+/// Verifies an empty decimal AND thousands separator both pass through as length-0 "insert nothing"
+/// (the multi-byte helper treats length 0 as no separator, not a truncated single byte).
+#[test]
+fn test_number_format_empty_both_separators() {
+    let out = compile_and_run(r#"<?php echo number_format(1234567.891, 2, "", "");"#);
+    assert_eq!(out, "123456789");
 }
 
 // --- Constants ---

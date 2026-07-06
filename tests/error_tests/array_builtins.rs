@@ -55,7 +55,7 @@ fn test_error_array_reverse_wrong_args() {
 fn test_error_array_merge_wrong_args() {
     expect_error(
         "<?php $a = [1]; array_merge($a);",
-        "array_merge() takes exactly 2 arguments",
+        "array_merge() takes at least 2 arguments",
     );
 }
 
@@ -70,7 +70,7 @@ fn test_error_array_sum_wrong_args() {
 fn test_error_array_search_wrong_args() {
     expect_error(
         "<?php $a = [1]; array_search($a);",
-        "array_search() takes exactly 2 arguments",
+        "array_search() takes 2 or 3 arguments",
     );
 }
 
@@ -88,7 +88,37 @@ fn test_error_array_key_exists_wrong_args() {
 fn test_error_array_slice_wrong_args() {
     expect_error(
         "<?php $a = [1]; array_slice($a);",
-        "array_slice() takes 2 or 3 arguments",
+        "array_slice() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies `array_slice(..., preserve_keys: true)` over a non-scalar (string) array is a clear
+/// unsupported-feature error rather than a silent Array-vs-AssocArray heap-shape mismatch.
+#[test]
+fn test_error_array_slice_preserve_keys_unsupported_element() {
+    expect_error(
+        r#"<?php $a = ["x", "y", "z"]; array_slice($a, 0, 2, true);"#,
+        "array_slice() with preserve_keys=true is only supported for arrays of int, float, or bool",
+    );
+}
+
+/// Verifies the two-input-array `array_map` form loudly rejects arrays whose element types differ,
+/// rather than miscompiling one array against the other's runtime slot layout.
+#[test]
+fn test_error_array_map_two_arrays_mismatched_element_types() {
+    expect_error(
+        r#"<?php $a = [1, 2]; $b = ["x", "y"]; array_map(fn($x, $y) => $x, $a, $b);"#,
+        "array_map() with multiple arrays currently requires every array to share one scalar element type",
+    );
+}
+
+/// Verifies the two-input-array `array_map` form loudly rejects unsupported (float) element arrays,
+/// since only integer and string element runtimes exist for the two-array path.
+#[test]
+fn test_error_array_map_two_arrays_unsupported_element_type() {
+    expect_error(
+        r#"<?php $a = [1.5, 2.5]; $b = [3.5, 4.5]; array_map(fn($x, $y) => $x + $y, $a, $b);"#,
+        "array_map() with multiple arrays currently supports only integer or string arrays",
     );
 }
 
@@ -140,7 +170,7 @@ fn test_error_array_pop_wrong_args() {
 /// Verifies that error in array wrong args.
 #[test]
 fn test_error_in_array_wrong_args() {
-    expect_error("<?php in_array(1);", "in_array() takes exactly 2 arguments");
+    expect_error("<?php in_array(1);", "in_array() takes 2 or 3 arguments");
 }
 
 /// Verifies that error array keys wrong args.
@@ -271,7 +301,7 @@ fn test_error_count_wrong_args() {
 fn test_error_array_diff_wrong_args() {
     expect_error(
         "<?php array_diff();",
-        "array_diff() takes exactly 2 arguments",
+        "array_diff() takes at least 2 arguments",
     );
 }
 
@@ -280,7 +310,7 @@ fn test_error_array_diff_wrong_args() {
 fn test_error_array_intersect_wrong_args() {
     expect_error(
         "<?php array_intersect();",
-        "array_intersect() takes exactly 2 arguments",
+        "array_intersect() takes at least 2 arguments",
     );
 }
 
@@ -364,7 +394,7 @@ fn test_error_array_column_wrong_args() {
 fn test_error_array_map_wrong_args() {
     expect_error(
         r#"<?php array_map("fn");"#,
-        "array_map() takes exactly 2 arguments",
+        "array_map() takes 2 or 3 arguments",
     );
 }
 

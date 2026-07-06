@@ -8,7 +8,7 @@ sidebar:
 ## array_diff()
 
 ```php
-function array_diff(array $array, ...$arrays): array
+function array_diff(array $array, ...$arrays): mixed
 ```
 
 Computes the difference of arrays.
@@ -17,7 +17,7 @@ Computes the difference of arrays.
 - `$array` (`array`)
 - `...$arrays` — variadic: collects excess arguments into `$arrays`.
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

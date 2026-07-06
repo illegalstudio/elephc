@@ -10,9 +10,13 @@
 //!   return type is the (array-or-assoc) input type unchanged; a boxed `Mixed`/`Union`
 //!   input yields `Mixed`. A check hook is required because the return type depends on
 //!   the inferred first-argument type.
+//! - A literal `preserve_keys = true` 4th argument keeps the original integer offsets, turning an
+//!   indexed scalar array into an integer-keyed associative result. The literal-true + scalar-element
+//!   predicate (`crate::types::array_slice_literal_preserve_keys`) MUST stay identical here, in the
+//!   EIR return-type inference, and in the emitter — a disagreement is a heap-shape mismatch.
 //! - The declared signature carries the golden param list (`array`, `offset`,
-//!   `length`), with `length` optional (default `null`), so the registry's
-//!   `check_arity` accepts 2 or 3 arguments — matching the legacy CHECK arm.
+//!   `length`, `preserve_keys`), with `length`/`preserve_keys` optional, so the registry's
+//!   `check_arity` accepts 2 to 4 arguments.
 //! - `lower` is a thin wrapper over the shared `arrays::lower_array_slice` emitter.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
@@ -25,7 +29,7 @@ use crate::types::PhpType;
 builtin! {
     name: "array_slice",
     area: Array,
-    params: [array: Mixed, offset: Mixed, length: Mixed = DefaultSpec::Null],
+    params: [array: Mixed, offset: Mixed, length: Mixed = DefaultSpec::Null, preserve_keys: Bool = DefaultSpec::Bool(false)],
     returns: Mixed,
     check: check,
     lower: lower,
@@ -37,9 +41,10 @@ builtin! {
 ///
 /// A slice preserves the input array shape, so the (array-or-assoc) first-argument
 /// type is returned unchanged; a boxed `Mixed`/`Union` first argument yields `Mixed`.
-/// Non-array first arguments are rejected. The first argument is re-inferred here;
-/// the registry already inferred every argument once for side effects, and arity
-/// (2 or 3) is pre-validated by the registry.
+/// A literal `preserve_keys = true` 4th argument over a scalar (int/float/bool) indexed array yields
+/// an integer-keyed associative array instead. Non-array first arguments are rejected. The first
+/// argument is re-inferred here; the registry already inferred every argument once for side effects,
+/// and arity (2 to 4) is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
@@ -50,6 +55,24 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             cx.span,
             "array_slice() first argument must be array",
         ));
+    }
+    // preserve_keys=true keeps the original integer offsets, turning an indexed array into an
+    // integer-keyed associative result. The literal-true + scalar-element predicate MUST stay
+    // identical to the EIR return-type and emitter checks — disagreeing on Array-vs-AssocArray is a
+    // heap-shape mismatch (corruption). Only scalar (int/float/bool) elements are supported.
+    if crate::types::array_slice_literal_preserve_keys(cx.args) {
+        if let PhpType::Array(inner) = &ty {
+            if matches!(**inner, PhpType::Int | PhpType::Float | PhpType::Bool) {
+                return Ok(PhpType::AssocArray {
+                    key: Box::new(PhpType::Int),
+                    value: inner.clone(),
+                });
+            }
+            return Err(CompileError::new(
+                cx.span,
+                "array_slice() with preserve_keys=true is only supported for arrays of int, float, or bool",
+            ));
+        }
     }
     Ok(ty)
 }

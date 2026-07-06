@@ -718,10 +718,9 @@ pub(crate) fn lower_substr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         )));
     }
     let neg_done = ctx.next_label("substr_neg_done");
-    let len_done = ctx.next_label("substr_len_done");
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_substr_aarch64(ctx, inst, &neg_done, &len_done)?,
-        Arch::X86_64 => lower_substr_x86_64(ctx, inst, &neg_done, &len_done)?,
+        Arch::AArch64 => lower_substr_aarch64(ctx, inst, &neg_done)?,
+        Arch::X86_64 => lower_substr_x86_64(ctx, inst, &neg_done)?,
     }
     store_if_result(ctx, inst)
 }
@@ -888,8 +887,8 @@ pub(crate) fn lower_number_format(
     abi::emit_push_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
 
     push_decimal_count(ctx, inst)?;
-    push_separator_byte(ctx, inst, 2, 46, false, "decimal separator")?;
-    push_separator_byte(ctx, inst, 3, 44, true, "thousands separator")?;
+    push_number_format_separator(ctx, inst, 2, b".", "decimal separator")?;
+    push_number_format_separator(ctx, inst, 3, b",", "thousands separator")?;
     pop_number_format_args(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_number_format");
     store_if_result(ctx, inst)
@@ -1436,15 +1435,15 @@ fn lower_substr_aarch64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     neg_done: &str,
-    len_done: &str,
 ) -> Result<()> {
     load_substr_string_and_offset_aarch64(ctx, inst)?;
-    if inst.operands.len() >= 3 {
+    // Whether a length argument was supplied is known at compile time, so no runtime sentinel is
+    // needed: an omitted length keeps the whole remaining tail, an explicit length is clamped below.
+    let has_length = inst.operands.len() >= 3;
+    if has_length {
         let length = expect_operand(inst, 2)?;
         load_as_int(ctx, length, "substr length")?;
         ctx.emitter.instruction("mov x3, x0");                                  // move the explicit substring length into the clamp register
-    } else {
-        ctx.emitter.instruction("mov x3, #-1");                                 // use -1 as the sentinel for an omitted substring length
     }
     ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the substring offset after optional length materialization
     ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the source string pointer and length
@@ -1458,13 +1457,15 @@ fn lower_substr_aarch64(
     ctx.emitter.instruction("csel x0, x2, x0, gt");                             // clamp offsets past the end to the source-string length
     ctx.emitter.instruction("add x1, x1, x0");                                  // advance the result pointer to the selected substring start
     ctx.emitter.instruction("sub x2, x2, x0");                                  // compute the remaining byte length after the selected offset
-    ctx.emitter.instruction("cmn x3, #1");                                      // check whether the optional length argument was omitted
-    ctx.emitter.instruction(&format!("b.eq {}", len_done));                     // keep the full remaining tail when no explicit length was provided
-    ctx.emitter.instruction("cmp x3, #0");                                      // check whether the requested substring length is negative
-    ctx.emitter.instruction("csel x3, xzr, x3, lt");                            // clamp negative requested lengths to zero
-    ctx.emitter.instruction("cmp x3, x2");                                      // compare requested length against the remaining tail length
-    ctx.emitter.instruction("csel x2, x3, x2, lt");                             // shrink the result length when the requested length is shorter
-    ctx.emitter.label(len_done);
+    if has_length {
+        ctx.emitter.instruction("add x4, x2, x3");                              // a negative length keeps remaining + length characters
+        ctx.emitter.instruction("cmp x3, #0");                                  // check whether the requested substring length is negative
+        ctx.emitter.instruction("csel x4, x3, x4, ge");                         // a non-negative length uses the requested length directly
+        ctx.emitter.instruction("cmp x4, #0");                                  // check whether the effective length underflowed below zero
+        ctx.emitter.instruction("csel x4, xzr, x4, lt");                        // clamp the underflowed length up to zero
+        ctx.emitter.instruction("cmp x4, x2");                                  // compare the effective length against the remaining tail
+        ctx.emitter.instruction("csel x2, x4, x2, lt");                         // keep min(effective length, remaining tail)
+    }
     Ok(())
 }
 
@@ -1486,15 +1487,15 @@ fn lower_substr_x86_64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     neg_done: &str,
-    len_done: &str,
 ) -> Result<()> {
     load_substr_string_and_offset_x86_64(ctx, inst)?;
-    if inst.operands.len() >= 3 {
+    // Whether a length argument was supplied is known at compile time, so no runtime sentinel is
+    // needed: an omitted length keeps the whole remaining tail, an explicit length is clamped below.
+    let has_length = inst.operands.len() >= 3;
+    if has_length {
         let length = expect_operand(inst, 2)?;
         load_as_int(ctx, length, "substr length")?;
         ctx.emitter.instruction("mov rcx, rax");                                // move the explicit substring length into the clamp register
-    } else {
-        abi::emit_load_int_immediate(ctx.emitter, "rcx", -1);
     }
     abi::emit_pop_reg(ctx.emitter, "rax");
     abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
@@ -1509,14 +1510,17 @@ fn lower_substr_x86_64(
     ctx.emitter.instruction("cmovg rax, rsi");                                  // clamp offsets past the end to the source-string length
     ctx.emitter.instruction("add rdi, rax");                                    // advance the result pointer to the selected substring start
     ctx.emitter.instruction("sub rsi, rax");                                    // compute the remaining byte length after the selected offset
-    ctx.emitter.instruction("cmp rcx, -1");                                     // check whether the optional length argument was omitted
-    ctx.emitter.instruction(&format!("je {}", len_done));                       // keep the full remaining tail when no explicit length was provided
-    ctx.emitter.instruction("cmp rcx, 0");                                      // check whether the requested substring length is negative
-    ctx.emitter.instruction("mov r8, 0");                                       // materialize zero for negative length clamping
-    ctx.emitter.instruction("cmovl rcx, r8");                                   // clamp negative requested lengths to zero
-    ctx.emitter.instruction("cmp rcx, rsi");                                    // compare requested length against the remaining tail length
-    ctx.emitter.instruction("cmovl rsi, rcx");                                  // shrink the result length when the requested length is shorter
-    ctx.emitter.label(len_done);
+    if has_length {
+        ctx.emitter.instruction("mov r8, rsi");                                 // r8 = remaining tail length
+        ctx.emitter.instruction("add r8, rcx");                                 // a negative length keeps remaining + length characters
+        ctx.emitter.instruction("cmp rcx, 0");                                  // check whether the requested substring length is negative
+        ctx.emitter.instruction("cmovge r8, rcx");                              // a non-negative length uses the requested length directly
+        ctx.emitter.instruction("mov r9, 0");                                   // materialize zero for the underflow clamp
+        ctx.emitter.instruction("cmp r8, 0");                                   // check whether the effective length underflowed below zero
+        ctx.emitter.instruction("cmovl r8, r9");                                // clamp the underflowed length up to zero
+        ctx.emitter.instruction("cmp r8, rsi");                                 // compare the effective length against the remaining tail
+        ctx.emitter.instruction("cmovl rsi, r8");                               // keep min(effective length, remaining tail)
+    }
     ctx.emitter.instruction("mov rax, rdi");                                    // return the selected substring pointer in the string result register
     ctx.emitter.instruction("mov rdx, rsi");                                    // return the selected substring length in the string result register
     Ok(())
@@ -3038,94 +3042,58 @@ fn push_decimal_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
     Ok(())
 }
 
-/// Pushes a one-byte separator argument, using `default_byte` when it is omitted.
-fn push_separator_byte(
+/// Pushes a `number_format` separator argument as a `(pointer, length)` pair (pointer first,
+/// then length) so multi-byte separators (e.g. a UTF-8 non-breaking space) survive intact.
+///
+/// An omitted argument falls back to the interned `default` bytes (`"."` / `","`); an explicit
+/// empty separator is passed through with length 0, which `__rt_number_format` treats as
+/// "insert no separator", replacing the previous single-byte truncation.
+fn push_number_format_separator(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     operand_index: usize,
-    default_byte: i64,
-    empty_string_means_zero: bool,
+    default: &[u8],
     name: &str,
 ) -> Result<()> {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     if inst.operands.len() > operand_index {
         let value = expect_operand(inst, operand_index)?;
-        load_separator_byte(ctx, value, empty_string_means_zero, name)?;
+        if ctx.value_php_type(value)? != PhpType::Str {
+            return Err(CodegenIrError::unsupported(format!(
+                "number_format {} for non-string operand",
+                name
+            )));
+        }
+        ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
     } else {
-        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), default_byte);
+        let (label, _) = ctx.data.add_string(default);
+        abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, default.len() as i64);
     }
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_push_reg(ctx.emitter, ptr_reg);
+    abi::emit_push_reg(ctx.emitter, len_reg);
     Ok(())
-}
-
-/// Loads the first byte of a separator string into the integer result register.
-fn load_separator_byte(
-    ctx: &mut FunctionContext<'_>,
-    value: ValueId,
-    empty_string_means_zero: bool,
-    name: &str,
-) -> Result<()> {
-    if ctx.value_php_type(value)? != PhpType::Str {
-        return Err(CodegenIrError::unsupported(format!(
-            "number_format {} for non-string operand",
-            name
-        )));
-    }
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_string_value_to_regs(value, "x1", "x2")?;
-            if empty_string_means_zero {
-                emit_aarch64_empty_separator_guard(ctx);
-            } else {
-                ctx.emitter.instruction("ldrb w0, [x1]");                       // load the first byte of the separator string
-            }
-        }
-        Arch::X86_64 => {
-            ctx.load_string_value_to_regs(value, "rax", "rdx")?;
-            if empty_string_means_zero {
-                emit_x86_64_empty_separator_guard(ctx);
-            } else {
-                ctx.emitter.instruction("movzx eax, BYTE PTR [rax]");           // load the first byte of the separator string
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Emits the AArch64 empty-string fallback for the optional thousands separator.
-fn emit_aarch64_empty_separator_guard(ctx: &mut FunctionContext<'_>) {
-    let use_zero = ctx.next_label("nf_sep_zero");
-    let done = ctx.next_label("nf_sep_done");
-    ctx.emitter.instruction(&format!("cbz x2, {}", use_zero));                  // use the no-separator sentinel when the separator string is empty
-    ctx.emitter.instruction("ldrb w0, [x1]");                                   // load the first byte of the non-empty separator string
-    ctx.emitter.instruction(&format!("b {}", done));                            // skip the empty-string separator fallback
-    ctx.emitter.label(&use_zero);
-    abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
-    ctx.emitter.label(&done);
-}
-
-/// Emits the x86_64 empty-string fallback for the optional thousands separator.
-fn emit_x86_64_empty_separator_guard(ctx: &mut FunctionContext<'_>) {
-    let use_zero = ctx.next_label("nf_sep_zero");
-    let done = ctx.next_label("nf_sep_done");
-    ctx.emitter.instruction("test rdx, rdx");                                   // check whether the separator string is empty
-    ctx.emitter.instruction(&format!("jz {}", use_zero));                       // use the no-separator sentinel for an empty separator
-    ctx.emitter.instruction("movzx eax, BYTE PTR [rax]");                       // load the first byte of the non-empty separator string
-    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the empty-string separator fallback
-    ctx.emitter.label(&use_zero);
-    abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
-    ctx.emitter.label(&done);
 }
 
 /// Pops the staged arguments into the runtime helper's target ABI registers.
+///
+/// ABI: number in `d0`/`xmm0`, decimals in `x1`/`rdi`, decimal separator `(ptr, len)` in
+/// `x2`/`x3` (`rsi`/`rdx`), thousands separator `(ptr, len)` in `x4`/`x5` (`rcx`/`r8`). The
+/// staged push order is number, decimals, dec ptr, dec len, thousands ptr, thousands len, so
+/// the pops run in reverse.
 fn pop_number_format_args(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x5");
+            abi::emit_pop_reg(ctx.emitter, "x4");
             abi::emit_pop_reg(ctx.emitter, "x3");
             abi::emit_pop_reg(ctx.emitter, "x2");
             abi::emit_pop_reg(ctx.emitter, "x1");
             abi::emit_pop_float_reg(ctx.emitter, "d0");
         }
         Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "r8");
+            abi::emit_pop_reg(ctx.emitter, "rcx");
             abi::emit_pop_reg(ctx.emitter, "rdx");
             abi::emit_pop_reg(ctx.emitter, "rsi");
             abi::emit_pop_reg(ctx.emitter, "rdi");

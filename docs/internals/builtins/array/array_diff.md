@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_diff.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_diff.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:874](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L874) (`lower_array_diff`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:996](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L996) (`lower_array_diff`)
 - **Function symbol**: `lower_array_diff()`
 
 
@@ -31,7 +31,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_diff(array $array, ...$arrays): array
+function array_diff(array $array, ...$arrays): mixed
 ```
 
 ## What the type checker enforces

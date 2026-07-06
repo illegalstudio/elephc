@@ -14,7 +14,7 @@ sidebar:
 | [`array_chunk()`](./array/array_chunk.md) | `(array $array, int $length): array` | `array` |
 | [`array_column()`](./array/array_column.md) | `(array $array, string $column_key): array` | `array` |
 | [`array_combine()`](./array/array_combine.md) | `(array $keys, array $values): array` | `array` |
-| [`array_diff()`](./array/array_diff.md) | `(array $array, ...$arrays): array` | `array` |
+| [`array_diff()`](./array/array_diff.md) | `(array $array, ...$arrays): mixed` | `mixed` |
 | [`array_diff_assoc()`](./array/array_diff_assoc.md) | `(array $array, ...$arrays): mixed` | `mixed` |
 | [`array_diff_key()`](./array/array_diff_key.md) | `(array $array, ...$arrays): array` | `array` |
 | [`array_fill()`](./array/array_fill.md) | `(int $start_index, int $count, mixed $value): array` | `array` |
@@ -22,7 +22,7 @@ sidebar:
 | [`array_filter()`](./array/array_filter.md) | `(array $array, callable $callback = null, int $mode = 0): array` | `array` |
 | [`array_find()`](./array/array_find.md) | `(mixed $array, mixed $callback): mixed` | `mixed` |
 | [`array_flip()`](./array/array_flip.md) | `(array $array): array` | `array` |
-| [`array_intersect()`](./array/array_intersect.md) | `(array $array, ...$arrays): array` | `array` |
+| [`array_intersect()`](./array/array_intersect.md) | `(array $array, ...$arrays): mixed` | `mixed` |
 | [`array_intersect_assoc()`](./array/array_intersect_assoc.md) | `(array $array, ...$arrays): mixed` | `mixed` |
 | [`array_intersect_key()`](./array/array_intersect_key.md) | `(array $array, ...$arrays): array` | `array` |
 | [`array_is_list()`](./array/array_is_list.md) | `(mixed $array): bool` | `bool` |
@@ -45,7 +45,7 @@ sidebar:
 | [`array_reverse()`](./array/array_reverse.md) | `(array $array): array` | `array` |
 | [`array_search()`](./array/array_search.md) | `(mixed $needle, array $haystack, bool $strict = false): mixed` | `mixed` |
 | [`array_shift()`](./array/array_shift.md) | `(array $array): mixed` | `mixed` |
-| [`array_slice()`](./array/array_slice.md) | `(array $array, int $offset, int $length = null): array` | `array` |
+| [`array_slice()`](./array/array_slice.md) | `(array $array, int $offset, int $length = null, bool $preserve_keys = false): array` | `array` |
 | [`array_splice()`](./array/array_splice.md) | `(array $array, int $offset, int $length = null): array` | `array` |
 | [`array_sum()`](./array/array_sum.md) | `(array $array): int` | `int` |
 | [`array_udiff()`](./array/array_udiff.md) | `(array $array1, array $array2, callable $callback): array` | `array` |
