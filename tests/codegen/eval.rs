@@ -1745,7 +1745,8 @@ function eval_cuf_join(string $left, string $right, bool $bang = false): string 
 }
 echo eval('return call_user_func("eval_cuf_join", "A", "B")
     . "|" . call_user_func_array("eval_cuf_join", ["right" => "D", "left" => "C", "bang" => true])
-    . "|" . call_user_func(eval_cuf_join(...), "E", "F", true);');
+    . "|" . call_user_func(eval_cuf_join(...), "E", "F", true)
+    . "|" . call_user_func_array(eval_cuf_join(...), ["right" => "H", "left" => "G"]);');
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
@@ -1780,7 +1781,7 @@ echo eval('return call_user_func("eval_cuf_join", "A", "B")
         &default_link_paths(),
         &[],
     );
-    assert_eq!(out, "A:B.|C:D!|E:F!");
+    assert_eq!(out, "A:B.|C:D!|E:F!|G:H.");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -1804,7 +1805,8 @@ echo eval('return call_user_func("EvalAotStaticMethodCallbackBox::join", "A", "B
     . "|" . call_user_func_array(["EvalAotStaticMethodCallbackBox", "inc"], [41])
     . "|" . call_user_func([EvalAotStaticMethodCallbackBox::class, "join"], "G", "H")
     . "|" . call_user_func_array([EvalAotStaticMethodCallbackBox::class, "inc"], [9])
-    . "|" . call_user_func(EvalAotStaticMethodCallbackBox::join(...), "I", "J", true);');
+    . "|" . call_user_func(EvalAotStaticMethodCallbackBox::join(...), "I", "J", true)
+    . "|" . call_user_func_array(EvalAotStaticMethodCallbackBox::join(...), ["right" => "L", "left" => "K"]);');
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
@@ -1839,7 +1841,7 @@ echo eval('return call_user_func("EvalAotStaticMethodCallbackBox::join", "A", "B
         &default_link_paths(),
         &[],
     );
-    assert_eq!(out, "A:B.|C:D!|E:F.|42|G:H.|10|I:J!");
+    assert_eq!(out, "A:B.|C:D!|E:F.|42|G:H.|10|I:J!|K:L.");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -1853,7 +1855,7 @@ class EvalAotUntypedStaticMethodCallbackBox {
         return $left + $right;
     }
 }
-echo eval('return call_user_func(EvalAotUntypedStaticMethodCallbackBox::add(...), 1, 2);');
+echo eval('return call_user_func_array(EvalAotUntypedStaticMethodCallbackBox::add(...), [1, 2]);');
 "#;
     let (user_asm, _runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);

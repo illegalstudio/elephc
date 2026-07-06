@@ -3385,6 +3385,8 @@ Tranche completata:
 - la classificazione generale di un first-class callable come valore resta
   conservativa: il supporto vale solo quando il callable e' usato come callback
   statico immediato;
+- la copertura verifica sia `call_user_func()` sia `call_user_func_array()` con
+  first-class callable a funzione utente e metodo statico;
 - i predicate esistenti continuano a escludere metodi non tipizzati, receiver
   non nominali e signature fuori subset.
 
