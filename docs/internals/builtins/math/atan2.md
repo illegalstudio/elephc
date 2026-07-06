@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/atan2.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/atan2.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/libm.rs`:35](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/libm.rs#L35) (`lower_atan2`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/libm.rs`:35](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/libm.rs#L35) (`lower_atan2`)
 - **Function symbol**: `lower_atan2()`
 
 

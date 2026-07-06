@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/htmlentities.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/htmlentities.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
 - **Function symbol**: `lower_unary_string_runtime()`
 
 

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/iterator_to_array.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/iterator_to_array.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:266](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L266) (`lower_iterator_to_array`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/spl.rs`:266](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/spl.rs#L266) (`lower_iterator_to_array`)
 - **Function symbol**: `lower_iterator_to_array()`
 
 

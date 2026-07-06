@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/ctype_digit.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ctype_digit.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/ctype.rs`:25](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/ctype.rs#L25) (`lower_ctype_digit`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/ctype.rs`:25](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/ctype.rs#L25) (`lower_ctype_digit`)
 - **Function symbol**: `lower_ctype_digit()`
 
 

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/sqrt.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/sqrt.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math.rs`:97](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math.rs#L97) (`lower_sqrt`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math.rs`:97](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math.rs#L97) (`lower_sqrt`)
 - **Function symbol**: `lower_sqrt()`
 
 

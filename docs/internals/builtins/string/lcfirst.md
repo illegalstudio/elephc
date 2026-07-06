@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/lcfirst.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/lcfirst.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:104](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L104) (`lower_lcfirst`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:104](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L104) (`lower_lcfirst`)
 - **Function symbol**: `lower_lcfirst()`
 
 

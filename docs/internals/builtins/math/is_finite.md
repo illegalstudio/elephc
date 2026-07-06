@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_finite.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_finite.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math.rs`:169](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math.rs#L169) (`lower_is_finite`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math.rs`:169](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math.rs#L169) (`lower_is_finite`)
 - **Function symbol**: `lower_is_finite()`
 
 

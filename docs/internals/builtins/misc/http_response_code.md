@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/http_response_code.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/http_response_code.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:264](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L264) (`lower_http_response_code`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:264](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L264) (`lower_http_response_code`)
 - **Function symbol**: `lower_http_response_code()`
 
 

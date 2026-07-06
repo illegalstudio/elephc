@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fseek.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fseek.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3172](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3172) (`lower_fseek`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3172](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3172) (`lower_fseek`)
 - **Function symbol**: `lower_fseek()`
 
 

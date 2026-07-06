@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/ctype_space.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ctype_space.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/ctype.rs`:35](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/ctype.rs#L35) (`lower_ctype_space`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/ctype.rs`:35](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/ctype.rs#L35) (`lower_ctype_space`)
 - **Function symbol**: `lower_ctype_space()`
 
 

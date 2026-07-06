@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/class_attribute_args.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/class_attribute_args.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/attributes.rs`:52](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/attributes.rs#L52) (`lower_class_attribute_args`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/attributes.rs`:52](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/attributes.rs#L52) (`lower_class_attribute_args`)
 - **Function symbol**: `lower_class_attribute_args()`
 
 

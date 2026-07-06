@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/readline.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/readline.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:310](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L310) (`lower_readline`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:310](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L310) (`lower_readline`)
 - **Function symbol**: `lower_readline()`
 
 

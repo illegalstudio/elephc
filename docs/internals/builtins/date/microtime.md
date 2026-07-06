@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/microtime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/microtime.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:111](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L111) (`lower_microtime`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:111](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L111) (`lower_microtime`)
 - **Function symbol**: `lower_microtime()`
 
 

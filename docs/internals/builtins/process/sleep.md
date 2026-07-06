@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/sleep.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/sleep.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:473](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L473) (`lower_sleep`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:473](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L473) (`lower_sleep`)
 - **Function symbol**: `lower_sleep()`
 
 

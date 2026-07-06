@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/class_implements.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/class_implements.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/class_relations.rs`:32](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/class_relations.rs#L32) (`lower_class_relation`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/class_relations.rs`:32](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/class_relations.rs#L32) (`lower_class_relation`)
 - **Function symbol**: `lower_class_relation()`
 
 

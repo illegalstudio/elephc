@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/pi.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/pi.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math.rs`:240](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math.rs#L240) (`lower_pi`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math.rs`:240](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math.rs#L240) (`lower_pi`)
 - **Function symbol**: `lower_pi()`
 
 

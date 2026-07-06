@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/hash_copy.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_copy.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:333](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L333) (`lower_hash_copy`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:333](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L333) (`lower_hash_copy`)
 - **Function symbol**: `lower_hash_copy()`
 
 

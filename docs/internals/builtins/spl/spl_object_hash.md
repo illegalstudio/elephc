@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/spl_object_hash.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_object_hash.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:226](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L226) (`lower_spl_object_hash`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/spl.rs`:226](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/spl.rs#L226) (`lower_spl_object_hash`)
 - **Function symbol**: `lower_spl_object_hash()`
 
 

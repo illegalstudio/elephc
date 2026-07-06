@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/call_user_func_array.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/call_user_func_array.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:38](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L38) (`lower_call_user_func_builtin_escape`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:38](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L38) (`lower_call_user_func_builtin_escape`)
 - **Function symbol**: `lower_call_user_func_builtin_escape()`
 
 

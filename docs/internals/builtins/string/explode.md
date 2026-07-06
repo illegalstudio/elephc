@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/explode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/explode.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:151](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L151) (`lower_explode`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:151](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L151) (`lower_explode`)
 - **Function symbol**: `lower_explode()`
 
 

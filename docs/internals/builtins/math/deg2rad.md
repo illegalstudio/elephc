@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/deg2rad.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/deg2rad.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/libm.rs`:75](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/libm.rs#L75) (`lower_deg2rad`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/libm.rs`:75](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/libm.rs#L75) (`lower_deg2rad`)
 - **Function symbol**: `lower_deg2rad()`
 
 

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/var_dump.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/var_dump.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/debug.rs`:35](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/debug.rs#L35) (`lower_var_dump`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/debug.rs`:35](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/debug.rs#L35) (`lower_var_dump`)
 - **Function symbol**: `lower_var_dump()`
 
 

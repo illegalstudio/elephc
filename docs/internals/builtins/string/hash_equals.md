@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/hash_equals.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_equals.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:247](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L247) (`lower_hash_equals`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:247](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L247) (`lower_hash_equals`)
 - **Function symbol**: `lower_hash_equals()`
 
 
