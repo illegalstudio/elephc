@@ -460,6 +460,7 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
         }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "d0")?;
+            emit_float_key_deprecation_check_aarch64(ctx);
             ctx.emitter.instruction("fcvtzs x1, d0");                           // PHP casts float array keys to integer keys
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
             Ok(())
@@ -496,6 +497,7 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
         }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "xmm0")?;
+            emit_float_key_deprecation_check_x86_64(ctx);
             ctx.emitter.instruction("cvttsd2si rsi, xmm0");                     // PHP casts float array keys to integer keys
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
             Ok(())
@@ -514,6 +516,46 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
             other
         ))),
     }
+}
+
+/// Emits the fractional float check and deprecation warning for AArch64 float keys.
+///
+/// Converts the float in `d0` to int and back, comparing for equality; if they
+/// differ (fractional part lost), calls `__rt_warn_float_to_int_key` with the
+/// original float. `d0` is saved/restored across the call so the caller can
+/// still truncate it.
+fn emit_float_key_deprecation_check_aarch64(ctx: &mut FunctionContext<'_>) {
+    let skip = ctx.next_label("float_key_no_deprecation");
+    // d0 holds the float key; save it across the truncation test and warning call.
+    ctx.emitter.instruction("str d0, [sp, #-16]!");                             // spill the float key so it survives the warning call
+    ctx.emitter.instruction("fcvtzs x9, d0");                                   // truncate the float key to an integer for the whole-number check
+    ctx.emitter.instruction("scvtf d1, x9");                                    // convert the truncated integer back to a float for comparison
+    ctx.emitter.instruction("fcmp d0, d1");                                     // compare the original float with the round-tripped value
+    ctx.emitter.instruction(&format!("b.eq {}", skip));                         // skip the deprecation when the float is a whole number
+    abi::emit_call_label(ctx.emitter, "__rt_warn_float_to_int_key");              // emit the PHP deprecation for the fractional float key
+    ctx.emitter.label(&skip);
+    ctx.emitter.instruction("ldr d0, [sp], #16");                               // restore the float key for the caller's truncation
+}
+
+/// Emits the fractional float check and deprecation warning for x86_64 float keys.
+///
+/// Converts the float in `xmm0` to int and back, comparing for equality; if they
+/// differ (fractional part lost), calls `__rt_warn_float_to_int_key` with the
+/// original float. `xmm0` is saved/restored across the call so the caller can
+/// still truncate it.
+fn emit_float_key_deprecation_check_x86_64(ctx: &mut FunctionContext<'_>) {
+    let skip = ctx.next_label("float_key_no_deprecation");
+    // xmm0 holds the float key; save it across the truncation test and warning call.
+    ctx.emitter.instruction("sub rsp, 16");                                     // reserve aligned scratch space for the float key
+    ctx.emitter.instruction("movsd QWORD PTR [rsp], xmm0");                     // spill the float key so it survives the warning call
+    ctx.emitter.instruction("cvttsd2si rax, xmm0");                             // truncate the float key to an integer for the whole-number check
+    ctx.emitter.instruction("cvtsi2sd xmm1, rax");                              // convert the truncated integer back to a float for comparison
+    ctx.emitter.instruction("ucomisd xmm0, xmm1");                              // compare the original float with the round-tripped value
+    ctx.emitter.instruction(&format!("je {}", skip));                           // skip the deprecation when the float is a whole number
+    abi::emit_call_label(ctx.emitter, "__rt_warn_float_to_int_key");              // emit the PHP deprecation for the fractional float key
+    ctx.emitter.label(&skip);
+    ctx.emitter.instruction("movsd xmm0, QWORD PTR [rsp]");                     // restore the float key for the caller's truncation
+    ctx.emitter.instruction("add rsp, 16");                                     // release the scratch space
 }
 
 /// Materializes a boxed Mixed key as the AArch64 hash key pair `x1`/`x2`.

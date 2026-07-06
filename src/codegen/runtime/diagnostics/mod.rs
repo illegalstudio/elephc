@@ -8,6 +8,9 @@
 //! Key details:
 //! - Suppression depth lives in _rt_diag_suppression and warning output must follow each target syscall ABI.
 
+mod float_to_int_key;
+mod string_offset;
+
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::abi;
@@ -105,4 +108,23 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("syscall");                                             // emit the runtime warning diagnostic to stderr
     emitter.label("__rt_diag_warning_done_linux_x86_64");
     emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
+}
+
+/// Emits the `__rt_warn_string_offset` runtime helper for the active target.
+///
+/// Dispatches to the x86_64 variant when targeting Linux x86_64; otherwise
+/// emits the ARM64 helper. The helper formats a PHP "Uninitialized string
+/// offset" warning carrying the runtime offset value, honoring `@` suppression.
+pub(crate) fn emit_string_offset_warning(emitter: &mut Emitter) {
+    string_offset::emit_string_offset_warning(emitter);
+}
+
+/// Emits the `__rt_warn_float_to_int_key` runtime helper for the active target.
+///
+/// Dispatches to the x86_64 variant when targeting Linux x86_64; otherwise
+/// emits the ARM64 helper. The helper formats a PHP "Implicit conversion from
+/// float … to int loses precision" deprecation carrying the runtime float
+/// value, honoring `@` suppression.
+pub(crate) fn emit_float_to_int_key_deprecation(emitter: &mut Emitter) {
+    float_to_int_key::emit_float_to_int_key_deprecation(emitter);
 }

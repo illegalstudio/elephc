@@ -15,3 +15,4 @@ mod callbacks;
 mod foreach_key_write;
 mod list_and_keys;
 mod assoc_set_ops;
+mod float_key_deprecation;

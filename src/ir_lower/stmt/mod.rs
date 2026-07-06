@@ -1580,12 +1580,73 @@ fn lower_try_finally_without_catches(
     try_body: &[Stmt],
     finally_body: &[Stmt],
 ) {
+    if ctx.is_generator_body {
+        lower_try_finally_generator(ctx, try_body, finally_body);
+        return;
+    }
     let depth = push_finally_frame(ctx, finally_body, true, None);
     lower_block(ctx, try_body);
     pop_finally_frame_if_active(ctx, depth);
     if !ctx.builder.insertion_block_is_terminated() {
         lower_block(ctx, finally_body);
     }
+}
+
+/// Lowers `try`/`finally` (no catch) inside a generator coroutine body.
+///
+/// `Generator::throw()` parks a Throwable and resumes the generator's `yield`
+/// via `__rt_fiber_suspend`, which re-raises through `__rt_throw_current` — a
+/// longjmp that unwinds to the nearest `try_push_handler` site. A plain
+/// try/finally without catch never pushes a handler, so the longjmp would skip
+/// the finally body and unwind straight to the caller's catch (issue #355).
+///
+/// The fix mirrors the #329 catch-in-generator path: push a handler around the
+/// try body, and on longjmp into that handler run the finally once then re-raise
+/// the captured exception. Normal exits still run the finally via the static
+/// finally-frame duplication, exactly like the non-generator lowering above.
+fn lower_try_finally_generator(
+    ctx: &mut LoweringContext<'_, '_>,
+    try_body: &[Stmt],
+    finally_body: &[Stmt],
+) {
+    let span = Span::dummy();
+    let handler_block = ctx.builder.create_named_block("try.gen_finally_handler", Vec::new());
+    let after_block = ctx.builder.create_named_block("try.after", Vec::new());
+    let handler_token = handler_block.as_raw() as i64;
+
+    ctx.clear_static_callable_locals();
+    ctx.emit_void(
+        Op::TryPushHandler,
+        Vec::new(),
+        Some(Immediate::I64(handler_token)),
+        Op::TryPushHandler.default_effects(),
+        Some(span),
+    );
+    // The finally frame is marked run-on-throw=false so a re-throw from inside
+    // the synthetic handler cannot re-enter the same finally body (that would
+    // double-run it). The handler emits its own copy of the finally body.
+    let depth = push_finally_frame(ctx, finally_body, false, Some((handler_token, span)));
+    lower_block(ctx, try_body);
+    pop_finally_frame_if_active(ctx, depth);
+    if !ctx.builder.insertion_block_is_terminated() {
+        emit_try_pop_handler(ctx, handler_token, span);
+        lower_block(ctx, finally_body);
+        branch_to(ctx, after_block);
+    }
+
+    // Longjmp landing pad: `__rt_throw_current` resumes here with the active
+    // exception bound to `_exc_value`. Run the finally body exactly once, then
+    // re-raise so the exception keeps unwinding to the caller's catch.
+    ctx.builder.position_at_end(handler_block);
+    emit_try_pop_handler(ctx, handler_token, span);
+    let exception = lower_current_exception(ctx, span);
+    lower_block(ctx, finally_body);
+    if !ctx.builder.insertion_block_is_terminated() {
+        ctx.builder.terminate(Terminator::Throw { value: exception.value });
+    }
+
+    ctx.builder.position_at_end(after_block);
+    ctx.clear_static_callable_locals();
 }
 
 /// Lowers a `try`/`catch`/`finally` statement while preserving catch-before-finally order.

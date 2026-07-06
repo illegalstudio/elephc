@@ -243,6 +243,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _diag_undefined_array_key_prefix\n_diag_undefined_array_key_prefix:\n    .ascii \"Warning: Undefined array key \"\n");
     out.push_str(".globl _diag_undefined_array_key_quote\n_diag_undefined_array_key_quote:\n    .ascii \"\\\"\"\n");
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _diag_string_offset_prefix\n_diag_string_offset_prefix:\n    .ascii \"Warning: Uninitialized string offset \"\n");
+    out.push_str(".globl _diag_string_offset_nl\n_diag_string_offset_nl:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _diag_float_key_prefix\n_diag_float_key_prefix:\n    .ascii \"Deprecated: Implicit conversion from float \"\n");
+    out.push_str(".globl _diag_float_key_suffix\n_diag_float_key_suffix:\n    .ascii \" to int loses precision\\n\"\n");
     out.push_str(".globl _fiber_msg_already_started\n_fiber_msg_already_started:\n    .ascii \"Cannot start a fiber that has already been started\"\n");
     out.push_str(".globl _fiber_msg_not_suspended\n_fiber_msg_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");
     out.push_str(".globl _fiber_msg_throw_not_suspended\n_fiber_msg_throw_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");

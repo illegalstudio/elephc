@@ -33,6 +33,8 @@ use crate::codegen::RuntimeFeatures;
 /// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     diagnostics::emit_diagnostics(emitter);
+    diagnostics::emit_string_offset_warning(emitter);
+    diagnostics::emit_float_to_int_key_deprecation(emitter);
 
     // String runtime functions
     strings::emit_itoa(emitter);

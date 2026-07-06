@@ -577,6 +577,7 @@ fn lower_body_into_function(
 ) -> Vec<Function> {
     let owner_name = function.name.clone();
     let function_by_ref_return = function.flags.by_ref_return;
+    let is_generator_body = function.flags.is_generator;
     let by_ref_params = function
         .params
         .iter()
@@ -609,6 +610,7 @@ fn lower_body_into_function(
         all_global_var_names,
     );
     ctx.by_ref_return = function_by_ref_return;
+    ctx.is_generator_body = is_generator_body;
     for (index, (name, php_type)) in params.iter().enumerate() {
         ctx.declare_local(name, php_type.clone());
         ctx.mark_local_initialized(name);

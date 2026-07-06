@@ -179,6 +179,7 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
         Arch::AArch64 => {
             ctx.load_string_value_to_regs(string, "x1", "x2")?;
             require_integer_like(ctx.load_value_to_reg(index, "x0")?, inst)?;
+            ctx.emitter.instruction("mov x9, x0");                              // save the original offset so the oob warning reports the user-visible value
             ctx.emitter.instruction("cmp x0, #0");                              // check whether the requested string offset is negative
             ctx.emitter.instruction(&format!("b.ge {}", non_negative));         // keep non-negative string offsets unchanged
             ctx.emitter.instruction("add x0, x2, x0");                          // convert negative string offsets to length plus offset
@@ -191,12 +192,16 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.emitter.instruction("mov x2, #1");                              // in-bounds string indexing returns one byte
             ctx.emitter.instruction(&format!("b {}", end));                     // skip the out-of-bounds empty-string result
             ctx.emitter.label(&oob);
+            ctx.emitter.instruction("mov x0, x9");                              // restore the original offset for the uninitialized-string-offset warning
+            abi::emit_call_label(ctx.emitter, "__rt_warn_string_offset");        // emit the PHP warning for the out-of-bounds string offset
+            ctx.emitter.instruction("mov x1, #0");                              // materialize a null pointer for the empty string result
             ctx.emitter.instruction("mov x2, #0");                              // out-of-bounds string indexing returns an empty string
             ctx.emitter.label(&end);
         }
         Arch::X86_64 => {
             ctx.load_string_value_to_regs(string, "r8", "r9")?;
             require_integer_like(ctx.load_value_to_reg(index, "rax")?, inst)?;
+            ctx.emitter.instruction("mov r10, rax");                            // save the original offset so the oob warning reports the user-visible value
             ctx.emitter.instruction("cmp rax, 0");                              // check whether the requested string offset is negative
             ctx.emitter.instruction(&format!("jge {}", non_negative));          // keep non-negative string offsets unchanged
             ctx.emitter.instruction("add rax, r9");                             // convert negative string offsets to length plus offset
@@ -210,6 +215,9 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.emitter.instruction("mov rdx, 1");                              // in-bounds string indexing returns one byte
             ctx.emitter.instruction(&format!("jmp {}", end));                   // skip the out-of-bounds empty-string result
             ctx.emitter.label(&oob);
+            ctx.emitter.instruction("mov rax, r10");                            // restore the original offset for the uninitialized-string-offset warning
+            abi::emit_call_label(ctx.emitter, "__rt_warn_string_offset");        // emit the PHP warning for the out-of-bounds string offset
+            ctx.emitter.instruction("xor r8, r8");                              // materialize a null pointer for the empty string result
             ctx.emitter.instruction("mov rax, r8");                             // preserve a valid source pointer for the empty string result
             ctx.emitter.instruction("mov rdx, 0");                              // out-of-bounds string indexing returns an empty string
             ctx.emitter.label(&end);
