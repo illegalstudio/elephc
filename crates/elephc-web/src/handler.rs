@@ -10,9 +10,13 @@
 //!   `elephc_web_worker_register` after registering its request handler.
 //!
 //! Key details:
-//! - All three statics are process-local: one worker = one process = one thread,
-//!   so plain `static mut` with `addr_of_mut!` is race-free (no `&mut` on a
-//!   `static mut`, per the `static_mut_refs` hard-error lint).
+//! - All slots are process-local and written once per worker before serving
+//!   begins (from `spawn_worker` / the PHP boot, on the main thread). Plain
+//!   `static mut` with `addr_of_mut!` is race-free (no `&mut` on a `static mut`,
+//!   per the `static_mut_refs` hard-error lint): without `--handler-offload` one
+//!   worker = one thread; with `--handler-offload` these slots are written before
+//!   the `php-handler` thread is spawned (whose `std::thread::spawn` happens-before
+//!   publishes them), and the handler thread is the only reader thereafter.
 //! - `elephc_web_worker_register` is `-> !`: it transfers control to the Rust
 //!   worker loop and never returns to PHP.
 

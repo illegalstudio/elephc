@@ -10,12 +10,18 @@
 //! - Tests: directly through the `rlib` crate type.
 //!
 //! Key details:
-//! - One process per prefork worker means no shared-thread state: per-worker
-//!   request/response data lives in plain process statics, not behind a mutex.
+//! - One process per prefork worker: per-worker request/response data lives in
+//!   plain process statics, not behind a mutex. Without `--handler-offload` the
+//!   worker is single-threaded (I/O and PHP share one thread). With
+//!   `--handler-offload` PHP runs on a dedicated `php-handler` thread and those
+//!   statics become affine to it; the I/O thread only moves owned `Send` values
+//!   across the channel boundary (see `mod offload`), so they are still only ever
+//!   touched by one thread.
 
 mod dispatch;
 mod handler;
 mod multipart;
+mod offload;
 mod request_state;
 mod server;
 mod tls;

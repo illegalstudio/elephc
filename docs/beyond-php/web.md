@@ -35,6 +35,8 @@ The produced binary accepts these arguments at runtime:
 | `--workers N` | No | CPU count | Number of worker processes to prefork. Minimum 1. |
 | `--dispatch MODE` | No | `kernel` | Connection dispatch backend. `kernel` = per-worker `SO_REUSEPORT` listeners (the kernel picks a worker at connect time). `master` = the master accepts every connection and hands it to the first idle worker — a real shared queue that removes head-of-line blocking between workers (see [Connection dispatch](#connection-dispatch-kernel-vs-master)). An unknown value is a usage error (exit 2). |
 | `--dispatch-backlog N` | No | `1024` | **Master mode only.** Max accepted connections the master queues while all workers are busy; once full, the master stops accepting (kernel SYN backpressure) instead of rejecting. Ignored (with a warning) without `--dispatch master`. |
+| `--handler-offload` | No | off | Run the PHP handler on a dedicated `php-handler` thread fed by a bounded job queue, so request/response I/O of other connections overlaps handler execution (handlers still never overlap — one consumer thread; see [Handler offload](#handler-offload)). Opt-in; default off keeps the synchronous inline handler path unchanged. Same in all three web modes. |
+| `--max-pending N` | No | `16` | **With `--handler-offload`:** max parsed requests queued for the handler thread before new requests get `503 Service Unavailable` + `Retry-After: 1` (built on the I/O thread, no PHP). Bounds queued-body memory to `N × --max-body-size`; `0` is rejected (exit 2) as an unbounded queue would let a slow handler exhaust memory. Ignored (with a warning) without `--handler-offload`. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes; `0` means unlimited. A request whose body exceeds the cap gets `413 Payload Too Large` and the PHP handler never runs. |
 | `--max-requests N` | No | `0` (never) | Recycle each **worker process** after serving N requests (the master respawns it), bounding memory growth in long-running servers. Do not confuse with `--max-requests-per-connection`. |
 | `--max-requests-per-connection N` | No | `0` (opt-in) | Close a keep-alive **connection** after N responses by sending `Connection: close`, so the client reconnects and `SO_REUSEPORT` re-picks a worker (see [Keep-alive and load distribution](#keep-alive-and-load-distribution-across-workers)); `0` = unlimited (off by default; no behavior change from before this flag existed). Same default in all three web modes. |
@@ -521,6 +523,52 @@ values — and defaults to `kernel`.
   supervisor. Worker crashes are handled identically to kernel mode: the master
   reaps and respawns them (with a fresh socketpair), and the same
   `--max-execution-time` / `--max-requests` recycling applies.
+
+### Handler offload
+
+`--handler-offload` (opt-in, default off, same in all three web modes) moves the
+blocking PHP `handler()` off the I/O thread without letting handlers overlap.
+
+- **Without `--handler-offload` (default)** — each worker is single-threaded: the
+  tokio I/O loop calls the blocking PHP `handler()` inline, so PHP never runs on
+  two threads in one worker. Concurrency comes from the N forked worker
+  processes; a slow handler still occupies its worker for its duration.
+- **With `--handler-offload`** — the blocking `handler()` runs on ONE dedicated
+  `php-handler` OS thread per worker, fed a bounded mpsc job queue by the I/O
+  thread. The I/O thread parses each request, hands it off as owned values, and
+  awaits the response, so the I/O of OTHER connections (reads, writes, TLS,
+  gzip) overlaps the running handler. Handlers still NEVER overlap — there is a
+  single consumer thread — so this is the N=1 case of the future ZTS
+  (multi-thread handler) work; it overlaps I/O with PHP, not PHP with PHP.
+- **Handler-thread affinity** — all PHP-visible state (request superglobals,
+  response buffers, the output-capture flag, temp-file registry, GC) lives on
+  the `php-handler` thread. The I/O thread only moves owned `Send` values
+  across the channel boundary; it touches no PHP runtime state, so no mutex or
+  `unsafe impl Send` is needed.
+- **Overload** — `--max-pending N` (default `16`) bounds the queue. When the
+  queue is full the I/O thread returns `503 Service Unavailable` +
+  `Retry-After: 1` immediately (no PHP, no accept-pausing). Queued-body memory
+  is bounded by `N × --max-body-size` (each queued job pins up to one body), so
+  pick `N` with that product in mind; `0` is rejected (exit 2) as an unbounded
+  queue would let a slow handler exhaust memory.
+- **`exit`/`die` is unchanged** — the bailout `setjmp` anchor lives in the
+  compiled handler prologue, so moving the `handler()` call to the handler
+  thread moves the anchor with it and the `longjmp` stays same-thread /
+  same-stack. No compiler change; the worker survives a mid-request `exit` and
+  serves the next request.
+- **`--max-execution-time`** — the SIGALRM watchdog is armed/disarmed on the
+  handler thread around `handler()`. SIGALRM is blocked on the I/O thread and
+  unblocked on the handler thread, so a runaway handler's alarm is delivered
+  to the handler thread deterministically and the worker is recycled (the
+  master respawns it).
+- **Stack** — the handler thread has an explicit 8 MiB stack (matching the
+  main thread), so PHP recursion depth does not shrink versus the inline path.
+- **When to use** — offload helps when handlers do blocking work (DB, upstream
+  HTTP, sleeps) and you want slow handlers to stop starving other connections'
+  I/O. It does NOT help CPU-bound handlers (handlers never overlap, so a
+  CPU-bound handler still occupies the worker), and it adds one thread of
+  memory per worker. Default off; enable per worker when the I/O-overlap win
+  is worth it.
 
 ## Robustness
 

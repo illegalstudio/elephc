@@ -47,6 +47,11 @@ Options:
   --max-execution-time N Kill (and respawn) a worker whose handler runs > N seconds; 0 = no limit
   --worker-gc-interval N Run the cycle collector every N requests; 0 = never, 1 = every request (worker mode default: 1)
   --gzip                 Compress responses when the client sends Accept-Encoding: gzip
+  --handler-offload      Run the PHP handler on a dedicated thread so request/response
+                         I/O overlaps handler execution (handlers still never overlap)
+  --max-pending N        With --handler-offload: max parsed requests queued for the
+                         handler before new requests get 503; queued-body memory is
+                         bounded by N x --max-body-size. 0 is rejected (default: 16)
   --tls-cert FILE        PEM certificate chain; enables TLS on --listen (requires --tls-key)
   --tls-key FILE         PEM private key matching --tls-cert (PKCS#8, PKCS#1 or SEC1)
   --help                 Show this help and exit
@@ -121,6 +126,12 @@ fn reset_signal_handlers_to_default() {
 /// Default request body cap in bytes (8 MiB), matching PHP's `post_max_size`.
 const DEFAULT_MAX_BODY: usize = 8 * 1024 * 1024;
 
+/// Default `--max-pending` queue depth (parsed requests waiting for the handler
+/// thread) when `--handler-offload` is on. Kept low (16, not the spec's 64)
+/// because each queued job pins up to `--max-body-size` of body, so the worst-case
+/// queued-body memory is `16 × --max-body-size` per worker.
+const DEFAULT_MAX_PENDING: usize = 16;
+
 /// Parsed server configuration from the binary's own argv.
 struct ServerArgs {
     listen: String,
@@ -159,6 +170,14 @@ struct ServerArgs {
     /// Master-mode internal fd-queue cap (`--dispatch-backlog`, default 1024).
     /// Ignored in kernel mode.
     dispatch_backlog: usize,
+    /// Run the PHP handler on a dedicated `php-handler` thread fed a bounded job
+    /// queue (`--handler-offload`), so request/response I/O overlaps handler
+    /// execution; default `false` (synchronous inline handler). All three web modes.
+    handler_offload: bool,
+    /// Max parsed requests queued for the handler thread before new requests get
+    /// `503` (`--max-pending`, default 16). Bounds queued-body memory to
+    /// `max_pending × --max-body-size`. Only meaningful with `--handler-offload`.
+    max_pending: usize,
 }
 
 impl ServerArgs {
@@ -175,6 +194,8 @@ impl ServerArgs {
             worker_gc_interval: self.worker_gc_interval,
             max_conn_requests: self.max_conn_requests,
             idle_timeout_secs: self.idle_timeout_secs,
+            handler_offload: self.handler_offload,
+            max_pending: self.max_pending,
         }
     }
 
@@ -245,6 +266,9 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
     let mut dispatch_mode = DispatchMode::Kernel;
     let mut dispatch_backlog: usize = 1024;
     let mut dispatch_backlog_set = false;
+    let mut handler_offload = false;
+    let mut max_pending: usize = DEFAULT_MAX_PENDING;
+    let mut max_pending_set = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -291,6 +315,14 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             }
             "--access-log" => { access_log = true; }
             "--gzip" => { gzip = true; }
+            "--handler-offload" => { handler_offload = true; }
+            "--max-pending" => {
+                i += 1;
+                if let Some(v) = args.get(i).and_then(|v| v.parse().ok()) {
+                    max_pending = v;
+                    max_pending_set = true;
+                }
+            }
             "--tls-cert" => { i += 1; tls_cert = args.get(i).cloned(); }
             "--tls-key" => { i += 1; tls_key = args.get(i).cloned(); }
             _ => {}
@@ -310,6 +342,20 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
         eprintln!(
             "warning: --dispatch-backlog is ignored without --dispatch master"
         );
+    }
+    // `--max-pending 0` is rejected: an unbounded queue turns a slow handler into
+    // unbounded memory (each queued job pins up to --max-body-size of body).
+    if max_pending_set && max_pending == 0 {
+        eprintln!(
+            "error: --max-pending must be greater than 0 (an unbounded queue lets a \
+             slow handler exhaust memory; try --help)"
+        );
+        return ParsedArgs::Exit(2);
+    }
+    // `--max-pending` only means anything with `--handler-offload`; warn (do not
+    // error) when it is set without it so a stray flag is not silently misleading.
+    if max_pending_set && !handler_offload {
+        eprintln!("warning: --max-pending is ignored without --handler-offload");
     }
     // Worker-mode defaults: recycle after 1000 requests and collect cycles
     // every request, unless the operator explicitly overrode either flag.
@@ -333,6 +379,8 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             tls_key,
             dispatch_mode,
             dispatch_backlog: dispatch_backlog.max(1),
+            handler_offload,
+            max_pending: max_pending.max(1),
         }),
         None => {
             eprintln!("error: --web binary requires --listen host:port (try --help)");
@@ -844,4 +892,94 @@ pub extern "C" fn elephc_web_run_script(
         if args.workers == 1 { "" } else { "s" }
     );
     supervise(&args.listen, kind, cfg, children)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+
+    // Purpose:
+    // Unit tests for runtime-arg parsing of the offload flags
+    // (`--handler-offload`, `--max-pending`) and their validation.
+    //
+    // Called from:
+    // - `cargo test` through Rust's test harness.
+    //
+    // Key details:
+    // - `parse_args` takes a C `argv`; each test builds one from owned `CString`s
+    //   kept alive for the call. `--listen` is always supplied so a missing-listen
+    //   exit-2 never masks the assertion under test.
+
+    /// Builds a C `argv` from `["prog", args...]` and runs `parse_args` in classic
+    /// mode, keeping the backing `CString`s alive for the duration of the call.
+    fn parse(args: &[&str]) -> ParsedArgs {
+        let owned: Vec<CString> = std::iter::once("prog")
+            .chain(args.iter().copied())
+            .map(|s| CString::new(s).unwrap())
+            .collect();
+        let ptrs: Vec<*const c_char> = owned.iter().map(|c| c.as_ptr()).collect();
+        parse_args(ptrs.len() as i32, ptrs.as_ptr(), false)
+    }
+
+    /// Verifies offload defaults: off, with the default 16-deep queue.
+    #[test]
+    fn offload_defaults_off_pending_16() {
+        match parse(&["--listen", "127.0.0.1:0"]) {
+            ParsedArgs::Run(a) => {
+                assert!(!a.handler_offload, "offload must default off");
+                assert_eq!(a.max_pending, 16, "default queue depth must be 16");
+            }
+            ParsedArgs::Exit(c) => panic!("expected Run, got Exit({c})"),
+        }
+    }
+
+    /// Verifies `--handler-offload` enables offload and `--max-pending N` threads
+    /// the queue depth through to the config.
+    #[test]
+    fn offload_flag_and_max_pending_parse() {
+        match parse(&[
+            "--listen",
+            "127.0.0.1:0",
+            "--handler-offload",
+            "--max-pending",
+            "32",
+        ]) {
+            ParsedArgs::Run(a) => {
+                assert!(a.handler_offload, "--handler-offload must enable offload");
+                assert_eq!(a.max_pending, 32, "--max-pending must be applied");
+            }
+            ParsedArgs::Exit(c) => panic!("expected Run, got Exit({c})"),
+        }
+    }
+
+    /// Verifies `--max-pending 0` is a usage error (exit 2): an unbounded queue is
+    /// an OOM vector, so it is rejected rather than silently clamped.
+    #[test]
+    fn max_pending_zero_is_exit_2() {
+        match parse(&[
+            "--listen",
+            "127.0.0.1:0",
+            "--handler-offload",
+            "--max-pending",
+            "0",
+        ]) {
+            ParsedArgs::Exit(2) => {}
+            ParsedArgs::Exit(c) => panic!("expected Exit(2) for --max-pending 0, got Exit({c})"),
+            ParsedArgs::Run(_) => panic!("expected Exit(2) for --max-pending 0, got Run"),
+        }
+    }
+
+    /// Verifies `--max-pending` without `--handler-offload` still yields a runnable
+    /// config (warning only, not an error), with the value applied.
+    #[test]
+    fn max_pending_without_offload_warns_but_runs() {
+        match parse(&["--listen", "127.0.0.1:0", "--max-pending", "8"]) {
+            ParsedArgs::Run(a) => {
+                assert!(!a.handler_offload, "offload stays off");
+                assert_eq!(a.max_pending, 8, "value still applied");
+            }
+            ParsedArgs::Exit(c) => panic!("expected Run, got Exit({c})"),
+        }
+    }
 }

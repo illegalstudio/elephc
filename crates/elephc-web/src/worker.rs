@@ -6,8 +6,17 @@
 //! - `crate::server::elephc_web_run` in each forked child process.
 //!
 //! Key details:
-//! - current-thread runtime + a blocking handler() call means PHP never runs on
-//!   two threads in one worker; concurrency comes from the N forked workers.
+//! - Without `--handler-offload`: current-thread runtime + a blocking handler()
+//!   call means PHP never runs on two threads in one worker; concurrency comes
+//!   from the N forked workers.
+//! - With `--handler-offload`: the blocking handler() runs on ONE dedicated
+//!   `php-handler` thread (see `crate::offload`), fed a bounded mpsc job queue by
+//!   this I/O thread, so request/response I/O of other connections overlaps PHP.
+//!   PHP-visible state stays handler-thread-affine — this I/O thread references no
+//!   `request_state::` mutator and no `__rt_*` extern; it only moves owned
+//!   `RequestJob`/`ResponseParts` across channels. Handlers still never overlap
+//!   (single consumer thread). The exit/die bailout rides handler() to that
+//!   thread unchanged (its setjmp anchor lives in the compiled prologue).
 //! - SO_REUSEPORT lets every worker bind the same port; the kernel balances.
 
 use std::cell::Cell;
@@ -30,6 +39,7 @@ use tokio::io::unix::AsyncFd;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 
+use crate::offload::{self, RequestJob};
 use crate::request_state;
 
 /// Pending-connection backlog for each worker's listening socket.
@@ -132,6 +142,16 @@ pub struct WorkerConfig {
     /// than this many seconds so the client reconnects; `0` = never, default `0`
     /// (opt-in; off preserves the original behavior).
     pub idle_timeout_secs: u32,
+    /// Run the PHP handler on a dedicated `php-handler` thread fed a bounded job
+    /// queue, so I/O of other connections overlaps handler execution; `false`
+    /// (default) keeps today's synchronous inline handler call. Opt-in
+    /// (`--handler-offload`); handlers still never overlap.
+    pub handler_offload: bool,
+    /// With `handler_offload`: max parsed requests queued for the handler thread
+    /// before new requests get `503`. Bounds queued-body memory to
+    /// `max_pending × max_body`. Default `16`; ignored when `handler_offload` is
+    /// off. Never `0` (rejected at parse time).
+    pub max_pending: usize,
 }
 
 /// Minimum response size (bytes) worth gzip-compressing; below this the framing
@@ -334,6 +354,8 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         // close predicate; only the idle timeout needs a loop-invariant local.
         max_conn_requests: _,
         idle_timeout_secs,
+        handler_offload,
+        max_pending,
     } = cfg;
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
@@ -351,6 +373,24 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
     // now so the accept loop uses `ConnSource::Master` (receive fds, do NOT bind) or
     // `ConnSource::Kernel` (bind a SO_REUSEPORT listener, exactly as before).
     let child_chan = crate::dispatch::take_child_dispatch_chan();
+    // Handler offload: spawn the dedicated `php-handler` thread + a bounded job
+    // queue when enabled, so this I/O thread never blocks in handler(). SIGALRM is
+    // blocked on THIS thread first (before the spawn, so the child inherits the
+    // block and unblocks itself at start), making the `--max-execution-time` alarm
+    // — armed on the handler thread around handler() — land on the handler thread
+    // deterministically. Each job runs the classic per-request body via
+    // `offload::run_one_job` (which also increments this module's `SERVED`). When
+    // off, `offload_tx` is `None` and the inline path below is byte-for-byte today.
+    let offload_tx = if handler_offload {
+        offload::block_sigalrm_on_io_thread();
+        let (tx, rx) = tokio::sync::mpsc::channel::<RequestJob>(max_pending);
+        offload::spawn_handler_thread(rx, move |job| {
+            offload::run_one_job(job, handler, max_exec_secs, &SERVED);
+        });
+        Some(tx)
+    } else {
+        None
+    };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -448,6 +488,10 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             let conn_served = rotate_on.then(|| Rc::new(Cell::new(0usize)));
             let last_activity = idle_on.then(|| Rc::new(Cell::new(Instant::now())));
             let watchdog_activity = last_activity.clone();
+            // Per-connection clone of the offload sender (cloning `None` is free);
+            // each request further clones it into its own `async move` so the mpsc
+            // handle is owned by the request task.
+            let conn_offload_tx = offload_tx.clone();
             // `service_fn` is FnMut — called once per request on this connection —
             // so the OUTER closure is non-async and clones the per-connection
             // `Option<Rc<..>>` handles into each returned `async move` block (cloning
@@ -456,6 +500,7 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             let service = service_fn(move |req: Request<hyper::body::Incoming>| {
                 let conn_served = conn_served.clone();
                 let last_activity = last_activity.clone();
+                let offload_tx = conn_offload_tx.clone();
                 async move {
                     // A request just arrived on this connection: stamp activity so
                     // the idle watchdog measures inactivity from now (only when the
@@ -516,10 +561,46 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                         protocol,
                         https,
                     };
-                    request_state::set_request(method, uri, path, query, headers, body, meta);
-                    let resp_body = run_handler(handler);
-                    let status = request_state::take_status();
-                    let resp_headers = request_state::take_headers();
+                    // Produce the response triple (status, headers, body) either
+                    // inline (handler on this I/O thread) or offloaded (handler on
+                    // the `php-handler` thread). The inline branch is byte-for-byte
+                    // today's path; the offload branch touches NO PHP state here —
+                    // it only moves owned values across the channels.
+                    let (status, resp_headers, resp_body) = match &offload_tx {
+                        Some(tx) => {
+                            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                            let job = RequestJob {
+                                method,
+                                uri,
+                                path,
+                                query,
+                                headers,
+                                body,
+                                meta,
+                                reply: reply_tx,
+                            };
+                            // Queue full (handler busy) → immediate 503 built here,
+                            // no PHP; also covers a closed channel (handler gone).
+                            if tx.try_send(job).is_err() {
+                                return Ok::<_, Infallible>(offload::queue_full_response());
+                            }
+                            // Await the handler thread's reply. A dropped sender
+                            // (handler-thread panic/exit race) → 500.
+                            match reply_rx.await {
+                                Ok(parts) => (parts.status, parts.headers, parts.body),
+                                Err(_) => {
+                                    return Ok::<_, Infallible>(offload::handler_gone_response());
+                                }
+                            }
+                        }
+                        None => {
+                            request_state::set_request(method, uri, path, query, headers, body, meta);
+                            let resp_body = run_handler(handler);
+                            let status = request_state::take_status();
+                            let resp_headers = request_state::take_headers();
+                            (status, resp_headers, resp_body)
+                        }
+                    };
                     // gzip the body when the client accepts it, the body is large
                     // enough to be worth it, and the handler did not already set a
                     // Content-Encoding.

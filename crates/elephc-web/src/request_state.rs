@@ -15,8 +15,14 @@
 //!   and before invoking the PHP handler.
 //!
 //! Key details:
-//! - One process per prefork worker, single-threaded: each request runs to
-//!   completion on the worker's one thread, so all process-statics are race-free.
+//! - Handler-thread-affine: without `--handler-offload` each request runs to
+//!   completion on the worker's one thread, so these statics are race-free. With
+//!   `--handler-offload` every `set_request` / `take_*` / capture / response
+//!   mutation happens on the dedicated `php-handler` thread ONLY; the I/O thread
+//!   never touches a `REQ_*` / `RESPONSE_*` static or the capture flag — it hands
+//!   parsed requests over as owned channel-moved values (`crate::offload`) and
+//!   receives owned `ResponseParts` back. Either way exactly one thread ever
+//!   accesses this state, so no mutex/`unsafe impl Send` is required.
 //! - All access to `static mut` items goes through raw pointers
 //!   (`core::ptr::addr_of_mut!` / `core::ptr::addr_of!`), never `&mut`/`&`
 //!   references, to stay clear of the `static_mut_refs` lint (a hard error under
@@ -26,6 +32,7 @@ use std::ffi::{c_char, CString};
 
 use hyper::body::Bytes;
 
+#[cfg(not(test))]
 extern "C" {
     /// Per-request output-capture flag defined in the compiled program's runtime
     /// `.comm` storage (`elephc_web_capture`). Non-zero routes the runtime's
@@ -35,6 +42,24 @@ extern "C" {
     /// `elephc_web_capture` on Linux — matching the runtime's `.comm` and load.
     static mut elephc_web_capture: u8;
 }
+
+/// Test-only stand-in for the runtime's `elephc_web_capture` `.comm` symbol, so
+/// the elephc-web rlib test binary links (and `set_capture` / `run_one_job` are
+/// reachable from tests) without the compiled program's runtime object. Never
+/// compiled into a real `--web` binary. The lower-case name is kept deliberately
+/// so `set_capture`'s `addr_of_mut!(elephc_web_capture)` resolves identically in
+/// both builds.
+#[cfg(test)]
+#[allow(non_upper_case_globals)]
+static mut elephc_web_capture: u8 = 0;
+
+/// Serializes crate-wide tests that mutate the shared per-request process statics
+/// (`REQ_*`, `RESPONSE_*`, the capture flag). Production touches these on exactly
+/// one thread (single-threaded worker, or the handler thread under offload), but
+/// the Rust harness runs tests on many threads, so `set_request` / `run_one_job`
+/// -driving tests in `request_state` and `offload` share this ONE lock.
+#[cfg(test)]
+pub(crate) static REQUEST_STATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Process-static per-worker response body. Bytes echoed by the PHP handler land
 /// here while capture is enabled; the server scaffold flushes it to the client
@@ -621,19 +646,12 @@ pub unsafe extern "C" fn elephc_web_multipart_value_len(i: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Serializes tests that mutate the shared per-request process statics
-    /// (`REQ_*`). The `static mut` request state is single-threaded per worker in
-    /// production, but the Rust test harness runs tests on multiple threads, so
-    /// two `set_request`-driving tests would otherwise race on the same globals.
-    static REQ_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// Verifies set_request round-trips through the C-ABI getters.
     #[test]
     fn request_getters_round_trip() {
         use std::ffi::CStr;
-        let _guard = REQ_TEST_LOCK.lock().unwrap();
+        let _guard = REQUEST_STATE_TEST_LOCK.lock().unwrap();
         set_request(
             "POST".into(),
             "/p?x=1".into(),
@@ -686,7 +704,7 @@ mod tests {
     #[test]
     fn set_request_overwrites_previous() {
         use std::ffi::CStr;
-        let _guard = REQ_TEST_LOCK.lock().unwrap();
+        let _guard = REQUEST_STATE_TEST_LOCK.lock().unwrap();
         set_request(
             "GET".into(),
             "/first?a=1".into(),
@@ -741,6 +759,7 @@ mod tests {
     /// Verifies the bridge response logic matches PHP header()/http_response_code().
     #[test]
     fn response_control_matches_php() {
+        let _guard = REQUEST_STATE_TEST_LOCK.lock().unwrap();
         unsafe {
             reset_response();
             assert_eq!(take_status(), 200); // default

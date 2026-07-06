@@ -12,6 +12,16 @@
 //!   before the boot runs, so the loop has its listen/max-body/etc. available.
 //!
 //! Key details:
+//! - Handler-thread affinity under `--handler-offload`: when enabled, the whole
+//!   per-request PHP body (`run_worker_handler` + `cleanup_tmp_files` +
+//!   `maybe_collect_cycles` + the `take_*` drains) runs on ONE dedicated
+//!   `php-handler` thread (see `crate::offload`), fed a bounded mpsc job queue by
+//!   the I/O thread; the I/O thread references no `request_state::` mutator and no
+//!   `__rt_*` extern. Boot still runs on the main thread (it must —
+//!   `enter_worker_loop` is reached from inside boot); the handler thread is
+//!   spawned after boot completes, so `std::thread::spawn`'s happens-before makes
+//!   the boot's heap/globals/statics visible to it. When off, the loop is
+//!   single-threaded exactly as before. Handlers never overlap either way.
 //! - The boot function (`WORKER_BOOT`) runs once, before the tokio runtime/loop
 //!   starts. It executes the top-level PHP which ends by calling
 //!   `elephc_web_worker_register` → `enter_worker_loop` (never returns).
@@ -53,6 +63,7 @@ use hyper_util::rt::TokioTimer;
 use tokio::net::TcpListener;
 
 use crate::handler;
+use crate::offload::{self, RequestJob, ResponseParts};
 use crate::request_state;
 use crate::worker::{
     drive_connection, reuseport_listener, should_close_connection, ConnSource, NextConn,
@@ -275,6 +286,8 @@ pub(crate) fn enter_worker_loop() -> ! {
         // close predicate; only the idle timeout needs a loop-invariant local.
         max_conn_requests: _,
         idle_timeout_secs,
+        handler_offload,
+        max_pending,
     } = cfg;
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
@@ -298,6 +311,23 @@ pub(crate) fn enter_worker_loop() -> ! {
     // now so the loop uses `ConnSource::Master` (receive fds, do NOT bind) or
     // `ConnSource::Kernel` (bind a SO_REUSEPORT listener, unchanged behavior).
     let child_chan = crate::dispatch::take_child_dispatch_chan();
+    // Handler offload: spawn the dedicated `php-handler` thread + bounded job queue
+    // when enabled. Boot has already completed (this loop is reached from inside
+    // register), so the spawn's happens-before publishes the boot's heap/globals to
+    // the handler thread. SIGALRM is blocked on THIS thread first so the
+    // `--max-execution-time` alarm (armed on the handler thread inside
+    // `run_worker_handler`) is delivered there deterministically. Each job runs the
+    // whole worker-mode per-request body via `run_one_worker_job`.
+    let offload_tx = if handler_offload {
+        offload::block_sigalrm_on_io_thread();
+        let (tx, rx) = tokio::sync::mpsc::channel::<RequestJob>(max_pending);
+        offload::spawn_handler_thread(rx, move |job| {
+            run_one_worker_job(job, worker_gc_interval);
+        });
+        Some(tx)
+    } else {
+        None
+    };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -380,6 +410,9 @@ pub(crate) fn enter_worker_loop() -> ! {
             let conn_served = rotate_on.then(|| Rc::new(Cell::new(0usize)));
             let last_activity = idle_on.then(|| Rc::new(Cell::new(Instant::now())));
             let watchdog_activity = last_activity.clone();
+            // Per-connection clone of the offload sender (cloning `None` is free);
+            // each request further clones it into its own `async move`.
+            let conn_offload_tx = offload_tx.clone();
             // `service_fn` is FnMut — called once per request on this connection —
             // so the OUTER closure is non-async and clones the per-connection
             // `Option<Rc<..>>` handles into each returned `async move` block (cloning
@@ -387,6 +420,7 @@ pub(crate) fn enter_worker_loop() -> ! {
             let service = service_fn(move |req: Request<hyper::body::Incoming>| {
                 let conn_served = conn_served.clone();
                 let last_activity = last_activity.clone();
+                let offload_tx = conn_offload_tx.clone();
                 async move {
                     // A request just arrived on this connection: stamp activity so
                     // the idle watchdog measures inactivity from now (only when the
@@ -442,17 +476,48 @@ pub(crate) fn enter_worker_loop() -> ! {
                         protocol,
                         https,
                     };
-                    request_state::set_request(method, uri, path, query, headers, body, meta);
-                    let resp_body = run_worker_handler();
-                    // Unlink multipart temp files the PHP prelude registered for
-                    // this request, then run the cycle collector per the
-                    // --worker-gc-interval cadence. Temp-file cleanup happens
-                    // before GC so the collector sees the freed file-scope
-                    // arrays before walking the heap.
-                    cleanup_tmp_files();
-                    maybe_collect_cycles(worker_gc_interval);
-                    let status = request_state::take_status();
-                    let resp_headers = request_state::take_headers();
+                    // Produce the response triple inline (I/O thread) or offloaded
+                    // (php-handler thread). The inline branch is byte-for-byte
+                    // today's path; the offload branch touches NO PHP state here —
+                    // the whole per-request body runs in `run_one_worker_job`.
+                    let (status, resp_headers, resp_body) = match &offload_tx {
+                        Some(tx) => {
+                            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                            let job = RequestJob {
+                                method,
+                                uri,
+                                path,
+                                query,
+                                headers,
+                                body,
+                                meta,
+                                reply: reply_tx,
+                            };
+                            if tx.try_send(job).is_err() {
+                                return Ok::<_, Infallible>(offload::queue_full_response());
+                            }
+                            match reply_rx.await {
+                                Ok(parts) => (parts.status, parts.headers, parts.body),
+                                Err(_) => {
+                                    return Ok::<_, Infallible>(offload::handler_gone_response());
+                                }
+                            }
+                        }
+                        None => {
+                            request_state::set_request(method, uri, path, query, headers, body, meta);
+                            let resp_body = run_worker_handler();
+                            // Unlink multipart temp files the PHP prelude registered for
+                            // this request, then run the cycle collector per the
+                            // --worker-gc-interval cadence. Temp-file cleanup happens
+                            // before GC so the collector sees the freed file-scope
+                            // arrays before walking the heap.
+                            cleanup_tmp_files();
+                            maybe_collect_cycles(worker_gc_interval);
+                            let status = request_state::take_status();
+                            let resp_headers = request_state::take_headers();
+                            (status, resp_headers, resp_body)
+                        }
+                    };
                     let already_encoded = resp_headers
                         .iter()
                         .any(|(n, _)| n.eq_ignore_ascii_case("content-encoding"));
@@ -596,6 +661,39 @@ fn run_worker_handler() -> Vec<u8> {
     request_state::take_body()
 }
 
+/// Runs the FULL worker-mode per-request body for one offloaded job on the
+/// dedicated `php-handler` thread and replies with the produced `ResponseParts`.
+/// This is the exact inline sequence, moved verbatim: `set_request` →
+/// `run_worker_handler` (reset + dispatch + `--max-execution-time` watchdog +
+/// `SERVED`++ + `take_body`) → `cleanup_tmp_files` → `maybe_collect_cycles` →
+/// drain status/headers. Every step touches handler-thread-affine PHP state, so it
+/// all runs here. A dropped receiver (client gone) makes `reply.send` a no-op.
+/// Factored as a free function so the ZTS (N>1) work can wrap it in a lock.
+/// `gc_interval` is the `--worker-gc-interval` cadence.
+fn run_one_worker_job(job: RequestJob, gc_interval: u32) {
+    let RequestJob {
+        method,
+        uri,
+        path,
+        query,
+        headers,
+        body,
+        meta,
+        reply,
+    } = job;
+    request_state::set_request(method, uri, path, query, headers, body, meta);
+    let resp_body = run_worker_handler();
+    cleanup_tmp_files();
+    maybe_collect_cycles(gc_interval);
+    let status = request_state::take_status();
+    let headers = request_state::take_headers();
+    let _ = reply.send(ResponseParts {
+        status,
+        headers,
+        body: resp_body,
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,6 +720,8 @@ mod tests {
             worker_gc_interval: 1,
             max_conn_requests: 250,
             idle_timeout_secs: 45,
+            handler_offload: true,
+            max_pending: 16,
         };
         set_worker_config(cfg);
         let peeked = peek_worker_config();

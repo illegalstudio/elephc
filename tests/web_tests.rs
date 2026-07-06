@@ -3102,3 +3102,276 @@ fn web_dispatch_master_server_addr_matches_kernel_on_wildcard() {
         mbody, kbody
     );
 }
+
+// --- PR4: handler offload (--handler-offload / --max-pending) ---
+
+/// Uploads `total` bytes to `path` as a POST body in `chunk`-sized writes spaced
+/// by `gap`, then reads the full response. Returns the client-observed wall time
+/// and the raw response. The pacing lets a slow upload span a handler window so
+/// the offload overlap is observable; on a busy inline worker the writes block
+/// (the server is not reading), so the same upload takes materially longer.
+fn paced_post(addr: &str, path: &str, total: usize, chunk: usize, gap: Duration) -> (Duration, String) {
+    let start = Instant::now();
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    let head = format!(
+        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        path, addr, total
+    );
+    s.write_all(head.as_bytes()).unwrap();
+    let buf = vec![b'x'; chunk];
+    let mut sent = 0;
+    while sent < total {
+        let n = chunk.min(total - sent);
+        s.write_all(&buf[..n]).unwrap();
+        s.flush().unwrap();
+        sent += n;
+        if sent < total {
+            std::thread::sleep(gap);
+        }
+    }
+    let mut resp = String::new();
+    let _ = s.read_to_string(&mut resp);
+    (start.elapsed(), resp)
+}
+
+/// Verifies `--handler-offload` serves a correct hello-world response with the
+/// flag on in ALL THREE web modes (`--web`, `--web-worker`, `--web-worker=script`):
+/// the handler runs on the dedicated `php-handler` thread and its output comes
+/// back intact through the oneshot. This is the baseline "offload does not change
+/// the happy path" test.
+#[test]
+fn web_offload_hello_world() {
+    let dir = make_test_dir("web_offload_hello");
+    // Classic --web.
+    let web_bin = compile_web(&dir, "<?php echo 'Hello World';", "web_app");
+    let web_srv = spawn_server_with_flags(&web_bin, &["--workers", "1", "--handler-offload"]);
+    let wr = http_get(web_srv.addr(), "/");
+    assert!(wr.starts_with("HTTP/1.1 200"), "classic offload status: {:?}", wr);
+    assert!(wr.ends_with("Hello World"), "classic offload body: {:?}", wr);
+    drop(web_srv);
+    // --web-worker (handler mode) — registers a per-request handler.
+    let worker_bin = compile_web_worker(
+        &dir,
+        "<?php elephc_worker_register(function () { echo 'Hello World'; });",
+        "worker_app",
+    );
+    let worker_srv = spawn_server_with_flags(&worker_bin, &["--workers", "1", "--handler-offload"]);
+    let wkr = http_get(worker_srv.addr(), "/");
+    assert!(wkr.ends_with("Hello World"), "worker offload body: {:?}", wkr);
+    drop(worker_srv);
+    // --web-worker=script.
+    let script_bin = compile_web_worker_script(&dir, "<?php echo 'Hello World';", "script_app");
+    let script_srv = spawn_server_with_flags(&script_bin, &["--workers", "1", "--handler-offload"]);
+    let sr = http_get(script_srv.addr(), "/");
+    assert!(sr.ends_with("Hello World"), "script offload body: {:?}", sr);
+}
+
+/// Verifies the exclusivity invariant under offload: two concurrent requests to a
+/// `=script` handler with a read-sleep-write window on a persistent function
+/// `static` must serialize (final values 1 then 2), never interleave (which would
+/// yield 1 and 1 from a lost update if two handlers ran at once). The single
+/// consumer `php-handler` thread guarantees at-most-one-handler even though the
+/// I/O thread is free to accept/read both connections concurrently.
+#[test]
+fn web_offload_handlers_never_overlap() {
+    let dir = make_test_dir("web_offload_noverlap");
+    let src = "<?php function n(): int { static $c = 0; $v = $c; usleep(300000); $c = $v + 1; return $c; } echo n();";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--handler-offload"]);
+    let addr = srv.addr().to_string();
+    let a = addr.clone();
+    let h1 = std::thread::spawn(move || http_get(&a, "/"));
+    let b = addr.clone();
+    let h2 = std::thread::spawn(move || http_get(&b, "/"));
+    let resp1 = h1.join().unwrap();
+    let resp2 = h2.join().unwrap();
+    let mut got = [
+        http_body(&resp1).trim().to_string(),
+        http_body(&resp2).trim().to_string(),
+    ];
+    got.sort();
+    assert_eq!(
+        got,
+        ["1".to_string(), "2".to_string()],
+        "handlers must serialize (1 then 2), never interleave to a lost update: {:?}",
+        got
+    );
+}
+
+/// Verifies the observable offload win: while conn A's handler sleeps ~1s, conn B
+/// uploads a ~3 MB body in small paced writes. With offload the I/O thread reads
+/// B's body concurrently with A's handler, so B finishes about one handler time
+/// (~1s). The inline path cannot read B until A's handler returns AND then still
+/// has to receive the paced upload, serializing to well over that. Timing test —
+/// generous threshold (the suite gates such cases loosely).
+#[test]
+fn web_offload_body_read_overlaps_handler() {
+    let dir = make_test_dir("web_offload_overlap");
+    let src = "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/slow') { usleep(1000000); } echo 'ok';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--handler-offload"]);
+    let addr = srv.addr().to_string();
+    // Conn A occupies the handler thread for ~1s.
+    let a = addr.clone();
+    let ha = std::thread::spawn(move || http_get(&a, "/slow"));
+    // Let A's handler start before B begins uploading.
+    std::thread::sleep(Duration::from_millis(150));
+    // Conn B: ~3 MB across ~64 KB writes with 18 ms gaps (~0.8 s of paced upload),
+    // overlapping A's handler on the I/O thread.
+    let (elapsed_b, resp_b) =
+        paced_post(&addr, "/", 3_000_000, 64_000, Duration::from_millis(18));
+    let ra = ha.join().unwrap();
+    assert!(ra.ends_with("ok"), "slow request must eventually return ok: {:?}", ra);
+    assert!(resp_b.ends_with("ok"), "upload request must return ok: {:?}", resp_b);
+    assert!(
+        elapsed_b < Duration::from_millis(1500),
+        "offload must overlap B's upload with A's handler (expected <1500ms, got {:?}); \
+         the inline path serializes A-handler + upload to well over that",
+        elapsed_b
+    );
+}
+
+/// Verifies queue-full shedding: with `--max-pending 1` and a sleeping handler,
+/// firing 4 concurrent requests fills the single running slot + the one-deep
+/// queue, so at least one request is shed with `503` + `Retry-After` built on the
+/// I/O thread (no PHP), while at least one succeeds with `200`. A follow-up
+/// request afterwards succeeds, proving the worker stays healthy.
+#[test]
+fn web_offload_max_pending_503() {
+    let dir = make_test_dir("web_offload_503");
+    let src = "<?php usleep(700000); echo 'ok';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(
+        &bin,
+        &["--workers", "1", "--handler-offload", "--max-pending", "1"],
+    );
+    let addr = srv.addr().to_string();
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let a = addr.clone();
+        handles.push(std::thread::spawn(move || http_get(&a, "/")));
+    }
+    let responses: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    let n_503 = responses
+        .iter()
+        .filter(|r| r.starts_with("HTTP/1.1 503"))
+        .count();
+    let n_200 = responses
+        .iter()
+        .filter(|r| r.starts_with("HTTP/1.1 200"))
+        .count();
+    assert!(n_503 >= 1, "at least one request must be shed with 503: {:?}", responses);
+    assert!(n_200 >= 1, "at least one request must succeed with 200: {:?}", responses);
+    let shed = responses
+        .iter()
+        .find(|r| r.starts_with("HTTP/1.1 503"))
+        .unwrap();
+    assert!(
+        shed.to_lowercase().contains("retry-after"),
+        "a 503 must carry Retry-After: {:?}",
+        shed
+    );
+    // The worker stays healthy: a later request succeeds.
+    let after = http_get(&addr, "/");
+    assert!(after.ends_with("ok"), "worker must stay healthy after shedding: {:?}", after);
+}
+
+/// Verifies exit/die works under offload in `=script` mode: `echo 'a'; exit;
+/// echo 'b';` returns `a` (code after exit skipped), and the NEXT request on the
+/// same worker returns `a` again. The setjmp bailout anchor lives in the compiled
+/// handler prologue, so moving handler() to the `php-handler` thread keeps the
+/// longjmp same-thread/same-stack and the worker alive (no codegen change).
+#[test]
+fn web_offload_script_exit_mid_request() {
+    let dir = make_test_dir("web_offload_exit");
+    let src = "<?php echo 'a'; exit; echo 'b';";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--handler-offload"]);
+    let r1 = http_get(srv.addr(), "/");
+    assert!(r1.starts_with("HTTP/1.1 200"), "exit status must be 200: {:?}", r1);
+    assert_eq!(http_body(&r1), "a", "exit must end the request after 'a': {:?}", r1);
+    let r2 = http_get(srv.addr(), "/");
+    assert_eq!(
+        http_body(&r2),
+        "a",
+        "worker must survive an exit landed on the handler thread: {:?}",
+        r2
+    );
+}
+
+/// Verifies exit from a NESTED function under offload ends the whole request,
+/// keeps the worker alive, and releases the callee's owned locals — the same
+/// activation-record unwind as the inline path, now on the `php-handler` thread.
+/// Driving many requests while a persistent `static` advances proves the request
+/// boundary is reached from any call depth and the worker is never respawned or
+/// leaked into a crash under offload.
+#[test]
+fn web_offload_script_exit_from_nested_function() {
+    let dir = make_test_dir("web_offload_exit_nested");
+    let src = "<?php function seq(): int { static $c = 0; return ++$c; } \
+        function bail() { $s = str_repeat('x', 4000); $arr = [1, 2, 3, 4, 5]; \
+            if (strlen($s) + count($arr) > 0) { echo 'IN'; exit; } echo 'NEVER_FN'; } \
+        echo 'A'; echo seq(); bail(); echo 'NEVER_TOP';";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--handler-offload"]);
+    for i in 1..=20 {
+        let resp = http_request(srv.addr(), "GET", "/", &[], "");
+        assert!(resp.starts_with("HTTP/1.1 200"), "request {i} status: {:?}", resp);
+        assert_eq!(
+            http_body(&resp),
+            format!("A{i}IN"),
+            "request {i}: nested exit must end after 'A{i}IN' and the worker must survive: {:?}",
+            resp,
+        );
+    }
+}
+
+/// Verifies deep PHP recursion works under offload, i.e. the `php-handler` thread
+/// has the explicit 8 MiB stack (Rust's spawned-thread default is only 2 MiB, on
+/// which this depth would SIGSEGV). Recurses 8000 frames and returns the depth.
+#[test]
+fn web_offload_deep_recursion() {
+    let dir = make_test_dir("web_offload_recursion");
+    let src = "<?php function r(int $n): int { if ($n <= 0) { return 0; } \
+        $pad = $n * 2; return 1 + r($n - 1) + ($pad - $pad); } echo r(8000);";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--handler-offload"]);
+    let resp = http_get(srv.addr(), "/");
+    assert!(resp.starts_with("HTTP/1.1 200"), "deep recursion status: {:?}", resp);
+    assert_eq!(
+        http_body(&resp),
+        "8000",
+        "deep recursion under offload must use the 8 MiB handler stack: {:?}",
+        resp
+    );
+}
+
+/// Verifies the `--max-execution-time` watchdog still recycles a runaway handler
+/// under offload: the alarm is armed on the `php-handler` thread (SIGALRM is
+/// blocked on the I/O thread), so a stuck handler is killed and the master
+/// respawns the worker, which serves again afterwards (WI-5 delivery path).
+#[test]
+fn web_offload_max_execution_time_recycles() {
+    let dir = make_test_dir("web_offload_exectime");
+    let src = "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/slow') { while (true) {} } echo 'fast';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(
+        &bin,
+        &["--workers", "1", "--handler-offload", "--max-execution-time", "1"],
+    );
+    let addr = srv.addr().to_string();
+    assert!(http_request(&addr, "GET", "/", &[], "").ends_with("fast"));
+    // The runaway request is killed by the watchdog (dropped connection); tolerate it.
+    let _ = try_http_get(&addr, "/slow");
+    // The master must respawn the worker; / serves again within a few seconds.
+    let mut recovered = false;
+    for _ in 0..40 {
+        if try_http_get(&addr, "/").ends_with("fast") {
+            recovered = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(recovered, "worker did not recover after a runaway offloaded handler was killed");
+}
