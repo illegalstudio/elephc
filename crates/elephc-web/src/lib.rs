@@ -13,6 +13,7 @@
 //! - One process per prefork worker means no shared-thread state: per-worker
 //!   request/response data lives in plain process statics, not behind a mutex.
 
+mod dispatch;
 mod handler;
 mod multipart;
 mod request_state;

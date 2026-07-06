@@ -50,6 +50,8 @@ arguments (not elephc compiler flags):
 |---|---|---|---|
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of prefork worker processes. Minimum 1. |
+| `--dispatch MODE` | No | `kernel` | Connection dispatch: `kernel` = per-worker `SO_REUSEPORT` listeners (kernel picks the worker); `master` = the master accepts and hands each connection to an idle worker (shared queue, no head-of-line blocking between workers). Unknown value = usage error (exit 2). See [Connection dispatch](../beyond-php/web.md#connection-dispatch-kernel-vs-master). |
+| `--dispatch-backlog N` | No | `1024` | Master mode only: max accepted connections queued while all workers are busy before the master applies SYN backpressure. Ignored (warns) without `--dispatch master`. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes (`0` = unlimited); oversized bodies get `413`. |
 | `--max-requests N` | No | `0` (classic) / `1000` (worker) | Recycle each worker process after N requests (bounds memory growth). Worker mode defaults to 1000. |
 | `--max-requests-per-connection N` | No | `0` (opt-in) | Close a keep-alive connection after N responses (sends `Connection: close`) so the client reconnects and the kernel re-picks a worker; `0` = unlimited (off by default; no behavior change unless set). Same default in all three web modes. |
@@ -68,6 +70,7 @@ elephc --web-worker app.php
 elephc --web-worker=script app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4 --max-body-size 1048576 --access-log
+./app --listen 0.0.0.0:8080 --workers 8 --dispatch master --max-requests-per-connection 32
 ./app --listen 127.0.0.1:8443 --tls-cert cert.pem --tls-key key.pem
 ```
 

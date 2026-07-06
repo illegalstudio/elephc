@@ -14,6 +14,7 @@ use std::cell::Cell;
 use std::convert::Infallible;
 use std::ffi::CString;
 use std::net::SocketAddr;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -24,8 +25,10 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use socket2::{Domain, Protocol, Socket, Type};
-use tokio::net::TcpListener;
+use socket2::{Domain, Protocol, SockRef, Socket, Type};
+use tokio::io::unix::AsyncFd;
+use tokio::net::{TcpListener, TcpStream};
+use tokio_rustls::TlsAcceptor;
 
 use crate::request_state;
 
@@ -53,6 +56,21 @@ pub(crate) fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::
     let sock = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
     sock.set_reuse_address(true)?;
     sock.set_reuse_port(true)?;
+    sock.set_nonblocking(true)?;
+    sock.bind(&addr.into())?;
+    sock.listen(LISTEN_BACKLOG)?;
+    Ok(sock.into())
+}
+
+/// Builds the master's SINGLE listening socket for `--dispatch master`: identical
+/// to `reuseport_listener` but WITHOUT `set_reuse_port`, since only the master
+/// binds the port (the workers never listen; they receive fds). Nonblocking so
+/// `dispatch::master_loop` can `poll` + `accept4`/`accept` it. Called once by
+/// `server::run_master` after all workers are forked.
+pub(crate) fn plain_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
+    let domain = if addr.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 };
+    let sock = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+    sock.set_reuse_address(true)?;
     sock.set_nonblocking(true)?;
     sock.bind(&addr.into())?;
     sock.listen(LISTEN_BACKLOG)?;
@@ -120,6 +138,187 @@ pub struct WorkerConfig {
 /// overhead outweighs the savings.
 const GZIP_MIN_LEN: usize = 256;
 
+/// The source of accepted connections for a worker's serve loop. `Kernel` owns a
+/// SO_REUSEPORT listener and `accept()`s (the default, behaviorally-identical
+/// path); `Master` receives already-accepted fds over the master socketpair
+/// (`--dispatch master`, slot = 1). Abstracting the loop head lets the SAME
+/// per-connection lifecycle (`drive_connection`, incl. PR2 TLS + PR1 keep-alive/
+/// idle gating) run in both modes. Shared by `serve` and
+/// `worker_mode::enter_worker_loop`.
+pub(crate) enum ConnSource {
+    /// Kernel dispatch: the worker owns a SO_REUSEPORT listener and accepts.
+    Kernel(TcpListener),
+    /// Master dispatch: the worker sends READY and receives an fd per connection.
+    Master {
+        /// The worker's socketpair end, registered for readiness with tokio.
+        chan: AsyncFd<OwnedFd>,
+    },
+}
+
+/// One step of a serve loop's connection source: a ready connection, a transient
+/// error to skip, or a closed source (master gone → the worker exits cleanly).
+pub(crate) enum NextConn {
+    /// A ready connection: the stream, the remote peer, and the local server addr.
+    Serve(TcpStream, SocketAddr, SocketAddr),
+    /// A transient error; the caller should `continue` the loop.
+    Retry,
+    /// The source is closed (EOF on the socketpair): the worker exits.
+    Closed,
+}
+
+impl ConnSource {
+    /// Builds the master-dispatch source from the child socketpair-end fd: makes it
+    /// nonblocking (required by `AsyncFd`) and wraps it as an `AsyncFd<OwnedFd>`.
+    /// Called by the serve loop when a dispatch chan was installed pre-boot.
+    pub(crate) fn master(chan_fd: RawFd) -> std::io::Result<ConnSource> {
+        crate::dispatch::set_nonblocking(chan_fd)?;
+        // SAFETY: chan_fd is this worker's own socketpair end, owned by the process.
+        let owned = unsafe { OwnedFd::from_raw_fd(chan_fd) };
+        Ok(ConnSource::Master {
+            chan: AsyncFd::new(owned)?,
+        })
+    }
+
+    /// Yields the next connection to serve. Kernel mode `accept()`s (peer from the
+    /// accept, addr = the parsed listen addr). Master mode sends READY then awaits
+    /// a received fd (see `next_master`). `kernel_addr` is used only by the kernel
+    /// arm; the master arm derives the server addr via getsockname.
+    pub(crate) async fn next(&self, kernel_addr: SocketAddr) -> NextConn {
+        match self {
+            ConnSource::Kernel(listener) => match listener.accept().await {
+                Ok((stream, peer)) => NextConn::Serve(stream, peer, kernel_addr),
+                Err(_) => NextConn::Retry,
+            },
+            ConnSource::Master { chan } => next_master(chan, kernel_addr).await,
+        }
+    }
+
+    /// Whether connections are served serially (master, slot = 1) rather than
+    /// concurrently via `spawn_local` (kernel). Selects the drive strategy so a
+    /// master worker serves exactly one connection at a time.
+    pub(crate) fn is_serial(&self) -> bool {
+        matches!(self, ConnSource::Master { .. })
+    }
+}
+
+/// Master-mode connection step: send the READY byte (the caller has already done
+/// the cap-before-READY `--max-requests` check), await a received fd over the
+/// socketpair, reconstruct a tokio `TcpStream` from it, and derive REMOTE_ADDR/
+/// REMOTE_PORT via getpeername (there is no `accept()` in a master-mode worker).
+/// The received fd is the RAW TCP socket BEFORE any TLS handshake — the worker
+/// runs the handshake later in `drive_connection`, so no key material crosses the
+/// socketpair. Returns `Closed` on EOF (master gone) so the worker exits `0`.
+///
+/// `listen_addr` is the parsed `--listen` address. The returned server address
+/// uses `listen_addr`'s IP so `$_SERVER['SERVER_ADDR']` matches kernel mode
+/// EXACTLY (a `0.0.0.0` wildcard bind must report `0.0.0.0`, not the concrete
+/// getsockname IP); the server PORT still comes from getsockname (the bound port,
+/// identical to `listen_addr`'s for a concrete bind).
+async fn next_master(chan: &AsyncFd<OwnedFd>, listen_addr: SocketAddr) -> NextConn {
+    // Send READY, gated on writability for the nonblocking socketpair end.
+    loop {
+        let mut guard = match chan.writable().await {
+            Ok(g) => g,
+            Err(_) => return NextConn::Closed,
+        };
+        match guard.try_io(|inner| crate::dispatch::send_ready(inner.get_ref().as_raw_fd())) {
+            Ok(Ok(())) => break,
+            Ok(Err(_)) => return NextConn::Closed, // master gone
+            Err(_would_block) => continue,
+        }
+    }
+    // Await a received fd from the master. READY was sent exactly once (above); the
+    // recv is retried WITHOUT re-sending READY so the master never over-credits
+    // this worker with a second connection.
+    let fd = loop {
+        let mut guard = match chan.readable().await {
+            Ok(g) => g,
+            Err(_) => return NextConn::Closed,
+        };
+        match guard.try_io(|inner| crate::dispatch::recv_fd(inner.get_ref().as_raw_fd())) {
+            Ok(Ok(Some(fd))) => break fd,
+            Ok(Ok(None)) => return NextConn::Closed, // EOF: master gone
+            // A hard recvmsg error did NOT dequeue the pending SCM_RIGHTS message,
+            // so the fd is still buffered: retry the recv (EINTR) without re-sending
+            // READY. Any other hard error is treated as fatal — exit and let the
+            // master respawn — rather than re-sending READY (which would make the
+            // master hand this worker a second connection → head-of-line blocking).
+            Ok(Err(ref e)) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Ok(Err(_)) => return NextConn::Closed,
+            Err(_would_block) => continue,
+        }
+    };
+    // Make the received fd nonblocking (+ SO_NOSIGPIPE on macOS) for tokio.
+    if crate::dispatch::prepare_received_fd(fd).is_err() {
+        // SAFETY: fd is a received descriptor owned here; drop it on setup failure.
+        // The fd WAS consumed by recv_fd, so a subsequent READY re-send is correct.
+        unsafe { libc::close(fd); }
+        return NextConn::Retry;
+    }
+    // SAFETY: fd is a valid, connected, nonblocking TCP socket owned by this worker.
+    let std_stream = unsafe { std::net::TcpStream::from_raw_fd(fd) };
+    // REMOTE_ADDR/REMOTE_PORT come from the socket's peer (getpeername), matching
+    // what `accept()` would have reported in kernel mode.
+    let peer = match SockRef::from(&std_stream).peer_addr().ok().and_then(|a| a.as_socket()) {
+        Some(p) => p,
+        None => return NextConn::Retry,
+    };
+    // SERVER address: keep the bound port from getsockname but take the IP from the
+    // parsed listen address, so SERVER_ADDR is IDENTICAL to kernel mode (which
+    // passes the parsed listen address) even on a wildcard bind.
+    let server_port = match SockRef::from(&std_stream).local_addr().ok().and_then(|a| a.as_socket()) {
+        Some(a) => a.port(),
+        None => return NextConn::Retry,
+    };
+    let addr = SocketAddr::new(listen_addr.ip(), server_port);
+    match TcpStream::from_std(std_stream) {
+        Ok(stream) => NextConn::Serve(stream, peer, addr),
+        Err(_) => NextConn::Retry,
+    }
+}
+
+/// Drives ONE accepted connection's full lifecycle: run the TLS handshake (or the
+/// plaintext passthrough) on the already-accepted `stream` via
+/// `crate::tls::wrap_accepted` (PR2), build the hyper HTTP/1 connection, then
+/// drive it with the PR1 idle-watchdog choice (`serve_connection_with_idle` when
+/// `--idle-timeout` is on, else the plain future). Factored out of both serve
+/// loops so the kernel path (`spawn_local(drive_connection(..))`, concurrent) and
+/// the master path (`drive_connection(..).await`, slot = 1) share IDENTICAL
+/// per-connection semantics. A failed handshake just drops the connection (the
+/// worker survives), with an optional `--access-log` line.
+pub(crate) async fn drive_connection<S>(
+    stream: TcpStream,
+    peer: SocketAddr,
+    acceptor: Option<&'static TlsAcceptor>,
+    http: http1::Builder,
+    service: S,
+    watchdog_activity: Option<Rc<Cell<Instant>>>,
+    idle: Duration,
+    access_log: bool,
+) where
+    S: hyper::service::HttpService<hyper::body::Incoming> + 'static,
+    S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    S::ResBody: hyper::body::Body + 'static,
+    <S::ResBody as hyper::body::Body>::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    let io = match crate::tls::wrap_accepted(stream, acceptor).await {
+        Some(io) => io,
+        None => {
+            if access_log {
+                eprintln!("{} tls handshake failed", peer.ip());
+            }
+            return;
+        }
+    };
+    let conn = http.serve_connection(TokioIo::new(io), service);
+    match watchdog_activity {
+        Some(wa) => serve_connection_with_idle(conn, wa, idle).await,
+        None => {
+            let _ = conn.await;
+        }
+    }
+}
+
 /// Serves HTTP on `listen` (host:port) in this worker process. Builds a
 /// current-thread tokio runtime and loops accepting connections, serving each
 /// with the PHP handler per `WorkerConfig`.
@@ -140,20 +339,18 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
         install_exec_timeout_handler();
     }
-    let addr: SocketAddr = match listen.parse() {
+    let listen_addr: SocketAddr = match listen.parse() {
         Ok(a) => a,
         Err(_) => {
             eprintln!("elephc-web: invalid --listen address {:?}", listen);
             std::process::exit(1);
         }
     };
-    let std_listener = match reuseport_listener(addr) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("elephc-web: failed to bind {}: {}", addr, e);
-            std::process::exit(1);
-        }
-    };
+    // Master dispatch (`--dispatch master`) installs the child socketpair end into
+    // a process-static slot before serve; kernel dispatch leaves it unset. Take it
+    // now so the accept loop uses `ConnSource::Master` (receive fds, do NOT bind) or
+    // `ConnSource::Kernel` (bind a SO_REUSEPORT listener, exactly as before).
+    let child_chan = crate::dispatch::take_child_dispatch_chan();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -165,13 +362,35 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
     // only the async request/response I/O of different connections interleaves.
     let local = tokio::task::LocalSet::new();
     local.block_on(&rt, async move {
-        let listener = match TcpListener::from_std(std_listener) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("elephc-web: failed to register listener: {}", e);
-                std::process::exit(1);
+        // Build the connection source: master mode wraps the socketpair end; kernel
+        // mode binds the SO_REUSEPORT listener (unchanged behavior).
+        let conn_source = match child_chan {
+            Some(chan_fd) => match ConnSource::master(chan_fd) {
+                Ok(cs) => cs,
+                Err(e) => {
+                    eprintln!("elephc-web: failed to set up master dispatch channel: {}", e);
+                    std::process::exit(1);
+                }
+            },
+            None => {
+                let std_listener = match reuseport_listener(listen_addr) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        eprintln!("elephc-web: failed to bind {}: {}", listen_addr, e);
+                        std::process::exit(1);
+                    }
+                };
+                match TcpListener::from_std(std_listener) {
+                    Ok(l) => ConnSource::Kernel(l),
+                    Err(e) => {
+                        eprintln!("elephc-web: failed to register listener: {}", e);
+                        std::process::exit(1);
+                    }
+                }
             }
         };
+        // Idle-watchdog duration, computed once (used only when `--idle-timeout` > 0).
+        let idle = Duration::from_secs(idle_timeout_secs as u64);
         // Connection-serving config is identical for every connection, so build the
         // hyper HTTP/1 builder once and reuse it (serve_connection takes &self).
         //
@@ -194,12 +413,17 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         loop {
             // --max-requests recycling: stop accepting once the cap is reached so
             // the master respawns a fresh worker (bounds memory growth over time).
+            // In master mode this runs BEFORE `next()` sends READY (cap-before-READY),
+            // so a capped worker exits without being handed one more connection.
             if max_requests > 0 && SERVED.load(Ordering::Relaxed) >= max_requests {
                 break;
             }
-            let (stream, peer) = match listener.accept().await {
-                Ok(pair) => pair,
-                Err(_) => continue,
+            // Next connection: kernel `accept()` (peer from accept, addr = listen
+            // addr) or master READY→recv_fd (peer/addr via getpeername/getsockname).
+            let (stream, peer, addr) = match conn_source.next(listen_addr).await {
+                NextConn::Serve(s, p, a) => (s, p, a),
+                NextConn::Retry => continue,
+                NextConn::Closed => break, // master gone → exit cleanly below
             };
             // Disable Nagle: responses are typically small and written in one
             // shot, so Nagle interacting with delayed-ACK would add tens of ms of
@@ -357,46 +581,27 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     Ok::<_, Infallible>(response)
                 }
             });
-            // Clone the hyper builder so the connection task OWNS it: the handshake
-            // and `serve_connection` both run inside the spawned task (after the
-            // stream is accepted), so the future cannot borrow the loop-local
-            // `http`. The builder is a small config struct, so the per-connection
-            // clone is cheap.
+            // Clone the hyper builder so the connection future OWNS it (the handshake
+            // and `serve_connection` run after the stream is accepted, so the future
+            // cannot borrow the loop-local `http`). The builder is a small config
+            // struct, so the per-connection clone is cheap.
             let http = http.clone();
-            // Whole connection lifecycle in one task: run the TLS handshake (or the
-            // plaintext passthrough) on the accepted stream, then serve it. Doing the
-            // handshake here keeps the accept loop responsive; a failed handshake
-            // just drops the connection (the worker survives), with an optional log
-            // line under `--access-log` so an exposed port is not flooded.
-            tokio::task::spawn_local(async move {
-                let io = match crate::tls::wrap_accepted(stream, acceptor).await {
-                    Some(io) => io,
-                    None => {
-                        if access_log {
-                            eprintln!("{} tls handshake failed", peer.ip());
-                        }
-                        return;
-                    }
-                };
-                let conn = http.serve_connection(TokioIo::new(io), service);
-                // Idle watchdog: wrap the connection only when `--idle-timeout` is
-                // enabled (`watchdog_activity` is `Some`); with the timeout off we
-                // await the original zero-overhead plain connection future (no timer,
-                // no per-connection wakeups) — identical to the pre-rotation path.
-                match watchdog_activity {
-                    Some(wa) => {
-                        serve_connection_with_idle(
-                            conn,
-                            wa,
-                            Duration::from_secs(idle_timeout_secs as u64),
-                        )
-                        .await;
-                    }
-                    None => {
-                        let _ = conn.await;
-                    }
-                }
-            });
+            // Drive the whole connection lifecycle (TLS handshake + serve + PR1 idle
+            // watchdog) via the shared helper. Kernel mode spawns it so connections
+            // interleave concurrently, exactly as before; master mode (slot = 1)
+            // awaits it inline so the worker serves one connection at a time and only
+            // sends the next READY once this connection's `serve_connection`
+            // completes.
+            if conn_source.is_serial() {
+                drive_connection(
+                    stream, peer, acceptor, http, service, watchdog_activity, idle, access_log,
+                )
+                .await;
+            } else {
+                tokio::task::spawn_local(drive_connection(
+                    stream, peer, acceptor, http, service, watchdog_activity, idle, access_log,
+                ));
+            }
         }
     });
 }

@@ -2804,3 +2804,301 @@ fn web_tls_multiple_workers() {
         );
     }
 }
+
+// --- PR3: master fd-dispatch (--dispatch master) ---
+
+/// Times a single `Connection: close` GET and returns `(elapsed, raw_response)`.
+/// Used by the head-of-line / queueing tests to assert latency behavior.
+fn timed_get(addr: &str, path: &str) -> (Duration, String) {
+    let start = Instant::now();
+    let resp = http_get(addr, path);
+    (start.elapsed(), resp)
+}
+
+/// Default (no `--dispatch`) is kernel mode and behaves exactly as before: a
+/// simple GET is served 200. The real kernel guarantee is that its code path is
+/// untouched; this is the trivial non-regression smoke.
+#[test]
+fn web_dispatch_kernel_default_unchanged() {
+    let dir = make_test_dir("disp_kernel_default");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "2"]);
+    let resp = http_get(srv.addr(), "/");
+    assert!(
+        resp.contains("200") && http_body(&resp) == "ok",
+        "kernel-default GET must be served: {:?}",
+        resp
+    );
+}
+
+/// `--dispatch master` serves a basic GET in ALL THREE web modes (classic,
+/// worker, script): the master accepts, passes the raw fd to an idle worker, and
+/// the worker serves it 200 with the expected body.
+#[test]
+fn web_dispatch_master_basic_get() {
+    // Classic --web.
+    let dir = make_test_dir("disp_master_basic_web");
+    let bin = compile_web(&dir, "<?php echo 'classic';", "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "2", "--dispatch", "master"]);
+    let resp = http_get(srv.addr(), "/");
+    assert!(
+        resp.contains("200") && http_body(&resp) == "classic",
+        "master classic GET: {:?}",
+        resp
+    );
+    drop(srv);
+
+    // --web-worker (handler mode).
+    let dir_w = make_test_dir("disp_master_basic_worker");
+    let src_w = "<?php elephc_worker_register(function () { echo 'worker'; });";
+    let bin_w = compile_web_worker(&dir_w, src_w, "app");
+    let srv_w = spawn_server_with_flags(&bin_w, &["--workers", "2", "--dispatch", "master"]);
+    let resp_w = http_get(srv_w.addr(), "/");
+    assert!(
+        resp_w.contains("200") && http_body(&resp_w) == "worker",
+        "master worker GET: {:?}",
+        resp_w
+    );
+    drop(srv_w);
+
+    // --web-worker=script.
+    let dir_s = make_test_dir("disp_master_basic_script");
+    let bin_s = compile_web_worker_script(&dir_s, "<?php echo 'script';", "app");
+    let srv_s = spawn_server_with_flags(&bin_s, &["--workers", "2", "--dispatch", "master"]);
+    let resp_s = http_get(srv_s.addr(), "/");
+    assert!(
+        resp_s.contains("200") && http_body(&resp_s) == "script",
+        "master script GET: {:?}",
+        resp_s
+    );
+}
+
+/// `$_SERVER` peer/server variables survive the fd pass: with no `accept()` in the
+/// worker, REMOTE_ADDR / REMOTE_PORT / SERVER_PORT are recovered from the socket
+/// itself (getpeername / getsockname) and must match the connection.
+#[test]
+fn web_dispatch_master_superglobals() {
+    let dir = make_test_dir("disp_master_sg");
+    let src = "<?php echo $_SERVER['REMOTE_ADDR'].'|'.$_SERVER['REMOTE_PORT'].'|'.$_SERVER['SERVER_PORT'];";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--dispatch", "master"]);
+    let server_port = srv.addr().rsplit(':').next().unwrap().to_string();
+    let resp = http_get(srv.addr(), "/");
+    assert!(resp.contains("200"), "status: {:?}", resp);
+    let body = http_body(&resp);
+    let parts: Vec<&str> = body.split('|').collect();
+    assert_eq!(parts.len(), 3, "expected REMOTE_ADDR|REMOTE_PORT|SERVER_PORT: {:?}", body);
+    assert_eq!(parts[0], "127.0.0.1", "REMOTE_ADDR through fd-passing: {:?}", body);
+    let remote_port: u32 = parts[1].parse().unwrap_or(0);
+    assert!(remote_port > 0, "REMOTE_PORT must be the client's ephemeral port: {:?}", body);
+    assert_eq!(parts[2], server_port, "SERVER_PORT through getsockname: {:?}", body);
+}
+
+/// THE key property: a slow request on one worker does NOT block fast requests on
+/// NEW connections, because the master hands them to the OTHER idle worker. With
+/// 2 workers, a 300 ms request in flight, four fast requests on fresh connections
+/// each finish well under 300 ms (in kernel mode they could be hashed behind the
+/// slow one and pay the full latency).
+#[test]
+fn web_dispatch_master_no_head_of_line() {
+    let dir = make_test_dir("disp_master_nohol");
+    let src = "<?php if (($_GET['slow'] ?? '') === '1') { usleep(300000); } echo 'ok';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "2", "--dispatch", "master"]);
+    let addr = srv.addr().to_string();
+    // Start the slow request in the background; it occupies exactly one worker.
+    let slow_addr = addr.clone();
+    let slow = std::thread::spawn(move || http_get(&slow_addr, "/?slow=1"));
+    // Let the master dispatch the slow request to a worker.
+    std::thread::sleep(Duration::from_millis(80));
+    // Four fast requests on fresh connections: each must be served by the free
+    // worker, so none pays the 300 ms head-of-line penalty.
+    for i in 0..4 {
+        let (elapsed, resp) = timed_get(&addr, "/");
+        assert!(
+            resp.contains("200") && http_body(&resp) == "ok",
+            "fast request {} must be served: {:?}",
+            i,
+            resp
+        );
+        assert!(
+            elapsed < Duration::from_millis(250),
+            "fast request {} took {:?}; a slow request must not block a free worker",
+            i,
+            elapsed
+        );
+    }
+    let slow_resp = slow.join().expect("slow thread");
+    assert!(http_body(&slow_resp) == "ok", "slow request must still complete: {:?}", slow_resp);
+}
+
+/// With a single worker saturated by a slow request, a fast request is QUEUED by
+/// the master (SYN backpressure, no 503) and served once the worker frees — it
+/// waits, but succeeds. Proves queue-full is never a rejection.
+#[test]
+fn web_dispatch_master_queueing_when_saturated() {
+    let dir = make_test_dir("disp_master_queue");
+    let src = "<?php if (($_GET['slow'] ?? '') === '1') { usleep(300000); } echo 'ok';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--dispatch", "master"]);
+    let addr = srv.addr().to_string();
+    let slow_addr = addr.clone();
+    let slow = std::thread::spawn(move || http_get(&slow_addr, "/?slow=1"));
+    std::thread::sleep(Duration::from_millis(80));
+    // The single worker is busy: this request must WAIT (queued in the master) but
+    // still be served, not refused.
+    let (elapsed, resp) = timed_get(&addr, "/");
+    assert!(
+        resp.contains("200") && http_body(&resp) == "ok",
+        "queued request must still be served: {:?}",
+        resp
+    );
+    assert!(
+        elapsed >= Duration::from_millis(150),
+        "queued request should have waited behind the slow one, took only {:?}",
+        elapsed
+    );
+    let slow_resp = slow.join().expect("slow thread");
+    assert!(http_body(&slow_resp) == "ok", "slow request must complete: {:?}", slow_resp);
+}
+
+/// `--max-requests 3` recycles the worker after 3 requests; the cap-before-READY
+/// ordering means a capped worker exits WITHOUT being handed one more fd, and the
+/// master respawns it with a fresh socketpair. Ten sequential new connections must
+/// all be served 200 across several worker generations. Script mode (boot pipe)
+/// classifies the recycle as a runtime event, not a startup crash.
+#[test]
+fn web_dispatch_master_worker_recycle_respawn() {
+    let dir = make_test_dir("disp_master_recycle");
+    let bin = compile_web_worker_script(&dir, "<?php echo 'ok';", "app");
+    let srv = spawn_server_with_flags(
+        &bin,
+        &["--workers", "1", "--dispatch", "master", "--max-requests", "3"],
+    );
+    for i in 0..10 {
+        let resp = http_get(srv.addr(), "/");
+        assert!(
+            resp.contains("200") && http_body(&resp) == "ok",
+            "sequential request {} across recycles must be served: {:?}",
+            i,
+            resp
+        );
+    }
+}
+
+/// A worker that crashes (`exit(1)`) mid-request is reaped and respawned with a
+/// fresh socketpair re-registered in the poll set; the next request is served.
+#[test]
+fn web_dispatch_master_worker_crash_respawn() {
+    let dir = make_test_dir("disp_master_crash");
+    let src = "<?php elephc_worker_register(function () { \
+        if (($_SERVER['REQUEST_URI'] ?? '') === '/crash') { exit(1); } echo 'alive'; });";
+    let bin = compile_web_worker(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--dispatch", "master"]);
+    assert!(http_get(srv.addr(), "/").ends_with("alive"), "initial request must serve");
+    // Crash the only worker; its connection is dropped.
+    let _ = try_http_get(srv.addr(), "/crash");
+    // The master must respawn a worker and keep serving.
+    let mut served = false;
+    for _ in 0..40 {
+        if try_http_get(srv.addr(), "/").ends_with("alive") {
+            served = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(served, "master must respawn the crashed worker and keep serving");
+}
+
+/// Keep-alive pinning: once a connection's fd is handed to a worker (slot = 1),
+/// that worker serves ALL of the connection's requests before it frees. Two
+/// requests on ONE keep-alive connection are both served by the pinned worker.
+#[test]
+fn web_dispatch_master_keepalive_pinning() {
+    let dir = make_test_dir("disp_master_keepalive");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--dispatch", "master"]);
+    let mut sock = TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let req = format!("GET / HTTP/1.1\r\nHost: {}\r\n\r\n", srv.addr());
+    sock.write_all(req.as_bytes()).unwrap();
+    let r1 = read_keepalive_response(&mut sock);
+    assert!(r1.contains("200") && http_body(&r1) == "ok", "keep-alive request 1: {:?}", r1);
+    sock.write_all(req.as_bytes()).unwrap();
+    let r2 = read_keepalive_response(&mut sock);
+    assert!(r2.contains("200") && http_body(&r2) == "ok", "keep-alive request 2: {:?}", r2);
+}
+
+/// SIGTERM to the master tears down cleanly in master mode: it closes the
+/// listener, reaps the workers, and exits 0 promptly.
+#[test]
+fn web_dispatch_master_sigterm_clean_shutdown() {
+    let dir = make_test_dir("disp_master_sigterm");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = Command::new(&bin)
+        .arg("--listen").arg(&addr)
+        .arg("--workers").arg("2")
+        .arg("--dispatch").arg("master")
+        .spawn()
+        .expect("failed to spawn master-dispatch server");
+    wait_until_ready(&addr);
+    assert!(http_get(&addr, "/").ends_with("ok"), "server must serve before shutdown");
+    let pid = child.id();
+    let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status();
+    let start = Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait().expect("try_wait") {
+            break s;
+        }
+        if start.elapsed() > Duration::from_secs(8) {
+            let _ = child.kill();
+            panic!("master (master dispatch) did not exit within 8s of SIGTERM");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(0), "master must exit 0 on SIGTERM (master dispatch)");
+}
+
+/// FIX 2 regression: on a `0.0.0.0` wildcard bind, `$_SERVER['SERVER_ADDR']` in
+/// master mode must MATCH kernel mode. The master worker has no `accept()`, so a
+/// naive getsockname on the received fd would report the concrete arrival IP
+/// (`127.0.0.1`) instead of the parsed listen IP (`0.0.0.0`) the kernel arm
+/// reports — this pins the "master behaves identically to kernel" contract.
+#[test]
+fn web_dispatch_master_server_addr_matches_kernel_on_wildcard() {
+    let dir = make_test_dir("disp_master_serveraddr");
+    let bin = compile_web(&dir, "<?php echo $_SERVER['SERVER_ADDR'];", "app");
+    // Kernel mode on a wildcard bind: baseline SERVER_ADDR.
+    let kport = free_port();
+    let mut kchild = Command::new(&bin)
+        .arg("--listen").arg(format!("0.0.0.0:{}", kport))
+        .arg("--workers").arg("1")
+        .spawn()
+        .expect("spawn kernel wildcard");
+    let kloop = format!("127.0.0.1:{}", kport);
+    wait_until_ready(&kloop);
+    let kbody = http_body(&http_get(&kloop, "/")).to_string();
+    let _ = kchild.kill();
+    let _ = kchild.wait();
+    // Master mode on a wildcard bind: SERVER_ADDR must equal the kernel value.
+    let mport = free_port();
+    let mut mchild = Command::new(&bin)
+        .arg("--listen").arg(format!("0.0.0.0:{}", mport))
+        .arg("--workers").arg("1")
+        .arg("--dispatch").arg("master")
+        .spawn()
+        .expect("spawn master wildcard");
+    let mloop = format!("127.0.0.1:{}", mport);
+    wait_until_ready(&mloop);
+    let mbody = http_body(&http_get(&mloop, "/")).to_string();
+    let _ = mchild.kill();
+    let _ = mchild.wait();
+    assert_eq!(kbody, "0.0.0.0", "kernel wildcard SERVER_ADDR baseline: {:?}", kbody);
+    assert_eq!(
+        mbody, kbody,
+        "master SERVER_ADDR must match kernel on a wildcard bind: {:?} vs {:?}",
+        mbody, kbody
+    );
+}

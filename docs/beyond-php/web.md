@@ -33,6 +33,8 @@ The produced binary accepts these arguments at runtime:
 |---|---|---|---|
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of worker processes to prefork. Minimum 1. |
+| `--dispatch MODE` | No | `kernel` | Connection dispatch backend. `kernel` = per-worker `SO_REUSEPORT` listeners (the kernel picks a worker at connect time). `master` = the master accepts every connection and hands it to the first idle worker — a real shared queue that removes head-of-line blocking between workers (see [Connection dispatch](#connection-dispatch-kernel-vs-master)). An unknown value is a usage error (exit 2). |
+| `--dispatch-backlog N` | No | `1024` | **Master mode only.** Max accepted connections the master queues while all workers are busy; once full, the master stops accepting (kernel SYN backpressure) instead of rejecting. Ignored (with a warning) without `--dispatch master`. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes; `0` means unlimited. A request whose body exceeds the cap gets `413 Payload Too Large` and the PHP handler never runs. |
 | `--max-requests N` | No | `0` (never) | Recycle each **worker process** after serving N requests (the master respawns it), bounding memory growth in long-running servers. Do not confuse with `--max-requests-per-connection`. |
 | `--max-requests-per-connection N` | No | `0` (opt-in) | Close a keep-alive **connection** after N responses by sending `Connection: close`, so the client reconnects and `SO_REUSEPORT` re-picks a worker (see [Keep-alive and load distribution](#keep-alive-and-load-distribution-across-workers)); `0` = unlimited (off by default; no behavior change from before this flag existed). Same default in all three web modes. |
@@ -459,13 +461,66 @@ lifetime — the original, pre-rotation behavior — with no measurable overhead
 Set either to a positive value to opt in to rotation; smaller values (e.g.
 `--max-requests-per-connection 16`) rebalance faster at the cost of more TCP
 handshakes. Rotation is a cheap, opt-in mitigation, not a substitute for a
-shared work queue (that is the separate fd-dispatch feature): within one
-pinning window a slow request still blocks the requests queued behind it on
-that worker, and in a mixed fast/slow benchmark aggressive rotation did not
+shared work queue (that is `--dispatch master`, below): within one pinning
+window a slow request still blocks the requests queued behind it on that
+worker, and in a mixed fast/slow benchmark aggressive rotation did not
 improve — and could worsen — fast-route tail latency, which is why it ships
 off by default. On Linux the `SO_REUSEPORT` hash spreads reconnects evenly; on
 macOS the distribution is less uniform, so p99 validation benchmarks are
 authoritative on Linux.
+
+### Connection dispatch: kernel vs master
+
+`--dispatch` selects how connections reach workers. It is orthogonal to the web
+mode — all of `--web`, `--web-worker`, and `--web-worker=script` support both
+values — and defaults to `kernel`.
+
+- **`--dispatch kernel` (default)** — the behavior described above: every worker
+  binds the port with `SO_REUSEPORT` and the kernel picks a worker for each
+  connection by hashing its 4-tuple, with **no** knowledge of which workers are
+  busy. This is N independent M/M/1 queues, not one shared queue: a connection
+  hashed onto a worker that is running a slow request waits behind it even if
+  every other worker is idle. It is near-optimal for homogeneous, short handlers
+  and adds no per-connection overhead, so it stays the default.
+
+- **`--dispatch master`** — only the **master** binds the port. It `accept()`s
+  each connection and passes the raw socket (an fd, over a per-worker Unix
+  socketpair with `SCM_RIGHTS`, **before** any TLS handshake — no key material
+  crosses the socketpair) to the **first idle worker**. This is a real shared
+  queue: a slow request occupies exactly one worker, and every other connection
+  goes to a free one, so a single slow handler no longer inflates the p99 of
+  fast requests hashed onto the same worker. When all workers are busy the master
+  queues accepted connections (bounded by `--dispatch-backlog`) and, once the
+  queue is full, stops accepting so the kernel's SYN backlog applies backpressure
+  — it never returns `503` and never drops an accepted connection. Because the
+  master makes the distribution decision itself, master mode is also uniform on
+  macOS, where `SO_REUSEPORT` is not.
+
+  **Keep-alive pinning.** Master mode balances **at connection open only**. A
+  worker serves exactly one connection at a time (slot = 1) and does not become
+  available again until that connection's `serve_connection` fully completes; all
+  keep-alive requests on a connection stay on the worker it was handed to. An idle
+  keep-alive connection therefore pins its worker. Pair `--dispatch master` with a
+  short **`--max-requests-per-connection`** (e.g. 16–64) — and optionally
+  `--idle-timeout` — so hyper closes connections after a bounded number of
+  responses, the client reconnects, and the new connection re-enters the master's
+  queue. This is the reference configuration for workloads with heterogeneous
+  handler latency behind keep-alive clients; it approaches request-grained
+  balancing for a bounded cost of TCP re-handshakes.
+
+  **Trade-off.** Master mode adds one IPC hop (accept → sendmsg → recv) per
+  connection — a few microseconds, negligible next to a PHP handler but pure
+  overhead for a trivial hello-world — which is why `kernel` remains the default.
+  Reach for `master` when handler latency is heterogeneous (a mix of fast and
+  slow routes) and tail latency matters.
+
+  **Master-crash policy.** In master mode the master owns the listener. If the
+  master dies, the workers see EOF on their socketpair and exit cleanly (`0`)
+  instead of continuing to serve unsupervised — the opposite of kernel mode,
+  where orphaned workers keep their own listeners and serve on without a
+  supervisor. Worker crashes are handled identically to kernel mode: the master
+  reaps and respawns them (with a fresh socketpair), and the same
+  `--max-execution-time` / `--max-requests` recycling applies.
 
 ## Robustness
 

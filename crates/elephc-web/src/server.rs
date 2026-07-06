@@ -11,9 +11,11 @@
 //! - --listen host:port is required; without it the process errors and exits.
 
 use std::ffi::{c_char, CStr};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::dispatch::{self, DispatchConfig, DispatchMode, MasterWorker};
 use crate::worker::{self, WorkerConfig};
 use crate::{handler, worker_mode};
 
@@ -26,6 +28,13 @@ A standalone prefork HTTP server compiled from PHP by `elephc --web`.
 Options:
   --listen HOST:PORT     Address to bind (required), e.g. 127.0.0.1:8080
   --workers N            Number of prefork worker processes (default: CPU count)
+  --dispatch MODE        Connection dispatch: kernel = SO_REUSEPORT per-worker
+                         listeners (default), master = the master accepts and
+                         passes each connection to an idle worker (shared queue).
+                         Pairs with a short --max-requests-per-connection to
+                         approach request-grained balancing on keep-alive clients
+  --dispatch-backlog N   Master mode only: max accepted connections queued while
+                         all workers are busy (default: 1024)
   --max-body-size BYTES  Max request body in bytes; 0 = unlimited (default: 8388608)
   --max-requests N       Recycle a WORKER PROCESS after N requests; 0 = never (default: 0; worker mode: 1000)
   --max-requests-per-connection N
@@ -58,11 +67,18 @@ const FAST_DEATH: Duration = Duration::from_millis(1000);
 /// boot signal is a runtime crash (counter reset, immediate respawn). In classic
 /// `--web` mode there is no boot pipe, so the timing heuristic (`FAST_DEATH`)
 /// is used instead.
-const MAX_FAST_DEATHS: u32 = 10;
+pub(crate) const MAX_FAST_DEATHS: u32 = 10;
 
 /// Set by the SIGINT/SIGTERM handler so the master supervision loop can break and
 /// shut workers down cleanly. Async-signal-safe: the handler only stores to it.
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+/// Returns whether a shutdown (SIGINT/SIGTERM) has been requested. Read by both
+/// `supervise` (kernel) and `dispatch::master_loop` (master) so the two loops
+/// share one shutdown flag.
+pub(crate) fn shutdown_requested() -> bool {
+    SHUTDOWN.load(Ordering::SeqCst)
+}
 
 /// Async-signal-safe SIGINT/SIGTERM handler: records the shutdown request only.
 extern "C" fn handle_shutdown_signal(_sig: libc::c_int) {
@@ -83,10 +99,13 @@ fn install_signal_handlers() {
     }
 }
 
-/// Restores the default disposition for SIGINT/SIGTERM. Each forked worker calls
-/// this so it does NOT inherit the master's catch-and-flag handler — otherwise a
-/// worker would catch the master's forwarded SIGTERM and never terminate, hanging
-/// the master's reap. With SIG_DFL a forwarded SIGTERM terminates the worker.
+/// Restores the default disposition for SIGINT/SIGTERM (and SIGCHLD). Each forked
+/// worker calls this so it does NOT inherit the master's catch-and-flag handler —
+/// otherwise a worker would catch the master's forwarded SIGTERM and never
+/// terminate, hanging the master's reap. With SIG_DFL a forwarded SIGTERM
+/// terminates the worker. SIGCHLD is reset too so a master-mode worker respawned
+/// after `dispatch::install_sigchld_handler` does not inherit the master's SIGCHLD
+/// handler (the worker has no children; a no-op in kernel mode).
 fn reset_signal_handlers_to_default() {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
@@ -95,6 +114,7 @@ fn reset_signal_handlers_to_default() {
         sa.sa_flags = 0;
         libc::sigaction(libc::SIGINT, &sa, std::ptr::null_mut());
         libc::sigaction(libc::SIGTERM, &sa, std::ptr::null_mut());
+        libc::sigaction(libc::SIGCHLD, &sa, std::ptr::null_mut());
     }
 }
 
@@ -133,10 +153,18 @@ struct ServerArgs {
     /// PEM private-key path for TLS (`--tls-key`); `None` = plaintext HTTP. Must be
     /// set together with `tls_cert`.
     tls_key: Option<String>,
+    /// Connection-dispatch backend (`--dispatch`); `Kernel` (default) preserves the
+    /// SO_REUSEPORT path, `Master` selects the fd-passing master loop.
+    dispatch_mode: DispatchMode,
+    /// Master-mode internal fd-queue cap (`--dispatch-backlog`, default 1024).
+    /// Ignored in kernel mode.
+    dispatch_backlog: usize,
 }
 
 impl ServerArgs {
     /// Builds the per-worker config handed to `worker::serve` / `enter_worker_loop`.
+    /// Kept SEPARATE from `dispatch_config` so the `Copy` `WorkerConfig` does not
+    /// carry master-only fields.
     fn worker_config(&self) -> WorkerConfig {
         WorkerConfig {
             max_body: self.max_body,
@@ -147,6 +175,15 @@ impl ServerArgs {
             worker_gc_interval: self.worker_gc_interval,
             max_conn_requests: self.max_conn_requests,
             idle_timeout_secs: self.idle_timeout_secs,
+        }
+    }
+
+    /// Builds the dispatch config (mode + master backlog) threaded into the run
+    /// entry points to select `supervise` (kernel) vs `dispatch::master_loop`.
+    fn dispatch_config(&self) -> DispatchConfig {
+        DispatchConfig {
+            mode: self.dispatch_mode,
+            backlog: self.dispatch_backlog,
         }
     }
 }
@@ -205,11 +242,35 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
     let mut idle_timeout_secs: u32 = 0;
     let mut tls_cert: Option<String> = None;
     let mut tls_key: Option<String> = None;
+    let mut dispatch_mode = DispatchMode::Kernel;
+    let mut dispatch_backlog: usize = 1024;
+    let mut dispatch_backlog_set = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--listen" => { i += 1; listen = args.get(i).cloned(); }
             "--workers" => { i += 1; workers = args.get(i).and_then(|w| w.parse().ok()).unwrap_or(workers); }
+            "--dispatch" => {
+                i += 1;
+                match args.get(i).map(|s| s.as_str()) {
+                    Some("kernel") => dispatch_mode = DispatchMode::Kernel,
+                    Some("master") => dispatch_mode = DispatchMode::Master,
+                    other => {
+                        eprintln!(
+                            "error: --dispatch must be 'kernel' or 'master' (got {:?}; try --help)",
+                            other.unwrap_or("")
+                        );
+                        return ParsedArgs::Exit(2);
+                    }
+                }
+            }
+            "--dispatch-backlog" => {
+                i += 1;
+                if let Some(v) = args.get(i).and_then(|v| v.parse().ok()) {
+                    dispatch_backlog = v;
+                    dispatch_backlog_set = true;
+                }
+            }
             "--max-body-size" => { i += 1; max_body = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_body); }
             "--max-requests" => {
                 i += 1;
@@ -243,6 +304,13 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
         eprintln!("error: --tls-cert and --tls-key must be provided together (try --help)");
         return ParsedArgs::Exit(2);
     }
+    // `--dispatch-backlog` only means anything in master mode; warn (do not error)
+    // when it is set in kernel mode so a stray flag is not silently misleading.
+    if dispatch_backlog_set && dispatch_mode == DispatchMode::Kernel {
+        eprintln!(
+            "warning: --dispatch-backlog is ignored without --dispatch master"
+        );
+    }
     // Worker-mode defaults: recycle after 1000 requests and collect cycles
     // every request, unless the operator explicitly overrode either flag.
     if worker_mode && !max_requests_set {
@@ -263,6 +331,8 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             idle_timeout_secs,
             tls_cert,
             tls_key,
+            dispatch_mode,
+            dispatch_backlog: dispatch_backlog.max(1),
         }),
         None => {
             eprintln!("error: --web binary requires --listen host:port (try --help)");
@@ -277,7 +347,7 @@ fn default_workers() -> usize {
 }
 
 /// Selects which child-entry path a forked worker takes.
-enum WorkerKind {
+pub(crate) enum WorkerKind {
     /// Classic `--web`: re-execute the top-level PHP handler per request.
     Classic { handler: extern "C" fn() },
     /// `--web-worker`: boot PHP once, then register + enter the Rust worker loop.
@@ -288,18 +358,26 @@ enum WorkerKind {
     Script { handler: handler::ScriptHandler },
 }
 
-/// Forks one worker child that serves forever, returning the child pid and the
-/// boot-pipe read fd (for worker mode) in the master. The child restores default
-/// signal disposition, installs the per-mode worker config/listen address, and
-/// never returns. A fork failure aborts the whole process. Used for both initial
-/// spawn and respawn, in both modes.
+/// Forks one worker child that serves forever, returning `(pid, boot_pipe_rd,
+/// master_chan)` in the master. `boot_pipe_rd` is the boot-signal pipe read end
+/// (worker/script modes) or `None` (classic). `master_chan` is the master end of
+/// the dispatch socketpair when `master_dispatch` is set (`--dispatch master`),
+/// else `None`. The child restores default signal disposition, installs the
+/// per-mode config/listen address, and never returns. A fork failure aborts the
+/// whole process. Used for both initial spawn and respawn, in both dispatch modes.
 ///
-/// For `WorkerKind::Worker` a pipe is created before fork; the child gets the
-/// write end (closed in `elephc_web_worker_register` after signaling) and the
-/// master gets the read end (stored alongside the pid so `supervise` can tell a
-/// startup crash from a runtime crash by whether the boot signal arrived). For
-/// `WorkerKind::Classic` the boot pipe read fd is `None`.
-fn spawn_worker(listen: &str, kind: WorkerKind, cfg: WorkerConfig) -> (libc::pid_t, Option<i32>) {
+/// In master mode a socketpair is created before fork (like the boot pipe): the
+/// child keeps its end (installed via `dispatch::set_child_dispatch_chan`, which
+/// makes the serve loop use `ConnSource::Master` and NOT bind a listener) and
+/// closes `child_close_fds` (sibling master ends + the listener fd) so it does not
+/// inherit descriptors it must not hold; the master keeps the other end.
+pub(crate) fn spawn_worker(
+    listen: &str,
+    kind: WorkerKind,
+    cfg: WorkerConfig,
+    master_dispatch: bool,
+    child_close_fds: &[i32],
+) -> (libc::pid_t, Option<i32>, Option<i32>) {
     // Worker mode: create a boot-signal pipe before fork so the child can
     // signal boot completion and the master can detect startup vs runtime
     // crashes precisely instead of relying on the FAST_DEATH timing heuristic.
@@ -315,6 +393,19 @@ fn spawn_worker(listen: &str, kind: WorkerKind, cfg: WorkerConfig) -> (libc::pid
         }
         WorkerKind::Classic { .. } => None,
     };
+    // Master dispatch: create the socketpair before fork (child end `b`, master
+    // end `a`). Failure aborts the master (a partial pool would deadlock).
+    let dispatch_pair = if master_dispatch {
+        match dispatch::socketpair_cloexec() {
+            Ok(pair) => Some(pair),
+            Err(e) => {
+                eprintln!("error: dispatch socketpair creation failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
     match unsafe { libc::fork() } {
         -1 => {
             eprintln!("error: fork failed");
@@ -322,6 +413,21 @@ fn spawn_worker(listen: &str, kind: WorkerKind, cfg: WorkerConfig) -> (libc::pid
         }
         0 => {
             reset_signal_handlers_to_default();
+            // Master dispatch: keep the child end, close the master end + every
+            // inherited sibling master end + the listener fd, and install the child
+            // end so the serve loop selects `ConnSource::Master` (no bind).
+            if let Some((master_end, child_end)) = dispatch_pair {
+                // SAFETY: the master end and the passed fds belong to the master; the
+                // child must not hold them (they would break master-crash EOF and
+                // leak the listener into a worker that never accepts).
+                unsafe {
+                    libc::close(master_end);
+                    for &fd in child_close_fds {
+                        libc::close(fd);
+                    }
+                }
+                dispatch::set_child_dispatch_chan(child_end);
+            }
             match kind {
                 WorkerKind::Classic { handler } => {
                     worker::serve(listen, handler, cfg);
@@ -376,7 +482,13 @@ fn spawn_worker(listen: &str, kind: WorkerKind, cfg: WorkerConfig) -> (libc::pid
                 }
                 None => None,
             };
-            (pid, rd)
+            // Master dispatch: close the child end, keep the master end.
+            let chan = dispatch_pair.map(|(master_end, child_end)| {
+                // SAFETY: the child end belongs to the worker; close the master's copy.
+                unsafe { libc::close(child_end); }
+                master_end
+            });
+            (pid, rd, chan)
         }
     }
 }
@@ -445,7 +557,7 @@ fn supervise(
                 fast_deaths = 0;
             }
             // A worker died unexpectedly: replace it to keep the pool at N.
-            let (new_pid, new_rd) = spawn_worker(listen, kind.clone(), cfg);
+            let (new_pid, new_rd, _) = spawn_worker(listen, kind.clone(), cfg, false, &[]);
             children.push((new_pid, new_rd, Instant::now()));
         } else if pid == -1 {
             // ECHILD: nothing left to wait for. EINTR: a signal arrived → re-loop
@@ -481,7 +593,7 @@ fn supervise(
 ///
 /// For classic mode (`boot_pipe_rd` is `None`): fall back to the timing
 /// heuristic — a death within `FAST_DEATH` of spawn is a startup crash.
-fn classify_crash(boot_pipe_rd: Option<i32>, spawned_at: Instant) -> bool {
+pub(crate) fn classify_crash(boot_pipe_rd: Option<i32>, spawned_at: Instant) -> bool {
     match boot_pipe_rd {
         // Worker mode: pipe-based boot signal. The read fd is still open here
         // (closed right after this call returns); check whether the child wrote
@@ -538,6 +650,65 @@ fn listen_scheme(args: &ServerArgs) -> &'static str {
         "http"
     }
 }
+
+/// Runs the `--dispatch master` fd-dispatch path, shared by all three web modes.
+/// Forks every worker with its own socketpair (each worker closes the master ends
+/// of its already-forked siblings so no worker inherits another's dispatch
+/// channel), binds the SINGLE plain listener AFTER the fork loop (so no worker
+/// inherits it), logs the startup line, and drives `dispatch::master_loop` in
+/// place of `supervise`. `mode_label` names the mode in the startup line. Returns
+/// the master exit code. The kernel path is unaffected — `master_loop` is a
+/// strictly parallel alternative selected only here.
+fn run_master(
+    args: &ServerArgs,
+    kind: WorkerKind,
+    cfg: WorkerConfig,
+    dispatch: DispatchConfig,
+    mode_label: &str,
+) -> i32 {
+    let mut workers: Vec<MasterWorker> = Vec::with_capacity(args.workers);
+    for _ in 0..args.workers {
+        // A worker forked at position k must close the master ends AND boot-pipe
+        // read ends of workers 0..k, so it inherits no live sibling fd. The listener
+        // does not exist yet, so it is not in the close set at initial spawn
+        // (respawns add it and the queued backlog fds — see `dispatch::master_loop`).
+        let mut close_fds: Vec<i32> = Vec::new();
+        for w in &workers {
+            close_fds.push(w.chan());
+            if let Some(rd) = w.boot_pipe_rd() {
+                close_fds.push(rd);
+            }
+        }
+        let (pid, rd, chan) = spawn_worker(&args.listen, kind.clone(), cfg, true, &close_fds);
+        let chan = chan.expect("master dispatch spawn must return a socketpair master end");
+        workers.push(MasterWorker::new(pid, chan, rd));
+    }
+    let addr: SocketAddr = match args.listen.parse() {
+        Ok(a) => a,
+        Err(_) => {
+            eprintln!("error: invalid --listen address {:?}", args.listen);
+            dispatch::reap_workers(&workers);
+            return 2;
+        }
+    };
+    let listener = match crate::worker::plain_listener(addr) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("elephc-web: failed to bind {}: {}", addr, e);
+            dispatch::reap_workers(&workers);
+            return 1;
+        }
+    };
+    eprintln!(
+        "elephc-web: listening on {}://{} ({} worker{}{}, master dispatch)",
+        listen_scheme(args),
+        args.listen,
+        args.workers,
+        if args.workers == 1 { "" } else { "s" },
+        mode_label,
+    );
+    dispatch::master_loop(listener, &args.listen, kind, cfg, dispatch, workers)
+}
 ///
 /// # Safety
 /// `handler` must be the compiler-emitted `_elephc_web_handler` symbol; argv
@@ -560,9 +731,15 @@ pub extern "C" fn elephc_web_run(
     install_signal_handlers();
     let kind = WorkerKind::Classic { handler };
     let cfg = args.worker_config();
+    let dispatch = args.dispatch_config();
+    // Master dispatch is a strictly parallel path; the kernel path below is
+    // unchanged.
+    if dispatch.mode == DispatchMode::Master {
+        return run_master(&args, kind, cfg, dispatch, "");
+    }
     let mut children: Vec<(libc::pid_t, Option<i32>, Instant)> = Vec::new();
     for _ in 0..args.workers {
-        let (pid, rd) = spawn_worker(&args.listen, kind.clone(), cfg);
+        let (pid, rd, _) = spawn_worker(&args.listen, kind.clone(), cfg, false, &[]);
         children.push((pid, rd, Instant::now()));
     }
     eprintln!(
@@ -605,9 +782,13 @@ pub extern "C" fn elephc_web_run_worker(
     install_signal_handlers();
     let kind = WorkerKind::Worker { boot: boot_fn };
     let cfg = args.worker_config();
+    let dispatch = args.dispatch_config();
+    if dispatch.mode == DispatchMode::Master {
+        return run_master(&args, kind, cfg, dispatch, ", web-worker mode");
+    }
     let mut children: Vec<(libc::pid_t, Option<i32>, Instant)> = Vec::new();
     for _ in 0..args.workers {
-        let (pid, rd) = spawn_worker(&args.listen, kind.clone(), cfg);
+        let (pid, rd, _) = spawn_worker(&args.listen, kind.clone(), cfg, false, &[]);
         children.push((pid, rd, Instant::now()));
     }
     eprintln!(
@@ -646,9 +827,13 @@ pub extern "C" fn elephc_web_run_script(
     install_signal_handlers();
     let kind = WorkerKind::Script { handler };
     let cfg = args.worker_config();
+    let dispatch = args.dispatch_config();
+    if dispatch.mode == DispatchMode::Master {
+        return run_master(&args, kind, cfg, dispatch, ", web-worker=script mode");
+    }
     let mut children: Vec<(libc::pid_t, Option<i32>, Instant)> = Vec::new();
     for _ in 0..args.workers {
-        let (pid, rd) = spawn_worker(&args.listen, kind.clone(), cfg);
+        let (pid, rd, _) = spawn_worker(&args.listen, kind.clone(), cfg, false, &[]);
         children.push((pid, rd, Instant::now()));
     }
     eprintln!(
