@@ -2557,9 +2557,20 @@ Aggiornamento verifica target-aware - 2026-07-06:
   - `./scripts/test-linux-x86_64.sh literal_eval_is_iterable_scope`: passato;
   - `./scripts/test-linux-x86_64.sh literal_eval_type_probes_scope`: passato;
 - i runner Docker x86_64 sono usciti senza container residui;
-- la verifica locale Linux ARM64 non e' stata rilanciata in questa tranche:
-  resta demandata alla matrice CI o a un filtro Docker ARM64 dedicato prima della
-  chiusura completa del piano.
+- la verifica locale Linux ARM64 per i casi direct-read resta demandata alla
+  matrice CI o a filtri Docker dedicati prima di cambiare quel sottoinsieme.
+
+Aggiornamento verifica target-aware prime-loop - 2026-07-06:
+
+- il test prime-sum literal eval (`100000`, output `454396537`, no bridge, no
+  `elephc_magician`) e' passato sul target locale macOS ARM64:
+  - `cargo test --test codegen_tests codegen::eval::test_literal_eval_prime_loop_uses_aot_without_execute_bridge -- --exact --nocapture`;
+- lo stesso filtro e' passato su Linux x86_64 via Docker:
+  - `./scripts/test-linux-x86_64.sh test_literal_eval_prime_loop_uses_aot_without_execute_bridge`;
+- lo stesso filtro e' passato su Linux ARM64 via Docker:
+  - `./scripts/test-linux-arm64.sh test_literal_eval_prime_loop_uses_aot_without_execute_bridge`;
+- i run Docker hanno emesso solo i warning preesistenti su `libc::time_t` in
+  `elephc-magician`.
 
 Aggiornamento Milestone 4/7.88 - 2026-07-06:
 
