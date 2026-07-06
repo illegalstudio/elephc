@@ -2572,6 +2572,19 @@ Aggiornamento verifica target-aware prime-loop - 2026-07-06:
 - i run Docker hanno emesso solo i warning preesistenti su `libc::time_t` in
   `elephc-magician`.
 
+Aggiornamento benchmark prime-loop - 2026-07-06:
+
+- ricostruito `target/release/elephc` con `cargo build --release`;
+- eseguito benchmark manuale fuori repo, senza aggiungere il caso alla suite
+  permanente, sullo stesso workload prime-sum fino a `100000`;
+- output verificato identico in tutti i casi: `454396537`;
+- mediane su 12 run:
+  - Elephc standard: `13.35 ms`;
+  - Elephc via eval literal AOT: `9.74 ms`;
+  - PHP standard: `97.77 ms`;
+  - PHP via eval: `117.76 ms`;
+- RSS sample `Elephc via eval`: `1572864` byte di maximum resident set size.
+
 Aggiornamento Milestone 4/7.88 - 2026-07-06:
 
 - esteso il path EIR AOT direct-read per `count($callerArray)` senza aprire
