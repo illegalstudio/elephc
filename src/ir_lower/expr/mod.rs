@@ -9329,6 +9329,7 @@ fn lower_static_method_call(
         }
     }
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let operands = coerce_int_backed_enum_string_argument(ctx, receiver, method, operands, expr);
     let name = format!("{}::{}", receiver_name(receiver), method);
     let data = ctx.intern_string(&name);
     let result_type = sig
@@ -9343,6 +9344,55 @@ fn lower_static_method_call(
         Op::StaticMethodCall.default_effects(),
         Some(expr.span),
     )
+}
+
+/// PHP coerces a numeric string to the integer backing value for an int-backed enum's
+/// `from()`/`tryFrom()`. When the sole argument lowered to a string, insert an explicit
+/// `EnumBackingStringToInt` coercion (issue #349) so the enum call receives a plain integer
+/// operand: the backing scan then runs on an int rather than a heap string, and a
+/// non-numeric string throws `TypeError` inside the coercion at runtime. Non-matching
+/// receivers/methods/argument types pass the operands through unchanged.
+fn coerce_int_backed_enum_string_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+    mut operands: Vec<crate::ir::ValueId>,
+    expr: &Expr,
+) -> Vec<crate::ir::ValueId> {
+    let key = php_symbol_key(method);
+    if (key != "from" && key != "tryfrom") || operands.len() != 1 {
+        return operands;
+    }
+    let StaticReceiver::Named(name) = receiver else {
+        return operands;
+    };
+    let enum_name = name.trim_start_matches('\\');
+    let is_int_backed = ctx
+        .enums
+        .get(enum_name)
+        .and_then(|info| info.backing_type.as_ref())
+        .is_some_and(|backing| matches!(backing, PhpType::Int));
+    if !is_int_backed
+        || !matches!(ctx.builder.value_php_type(operands[0]).codegen_repr(), PhpType::Str)
+    {
+        return operands;
+    }
+    let method_display = if key == "tryfrom" { "tryFrom" } else { "from" };
+    let message = format!(
+        "{}::{}(): Argument #1 ($value) must be of type int, string given",
+        enum_name, method_display
+    );
+    let message_data = ctx.intern_string(&message);
+    let coerced = ctx.emit_value(
+        Op::EnumBackingStringToInt,
+        vec![operands[0]],
+        Some(Immediate::Data(message_data)),
+        PhpType::Int,
+        Op::EnumBackingStringToInt.default_effects(),
+        Some(expr.span),
+    );
+    operands[0] = coerced.value;
+    operands
 }
 
 /// Resolves the class whose `__callStatic` should handle an otherwise-undefined
