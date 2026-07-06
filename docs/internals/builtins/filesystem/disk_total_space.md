@@ -2,14 +2,14 @@
 title: "disk_total_space() — internals"
 description: "Compiler internals for disk_total_space(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 105
+  order: 107
 ---
 
 ## `disk_total_space()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/disk_total_space.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/disk_total_space.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3378](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3378) (`lower_disk_total_space`)
 - **Function symbol**: `lower_disk_total_space()`
 
@@ -36,4 +36,3 @@ function disk_total_space(string $directory): float
 ## Cross-references
 
 - [User reference for `disk_total_space()`](../../../php/builtins/filesystem/disk_total_space.md)
-

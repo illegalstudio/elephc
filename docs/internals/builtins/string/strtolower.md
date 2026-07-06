@@ -2,14 +2,14 @@
 title: "strtolower() — internals"
 description: "Compiler internals for strtolower(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 396
+  order: 393
 ---
 
 ## `strtolower()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/strtolower.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strtolower.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
 - **Function symbol**: `lower_unary_string_runtime()`
 
@@ -37,4 +37,3 @@ function strtolower(string $string): string
 ## Cross-references
 
 - [User reference for `strtolower()`](../../../php/builtins/string/strtolower.md)
-

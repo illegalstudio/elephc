@@ -934,3 +934,34 @@ echo $typed->line(), "\n", $untyped->line(), "\n", $three->line();
     );
     assert_eq!(out, "1|hi\n1|hi\n1|x|1.5");
 }
+
+/// Regression for issue #360: indexed array elements are valid PHP l-values for
+/// by-reference parameters, and mutations must write back into the array slot.
+#[test]
+fn test_array_element_can_be_passed_by_reference() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$x) { $x++; }
+$a = [5];
+bump($a[0]);
+echo $a[0];
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+/// Regression for issue #360: taking an array-element reference must split
+/// copy-on-write storage before the callee mutates the element.
+#[test]
+fn test_array_element_by_reference_splits_copy_on_write_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$x) { $x++; }
+$a = [5];
+$b = $a;
+bump($b[0]);
+echo $a[0], ":", $b[0];
+"#,
+    );
+    assert_eq!(out, "5:6");
+}

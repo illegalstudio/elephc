@@ -2,14 +2,14 @@
 title: "filectime() — internals"
 description: "Compiler internals for filectime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 108
+  order: 110
 ---
 
 ## `filectime()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/filectime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/filectime.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5476](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5476) (`lower_filectime`)
 - **Function symbol**: `lower_filectime()`
 
@@ -39,4 +39,3 @@ function filectime(string $filename): mixed
 ## Cross-references
 
 - [User reference for `filectime()`](../../../php/builtins/filesystem/filectime.md)
-

@@ -2,14 +2,14 @@
 title: "shuffle() — internals"
 description: "Compiler internals for shuffle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 57
+  order: 59
 ---
 
 ## `shuffle()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/shuffle.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/shuffle.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1116](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1116) (`lower_shuffle`)
 - **Function symbol**: `lower_shuffle()`
 
@@ -37,4 +37,3 @@ function shuffle(array $array): bool
 ## Cross-references
 
 - [User reference for `shuffle()`](../../../php/builtins/array/shuffle.md)
-

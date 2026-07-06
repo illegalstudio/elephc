@@ -2,14 +2,14 @@
 title: "chdir() — internals"
 description: "Compiler internals for chdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 97
+  order: 99
 ---
 
 ## `chdir()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/chdir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/chdir.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4438](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4438) (`lower_chdir`)
 - **Function symbol**: `lower_chdir()`
 
@@ -40,4 +40,3 @@ function chdir(string $directory): bool
 ## Cross-references
 
 - [User reference for `chdir()`](../../../php/builtins/filesystem/chdir.md)
-

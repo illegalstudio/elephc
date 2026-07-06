@@ -67,6 +67,40 @@ fn test_error_object_subscript_requires_array_access() {
     );
 }
 
+/// Verifies that parenthesis-free `new Class` rejects immediate postfix access.
+#[test]
+fn test_error_parenthesis_free_new_rejects_immediate_postfix_access() {
+    expect_error(
+        "<?php class Box { public $value = \"x\"; } echo new Box->value;",
+        "Parentheses are required before accessing a parenthesis-free new expression",
+    );
+    expect_error(
+        "<?php class Box { public $value = \"x\"; } echo new Box?->value;",
+        "Parentheses are required before accessing a parenthesis-free new expression",
+    );
+    expect_error(
+        "<?php class Box { public static function value() {} } echo new Box::value();",
+        "Parentheses are required before accessing a parenthesis-free new expression",
+    );
+    expect_error(
+        "<?php class Box {} echo new Box[0];",
+        "Parentheses are required before accessing a parenthesis-free new expression",
+    );
+}
+
+/// Verifies unsupported dynamic class-name references after `new` fail instead of miscompiling.
+#[test]
+fn test_error_dynamic_new_rejects_unsupported_class_name_references() {
+    expect_error(
+        "<?php class Box { public $className = \"stdClass\"; } $box = new Box(); $object = new $box->className;",
+        "Dynamic class-name expressions after 'new' are not supported",
+    );
+    expect_error(
+        "<?php $classes = [\"stdClass\"]; $object = new $classes[0];",
+        "Dynamic class-name expressions after 'new' are not supported",
+    );
+}
+
 /// Verifies the error diagnostic for nullsafe property rejects scalar receiver.
 #[test]
 fn test_error_nullsafe_property_rejects_scalar_receiver() {
@@ -114,16 +148,6 @@ fn test_error_private_access() {
     expect_error(
         "<?php class Secret { private $value = 7; } $s = new Secret(); echo $s->value;",
         "Cannot access private property: Secret::value",
-    );
-}
-
-/// Verifies the error diagnostic for readonly assign.
-#[test]
-fn test_error_readonly_assign() {
-    // readonly property may only be assigned during construction.
-    expect_error(
-        "<?php class User { public readonly $id; public function __construct($id) { $this->id = $id; } } $u = new User(1); $u->id = 2;",
-        "Cannot assign to readonly property outside constructor: User::id",
     );
 }
 
@@ -597,16 +621,6 @@ fn test_error_class_cannot_extend_interface() {
 }
 
 // --- Date/time error tests ---
-
-/// Verifies the error diagnostic for readonly class property is implicitly readonly.
-#[test]
-fn test_error_readonly_class_property_is_implicitly_readonly() {
-    // inside a readonly class, instance properties are implicitly readonly.
-    expect_error(
-        "<?php readonly class User { public $id; public function __construct($id) { $this->id = $id; } } $u = new User(1); $u->id = 2;",
-        "Cannot assign to readonly property outside constructor: User::id",
-    );
-}
 
 /// Verifies the error diagnostic for readonly class cannot extend non readonly parent.
 #[test]

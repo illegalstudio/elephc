@@ -2,14 +2,14 @@
 title: "strcmp() — internals"
 description: "Compiler internals for strcmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 389
+  order: 386
 ---
 
 ## `strcmp()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/strcmp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strcmp.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:139](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L139) (`lower_binary_string_runtime`)
 - **Function symbol**: `lower_binary_string_runtime()`
 
@@ -36,4 +36,3 @@ function strcmp(string $string1, string $string2): int
 ## Cross-references
 
 - [User reference for `strcmp()`](../../../php/builtins/string/strcmp.md)
-

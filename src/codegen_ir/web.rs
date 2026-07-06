@@ -5,8 +5,8 @@
 //! releases and zeroes function static locals (and their init markers, so their
 //! initializers re-run), releases the previous value of refcounted static class
 //! properties (their initializers re-run in the handler body and restore the
-//! defaults), releases and zeroes the request superglobals ($_SERVER/$_GET/
-//! $_POST) that the web prelude reassigns each request, and resets the
+//! defaults), releases and zeroes ordinary globals plus request superglobals
+//! ($_SERVER/$_GET/$_POST) that survive between requests, and resets the
 //! concat-buffer write offset.
 //!
 //! Called from:
@@ -80,10 +80,14 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     for (symbol, php_type) in refcounted_static_properties(module) {
         emit_static_property_release(emitter, &symbol, &php_type, &mut labels);
     }
+    for name in &module.data.global_names {
+        if !superglobals::is_superglobal(name) && !module.extern_globals.contains_key(name) {
+            emit_ordinary_global_reset(emitter, &ir_global_symbol(name), &mut labels);
+        }
+    }
     // Request superglobals ($_SERVER/$_GET/$_POST) live in `_eir_global_*` symbol
-    // storage and are reassigned (`$_SERVER = []`) by the web prelude every
-    // request. `StoreGlobal` does not release the previous value, so without this
-    // each request would leak the prior request's assoc-array hash.
+    // storage and are reassigned by the web prelude every request. Reset them here
+    // so stale request arrays are gone before the next prelude builds replacements.
     for name in superglobals::SUPERGLOBALS {
         emit_superglobal_reset(emitter, &ir_global_symbol(name), &mut labels);
     }
@@ -148,6 +152,18 @@ fn emit_superglobal_reset(emitter: &mut Emitter, symbol: &str, labels: &mut Labe
     let ty = superglobals::superglobal_type().codegen_repr();
     let skip_label = labels.next("skip_superglobal");
     emitter.comment(&format!("reset request superglobal {}", symbol));
+    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 0);
+    abi::emit_branch_if_int_result_zero(emitter, &skip_label);
+    emit_release_symbol_value(emitter, symbol, &ty);
+    abi::emit_store_zero_to_symbol(emitter, symbol, 0);
+    emitter.label(&skip_label);
+}
+
+/// Releases and zeroes one ordinary PHP global, whose storage is a boxed Mixed cell.
+fn emit_ordinary_global_reset(emitter: &mut Emitter, symbol: &str, labels: &mut LabelGen) {
+    let ty = PhpType::Mixed;
+    let skip_label = labels.next("skip_global");
+    emitter.comment(&format!("reset ordinary global {}", symbol));
     abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 0);
     abi::emit_branch_if_int_result_zero(emitter, &skip_label);
     emit_release_symbol_value(emitter, symbol, &ty);

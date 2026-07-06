@@ -2,17 +2,21 @@
 title: "is_null() — internals"
 description: "Compiler internals for is_null(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 424
+  order: 421
 ---
 
 ## `is_null()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/types/is_null.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_null.rs)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:993](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L993) (`lower_is_null_builtin`)
+- **Function symbol**: `lower_is_null_builtin()`
 
+
+### Lowering notes
+
+- Lowers `is_null()` for concrete scalar values and boxed Mixed payloads.
 
 ## Runtime helpers
 
@@ -31,4 +35,3 @@ function is_null(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_null()`](../../../php/builtins/type/is_null.md)
-

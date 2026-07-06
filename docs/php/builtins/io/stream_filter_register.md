@@ -1,8 +1,8 @@
 ---
 title: "stream_filter_register()"
-description: "Lowers `stream_filter_register(filter_name, class)` into the user-filter registry helper."
+description: "Registers a user-defined stream filter."
 sidebar:
-  order: 197
+  order: 199
 ---
 
 ## stream_filter_register()
@@ -11,7 +11,7 @@ sidebar:
 function stream_filter_register(string $filter_name, string $class): bool
 ```
 
-Lowers `stream_filter_register(filter_name, class)` into the user-filter registry helper.
+Registers a user-defined stream filter.
 
 **Parameters**:
 - `$filter_name` (`string`)

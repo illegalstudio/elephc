@@ -2,14 +2,14 @@
 title: "ctype_alpha() — internals"
 description: "Compiler internals for ctype_alpha(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 410
+  order: 407
 ---
 
 ## `ctype_alpha()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/ctype_alpha.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ctype_alpha.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/ctype.rs`:20](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/ctype.rs#L20) (`lower_ctype_alpha`)
 - **Function symbol**: `lower_ctype_alpha()`
 
@@ -35,4 +35,3 @@ function ctype_alpha(string $text): bool
 ## Cross-references
 
 - [User reference for `ctype_alpha()`](../../../php/builtins/type/ctype_alpha.md)
-

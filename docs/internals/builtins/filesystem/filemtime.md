@@ -2,14 +2,14 @@
 title: "filemtime() — internals"
 description: "Compiler internals for filemtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 111
+  order: 113
 ---
 
 ## `filemtime()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/filemtime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/filemtime.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5432](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5432) (`lower_filemtime`)
 - **Function symbol**: `lower_filemtime()`
 
@@ -40,4 +40,3 @@ function filemtime(string $filename): int
 ## Cross-references
 
 - [User reference for `filemtime()`](../../../php/builtins/filesystem/filemtime.md)
-

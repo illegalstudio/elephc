@@ -1,6 +1,6 @@
 ---
 title: "ucwords()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Uppercases the first character of each word in a string."
 sidebar:
   order: 399
 ---
@@ -8,14 +8,14 @@ sidebar:
 ## ucwords()
 
 ```php
-function ucwords(string $string, string $separators): string
+function ucwords(string $string, string $separators = ' \t\r\n\x0c\x0b'): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Uppercases the first character of each word in a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$separators` (`string`), optional
+- `$separators` (`string`), default `' \t\r\n\x0c\x0b'`, optional
 
 **Returns**: `string`
 

@@ -1,8 +1,8 @@
 ---
 title: "is_writable()"
-description: "Lowers `is_writable(path)` through the target-aware runtime access helper."
+description: "Tells whether the filename is writable."
 sidebar:
-  order: 125
+  order: 127
 ---
 
 ## is_writable()
@@ -11,7 +11,7 @@ sidebar:
 function is_writable(string $filename): bool
 ```
 
-Lowers `is_writable(path)` through the target-aware runtime access helper.
+Tells whether the filename is writable.
 
 **Parameters**:
 - `$filename` (`string`)

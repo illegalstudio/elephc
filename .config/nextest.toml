@@ -35,13 +35,14 @@ relative-to = "target"
 path = "debug/libelephc_web.a"
 relative-to = "target"
 
-# The ir_backend_parity first-class-callable case bundles 15 legacy-vs-EIR parity
-# programs (several link the PCRE staticlib), each compiled and run through both
-# backends. It legitimately runs ~65-70s, just over the global 60s cap, so give
-# this one test a longer slow-timeout to avoid spurious termination.
+# The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
+# parity programs (several link the PCRE staticlib), each compiled and run twice.
+# It legitimately runs ~65-70s, just over the global 60s cap, so it needs a
+# longer slow-timeout to avoid spurious termination on loaded runners.
 [[profile.default.overrides]]
 filter = 'test(parity_function_first_class_callable_dispatch)'
 slow-timeout = { period = "180s", terminate-after = 1 }
+
 [[profile.ci.overrides]]
 filter = 'test(parity_function_first_class_callable_dispatch)'
 slow-timeout = { period = "180s", terminate-after = 1 }

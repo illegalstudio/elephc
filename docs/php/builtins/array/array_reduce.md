@@ -1,6 +1,6 @@
 ---
 title: "array_reduce()"
-description: "Lowers `array_reduce()` through the callback-driven runtime helper."
+description: "Iteratively reduces an array to a single value using a callback function."
 sidebar:
   order: 31
 ---
@@ -8,15 +8,15 @@ sidebar:
 ## array_reduce()
 
 ```php
-function array_reduce(array $array, callable $callback, mixed $initial): int
+function array_reduce(array $array, callable $callback, mixed $initial = null): int
 ```
 
-Lowers `array_reduce()` through the callback-driven runtime helper.
+Iteratively reduces an array to a single value using a callback function.
 
 **Parameters**:
 - `$array` (`array`)
 - `$callback` (`callable`)
-- `$initial` (`mixed`), optional
+- `$initial` (`mixed`), default `null`, optional
 
 **Returns**: `int`
 

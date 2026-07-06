@@ -518,6 +518,11 @@ fn ensure_static_property_value_supported(
     if matches!(slot.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return Ok(());
     }
+    if matches!(slot.php_type.codegen_repr(), PhpType::Int)
+        && matches!(value_ty.codegen_repr(), PhpType::Mixed)
+    {
+        return Ok(());
+    }
     if is_empty_array_for_array_static_property(value_ty, &slot.php_type) {
         return Ok(());
     }
@@ -596,8 +601,55 @@ fn load_static_property_store_value_to_result(
         return Ok(());
     }
     ctx.load_value_to_result(value)?;
+    if matches!(slot_ty.codegen_repr(), PhpType::Int)
+        && matches!(value_ty.codegen_repr(), PhpType::Mixed)
+    {
+        emit_mixed_result_as_int(ctx, value)?;
+        return Ok(());
+    }
     box_static_property_value_if_needed(ctx, slot_ty, &value_ty);
     Ok(())
+}
+
+/// Narrows a loaded Mixed result to int for coercive typed static-property stores.
+fn emit_mixed_result_as_int(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // move the Mixed pointer into the first SysV argument register
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        }
+    }
+    if value_is_owned_mixed_store_temporary(ctx, value)? {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        ctx.load_value_to_result(value)?;
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    }
+    Ok(())
+}
+
+/// Returns true when a Mixed store source is a temporary that must be released after narrowing.
+fn value_is_owned_mixed_store_temporary(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    Ok(matches!(
+        inst_ref.op,
+        crate::ir::Op::ICheckedAdd
+            | crate::ir::Op::ICheckedSub
+            | crate::ir::Op::ICheckedMul
+            | crate::ir::Op::MixedNumericBinop
+            | crate::ir::Op::MixedBox
+    ))
 }
 
 /// Reorders `__rt_mixed_unbox` output into the tagged-scalar result register pair.
@@ -654,30 +706,96 @@ fn emit_uninitialized_static_property_guard(
     ctx.emitter.label(&initialized_label);
 }
 
-/// Emits the runtime fatal diagnostic for an uninitialized typed static-property read.
+/// Emits the runtime throw for an uninitialized typed static-property read.
+///
+/// Constructs an `Error` object with the diagnostic message, publishes it to
+/// `_exc_value`, and branches to `__rt_throw_current` so surrounding try/catch
+/// blocks can observe and catch it. When no handler is registered, the uncaught
+/// fast path prints the specific fatal diagnostic and exits, preserving the old behavior.
 fn emit_uninitialized_static_property_fatal(
     ctx: &mut FunctionContext<'_>,
     slot: &StaticPropertySlot,
 ) {
     let message = format!(
-        "Fatal error: Typed static property {}::${} must not be accessed before initialization\n",
+        "Typed static property {}::${} must not be accessed before initialization",
         slot.declaring_class, slot.property
+    );
+    let fatal_message = format!("Fatal error: {}\n", message);
+    let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
+    emit_uninitialized_static_property_uncaught_fatal_if_no_handler(
+        ctx,
+        &fatal_label,
+        fatal_len,
     );
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the uninitialized static-property fatal
-            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the fatal diagnostic byte length to write()
-            ctx.emitter.syscall(4);
+            ctx.emitter.instruction("mov x0, #32");                                // request Throwable payload storage
+            ctx.emitter.instruction("bl __rt_heap_alloc");                         // allocate the Error object payload
+            ctx.emitter.instruction("mov x9, #6");                                 // heap kind 6 = object instance
+            ctx.emitter.instruction("str x9, [x0, #-8]");                          // stamp allocation as a runtime object
+            abi::emit_symbol_address(ctx.emitter, "x9", "_spl_error_class_id");   // load Error's runtime class id symbol
+            ctx.emitter.instruction("ldr x9, [x9]");                               // load Error's runtime class id for this program
+            ctx.emitter.instruction("str x9, [x0]");                               // store class id at the object header
+            abi::emit_symbol_address(ctx.emitter, "x9", &message_label);          // materialize static Error message pointer
+            ctx.emitter.instruction("str x9, [x0, #8]");                          // store static Error message pointer
+            ctx.emitter.instruction(&format!("mov x9, #{}", message_len));         // load Error message length
+            ctx.emitter.instruction("str x9, [x0, #16]");                         // store exception message length
+            ctx.emitter.instruction("str xzr, [x0, #24]");                        // exception code defaults to zero
+            abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");             // materialize the active exception cell
+            ctx.emitter.instruction("str x0, [x9]");                               // publish the active exception object
+            ctx.emitter.instruction("b __rt_throw_current");                      // enter the standard exception unwinder
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
-            ctx.emitter.instruction(&format!("mov edx, {}", message_len));      // pass the fatal diagnostic byte length to write()
-            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the uninitialized static-property fatal
-            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall
-            ctx.emitter.instruction("syscall");                                 // write the uninitialized static-property fatal diagnostic
+            ctx.emitter.instruction("push rbp");                                   // preserve caller frame pointer for exception allocation
+            ctx.emitter.instruction("mov rbp, rsp");                               // establish aligned helper frame
+            ctx.emitter.instruction("sub rsp, 16");                                // keep the nested heap allocation call 16-byte aligned
+            ctx.emitter.instruction("mov rax, 32");                                // request Throwable payload storage
+            ctx.emitter.instruction("call __rt_heap_alloc");                       // allocate the Error object payload
+            ctx.emitter.instruction("mov r10, 0x4548504c00000006");              // x86_64 heap-kind word: HE LP magic + kind 6 object
+            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");               // stamp allocation as a runtime object
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0); // load Error's runtime class id for this program
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                   // store class id at the object header
+            abi::emit_symbol_address(ctx.emitter, "r10", &message_label);          // materialize static Error message pointer
+            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");               // store static Error message pointer
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store Error message length
+            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                // exception code defaults to zero
+            abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);   // publish the active exception object
+            ctx.emitter.instruction("mov rsp, rbp");                               // release helper frame before throwing
+            ctx.emitter.instruction("pop rbp");                                    // restore caller frame pointer before throwing
+            ctx.emitter.instruction("jmp __rt_throw_current");                    // enter the standard exception unwinder
         }
     }
-    abi::emit_exit(ctx.emitter, 1);
+}
+
+/// Emits a no-handler fast path that preserves the specific typed static-property fatal text.
+fn emit_uninitialized_static_property_uncaught_fatal_if_no_handler(
+    ctx: &mut FunctionContext<'_>,
+    fatal_label: &str,
+    fatal_len: usize,
+) {
+    let throw_label = ctx.next_label("typed_static_property_throw");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_exc_handler_top", 0);
+            ctx.emitter.instruction(&format!("cbnz x9, {}", throw_label));      // keep typed static-property errors catchable when a handler is active
+            abi::emit_symbol_address(ctx.emitter, "x1", fatal_label);          // load the specific uninitialized static-property fatal text
+            ctx.emitter.instruction(&format!("mov x2, #{}", fatal_len));        // pass the fatal diagnostic byte length to write()
+            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the uninitialized static-property fatal
+            ctx.emitter.syscall(4);
+            abi::emit_exit(ctx.emitter, 1);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_exc_handler_top", 0);
+            ctx.emitter.instruction("test r10, r10");                           // is there an active handler that can catch the Error?
+            ctx.emitter.instruction(&format!("jne {}", throw_label));           // keep typed static-property errors catchable when a handler is active
+            abi::emit_symbol_address(ctx.emitter, "rsi", fatal_label);          // load the specific uninitialized static-property fatal text
+            ctx.emitter.instruction(&format!("mov edx, {}", fatal_len));        // pass the fatal diagnostic byte length to write()
+            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the uninitialized static-property fatal
+            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall
+            ctx.emitter.instruction("syscall");                                 // write the specific uninitialized static-property fatal diagnostic
+            abi::emit_exit(ctx.emitter, 1);
+        }
+    }
+    ctx.emitter.label(&throw_label);
 }

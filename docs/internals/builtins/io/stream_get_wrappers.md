@@ -2,14 +2,14 @@
 title: "stream_get_wrappers() — internals"
 description: "Compiler internals for stream_get_wrappers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 204
+  order: 206
 ---
 
 ## `stream_get_wrappers()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_get_wrappers.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_wrappers.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1461](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1461) (`lower_stream_get_wrappers`)
 - **Function symbol**: `lower_stream_get_wrappers()`
 
@@ -35,4 +35,3 @@ function stream_get_wrappers(): array
 ## Cross-references
 
 - [User reference for `stream_get_wrappers()`](../../../php/builtins/io/stream_get_wrappers.md)
-

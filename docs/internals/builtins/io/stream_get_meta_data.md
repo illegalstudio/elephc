@@ -2,14 +2,14 @@
 title: "stream_get_meta_data() — internals"
 description: "Compiler internals for stream_get_meta_data(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 202
+  order: 204
 ---
 
 ## `stream_get_meta_data()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_get_meta_data.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_meta_data.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1446](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1446) (`lower_stream_get_meta_data`)
 - **Function symbol**: `lower_stream_get_meta_data()`
 
@@ -36,4 +36,3 @@ function stream_get_meta_data(resource $stream): array
 ## Cross-references
 
 - [User reference for `stream_get_meta_data()`](../../../php/builtins/io/stream_get_meta_data.md)
-

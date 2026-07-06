@@ -1,6 +1,6 @@
 ---
 title: "ptr_is_null()"
-description: "Lowers `ptr_is_null(pointer)` by comparing the raw pointer address to zero."
+description: "Returns true if the pointer is null."
 sidebar:
   order: 287
 ---
@@ -11,7 +11,7 @@ sidebar:
 function ptr_is_null(pointer $pointer): bool
 ```
 
-Lowers `ptr_is_null(pointer)` by comparing the raw pointer address to zero.
+Returns true if the pointer is null.
 
 **Parameters**:
 - `$pointer` (`pointer`)

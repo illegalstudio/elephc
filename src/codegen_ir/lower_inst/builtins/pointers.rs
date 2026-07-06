@@ -22,7 +22,7 @@ use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 
 /// Lowers `ptr(value)` by materializing the address of addressable local/global storage.
-pub(super) fn lower_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "ptr", 1)?;
     let value = expect_operand(inst, 0)?;
     match pointer_source(ctx, value)? {
@@ -46,14 +46,14 @@ pub(super) fn lower_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
 }
 
 /// Lowers `ptr_null()` by materializing the raw null pointer sentinel.
-pub(super) fn lower_ptr_null(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_null(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "ptr_null", 0)?;
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     store_if_result(ctx, inst)
 }
 
 /// Lowers `ptr_is_null(pointer)` by comparing the raw pointer address to zero.
-pub(super) fn lower_ptr_is_null(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_is_null(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "ptr_is_null", 1)?;
     let pointer = expect_operand(inst, 0)?;
     load_pointer_payload(ctx, pointer, "ptr_is_null")?;
@@ -72,7 +72,7 @@ pub(super) fn lower_ptr_is_null(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Lowers `ptr_sizeof("type")` by materializing the checked static byte size.
-pub(super) fn lower_ptr_sizeof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_sizeof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "ptr_sizeof", 1)?;
     let type_name = const_string_operand(ctx, expect_operand(inst, 0)?)?;
     let size = pointer_target_size(ctx, &type_name).ok_or_else(|| {
@@ -83,13 +83,13 @@ pub(super) fn lower_ptr_sizeof(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `ptr_offset(pointer, offset)` by adding a byte offset to a raw address.
-pub(super) fn lower_ptr_offset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_offset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "ptr_offset", 2)?;
     let pointer = expect_operand(inst, 0)?;
     let offset = expect_operand(inst, 1)?;
     load_pointer_payload(ctx, pointer, "ptr_offset")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    require_integer_offset(ctx.load_value_to_result(offset)?, "ptr_offset")?;
+    super::super::resolve_int_operand_to_result(ctx, offset, "ptr_offset offset")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x10, x0");                             // preserve the byte offset while restoring the base pointer
@@ -106,32 +106,32 @@ pub(super) fn lower_ptr_offset(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `ptr_get(pointer)` by reading one machine word through a checked pointer.
-pub(super) fn lower_ptr_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_pointer_read(ctx, inst, "ptr_get", PointerWidth::Word64)
 }
 
 /// Lowers `ptr_set(pointer, value)` by writing one machine word through a checked pointer.
-pub(super) fn lower_ptr_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_pointer_write(ctx, inst, "ptr_set", PointerWidth::Word64, WordValuePolicy::Word)
 }
 
 /// Lowers `ptr_read8(pointer)` by reading one unsigned byte through a checked pointer.
-pub(super) fn lower_ptr_read8(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_read8(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_pointer_read(ctx, inst, "ptr_read8", PointerWidth::Byte)
 }
 
 /// Lowers `ptr_read16(pointer)` by reading one unsigned 16-bit word through a checked pointer.
-pub(super) fn lower_ptr_read16(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_read16(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_pointer_read(ctx, inst, "ptr_read16", PointerWidth::Half)
 }
 
 /// Lowers `ptr_read32(pointer)` by reading one unsigned 32-bit word through a checked pointer.
-pub(super) fn lower_ptr_read32(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_read32(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_pointer_read(ctx, inst, "ptr_read32", PointerWidth::Word32)
 }
 
 /// Lowers `ptr_read_string(pointer, length)` by copying raw bytes into an owned PHP string.
-pub(super) fn lower_ptr_read_string(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_read_string(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "ptr_read_string", 2)?;
     let pointer = expect_operand(inst, 0)?;
     let length = expect_operand(inst, 1)?;
@@ -153,22 +153,22 @@ pub(super) fn lower_ptr_read_string(ctx: &mut FunctionContext<'_>, inst: &Instru
 }
 
 /// Lowers `ptr_write8(pointer, value)` by writing one byte through a checked pointer.
-pub(super) fn lower_ptr_write8(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_write8(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_pointer_write(ctx, inst, "ptr_write8", PointerWidth::Byte, WordValuePolicy::IntOnly)
 }
 
 /// Lowers `ptr_write16(pointer, value)` by writing one 16-bit word through a checked pointer.
-pub(super) fn lower_ptr_write16(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_write16(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_pointer_write(ctx, inst, "ptr_write16", PointerWidth::Half, WordValuePolicy::IntOnly)
 }
 
 /// Lowers `ptr_write32(pointer, value)` by writing one 32-bit word through a checked pointer.
-pub(super) fn lower_ptr_write32(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_write32(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_pointer_write(ctx, inst, "ptr_write32", PointerWidth::Word32, WordValuePolicy::IntOnly)
 }
 
 /// Lowers `ptr_write_string(pointer, string)` by copying PHP string bytes into raw memory.
-pub(super) fn lower_ptr_write_string(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ptr_write_string(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "ptr_write_string", 2)?;
     let pointer = expect_operand(inst, 0)?;
     let string = expect_operand(inst, 1)?;
@@ -416,6 +416,12 @@ fn materialize_word_value(
             ctx.load_value_to_result(value)?;
             Ok(())
         }
+        PhpType::Mixed | PhpType::Union(_) if matches!(policy, WordValuePolicy::Word) => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            emit_mixed_payload_to_result(ctx);
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} value PHP type {:?}",
             name,
@@ -520,18 +526,6 @@ fn ensure_arg_count(inst: &Instruction, name: &str, expected: usize) -> Result<(
         expected,
         inst.operands.len()
     )))
-}
-
-/// Verifies `ptr_offset()` received an integer-like byte offset operand.
-fn require_integer_offset(ty: PhpType, name: &str) -> Result<()> {
-    match ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool => Ok(()),
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} offset PHP type {:?}",
-            name,
-            other
-        ))),
-    }
 }
 
 /// Verifies a pointer string-copy length operand is a concrete PHP integer.

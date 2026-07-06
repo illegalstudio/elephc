@@ -2,17 +2,21 @@
 title: "is_bool() — internals"
 description: "Compiler internals for is_bool(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 419
+  order: 416
 ---
 
 ## `is_bool()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/types/is_bool.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_bool.rs)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:737](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L737) (`lower_static_type_predicate`)
+- **Function symbol**: `lower_static_type_predicate()`
 
+
+### Lowering notes
+
+- Lowers a static `is_*` predicate for concrete non-Mixed values.
 
 ## Runtime helpers
 
@@ -31,4 +35,3 @@ function is_bool(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_bool()`](../../../php/builtins/type/is_bool.md)
-

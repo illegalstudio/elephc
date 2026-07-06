@@ -2,14 +2,14 @@
 title: "str_ends_with() — internals"
 description: "Compiler internals for str_ends_with(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 381
+  order: 378
 ---
 
 ## `str_ends_with()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/str_ends_with.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_ends_with.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:139](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L139) (`lower_binary_string_runtime`)
 - **Function symbol**: `lower_binary_string_runtime()`
 
@@ -36,4 +36,3 @@ function str_ends_with(string $haystack, string $needle): bool
 ## Cross-references
 
 - [User reference for `str_ends_with()`](../../../php/builtins/string/str_ends_with.md)
-

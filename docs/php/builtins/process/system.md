@@ -1,6 +1,6 @@
 ---
 title: "system()"
-description: "Lowers `system(command)` through libc `system()` and returns the legacy empty string result."
+description: "Executes an external program and displays the output."
 sidebar:
   order: 309
 ---
@@ -8,14 +8,13 @@ sidebar:
 ## system()
 
 ```php
-function system(string $command, int $result_code): string
+function system(string $command): string
 ```
 
-Lowers `system(command)` through libc `system()` and returns the legacy empty string result.
+Executes an external program and displays the output.
 
 **Parameters**:
 - `$command` (`string`)
-- `$result_code` (`int`), passed by reference
 
 **Returns**: `string`
 

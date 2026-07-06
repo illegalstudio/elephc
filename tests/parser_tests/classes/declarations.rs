@@ -63,6 +63,41 @@ fn test_parse_new_object() {
     }
 }
 
+/// Verifies that `<?php $p = new Point;` parses `new` without constructor parentheses
+/// into `ExprKind::NewObject` with empty args, matching PHP's optional-parens rule.
+#[test]
+fn test_parse_new_object_no_parens() {
+    let stmts = parse_source("<?php $p = new Point;");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewObject { class_name, args } => {
+                assert_eq!(class_name, "Point");
+                assert!(args.is_empty());
+            }
+            _ => panic!("Expected NewObject"),
+        },
+        _ => panic!("Expected Assign"),
+    }
+}
+
+/// Verifies that `<?php $o = new $cls(1, 2);` parses dynamic instantiation into
+/// `ExprKind::NewDynamic` whose `name_expr` is the class-name variable, with the
+/// constructor argument list captured.
+#[test]
+fn test_parse_new_dynamic_object() {
+    let stmts = parse_source("<?php $o = new $cls(1, 2);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewDynamic { name_expr, args } => {
+                assert_eq!(name_expr.kind, ExprKind::Variable("cls".to_string()));
+                assert_eq!(args.len(), 2);
+            }
+            _ => panic!("Expected NewDynamic"),
+        },
+        _ => panic!("Expected Assign"),
+    }
+}
+
 /// Verifies that `<?php class Child extends Base { ... }` parses to `ClassDecl` with the
 /// extends name set and the subclass body (method count, name) correctly captured.
 #[test]
@@ -154,11 +189,39 @@ fn test_parse_new_self() {
     }
 }
 
+/// Verifies that `<?php echo new self;` parses `new self` without parentheses into
+/// `ExprKind::NewScopedObject` with `StaticReceiver::Self_` and empty args.
+#[test]
+fn test_parse_new_self_no_parens() {
+    let stmts = parse_source("<?php echo new self;");
+    match echoed_expr(&stmts) {
+        ExprKind::NewScopedObject {
+            receiver: StaticReceiver::Self_,
+            args,
+        } => assert!(args.is_empty()),
+        other => panic!("expected NewScopedObject Self_, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php echo new static();` parses `new static` into `ExprKind::NewScopedObject`
 /// with `StaticReceiver::Static` and no constructor arguments.
 #[test]
 fn test_parse_new_static() {
     let stmts = parse_source("<?php echo new static();");
+    match echoed_expr(&stmts) {
+        ExprKind::NewScopedObject {
+            receiver: StaticReceiver::Static,
+            args,
+        } => assert!(args.is_empty()),
+        other => panic!("expected NewScopedObject Static, got {:?}", other),
+    }
+}
+
+/// Verifies that `<?php echo new static;` parses `new static` without parentheses into
+/// `ExprKind::NewScopedObject` with `StaticReceiver::Static` and empty args.
+#[test]
+fn test_parse_new_static_no_parens() {
+    let stmts = parse_source("<?php echo new static;");
     match echoed_expr(&stmts) {
         ExprKind::NewScopedObject {
             receiver: StaticReceiver::Static,
@@ -179,6 +242,31 @@ fn test_parse_new_parent_with_args() {
             args,
         } => assert_eq!(args.len(), 2),
         other => panic!("expected NewScopedObject Parent, got {:?}", other),
+    }
+}
+
+/// Verifies that `<?php echo new parent;` parses `new parent` without parentheses into
+/// `ExprKind::NewScopedObject` with `StaticReceiver::Parent` and empty args.
+#[test]
+fn test_parse_new_parent_no_parens() {
+    let stmts = parse_source("<?php echo new parent;");
+    match echoed_expr(&stmts) {
+        ExprKind::NewScopedObject {
+            receiver: StaticReceiver::Parent,
+            args,
+        } => assert!(args.is_empty()),
+        other => panic!("expected NewScopedObject Parent, got {:?}", other),
+    }
+}
+
+/// Verifies that `<?php echo new $cls;` parses `new $cls` without parentheses into
+/// `ExprKind::NewDynamic` with empty args.
+#[test]
+fn test_parse_new_dynamic_no_parens() {
+    let stmts = parse_source("<?php echo new $cls;");
+    match echoed_expr(&stmts) {
+        ExprKind::NewDynamic { args, .. } => assert!(args.is_empty()),
+        other => panic!("expected NewDynamic, got {:?}", other),
     }
 }
 

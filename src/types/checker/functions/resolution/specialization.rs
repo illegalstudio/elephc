@@ -34,6 +34,17 @@ impl Checker {
         let Some(stored_sig) = self.functions.get(name).cloned() else {
             return Ok(false);
         };
+        let resolving_variant_group = self
+            .function_variant_groups
+            .get(name)
+            .is_some_and(|variants| {
+                variants
+                    .iter()
+                    .any(|variant| self.resolving_functions.contains(variant))
+            });
+        if self.resolving_functions.contains(name) || resolving_variant_group {
+            return Ok(false);
+        }
 
         let Some(param_types) =
             self.respecialized_param_types_for_call(name, &stored_sig, args, caller_env)?
@@ -51,6 +62,9 @@ impl Checker {
         };
 
         for variant in &variants {
+            if self.resolving_functions.contains(variant) {
+                continue;
+            }
             let decl = self.fn_decls.get(variant).cloned().ok_or_else(|| {
                 CompileError::new(
                     crate::span::Span::dummy(),

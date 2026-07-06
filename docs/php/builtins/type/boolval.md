@@ -1,6 +1,6 @@
 ---
 title: "boolval()"
-description: "Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`."
+description: "Returns the boolean value of a variable."
 sidebar:
   order: 405
 ---
@@ -11,7 +11,7 @@ sidebar:
 function boolval(mixed $value): bool
 ```
 
-Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`.
+Returns the boolean value of a variable.
 
 **Parameters**:
 - `$value` (`mixed`)

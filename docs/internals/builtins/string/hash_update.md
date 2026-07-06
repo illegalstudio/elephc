@@ -2,14 +2,14 @@
 title: "hash_update() — internals"
 description: "Compiler internals for hash_update(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 357
+  order: 354
 ---
 
 ## `hash_update()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/hash_update.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_update.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:277](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L277) (`lower_hash_update`)
 - **Function symbol**: `lower_hash_update()`
 
@@ -36,4 +36,3 @@ function hash_update(resource $context, string $data): bool
 ## Cross-references
 
 - [User reference for `hash_update()`](../../../php/builtins/string/hash_update.md)
-

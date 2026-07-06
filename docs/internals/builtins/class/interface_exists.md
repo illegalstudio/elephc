@@ -2,17 +2,21 @@
 title: "interface_exists() — internals"
 description: "Compiler internals for interface_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 79
+  order: 81
 ---
 
 ## `interface_exists()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/callables/interface_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/interface_exists.rs)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:294](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L294) (`lower_class_like_exists`)
+- **Function symbol**: `lower_class_like_exists()`
 
+
+### Lowering notes
+
+- Lowers AOT class/interface/enum existence checks for literal names.
 
 ## Runtime helpers
 
@@ -21,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function interface_exists(string $interface, bool $autoload): bool
+function interface_exists(string $interface, bool $autoload = true): bool
 ```
 
 ## What the type checker enforces
@@ -31,4 +35,3 @@ function interface_exists(string $interface, bool $autoload): bool
 ## Cross-references
 
 - [User reference for `interface_exists()`](../../../php/builtins/class/interface_exists.md)
-

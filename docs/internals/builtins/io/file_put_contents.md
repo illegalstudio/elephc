@@ -2,14 +2,14 @@
 title: "file_put_contents() — internals"
 description: "Compiler internals for file_put_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 161
+  order: 163
 ---
 
 ## `file_put_contents()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/file_put_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/file_put_contents.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3727](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3727) (`lower_file_put_contents`)
 - **Function symbol**: `lower_file_put_contents()`
 
@@ -27,14 +27,13 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function file_put_contents(string $filename, mixed $data, int $flags = 0, mixed $context = null): int
+function file_put_contents(string $filename, string $data): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–4 arguments (2 optional).
+- **Arity**: takes exactly 2 arguments.
 
 ## Cross-references
 
 - [User reference for `file_put_contents()`](../../../php/builtins/io/file_put_contents.md)
-

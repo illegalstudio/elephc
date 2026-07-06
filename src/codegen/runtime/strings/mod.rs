@@ -90,6 +90,8 @@ pub use str_eq::emit_str_eq;
 pub use str_loose_eq::emit_str_loose_eq;
 /// Emit case-insensitive string equality check.
 pub use str_to_number::emit_str_to_number;
+/// Emit string-to-int parameter coercion validation helper.
+pub use str_to_number::emit_str_looks_like_int_for_coercion;
 /// Emit string-to-number conversion helper.
 pub use str_to_int::emit_str_to_int;
 /// Emit PHP string-to-integer cast helper.

@@ -1,6 +1,6 @@
 ---
 title: "array_multisort()"
-description: "Lowers `array_multisort()`: stable-sorts the first indexed array ascending and reorders the second"
+description: "Sorts multiple arrays or multi-dimensional arrays."
 sidebar:
   order: 25
 ---
@@ -11,11 +11,11 @@ sidebar:
 function array_multisort(array $array1, int $array2): bool
 ```
 
-Lowers `array_multisort()`: stable-sorts the first indexed array ascending and reorders the second
+Sorts multiple arrays or multi-dimensional arrays.
 
 **Parameters**:
-- `$array1` (`array`)
-- `$array2` (`int`)
+- `$array1` (`array`), passed by reference
+- `$array2` (`int`), passed by reference
 
 **Returns**: `bool`
 

@@ -43,6 +43,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_atoi(emitter);
     strings::emit_str_eq(emitter);
     strings::emit_str_to_number(emitter);
+    strings::emit_str_looks_like_int_for_coercion(emitter);
     strings::emit_str_to_int(emitter);
     strings::emit_str_loose_eq(emitter);
     strings::emit_number_format(emitter);
@@ -190,6 +191,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_set_int(emitter);
     arrays::emit_array_set_mixed(emitter);
     arrays::emit_array_set_mixed_key(emitter);
+    arrays::emit_array_get_mixed_key(emitter);
     arrays::emit_array_set_refcounted(emitter);
     arrays::emit_array_set_str(emitter);
     arrays::emit_array_union(emitter);
@@ -217,6 +219,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_hash_get(emitter);
     arrays::emit_hash_iter(emitter);
     arrays::emit_hash_union(emitter);
+    arrays::emit_hash_spread(emitter);
     arrays::emit_hash_to_mixed(emitter);
     arrays::emit_hash_count(emitter);
     arrays::emit_hash_free_deep(emitter);
@@ -309,6 +312,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_free_deep(emitter);
     arrays::emit_mixed_is_empty(emitter);
     arrays::emit_mixed_numeric_binops(emitter);
+    arrays::emit_int_checked_binops(emitter);
     arrays::emit_mixed_strict_eq(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_write_stdout(emitter);

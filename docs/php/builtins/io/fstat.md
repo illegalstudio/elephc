@@ -1,8 +1,8 @@
 ---
 title: "fstat()"
-description: "Lowers `fstat(stream)` and boxes the runtime stat array or PHP false result."
+description: "Gets information about a file using an open file pointer."
 sidebar:
-  order: 170
+  order: 172
 ---
 
 ## fstat()
@@ -11,7 +11,7 @@ sidebar:
 function fstat(resource $stream): mixed
 ```
 
-Lowers `fstat(stream)` and boxes the runtime stat array or PHP false result.
+Gets information about a file using an open file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)

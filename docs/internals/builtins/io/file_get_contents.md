@@ -2,14 +2,14 @@
 title: "file_get_contents() — internals"
 description: "Compiler internals for file_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 160
+  order: 162
 ---
 
 ## `file_get_contents()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/file_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/file_get_contents.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:39](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L39) (`lower_file_get_contents`)
 - **Function symbol**: `lower_file_get_contents()`
 
@@ -27,14 +27,13 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function file_get_contents(string $filename, bool $use_include_path, mixed $context, int $offset, int $length): mixed
+function file_get_contents(string $filename): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 5 arguments.
+- **Arity**: takes exactly 1 argument.
 
 ## Cross-references
 
 - [User reference for `file_get_contents()`](../../../php/builtins/io/file_get_contents.md)
-

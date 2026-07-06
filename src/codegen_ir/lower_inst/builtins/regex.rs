@@ -25,7 +25,7 @@ use super::super::callables;
 const PREG_SPLIT_FORCE_MIXED_RESULT: i64 = 1 << 30;
 
 /// Lowers `preg_match(pattern, subject)` through the shared regex runtime helper.
-pub(super) fn lower_preg_match(
+pub(crate) fn lower_preg_match(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -49,7 +49,7 @@ pub(super) fn lower_preg_match(
 }
 
 /// Lowers `preg_match_all(pattern, subject)` through the shared regex runtime helper.
-pub(super) fn lower_preg_match_all(
+pub(crate) fn lower_preg_match_all(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -62,7 +62,7 @@ pub(super) fn lower_preg_match_all(
 }
 
 /// Lowers `preg_replace(pattern, replacement, subject)` through the regex replacement helper.
-pub(super) fn lower_preg_replace(
+pub(crate) fn lower_preg_replace(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -87,7 +87,7 @@ pub(super) fn lower_preg_replace(
 }
 
 /// Lowers `preg_replace_callback(pattern, callback, subject)` through supported direct callbacks.
-pub(super) fn lower_preg_replace_callback(
+pub(crate) fn lower_preg_replace_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -371,7 +371,7 @@ fn preg_matches_type() -> PhpType {
 }
 
 /// Lowers `preg_split(pattern, subject, limit?, flags?)` through the regex split helper.
-pub(super) fn lower_preg_split(
+pub(crate) fn lower_preg_split(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

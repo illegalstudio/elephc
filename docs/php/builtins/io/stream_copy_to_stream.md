@@ -1,23 +1,23 @@
 ---
 title: "stream_copy_to_stream()"
-description: "Lowers `stream_copy_to_stream(from, to, length?, offset?)` through wrapper-aware read/write loops."
+description: "Copies data from one stream to another."
 sidebar:
-  order: 196
+  order: 198
 ---
 
 ## stream_copy_to_stream()
 
 ```php
-function stream_copy_to_stream(resource $from, resource $to, int $length, int $offset): mixed
+function stream_copy_to_stream(resource $from, resource $to, int $length = null, int $offset = -1): mixed
 ```
 
-Lowers `stream_copy_to_stream(from, to, length?, offset?)` through wrapper-aware read/write loops.
+Copies data from one stream to another.
 
 **Parameters**:
 - `$from` (`resource`)
 - `$to` (`resource`)
-- `$length` (`int`), optional
-- `$offset` (`int`), optional
+- `$length` (`int`), default `null`, optional
+- `$offset` (`int`), default `-1`, optional
 
 **Returns**: `mixed`
 

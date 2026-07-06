@@ -1,6 +1,6 @@
 ---
 title: "urlencode()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "URL-encodes a string using application/x-www-form-urlencoded rules."
 sidebar:
   order: 401
 ---
@@ -11,7 +11,7 @@ sidebar:
 function urlencode(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+URL-encodes a string using application/x-www-form-urlencoded rules.
 
 **Parameters**:
 - `$string` (`string`)

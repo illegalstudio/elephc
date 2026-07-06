@@ -2,7 +2,7 @@
 title: "buffer_free() — internals"
 description: "Compiler internals for buffer_free(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 62
+  order: 64
 ---
 
 ## `buffer_free()` — internals
@@ -35,4 +35,3 @@ function buffer_free(buffer $buffer): mixed
 ## Cross-references
 
 - [User reference for `buffer_free()`](../../../php/builtins/buffer/buffer_free.md)
-

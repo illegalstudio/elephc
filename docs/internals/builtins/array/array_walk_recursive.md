@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_walk_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_walk_recursive.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1542](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1542) (`lower_array_walk_recursive`)
 - **Function symbol**: `lower_array_walk_recursive()`
 
@@ -28,15 +28,14 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_walk_recursive(array $array, callable $callback, mixed $value): void
+function array_walk_recursive(array $array, callable $callback): void
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
+- **Arity**: takes exactly 2 arguments.
 - **By-reference parameters**: `$array`.
 
 ## Cross-references
 
 - [User reference for `array_walk_recursive()`](../../../php/builtins/array/array_walk_recursive.md)
-

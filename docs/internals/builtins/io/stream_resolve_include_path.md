@@ -2,14 +2,14 @@
 title: "stream_resolve_include_path() — internals"
 description: "Compiler internals for stream_resolve_include_path(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 207
+  order: 209
 ---
 
 ## `stream_resolve_include_path()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/stream_resolve_include_path.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_resolve_include_path.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2361](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2361) (`lower_stream_resolve_include_path`)
 - **Function symbol**: `lower_stream_resolve_include_path()`
 
@@ -37,4 +37,3 @@ function stream_resolve_include_path(string $filename): mixed
 ## Cross-references
 
 - [User reference for `stream_resolve_include_path()`](../../../php/builtins/io/stream_resolve_include_path.md)
-

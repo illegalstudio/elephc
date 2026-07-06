@@ -160,6 +160,37 @@ new PHP-visible behavior must be driven by EIR lowering and `src/codegen_ir/`.
 | `src/errors/` | `report()` | Error formatting with line:col |
 | `src/span.rs` | `Span` | Source position (line, col) attached to all AST nodes |
 
+### Bridge crates and `--with-<crate>` flags
+
+Optional, heavyweight functionality that is naturally expressed with Rust
+libraries lives in a workspace crate under `crates/elephc-<name>/`, compiled as a
+`staticlib` and linked into the user program on demand. Every such bridge is
+described by one entry in the `BRIDGES` table in `src/linker.rs`; `link()` and the
+discovery/auto-build helpers are fully table-driven, so adding a bridge is a
+single table entry rather than new linker logic.
+
+A bridge is linked when its `lib_name` appears in `extra_link_libs`. That set is
+populated automatically by feature detection: the type checker records a needed
+library via `require_builtin_library(...)` (e.g. hash builtins → `elephc_crypto`)
+or through an injected `extern "elephc_<name>" { ... }` prelude block (e.g. the
+PDO/tz/image preludes), so programs that do not use a feature never link its
+bridge.
+
+`--with-<crate>` force-enables a bridge regardless of detection. It force-links
+the staticlib (whole-archived so it is not dead-stripped) and, for crates whose
+PHP surface comes from a prelude (`pdo`, `tz`, `image`), force-injects that
+prelude so the API is declared even when usage was not detected. The flag name is
+the bridge's `flag_name` (`crate_name` minus the `elephc-` prefix): `--with-pdo`,
+`--with-tls`, `--with-crypto`, `--with-phar`, `--with-tz`, `--with-image`.
+`--with-web` is an alias for `--web` (the full server mode, which owns the program
+entry point). An unknown `--with-<name>` is a hard CLI error listing the valid
+crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
+(`src/pipeline.rs`: force-link + prelude forcing) → linker
+(`src/linker.rs`: `forced_whole_archive`).
+
+The full recipe for adding a new crate-backed feature and its `--with-<crate>`
+flag lives in `CONTRIBUTING.md` ("Adding functionality via a Rust crate").
+
 ### Codegen layout
 
 - `src/ir_lower/` is the active high-level lowering layer. Add PHP-visible semantics there, not in legacy direct AST emitters.
@@ -172,25 +203,19 @@ new PHP-visible behavior must be driven by EIR lowering and `src/codegen_ir/`.
 
 ### Adding a new operator
 
-1. Add token to `src/lexer/token.rs`
-2. Add scanning logic to `src/lexer/scan.rs`
-3. Add `BinOp` variant to `src/parser/ast.rs`
-4. Add one line to `infix_bp()` in `src/parser/expr/pratt.rs` (the Pratt parser binding power table)
-5. Add type checking/inference in the relevant `src/types/checker/` file, usually under `inference/ops.rs` or expression inference
-6. Add optimizer/effect handling when the operator can be folded, propagated, pruned, or has side effects
-7. Add EIR lowering in the relevant `src/ir_lower/expr/` path and target-aware EIR codegen under `src/codegen_ir/lower_inst/` when the operator needs a new IR instruction or lowering path. Do not extend the frozen legacy direct AST emitter.
-8. Add tests in all 4 test files
+**The full step-by-step recipe lives in `CONTRIBUTING.md` ("Adding a new operator").** Key invariants:
+
+- A new operator touches the whole pipeline: token (`src/lexer/`), Pratt binding power (`infix_bp()` in `src/parser/expr/pratt.rs`), `BinOp` variant (`src/parser/ast.rs`), type inference (`src/types/checker/`, usually `inference/ops.rs`), optimizer folding/effects (`src/optimize/`), and EIR lowering (`src/ir_lower/expr/` + `src/codegen_ir/lower_inst/`). Do not extend the frozen legacy direct AST emitter.
+- Precedence and associativity must match PHP; keep folds PHP-equivalent and cross-check edge cases with `php -r`.
+- Needs a Pratt binding-power test asserting precedence relative to adjacent operators, plus tests in all 4 test files (lexer, parser, codegen, error).
 
 ### Adding a new statement type
 
-1. Add `StmtKind` variant to `src/parser/ast.rs`
-2. Add parser logic in `src/parser/stmt.rs`
-3. Add resolver/name-resolver handling if the statement can contain names, declarations, includes, function variants, or expressions
-4. Add type checking in the relevant `src/types/checker/` module
-5. Add optimizer/effects/warnings handling if the statement can be folded, pruned, read variables, write variables, or alter control flow
-6. Add EIR lowering in `src/ir_lower/stmt/` and target-aware EIR codegen under `src/codegen_ir/` when the statement needs new instruction or terminator support. Do not extend the frozen legacy direct AST emitter.
-7. If it introduces variables or hidden temporaries, update EIR local/temp declaration in `src/ir_lower/context.rs` and any frame-layout allocation needed before frame sizing
-8. Add tests
+**The full step-by-step recipe lives in `CONTRIBUTING.md` ("Adding a new statement type").** Key invariants:
+
+- A new statement touches parser (`StmtKind` in `src/parser/ast.rs` + `src/parser/stmt.rs`), resolver/name-resolver (if it holds names, declarations, includes, function variants, or expressions), type checker (`src/types/checker/`), optimizer/effects/warnings (`src/optimize/`), and EIR lowering (`src/ir_lower/stmt/` + `src/codegen_ir/`). Do not extend the frozen legacy direct AST emitter.
+- If it introduces variables or hidden temporaries, update EIR local/temp declaration in `src/ir_lower/context.rs` and frame-layout allocation before frame sizing.
+- Also audit every AST-walking pass (see "Adding or changing an AST node") — a missed pass usually causes silent miscompilation rather than a compile error.
 
 ### Adding or changing an AST node
 
@@ -211,35 +236,43 @@ Common places to audit:
 
 ### Adding a new built-in function
 
-1. Add the function to `src/types/checker/builtins/catalog.rs`. This is mandatory: it drives PHP-style case-insensitive builtin lookup, namespace fallback, redeclaration checks, and `name_resolver` behavior.
-2. Confirm `function_exists("...")` recognizes the function. The implementation delegates to the canonical catalog; do not add a second builtin-name table without keeping it in lockstep.
-3. Add or update the call signature in `src/types/signatures.rs`. This is the contract for named arguments: parameter names, default values, variadic name, by-ref/ref-like params, and arity must match PHP. Mark mutating parameters in `ref_params`; named-argument lowering and hidden-temp allocation depend on it.
-4. Add type signature handling in the appropriate `src/types/checker/builtins/<category>.rs` file (argument count, value types, return type, warnings, required Linux libraries).
-5. Add first-class callable support in `first_class_callable_builtin_sig()` if the builtin should work through first-class callable syntax or callable aliases.
-6. Add optimizer effect modeling in `src/optimize/effects/builtins.rs` when purity, reads, writes, or thrown/fatal behavior matters for DCE/constant propagation.
-7. Add or update EIR call/lowering support in `src/ir_lower/expr/` when argument materialization, hidden temporaries, or ownership differ from ordinary calls.
-8. Add target-aware EIR backend support in `src/codegen_ir/lower_inst/builtins/<category>.rs` or the closest focused EIR lowering module.
-9. If the function needs a runtime routine, create it under `src/codegen/runtime/<category>/`.
-10. Add module/re-export wiring in the relevant `runtime/<category>/mod.rs`, then call it from the runtime emitter orchestration.
-11. Leave the frozen legacy `src/codegen/builtins/` path untouched unless a narrow shared-API build fix is required.
-12. Update docs and add codegen/error tests. New PHP-visible builtins should include at least one case-insensitive or namespaced call test when relevant.
+PHP builtins are declared **once** in the single-source registry: one home file per
+builtin at `src/builtins/<area>/<name>.rs`, declared with the `builtin!` macro and
+collected via `inventory`. From that single declaration the compiler derives the
+catalog name-set (`function_exists`, case-insensitive lookup, namespace fallback), the
+`FunctionSig` (named args, defaults, ref params, variadic, arity), the type-check
+entry, the EIR lowering dispatch (`spec.lower`), and the generated docs. Do **not**
+re-add builtin names to hand-maintained tables (`catalog.rs`, `signatures.rs`, per-area
+`check_builtin` arms) — they are superseded by the registry.
 
-Do not stop after wiring only the checker and EIR backend dispatcher. A builtin is not complete until the catalog, `function_exists()`, case-insensitive lookup, and namespace fallback all see it. New builtins should include at least one case-insensitive or namespaced call test when the feature is PHP-visible.
+**The full step-by-step recipe lives in `CONTRIBUTING.md` ("Adding a built-in function").** Key invariants:
 
-Leaf builtin/runtime files contain exactly **one emitter function**. Keep dispatcher/re-export files (`mod.rs`) as orchestration-only files, and keep runtime data emission in `src/codegen/runtime/data.rs`.
-
-Do not list every builtin in this guide. `src/types/checker/builtins/catalog.rs` and `src/types/signatures.rs` are the canonical sources; update those instead of maintaining parallel lists.
+- **One builtin per home file.** The `lower` hook is a thin wrapper over the real
+  emitter in `src/codegen_ir/lower_inst/builtins/<area>/`; leaf emitter files hold
+  exactly one emitter function, and runtime data emission stays in
+  `src/codegen/runtime/data.rs`.
+- **`returns:`/`check` are checker-only.** The EIR backend derives return types
+  separately in `call_return_type` (`src/ir_lower/expr/mod.rs`); a `returns: Mixed` +
+  precise-`check` builtin also needs a matching EIR return-type arm, or the checker and
+  EIR disagree on the value's type.
+- **Separate surfaces still need hand-wiring** when relevant: the EIR emitter/runtime
+  routine, optimizer effects (`src/optimize/effects/builtins.rs`), and the
+  runtime-callable wrapper exclusion (`src/codegen/callable_dispatch.rs`).
+- `isset`/`unset`/`empty`/`exit`/`die`/`buffer_*` are language constructs that stay
+  checker-resident (`numeric`/`arrays` `check_builtin`), not in the registry.
+- Add codegen + error tests (include a case-insensitive or namespaced call for
+  PHP-visible builtins); keep the parity gates in `src/builtins/parity_tests.rs` green.
 
 ### Adding a new EIR optimization pass
 
-IR-level transformations run after EIR lowering/validation through a fixed-point driver, not in the AST optimizer.
+IR-level transformations run after EIR lowering/validation through a fixed-point driver (`src/ir_passes/`), not in the AST optimizer.
 
-1. Implement the `IrPass` trait (`name()`, `run(&mut Function, &mut DataPool) -> bool`) in a new `src/ir_passes/<pass>.rs`; `run` mutates the function in place and returns whether it changed anything. The `DataPool` is the module's shared literal pool for passes that intern new constants (e.g. peephole string-literal concat folding); ignore it (`_data`) otherwise.
-2. Register the pass in `default_passes()` in `src/ir_passes/driver.rs`. Order matters: the driver re-runs the whole set per function until none reports a change, capped by `MAX_PASS_ITERATIONS`.
-3. Reuse `src/ir_passes/rewrite.rs` for value redirection (`replace_all_uses` for RAUW) and the shared fold helpers (`resolve_chains`, `neutralize_to_nop`, `defining_instruction`, `count_value_uses`) instead of re-walking operands/terminators. Keep rewrites dominance-safe and PHP-equivalent; cross-check edge cases (division by zero, signed-zero/`NaN` floats) with `php -r`.
-4. The driver re-validates each function with `validate_function` after every pass in debug/test builds and panics (naming the pass) on malformed IR or non-convergence; both guards compile out of `--release`. Rely on this during development.
-5. Add unit tests under `src/ir_passes/tests/` (hand-built EIR via `crate::ir::Builder`) and end-to-end tests under `tests/codegen/optimizer/`. In e2e fixtures, use runtime-unknown values (e.g. `$argc`) so the targeted IR construct survives AST-level folding and actually reaches EIR.
-6. Passes are gated by `--ir-opt=on|off` / `--no-ir-opt` (env `ELEPHC_IR_OPT`), default on. Behavior must be identical with the flag on or off except for performance; verify with `--emit-ir` and `--emit-ir --no-ir-opt`.
+**The full step-by-step recipe lives in `CONTRIBUTING.md` ("Adding a new EIR optimization pass").** Key invariants:
+
+- Implement the `IrPass` trait in `src/ir_passes/<pass>.rs` and register it in `default_passes()` (`src/ir_passes/driver.rs`); the driver re-runs the whole set per function to a fixed point, capped by `MAX_PASS_ITERATIONS`.
+- Reuse `src/ir_passes/rewrite.rs` (RAUW via `replace_all_uses` + shared fold helpers) instead of re-walking operands/terminators. Keep rewrites dominance-safe and PHP-equivalent; cross-check edge cases (division by zero, signed-zero/`NaN` floats) with `php -r`.
+- Debug/test builds re-validate each function after every pass and panic (naming the pass) on malformed IR or non-convergence; both guards compile out of `--release`.
+- Behavior must be identical with `--ir-opt` on or off except for performance (gate: `--ir-opt=on|off` / `--no-ir-opt`, env `ELEPHC_IR_OPT`, default on). Add unit tests (`src/ir_passes/tests/`) and e2e tests (`tests/codegen/optimizer/`) using runtime-unknown values (e.g. `$argc`) so the construct survives AST folding.
 
 ### Call argument semantics
 

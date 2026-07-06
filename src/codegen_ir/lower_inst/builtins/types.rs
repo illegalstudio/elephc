@@ -22,7 +22,7 @@ use super::super::predicates;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
 /// Lowers `settype($local, "type")` by mutating the resolved local slot and returning true.
-pub(super) fn lower_settype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_settype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "settype", 2)?;
     let value = expect_operand(inst, 0)?;
     let type_name = expect_operand(inst, 1)?;
@@ -38,7 +38,7 @@ pub(super) fn lower_settype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers the defensive `class_alias()` fallback that remains after AOT alias extraction.
-pub(super) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count_between(inst, "class_alias", 2, 3)?;
     emit_bool_result(ctx, false);
     store_if_result(ctx, inst)
@@ -328,7 +328,7 @@ fn emit_resource_display_id_to_int(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Lowers `get_class()` and `get_parent_class()` through static or dynamic class metadata.
-pub(super) fn lower_class_name_lookup(
+pub(crate) fn lower_class_name_lookup(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -366,7 +366,7 @@ pub(super) fn lower_class_name_lookup(
 }
 
 /// Lowers `is_a()` and `is_subclass_of()` for object operands and literal targets.
-pub(super) fn lower_is_a_relation(
+pub(crate) fn lower_is_a_relation(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -385,7 +385,7 @@ pub(super) fn lower_is_a_relation(
 }
 
 /// Lowers `get_declared_classes/interfaces/traits()` using the shared declaration registry.
-pub(super) fn lower_get_declared_names(
+pub(crate) fn lower_get_declared_names(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -397,7 +397,7 @@ pub(super) fn lower_get_declared_names(
 }
 
 /// Lowers `is_resource(value)` for static resources and boxed Mixed resource cells.
-pub(super) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "is_resource", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.raw_value_php_type(value)? {
@@ -409,7 +409,7 @@ pub(super) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Lowers `get_resource_type(resource)` to elephc's current resource type label.
-pub(super) fn lower_get_resource_type(
+pub(crate) fn lower_get_resource_type(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -421,7 +421,7 @@ pub(super) fn lower_get_resource_type(
 }
 
 /// Lowers `get_resource_id(resource)` by unboxing the native handle and making it one-based.
-pub(super) fn lower_get_resource_id(
+pub(crate) fn lower_get_resource_id(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

@@ -1,8 +1,8 @@
 ---
 title: "ceil()"
-description: "Lowers `ceil()` for concrete integer-like and floating operands."
+description: "Rounds a number up to the nearest integer."
 sidebar:
-  order: 238
+  order: 240
 ---
 
 ## ceil()
@@ -11,7 +11,7 @@ sidebar:
 function ceil(float $num): float
 ```
 
-Lowers `ceil()` for concrete integer-like and floating operands.
+Rounds a number up to the nearest integer.
 
 **Parameters**:
 - `$num` (`float`)

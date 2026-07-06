@@ -2,17 +2,21 @@
 title: "trait_exists() — internals"
 description: "Compiler internals for trait_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 82
+  order: 84
 ---
 
 ## `trait_exists()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/callables/trait_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/trait_exists.rs)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:294](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L294) (`lower_class_like_exists`)
+- **Function symbol**: `lower_class_like_exists()`
 
+
+### Lowering notes
+
+- Lowers AOT class/interface/enum existence checks for literal names.
 
 ## Runtime helpers
 
@@ -21,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function trait_exists(string $trait, bool $autoload): bool
+function trait_exists(string $trait, bool $autoload = true): bool
 ```
 
 ## What the type checker enforces
@@ -31,4 +35,3 @@ function trait_exists(string $trait, bool $autoload): bool
 ## Cross-references
 
 - [User reference for `trait_exists()`](../../../php/builtins/class/trait_exists.md)
-

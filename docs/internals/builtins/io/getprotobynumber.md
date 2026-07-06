@@ -2,14 +2,14 @@
 title: "getprotobynumber() — internals"
 description: "Compiler internals for getprotobynumber(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 179
+  order: 181
 ---
 
 ## `getprotobynumber()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/getprotobynumber.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/getprotobynumber.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3467](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3467) (`lower_getprotobynumber`)
 - **Function symbol**: `lower_getprotobynumber()`
 
@@ -36,4 +36,3 @@ function getprotobynumber(int $protocol): mixed
 ## Cross-references
 
 - [User reference for `getprotobynumber()`](../../../php/builtins/io/getprotobynumber.md)
-

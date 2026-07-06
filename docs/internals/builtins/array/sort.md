@@ -2,14 +2,14 @@
 title: "sort() — internals"
 description: "Compiler internals for sort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 58
+  order: 60
 ---
 
 ## `sort()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/sort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/sort.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1076](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1076) (`lower_sort`)
 - **Function symbol**: `lower_sort()`
 
@@ -33,15 +33,14 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function sort(array $array, int $flags): bool
+function sort(array $array): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes exactly 1 argument.
 - **By-reference parameters**: `$array`.
 
 ## Cross-references
 
 - [User reference for `sort()`](../../../php/builtins/array/sort.md)
-

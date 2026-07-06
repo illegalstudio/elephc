@@ -1,0 +1,49 @@
+//! Purpose:
+//! Home of the PHP `stream_filter_register` builtin: its declaration, type-check hook, and lowering.
+//!
+//! Called from:
+//! - The builtin registry (declaration), the type checker (check hook), and the EIR
+//!   backend (lower hook), all via `crate::builtins::registry`.
+//!
+//! Key details:
+//! - `check` validates that the class argument names a declared class and returns `Bool`.
+//! - Arguments are pre-inferred by the registry before the hook runs; the hook does NOT
+//!   re-infer them.
+//! - `lower` is a thin wrapper over `io::lower_stream_filter_register` in the EIR backend.
+
+use crate::builtins::spec::BuiltinCheckCtx;
+use crate::codegen_ir::context::FunctionContext;
+use crate::codegen_ir::CodegenIrError;
+use crate::errors::CompileError;
+use crate::ir::Instruction;
+use crate::types::PhpType;
+
+builtin! {
+    name: "stream_filter_register",
+    area: Io,
+    params: [filter_name: Str, class: Str],
+    returns: Bool,
+    check: check,
+    lower: lower,
+    summary: "Registers a user-defined stream filter.",
+    php_manual: "function.stream-filter-register",
+}
+
+/// Validates the class argument names a declared class and returns `Bool`.
+///
+/// Arguments are pre-inferred by the registry; this hook validates the class
+/// registration using the shared `validate_registered_stream_class` helper.
+fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    crate::builtins::io::stream_support::validate_registered_stream_class(
+        cx.checker,
+        cx.name,
+        &cx.args[1],
+        cx.span,
+    )?;
+    Ok(PhpType::Bool)
+}
+
+/// Lowers a `stream_filter_register` call by dispatching to the shared io emitter.
+fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
+    crate::codegen_ir::lower_inst::builtins::io::lower_stream_filter_register(ctx, inst)
+}

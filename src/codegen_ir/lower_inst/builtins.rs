@@ -21,558 +21,50 @@ use super::super::context::FunctionContext;
 use super::{expect_data, expect_operand, load_value_to_first_int_arg, predicates, store_if_result};
 use crate::codegen_ir::{CodegenIrError, Result};
 
-pub(in crate::codegen_ir::lower_inst) mod attributes;
-mod arrays;
+pub(crate) mod attributes;
+pub(crate) mod arrays;
 mod buffers;
-mod class_relations;
-mod ctype;
-mod debug;
-mod io;
+pub(crate) mod class_relations;
+pub(crate) mod ctype;
+pub(crate) mod debug;
+pub(crate) mod io;
 mod isset;
-mod is_numeric;
-mod json;
-mod math;
-mod pointers;
-mod regex;
-mod serialize;
-mod spl;
-mod system;
-mod strings;
-mod types;
+pub(crate) mod is_numeric;
+pub(crate) mod json;
+pub(crate) mod math;
+pub(crate) mod pointers;
+pub(crate) mod regex;
+pub(crate) mod serialize;
+pub(crate) mod spl;
+pub(crate) mod system;
+pub(crate) mod strings;
+pub(crate) mod types;
 
 const DEFINE_ALREADY_DEFINED_WARNING: &str =
     "Warning: define(): Constant already defined\n";
 
 /// Lowers a scalar builtin call by matching the canonical PHP function name.
+///
+/// Consults the builtin registry first using the canonical key; falls back to the
+/// legacy match table when the name is not registered. This makes the registry the
+/// authoritative dispatch path while keeping the legacy emitters as a fallback.
 pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let name = ctx.function_name_data(expect_data(inst)?)?;
     let key = php_symbol_key(name.trim_start_matches('\\'));
+    // Registry-first: if the builtin is registered, invoke its lowering hook.
+    // Falls through to the legacy match when the name is not registered.
+    if let Some(def) = crate::builtins::registry::lookup(key.as_str()) {
+        return (def.spec.lower)(ctx, inst);
+    }
     match key.as_str() {
-        "abs" => math::lower_abs(ctx, inst),
-        "floor" => math::lower_floor(ctx, inst),
-        "ceil" => math::lower_ceil(ctx, inst),
-        "clamp" => math::lower_clamp(ctx, inst),
-        "round" => math::lower_round(ctx, inst),
-        "sqrt" => math::lower_sqrt(ctx, inst),
-        "intdiv" => math::lower_intdiv(ctx, inst),
-        "fdiv" => math::lower_fdiv(ctx, inst),
-        "fmod" => math::lower_fmod(ctx, inst),
-        "pow" => math::lower_pow(ctx, inst),
-        "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh"
-        | "tanh" | "log2" | "log10" | "exp" => {
-            math::lower_unary_libm(ctx, inst, key.as_str())
-        }
-        "log" => math::lower_log(ctx, inst),
-        "atan2" => math::lower_atan2(ctx, inst),
-        "hypot" => math::lower_hypot(ctx, inst),
-        "deg2rad" => math::lower_deg2rad(ctx, inst),
-        "rad2deg" => math::lower_rad2deg(ctx, inst),
-        "rand" | "mt_rand" => math::lower_rand(ctx, inst, key.as_str()),
-        "random_int" => math::lower_random_int(ctx, inst),
-        "min" => math::lower_min_max(ctx, inst, false),
-        "max" => math::lower_min_max(ctx, inst, true),
-        "pi" => lower_pi(ctx, inst),
-        "phpversion" => lower_phpversion(ctx, inst),
-        "strlen" => lower_strlen(ctx, inst),
-        "count" => lower_count(ctx, inst),
         "closure_bind" => lower_closure_bind(ctx, inst),
         "buffer_len" => buffers::lower_buffer_len(ctx, inst),
         "buffer_free" => buffers::lower_buffer_free(ctx, inst),
-        "ptr" => pointers::lower_ptr(ctx, inst),
-        "ptr_null" => pointers::lower_ptr_null(ctx, inst),
-        "ptr_is_null" => pointers::lower_ptr_is_null(ctx, inst),
-        "ptr_sizeof" => pointers::lower_ptr_sizeof(ctx, inst),
-        "ptr_offset" => pointers::lower_ptr_offset(ctx, inst),
-        "ptr_get" => pointers::lower_ptr_get(ctx, inst),
-        "ptr_set" => pointers::lower_ptr_set(ctx, inst),
-        "ptr_read8" => pointers::lower_ptr_read8(ctx, inst),
-        "ptr_read16" => pointers::lower_ptr_read16(ctx, inst),
-        "ptr_read32" => pointers::lower_ptr_read32(ctx, inst),
-        "ptr_read_string" => pointers::lower_ptr_read_string(ctx, inst),
-        "ptr_write8" => pointers::lower_ptr_write8(ctx, inst),
-        "ptr_write16" => pointers::lower_ptr_write16(ctx, inst),
-        "ptr_write32" => pointers::lower_ptr_write32(ctx, inst),
-        "ptr_write_string" => pointers::lower_ptr_write_string(ctx, inst),
-        "array_sum" => arrays::lower_array_sum(ctx, inst),
-        "array_product" => arrays::lower_array_product(ctx, inst),
-        "array_push" => arrays::lower_array_push(ctx, inst),
-        "array_chunk" => arrays::lower_array_chunk(ctx, inst),
-        "array_pad" => arrays::lower_array_pad(ctx, inst),
-        "array_combine" => arrays::lower_array_combine(ctx, inst),
-        "array_column" => arrays::lower_array_column(ctx, inst),
-        "array_flip" => arrays::lower_array_flip(ctx, inst),
-        "array_fill" => arrays::lower_array_fill(ctx, inst),
-        "array_fill_keys" => arrays::lower_array_fill_keys(ctx, inst),
-        "array_reverse" => arrays::lower_array_reverse(ctx, inst),
-        "array_unique" => arrays::lower_array_unique(ctx, inst),
-        "array_map" => arrays::lower_array_map(ctx, inst),
-        "array_filter" => arrays::lower_array_filter(ctx, inst),
-        "array_reduce" => arrays::lower_array_reduce(ctx, inst),
-        "array_walk" => arrays::lower_array_walk(ctx, inst),
-        "array_merge" => arrays::lower_array_merge(ctx, inst),
-        "array_diff" => arrays::lower_array_diff(ctx, inst),
-        "array_intersect" => arrays::lower_array_intersect(ctx, inst),
-        "array_diff_key" => arrays::lower_array_diff_key(ctx, inst),
-        "array_intersect_key" => arrays::lower_array_intersect_key(ctx, inst),
-        "array_replace" => arrays::lower_array_replace(ctx, inst),
-        "array_replace_recursive" => arrays::lower_array_replace_recursive(ctx, inst),
-        "array_diff_assoc" => arrays::lower_array_diff_assoc(ctx, inst),
-        "array_intersect_assoc" => arrays::lower_array_intersect_assoc(ctx, inst),
-        "array_merge_recursive" => arrays::lower_array_merge_recursive(ctx, inst),
-        "array_find" => arrays::lower_array_find(ctx, inst),
-        "array_any" => arrays::lower_array_any(ctx, inst),
-        "array_all" => arrays::lower_array_all(ctx, inst),
-        "array_walk_recursive" => arrays::lower_array_walk_recursive(ctx, inst),
-        "array_udiff" => arrays::lower_array_udiff(ctx, inst),
-        "array_uintersect" => arrays::lower_array_uintersect(ctx, inst),
-        "array_multisort" => arrays::lower_array_multisort(ctx, inst),
-        "array_slice" => arrays::lower_array_slice(ctx, inst),
-        "array_splice" => arrays::lower_array_splice(ctx, inst),
-        "array_keys" => arrays::lower_array_keys(ctx, inst),
-        "array_values" => arrays::lower_array_values(ctx, inst),
-        "array_rand" => arrays::lower_array_rand(ctx, inst),
-        "array_pop" => arrays::lower_array_pop(ctx, inst),
-        "array_shift" => arrays::lower_array_shift(ctx, inst),
-        "array_unshift" => arrays::lower_array_unshift(ctx, inst),
-        "sort" => arrays::lower_sort(ctx, inst),
-        "rsort" => arrays::lower_rsort(ctx, inst),
-        "asort" => arrays::lower_asort(ctx, inst),
-        "arsort" => arrays::lower_arsort(ctx, inst),
-        "ksort" => arrays::lower_ksort(ctx, inst),
-        "krsort" => arrays::lower_krsort(ctx, inst),
-        "natsort" => arrays::lower_natsort(ctx, inst),
-        "natcasesort" => arrays::lower_natcasesort(ctx, inst),
-        "shuffle" => arrays::lower_shuffle(ctx, inst),
-        "usort" => arrays::lower_usort(ctx, inst),
-        "uksort" => arrays::lower_uksort(ctx, inst),
-        "uasort" => arrays::lower_uasort(ctx, inst),
-        "array_key_exists" => arrays::lower_array_key_exists(ctx, inst),
-        "array_is_list" => arrays::lower_array_is_list(ctx, inst),
-        "array_key_first" => arrays::lower_array_key_first(ctx, inst),
-        "array_key_last" => arrays::lower_array_key_last(ctx, inst),
-        "array_search" => arrays::lower_array_search(ctx, inst),
-        "in_array" => arrays::lower_in_array(ctx, inst),
-        "call_user_func" | "call_user_func_array" => {
-            arrays::lower_call_user_func_builtin_escape(ctx, inst, key.as_str())
-        }
-        "range" => arrays::lower_range(ctx, inst),
-        "intval" => lower_intval(ctx, inst),
-        "floatval" => lower_floatval(ctx, inst),
-        "boolval" => lower_boolval(ctx, inst),
+
         "empty" => lower_empty(ctx, inst),
-        "settype" => types::lower_settype(ctx, inst),
         "unset" => types::lower_unset_builtin(ctx, inst),
         "isset" => isset::lower_isset(ctx, inst),
-        "gettype" => lower_gettype(ctx, inst),
-        "define" => lower_define(ctx, inst),
-        "defined" => lower_defined(ctx, inst),
-        "file_get_contents" => io::lower_file_get_contents(ctx, inst),
-        "readfile" => io::lower_readfile(ctx, inst),
-        "readline" => io::lower_readline(ctx, inst),
-        "fopen" => io::lower_fopen(ctx, inst),
-        "fclose" => io::lower_fclose(ctx, inst),
-        "fread" => io::lower_fread(ctx, inst),
-        "fwrite" => io::lower_fwrite(ctx, inst),
-        "fprintf" => io::lower_fprintf(ctx, inst),
-        "vfprintf" => io::lower_vfprintf(ctx, inst),
-        "fscanf" => io::lower_fscanf(ctx, inst),
-        "fgets" => io::lower_fgets(ctx, inst),
-        "fgetc" => io::lower_fgetc(ctx, inst),
-        "fgetcsv" => io::lower_fgetcsv(ctx, inst),
-        "fputcsv" => io::lower_fputcsv(ctx, inst),
-        "fpassthru" => io::lower_fpassthru(ctx, inst),
-        "feof" => io::lower_feof(ctx, inst),
-        "fseek" => io::lower_fseek(ctx, inst),
-        "ftell" => io::lower_ftell(ctx, inst),
-        "rewind" => io::lower_rewind(ctx, inst),
-        "ftruncate" => io::lower_ftruncate(ctx, inst),
-        "fsync" => io::lower_fsync(ctx, inst),
-        "fflush" => io::lower_fflush(ctx, inst),
-        "fdatasync" => io::lower_fdatasync(ctx, inst),
-        "flock" => io::lower_flock(ctx, inst),
-        "disk_free_space" => io::lower_disk_free_space(ctx, inst),
-        "disk_total_space" => io::lower_disk_total_space(ctx, inst),
-        "gethostname" => io::lower_gethostname(ctx, inst),
-        "gethostbyname" => io::lower_gethostbyname(ctx, inst),
-        "gethostbyaddr" => io::lower_gethostbyaddr(ctx, inst),
-        "getprotobyname" => io::lower_getprotobyname(ctx, inst),
-        "getprotobynumber" => io::lower_getprotobynumber(ctx, inst),
-        "getservbyname" => io::lower_getservbyname(ctx, inst),
-        "getservbyport" => io::lower_getservbyport(ctx, inst),
-        "opendir" => io::lower_opendir(ctx, inst),
-        "readdir" => io::lower_readdir(ctx, inst),
-        "closedir" => io::lower_closedir(ctx, inst),
-        "rewinddir" => io::lower_rewinddir(ctx, inst),
-        "popen" => io::lower_popen(ctx, inst),
-        "pclose" => io::lower_pclose(ctx, inst),
-        "fsockopen" | "pfsockopen" => io::lower_fsockopen(ctx, inst),
-        "stream_wrapper_register" => io::lower_stream_wrapper_register(ctx, inst),
-        "stream_wrapper_unregister" => io::lower_stream_wrapper_unregister(ctx, inst),
-        "stream_wrapper_restore" => io::lower_stream_wrapper_restore(ctx, inst),
-        "stream_context_create" => io::lower_stream_context_create(ctx, inst),
-        "stream_context_get_default" => io::lower_stream_context_get_default(ctx, inst),
-        "stream_context_set_default" => io::lower_stream_context_set_default(ctx, inst),
-        "stream_context_set_option" => io::lower_stream_context_set_option(ctx, inst),
-        "stream_context_set_params" => io::lower_stream_context_set_params(ctx, inst),
-        "stream_context_get_options" => io::lower_stream_context_get_options(ctx, inst),
-        "stream_context_get_params" => io::lower_stream_context_get_params(ctx, inst),
-        "stream_get_contents" => io::lower_stream_get_contents(ctx, inst),
-        "stream_get_line" => io::lower_stream_get_line(ctx, inst),
-        "stream_get_meta_data" => io::lower_stream_get_meta_data(ctx, inst),
-        "stream_get_wrappers" => io::lower_stream_get_wrappers(ctx, inst),
-        "stream_get_transports" => io::lower_stream_get_transports(ctx, inst),
-        "stream_get_filters" => io::lower_stream_get_filters(ctx, inst),
-        "stream_filter_register" => io::lower_stream_filter_register(ctx, inst),
-        "stream_filter_append" | "stream_filter_prepend" => {
-            io::lower_stream_filter_attach(ctx, inst, key.as_str())
-        }
-        "stream_filter_remove" => io::lower_stream_filter_remove(ctx, inst),
-        "stream_bucket_make_writeable" => io::lower_stream_bucket_make_writeable(ctx, inst),
-        "stream_bucket_new" => io::lower_stream_bucket_new(ctx, inst),
-        "stream_bucket_append" | "stream_bucket_prepend" => {
-            io::lower_stream_bucket_append_or_prepend(ctx, inst)
-        }
-        "stream_is_local" => io::lower_stream_is_local(ctx, inst),
-        "stream_supports_lock" => io::lower_stream_supports_lock(ctx, inst),
-        "stream_isatty" => io::lower_stream_isatty(ctx, inst),
-        "stream_set_chunk_size" => io::lower_stream_set_chunk_size(ctx, inst),
-        "stream_set_read_buffer" => io::lower_stream_set_buffer(ctx, inst),
-        "stream_set_write_buffer" => io::lower_stream_set_buffer(ctx, inst),
-        "stream_set_blocking" => io::lower_stream_set_blocking(ctx, inst),
-        "stream_set_timeout" => io::lower_stream_set_timeout(ctx, inst),
-        "stream_select" => io::lower_stream_select(ctx, inst),
-        "stream_resolve_include_path" => io::lower_stream_resolve_include_path(ctx, inst),
-        "stream_copy_to_stream" => io::lower_stream_copy_to_stream(ctx, inst),
-        "stream_socket_server" => io::lower_stream_socket_server(ctx, inst),
-        "stream_socket_client" => io::lower_stream_socket_client(ctx, inst),
-        "stream_socket_accept" => io::lower_stream_socket_accept(ctx, inst),
-        "stream_socket_pair" => io::lower_stream_socket_pair(ctx, inst),
-        "stream_socket_get_name" => io::lower_stream_socket_get_name(ctx, inst),
-        "stream_socket_shutdown" => io::lower_stream_socket_shutdown(ctx, inst),
-        "stream_socket_enable_crypto" => io::lower_stream_socket_enable_crypto(ctx, inst),
-        "stream_socket_recvfrom" => io::lower_stream_socket_recvfrom(ctx, inst),
-        "stream_socket_sendto" => io::lower_stream_socket_sendto(ctx, inst),
-        "file" => io::lower_file(ctx, inst),
-        "realpath" => io::lower_realpath(ctx, inst),
-        "realpath_cache_get" => io::lower_realpath_cache_get(ctx, inst),
-        "realpath_cache_size" => io::lower_realpath_cache_size(ctx, inst),
-        "file_put_contents" => io::lower_file_put_contents(ctx, inst),
-        "__elephc_phar_set_compression" => io::lower_elephc_phar_set_compression(ctx, inst),
-        "__elephc_phar_list_entries" => io::lower_elephc_phar_list_entries(ctx, inst),
-        "__elephc_phar_get_metadata" => io::lower_elephc_phar_get_metadata(ctx, inst),
-        "__elephc_phar_get_stub" => io::lower_elephc_phar_get_stub(ctx, inst),
-        "__elephc_phar_set_metadata" => io::lower_elephc_phar_set_metadata(ctx, inst),
-        "__elephc_phar_set_stub" => io::lower_elephc_phar_set_stub(ctx, inst),
-        "__elephc_phar_get_file_metadata" => {
-            io::lower_elephc_phar_get_file_metadata(ctx, inst)
-        }
-        "__elephc_phar_set_file_metadata" => {
-            io::lower_elephc_phar_set_file_metadata(ctx, inst)
-        }
-        "__elephc_phar_gzip_archive" => io::lower_elephc_phar_gzip_archive(ctx, inst),
-        "__elephc_phar_bzip2_archive" => io::lower_elephc_phar_bzip2_archive(ctx, inst),
-        "__elephc_phar_decompress_archive" => {
-            io::lower_elephc_phar_decompress_archive(ctx, inst)
-        }
-        "__elephc_phar_sign_openssl" => io::lower_elephc_phar_sign_openssl(ctx, inst),
-        "__elephc_phar_sign_hash" => io::lower_elephc_phar_sign_hash(ctx, inst),
-        "__elephc_phar_set_zip_password" => io::lower_elephc_phar_set_zip_password(ctx, inst),
-        "__elephc_phar_get_signature_hash" => {
-            io::lower_elephc_phar_get_signature_hash(ctx, inst)
-        }
-        "__elephc_phar_get_signature_type" => {
-            io::lower_elephc_phar_get_signature_type(ctx, inst)
-        }
-        "file_exists" => io::lower_file_exists(ctx, inst),
-        "copy" => io::lower_copy(ctx, inst),
-        "rename" => io::lower_rename(ctx, inst),
-        "unlink" => io::lower_unlink(ctx, inst),
-        "mkdir" => io::lower_mkdir(ctx, inst),
-        "rmdir" => io::lower_rmdir(ctx, inst),
-        "chdir" => io::lower_chdir(ctx, inst),
-        "chmod" => io::lower_chmod(ctx, inst),
-        "chown" => io::lower_chown(ctx, inst),
-        "chgrp" => io::lower_chgrp(ctx, inst),
-        "lchown" => io::lower_lchown(ctx, inst),
-        "lchgrp" => io::lower_lchgrp(ctx, inst),
-        "umask" => io::lower_umask(ctx, inst),
-        "touch" => io::lower_touch(ctx, inst),
-        "getcwd" => io::lower_getcwd(ctx, inst),
-        "sys_get_temp_dir" => io::lower_sys_get_temp_dir(ctx, inst),
-        "tmpfile" => io::lower_tmpfile(ctx, inst),
-        "tempnam" => io::lower_tempnam(ctx, inst),
-        "scandir" => io::lower_scandir(ctx, inst),
-        "glob" => io::lower_glob(ctx, inst),
-        "basename" => io::lower_basename(ctx, inst),
-        "dirname" => io::lower_dirname(ctx, inst),
-        "fnmatch" => io::lower_fnmatch(ctx, inst),
-        "pathinfo" => io::lower_pathinfo(ctx, inst),
-        "filesize" => io::lower_filesize(ctx, inst),
-        "filemtime" => io::lower_filemtime(ctx, inst),
-        "linkinfo" => io::lower_linkinfo(ctx, inst),
-        "symlink" => io::lower_symlink(ctx, inst),
-        "link" => io::lower_link(ctx, inst),
-        "readlink" => io::lower_readlink(ctx, inst),
-        "fileatime" => io::lower_fileatime(ctx, inst),
-        "filectime" => io::lower_filectime(ctx, inst),
-        "fileperms" => io::lower_fileperms(ctx, inst),
-        "fileowner" => io::lower_fileowner(ctx, inst),
-        "filegroup" => io::lower_filegroup(ctx, inst),
-        "fileinode" => io::lower_fileinode(ctx, inst),
-        "filetype" => io::lower_filetype(ctx, inst),
-        "stat" => io::lower_stat(ctx, inst),
-        "lstat" => io::lower_lstat(ctx, inst),
-        "fstat" => io::lower_fstat(ctx, inst),
-        "clearstatcache" => io::lower_clearstatcache(ctx, inst),
-        "is_file" => io::lower_is_file(ctx, inst),
-        "is_dir" => io::lower_is_dir(ctx, inst),
-        "is_readable" => io::lower_is_readable(ctx, inst),
-        "is_writable" => io::lower_is_writable(ctx, inst),
-        "is_writeable" => io::lower_is_writeable(ctx, inst),
-        "is_executable" => io::lower_is_executable(ctx, inst),
-        "is_link" => io::lower_is_link(ctx, inst),
-        "date" => system::lower_date(ctx, inst),
-        "gmdate" => system::lower_gmdate(ctx, inst),
-        "date_default_timezone_get" => system::lower_date_default_timezone_get(ctx, inst),
-        "date_default_timezone_set" => system::lower_date_default_timezone_set(ctx, inst),
-        "microtime" => system::lower_microtime(ctx, inst),
-        "mktime" => system::lower_mktime(ctx, inst),
-        "gmmktime" => system::lower_gmmktime(ctx, inst),
-        "__elephc_mktime_raw" => system::lower_mktime(ctx, inst),
-        "__elephc_gmmktime_raw" => system::lower_gmmktime(ctx, inst),
-        "checkdate" => system::lower_checkdate(ctx, inst),
-        "getdate" => system::lower_getdate(ctx, inst),
-        "localtime" => system::lower_localtime(ctx, inst),
-        "hrtime" => system::lower_hrtime(ctx, inst),
-        "http_response_code" => system::lower_http_response_code(ctx, inst),
-        "header" => system::lower_header(ctx, inst),
-        "sleep" => system::lower_sleep(ctx, inst),
-        "strtotime" => system::lower_strtotime(ctx, inst),
-        "__elephc_strtotime_raw" => system::lower_elephc_strtotime_raw(ctx, inst),
-        "time" => system::lower_time(ctx, inst),
-        "usleep" => system::lower_usleep(ctx, inst),
         "exit" | "die" => system::lower_exit(ctx, inst),
-        "getenv" => system::lower_getenv(ctx, inst),
-        "putenv" => system::lower_putenv(ctx, inst),
-        "php_uname" => system::lower_php_uname(ctx, inst),
-        "exec" => system::lower_exec(ctx, inst),
-        "shell_exec" => system::lower_shell_exec(ctx, inst),
-        "system" => system::lower_system(ctx, inst),
-        "passthru" => system::lower_passthru(ctx, inst),
-        "preg_match" => regex::lower_preg_match(ctx, inst),
-        "preg_match_all" => regex::lower_preg_match_all(ctx, inst),
-        "preg_replace" => regex::lower_preg_replace(ctx, inst),
-        "preg_replace_callback" => regex::lower_preg_replace_callback(ctx, inst),
-        "preg_split" => regex::lower_preg_split(ctx, inst),
-        "json_decode" => json::lower_json_decode(ctx, inst),
-        "json_encode" => json::lower_json_encode(ctx, inst),
-        "json_last_error" => json::lower_json_last_error(ctx, inst),
-        "json_last_error_msg" => json::lower_json_last_error_msg(ctx, inst),
-        "json_validate" => json::lower_json_validate(ctx, inst),
-        "serialize" => serialize::lower_serialize(ctx, inst),
-        "unserialize" => serialize::lower_unserialize(ctx, inst),
-        "function_exists" => lower_function_exists(ctx, inst),
-        "class_exists" | "interface_exists" | "trait_exists" | "enum_exists" => {
-            lower_class_like_exists(ctx, inst, key.as_str())
-        }
-        "class_alias" => types::lower_class_alias(ctx, inst),
-        "get_class" | "get_parent_class" => types::lower_class_name_lookup(ctx, inst, key.as_str()),
-        "is_a" | "is_subclass_of" => types::lower_is_a_relation(ctx, inst, key.as_str()),
-        "class_implements" | "class_parents" | "class_uses" => {
-            class_relations::lower_class_relation(ctx, inst, key.as_str())
-        }
-        "class_attribute_names" => attributes::lower_class_attribute_names(ctx, inst),
-        "class_attribute_args" => attributes::lower_class_attribute_args(ctx, inst),
-        "class_get_attributes" => attributes::lower_class_get_attributes(ctx, inst),
-        "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
-            types::lower_get_declared_names(ctx, inst, key.as_str())
-        }
-        "is_callable" => lower_is_callable(ctx, inst),
-        "print_r" => debug::lower_print_r(ctx, inst),
-        "var_dump" => debug::lower_var_dump(ctx, inst),
-        "is_int" => lower_static_type_predicate(ctx, inst, "is_int", PhpType::Int),
-        "is_float" => lower_static_type_predicate(ctx, inst, "is_float", PhpType::Float),
-        "is_bool" => lower_static_type_predicate(ctx, inst, "is_bool", PhpType::Bool),
-        "is_null" => lower_is_null_builtin(ctx, inst),
-        "is_string" => lower_static_type_predicate(ctx, inst, "is_string", PhpType::Str),
-        "is_resource" => types::lower_is_resource(ctx, inst),
-        "is_iterable" => lower_is_iterable(ctx, inst),
-        "is_array" => lower_is_array(ctx, inst),
-        "is_object" => lower_is_object(ctx, inst),
-        "is_scalar" => lower_is_scalar(ctx, inst),
-        "get_resource_type" => types::lower_get_resource_type(ctx, inst),
-        "get_resource_id" => types::lower_get_resource_id(ctx, inst),
-        "is_numeric" => is_numeric::lower_is_numeric(ctx, inst),
-        "is_nan" => math::lower_is_nan(ctx, inst),
-        "is_infinite" => math::lower_is_infinite(ctx, inst),
-        "is_finite" => math::lower_is_finite(ctx, inst),
-        "number_format" => strings::lower_number_format(ctx, inst),
-        "strtolower" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "strtolower",
-            "__rt_strtolower",
-        ),
-        "strtoupper" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "strtoupper",
-            "__rt_strtoupper",
-        ),
-        "strrev" => strings::lower_unary_string_runtime(ctx, inst, "strrev", "__rt_strrev"),
-        "grapheme_strrev" => strings::lower_grapheme_strrev(ctx, inst),
-        "str_repeat" => strings::lower_str_repeat(ctx, inst),
-        "substr" => strings::lower_substr(ctx, inst),
-        "substr_replace" => strings::lower_substr_replace(ctx, inst),
-        "strstr" => strings::lower_strstr(ctx, inst),
-        "str_replace" => strings::lower_string_replace(ctx, inst, "str_replace", "__rt_str_replace"),
-        "str_ireplace" => {
-            strings::lower_string_replace(ctx, inst, "str_ireplace", "__rt_str_ireplace")
-        }
-        "explode" => strings::lower_explode(ctx, inst),
-        "implode" => strings::lower_implode(ctx, inst),
-        "str_split" => strings::lower_str_split(ctx, inst),
-        "sscanf" => strings::lower_sscanf(ctx, inst),
-        "ucfirst" => strings::lower_ucfirst(ctx, inst),
-        "lcfirst" => strings::lower_lcfirst(ctx, inst),
-        "ucwords" => strings::lower_unary_string_runtime(ctx, inst, "ucwords", "__rt_ucwords"),
-        "trim" => strings::lower_trim_like(ctx, inst, "trim", "__rt_trim", "__rt_trim_mask"),
-        "ltrim" => strings::lower_trim_like(ctx, inst, "ltrim", "__rt_ltrim", "__rt_ltrim_mask"),
-        "rtrim" | "chop" => {
-            strings::lower_trim_like(ctx, inst, key.as_str(), "__rt_rtrim", "__rt_rtrim_mask")
-        }
-        "strcmp" => strings::lower_binary_string_runtime(ctx, inst, "strcmp", "__rt_strcmp"),
-        "strcasecmp" => {
-            strings::lower_binary_string_runtime(ctx, inst, "strcasecmp", "__rt_strcasecmp")
-        }
-        "str_contains" => strings::lower_str_contains(ctx, inst),
-        "strpos" => strings::lower_string_position(ctx, inst, "strpos", "__rt_strpos"),
-        "strrpos" => strings::lower_string_position(ctx, inst, "strrpos", "__rt_strrpos"),
-        "str_starts_with" => strings::lower_binary_string_runtime(
-            ctx,
-            inst,
-            "str_starts_with",
-            "__rt_str_starts_with",
-        ),
-        "str_ends_with" => strings::lower_binary_string_runtime(
-            ctx,
-            inst,
-            "str_ends_with",
-            "__rt_str_ends_with",
-        ),
-        "ord" => strings::lower_ord(ctx, inst),
-        "chr" => strings::lower_chr(ctx, inst),
-        "addslashes" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "addslashes",
-            "__rt_addslashes",
-        ),
-        "stripslashes" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "stripslashes",
-            "__rt_stripslashes",
-        ),
-        "nl2br" => strings::lower_unary_string_runtime(ctx, inst, "nl2br", "__rt_nl2br"),
-        "wordwrap" => strings::lower_wordwrap(ctx, inst),
-        "bin2hex" => strings::lower_unary_string_runtime(ctx, inst, "bin2hex", "__rt_bin2hex"),
-        "hex2bin" => strings::lower_unary_string_runtime(ctx, inst, "hex2bin", "__rt_hex2bin"),
-        "htmlspecialchars" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "htmlspecialchars",
-            "__rt_htmlspecialchars",
-        ),
-        "htmlentities" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "htmlentities",
-            "__rt_htmlspecialchars",
-        ),
-        "html_entity_decode" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "html_entity_decode",
-            "__rt_html_entity_decode",
-        ),
-        "urlencode" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "urlencode",
-            "__rt_urlencode",
-        ),
-        "urldecode" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "urldecode",
-            "__rt_urldecode",
-        ),
-        "rawurlencode" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "rawurlencode",
-            "__rt_rawurlencode",
-        ),
-        "rawurldecode" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "rawurldecode",
-            "__rt_urldecode",
-        ),
-        "base64_encode" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "base64_encode",
-            "__rt_base64_encode",
-        ),
-        "base64_decode" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "base64_decode",
-            "__rt_base64_decode",
-        ),
-        "md5" => strings::lower_md5(ctx, inst),
-        "sha1" => strings::lower_sha1(ctx, inst),
-        "hash" => strings::lower_hash(ctx, inst),
-        "hash_hmac" => strings::lower_hash_hmac(ctx, inst),
-        "hash_equals" => strings::lower_hash_equals(ctx, inst),
-        "hash_algos" => strings::lower_hash_algos(ctx, inst),
-        "hash_init" => strings::lower_hash_init(ctx, inst),
-        "hash_update" => strings::lower_hash_update(ctx, inst),
-        "hash_final" => strings::lower_hash_final(ctx, inst),
-        "hash_copy" => strings::lower_hash_copy(ctx, inst),
-        "hash_file" => io::lower_hash_file(ctx, inst),
-        "crc32" => strings::lower_crc32(ctx, inst),
-        "gzcompress" => strings::lower_gzcompress(ctx, inst),
-        "gzdeflate" => strings::lower_gzdeflate(ctx, inst),
-        "gzinflate" => strings::lower_gzinflate(ctx, inst),
-        "gzuncompress" => strings::lower_gzuncompress(ctx, inst),
-        "long2ip" => strings::lower_long2ip(ctx, inst),
-        "ip2long" => strings::lower_ip2long(ctx, inst),
-        "inet_ntop" => strings::lower_inet(ctx, inst, "inet_ntop", "__rt_inet_ntop"),
-        "inet_pton" => strings::lower_inet(ctx, inst, "inet_pton", "__rt_inet_pton"),
-        "str_pad" => strings::lower_str_pad(ctx, inst),
-        "sprintf" => strings::lower_sprintf(ctx, inst),
-        "printf" => strings::lower_printf(ctx, inst),
-        "vsprintf" => strings::lower_vsprintf(ctx, inst),
-        "vprintf" => strings::lower_vprintf(ctx, inst),
-        "ctype_alpha" => ctype::lower_ctype_alpha(ctx, inst),
-        "ctype_digit" => ctype::lower_ctype_digit(ctx, inst),
-        "ctype_alnum" => ctype::lower_ctype_alnum(ctx, inst),
-        "ctype_space" => ctype::lower_ctype_space(ctx, inst),
-        "spl_autoload_register" => spl::lower_spl_autoload_bool(ctx, inst, "spl_autoload_register"),
-        "spl_autoload_unregister" => spl::lower_spl_autoload_bool(ctx, inst, "spl_autoload_unregister"),
-        "spl_autoload_functions" => spl::lower_spl_autoload_functions(ctx, inst),
-        "spl_autoload_extensions" => spl::lower_spl_autoload_extensions(ctx, inst),
-        "spl_autoload_call" => spl::lower_spl_autoload_void(ctx, inst, "spl_autoload_call"),
-        "spl_autoload" => spl::lower_spl_autoload_void(ctx, inst, "spl_autoload"),
-        "spl_object_id" => spl::lower_spl_object_id(ctx, inst),
-        "spl_object_hash" => spl::lower_spl_object_hash(ctx, inst),
-        "spl_classes" => spl::lower_spl_classes(ctx, inst),
-        "iterator_apply" => spl::lower_iterator_apply(ctx, inst),
-        "iterator_count" => spl::lower_iterator_count(ctx, inst),
-        "iterator_to_array" => spl::lower_iterator_to_array(ctx, inst),
         _ => Err(CodegenIrError::unsupported(format!("builtin call {}", name))),
     }
 }
@@ -588,7 +80,7 @@ pub(super) fn lower_hash_isset(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `define("NAME", value)` with the legacy duplicate-name runtime guard.
-fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "define", 2)?;
     let name_value = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
@@ -634,24 +126,8 @@ fn emit_duplicate_define_warning(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
 }
 
-/// Lowers `pi()` as the same data-section float constant used by the legacy backend.
-fn lower_pi(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "pi", 0)?;
-    let label = ctx.data.add_float(std::f64::consts::PI);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.adrp("x9", &label);                                     // load the page address that contains the M_PI floating constant
-            ctx.emitter.ldr_lo12("d0", "x9", &label);                          // load the M_PI floating constant into the floating result register
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd xmm0, QWORD PTR [rip + {}]", label)); // load the M_PI floating constant into the floating result register
-        }
-    }
-    store_if_result(ctx, inst)
-}
-
 /// Lowers `gettype(value)` for statically concrete PHP types.
-fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "gettype", 1)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.raw_value_php_type(value)?;
@@ -773,7 +249,7 @@ fn emit_type_name_result(ctx: &mut FunctionContext<'_>, type_name: &[u8]) {
 }
 
 /// Lowers `phpversion()` as the compiler package version string.
-fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "phpversion", 0)?;
     let (label, len) = ctx.data.add_string(env!("CARGO_PKG_VERSION").as_bytes());
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
@@ -783,7 +259,7 @@ fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
 }
 
 /// Lowers `defined("NAME")` for compile-time string constant names.
-fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "defined", 1)?;
     let value = expect_operand(inst, 0)?;
     let constant_name = const_string_operand(ctx, value)?;
@@ -798,7 +274,7 @@ fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()
 /// functions). The aliases are matched through `is_date_procedural_alias` rather than the catalog
 /// because their call sites are rewritten before codegen, so they never reach the builtin catalog
 /// yet must still report as existing to match PHP.
-fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "function_exists", 1)?;
     let value = expect_operand(inst, 0)?;
     let function_name = const_string_operand(ctx, value)?;
@@ -815,7 +291,7 @@ fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 }
 
 /// Lowers AOT class/interface/enum existence checks for literal names.
-fn lower_class_like_exists(
+pub(crate) fn lower_class_like_exists(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -841,7 +317,7 @@ fn lower_class_like_exists(
 }
 
 /// Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers.
-fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_callable", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)?.codegen_repr() {
@@ -956,7 +432,12 @@ fn emit_variant_function_exists(ctx: &mut FunctionContext<'_>, function_name: &s
 }
 
 /// Lowers `count(array)` for concrete array values by reading the runtime length header.
-fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+///
+/// Called from `crate::builtins::array::count` (the registry home) via a thin wrapper.
+/// Handles Array/AssocArray (reads length directly from the runtime header), Mixed/Union
+/// (delegates to `__rt_mixed_count`), and Countable Object (calls the object's `count`
+/// method via intrinsic or dynamic dispatch).
+pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "count", 1)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.value_php_type(value)?.codegen_repr();
@@ -1010,7 +491,7 @@ fn lower_closure_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
 }
 
 /// Lowers `strlen()` by coercing string-like values and returning the byte length.
-fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "strlen", 1)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(value)?;
@@ -1040,7 +521,7 @@ fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
 }
 
 /// Lowers `intval()` for concrete scalar operands.
-fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "intval", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
@@ -1073,7 +554,7 @@ fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
 }
 
 /// Lowers `floatval()` for concrete scalar operands.
-fn lower_floatval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_floatval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "floatval", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
@@ -1103,7 +584,7 @@ fn lower_floatval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<(
 }
 
 /// Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`.
-fn lower_boolval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_boolval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "boolval", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
@@ -1253,7 +734,7 @@ fn invert_bool_result(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Lowers a static `is_*` predicate for concrete non-Mixed values.
-fn lower_static_type_predicate(
+pub(crate) fn lower_static_type_predicate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -1311,7 +792,7 @@ fn emit_tagged_scalar_int_predicate(
 }
 
 /// Lowers `is_iterable()` for concrete values and boxed Mixed payloads.
-fn lower_is_iterable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_iterable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_iterable", 1)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.value_php_type(value)?;
@@ -1509,7 +990,7 @@ fn normalized_type_name(type_name: &str) -> &str {
 }
 
 /// Lowers `is_null()` for concrete scalar values and boxed Mixed payloads.
-fn lower_is_null_builtin(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_null_builtin(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_null", 1)?;
     let value = expect_operand(inst, 0)?;
     predicates::emit_is_null_result(ctx, value)?;
@@ -1519,7 +1000,7 @@ fn lower_is_null_builtin(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 /// Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value
 /// whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is
 /// not treated as a definite array here (it may hold a Traversable); use `is_iterable` for that.
-fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_array", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
@@ -1534,7 +1015,7 @@ fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<(
 
 /// Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose
 /// runtime tag is an object (6).
-fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_object", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
@@ -1550,7 +1031,7 @@ fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
 /// Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed
 /// Mixed/Union value whose runtime tag is int (0), string (1), float (2), or bool (3). Null,
 /// arrays, objects, and resources are not scalars, matching PHP.
-fn lower_is_scalar(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_is_scalar(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_scalar", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {

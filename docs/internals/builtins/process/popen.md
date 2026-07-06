@@ -2,14 +2,14 @@
 title: "popen() — internals"
 description: "Compiler internals for popen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 308
+  order: 305
 ---
 
 ## `popen()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/popen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/popen.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3602](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3602) (`lower_popen`)
 - **Function symbol**: `lower_popen()`
 
@@ -36,4 +36,3 @@ function popen(string $command, string $mode): mixed
 ## Cross-references
 
 - [User reference for `popen()`](../../../php/builtins/process/popen.md)
-

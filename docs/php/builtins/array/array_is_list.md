@@ -1,6 +1,6 @@
 ---
 title: "array_is_list()"
-description: "Lowers `array_is_list()` to the `__rt_array_is_list` runtime predicate, returning a bool."
+description: "Checks whether an array is a list (sequential 0-based integer keys)."
 sidebar:
   order: 17
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_is_list(mixed $array): bool
 ```
 
-Lowers `array_is_list()` to the `__rt_array_is_list` runtime predicate, returning a bool.
+Checks whether an array is a list (sequential 0-based integer keys).
 
 **Parameters**:
 - `$array` (`mixed`)

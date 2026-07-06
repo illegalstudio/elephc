@@ -2,17 +2,21 @@
 title: "log10() — internals"
 description: "Compiler internals for log10(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 253
+  order: 255
 ---
 
 ## `log10()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/math/log10.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/log10.rs)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/libm.rs`:22](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/libm.rs#L22) (`lower_unary_libm`)
+- **Function symbol**: `lower_unary_libm()`
 
+
+### Lowering notes
+
+- Lowers a one-argument libm builtin such as `sin()`, `cos()`, or `exp()`.
 
 ## Runtime helpers
 
@@ -31,4 +35,3 @@ function log10(float $num): float
 ## Cross-references
 
 - [User reference for `log10()`](../../../php/builtins/math/log10.md)
-

@@ -21,7 +21,7 @@ use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 
 /// Lowers `print_r(value)` for concrete scalar/resource values and array/hash shells.
-pub(super) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "print_r", 1)?;
     ctx.emitter.blank();
     ctx.emitter.comment("print_r()");
@@ -32,7 +32,7 @@ pub(super) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `var_dump(value)` for concrete scalar/resource values and array/hash shells.
-pub(super) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "var_dump", 1)?;
     ctx.emitter.blank();
     ctx.emitter.comment("var_dump()");

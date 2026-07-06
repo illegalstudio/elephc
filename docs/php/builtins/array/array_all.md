@@ -1,6 +1,6 @@
 ---
 title: "array_all()"
-description: "Lowers `array_all()`: returns true when every element satisfies the predicate."
+description: "Returns true when every array element satisfies the predicate callback."
 sidebar:
   order: 1
 ---
@@ -8,16 +8,16 @@ sidebar:
 ## array_all()
 
 ```php
-function array_all(array $array, mixed $callback): mixed
+function array_all(mixed $array, mixed $callback): bool
 ```
 
-Lowers `array_all()`: returns true when every element satisfies the predicate.
+Returns true when every array element satisfies the predicate callback.
 
 **Parameters**:
-- `$array` (`array`)
+- `$array` (`mixed`)
 - `$callback` (`mixed`)
 
-**Returns**: `mixed`
+**Returns**: `bool`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

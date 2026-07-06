@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_key_first.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_key_first.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1155](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1155) (`lower_array_key_first`)
 - **Function symbol**: `lower_array_key_first()`
 
@@ -37,4 +37,3 @@ function array_key_first(array $array): mixed
 ## Cross-references
 
 - [User reference for `array_key_first()`](../../../php/builtins/array/array_key_first.md)
-

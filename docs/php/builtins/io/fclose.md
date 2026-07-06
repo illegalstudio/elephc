@@ -1,8 +1,8 @@
 ---
 title: "fclose()"
-description: "Lowers `fclose(stream)` after validating and unboxing the stream handle."
+description: "Closes an open file pointer."
 sidebar:
-  order: 152
+  order: 154
 ---
 
 ## fclose()
@@ -11,7 +11,7 @@ sidebar:
 function fclose(resource $stream): bool
 ```
 
-Lowers `fclose(stream)` after validating and unboxing the stream handle.
+Closes an open file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)

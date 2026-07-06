@@ -1,6 +1,6 @@
 ---
 title: "array_fill()"
-description: "Lowers `array_fill()` for pointer-sized scalar and refcounted payloads."
+description: "Fill an array with values."
 sidebar:
   order: 9
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_fill(int $start_index, int $count, mixed $value): array
 ```
 
-Lowers `array_fill()` for pointer-sized scalar and refcounted payloads.
+Fill an array with values.
 
 **Parameters**:
 - `$start_index` (`int`)

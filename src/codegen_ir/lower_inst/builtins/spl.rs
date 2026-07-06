@@ -94,6 +94,7 @@ const SPL_CLASS_NAMES: &[&str] = &[
     "UnderflowException",
     "UnexpectedValueException",
     "ValueError",
+    "ArithmeticError",
 ];
 
 /// Callback strategy supported by the current EIR `iterator_apply()` lowering.
@@ -131,7 +132,7 @@ struct IteratorApplyCallbackTarget {
 }
 
 /// Lowers autoload registration stubs by preserving arg effects and returning true.
-pub(super) fn lower_spl_autoload_bool(
+pub(crate) fn lower_spl_autoload_bool(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -147,7 +148,7 @@ pub(super) fn lower_spl_autoload_bool(
 }
 
 /// Lowers no-op autoload calls by preserving arg effects and returning PHP null if used.
-pub(super) fn lower_spl_autoload_void(
+pub(crate) fn lower_spl_autoload_void(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -163,7 +164,7 @@ pub(super) fn lower_spl_autoload_void(
 }
 
 /// Lowers `spl_autoload_functions()` to an indexed array of AOT rule placeholders.
-pub(super) fn lower_spl_autoload_functions(
+pub(crate) fn lower_spl_autoload_functions(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -174,7 +175,7 @@ pub(super) fn lower_spl_autoload_functions(
 }
 
 /// Lowers `spl_autoload_extensions()` against the legacy mutable extension globals.
-pub(super) fn lower_spl_autoload_extensions(
+pub(crate) fn lower_spl_autoload_extensions(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -202,7 +203,7 @@ pub(super) fn lower_spl_autoload_extensions(
 }
 
 /// Lowers `spl_classes()` to the static compiler-shipped SPL/core type snapshot.
-pub(super) fn lower_spl_classes(
+pub(crate) fn lower_spl_classes(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -212,7 +213,7 @@ pub(super) fn lower_spl_classes(
 }
 
 /// Lowers `spl_object_id(object)` by returning the loaded object pointer as an integer.
-pub(super) fn lower_spl_object_id(
+pub(crate) fn lower_spl_object_id(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -222,7 +223,7 @@ pub(super) fn lower_spl_object_id(
 }
 
 /// Lowers `spl_object_hash(object)` by formatting the loaded object pointer as a string.
-pub(super) fn lower_spl_object_hash(
+pub(crate) fn lower_spl_object_hash(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -233,7 +234,7 @@ pub(super) fn lower_spl_object_hash(
 }
 
 /// Lowers `iterator_count()` over arrays, `iterable`, and Traversable objects.
-pub(super) fn lower_iterator_count(
+pub(crate) fn lower_iterator_count(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -262,7 +263,7 @@ pub(super) fn lower_iterator_count(
 }
 
 /// Lowers `iterator_to_array()` over arrays, `iterable`, and Traversable objects.
-pub(super) fn lower_iterator_to_array(
+pub(crate) fn lower_iterator_to_array(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -286,7 +287,7 @@ pub(super) fn lower_iterator_to_array(
 }
 
 /// Lowers `iterator_apply()` over supported Traversable sources and callback forms.
-pub(super) fn lower_iterator_apply(
+pub(crate) fn lower_iterator_apply(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {

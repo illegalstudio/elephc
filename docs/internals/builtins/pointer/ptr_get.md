@@ -2,14 +2,14 @@
 title: "ptr_get() — internals"
 description: "Compiler internals for ptr_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 289
+  order: 286
 ---
 
 ## `ptr_get()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/pointers/ptr_get.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_get.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/pointers.rs`:109](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/pointers.rs#L109) (`lower_ptr_get`)
 - **Function symbol**: `lower_ptr_get()`
 
@@ -35,4 +35,3 @@ function ptr_get(pointer $pointer): int
 ## Cross-references
 
 - [User reference for `ptr_get()`](../../../php/builtins/pointer/ptr_get.md)
-

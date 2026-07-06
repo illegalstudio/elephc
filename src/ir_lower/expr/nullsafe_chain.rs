@@ -21,13 +21,27 @@ use super::{
     branch_to, lower_array_access_from_value, lower_boxed_null,
     lower_dynamic_property_get_from_value, lower_expr, lower_expr_call_from_value,
     lower_method_call_with_receiver, lower_property_get_from_value, store_value_into_temp,
-    value_is_definitely_null, value_is_nullable,
+    take_owned_temp, value_is_definitely_null, value_is_nullable,
 };
 
 /// Lowers `expr` when it is a postfix chain containing `?->`.
 pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Option<LoweredValue> {
+    lower_with_missing_warning(ctx, expr, true)
+}
+
+/// Lowers a nullsafe postfix chain while configuring native array-miss warnings.
+pub(super) fn lower_with_missing_warning(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> Option<LoweredValue> {
     let chain = flatten_nullsafe_postfix_chain(expr)?;
-    Some(lower_nullsafe_postfix_chain(ctx, chain, expr))
+    Some(lower_nullsafe_postfix_chain(
+        ctx,
+        chain,
+        expr,
+        warn_on_missing,
+    ))
 }
 
 /// Flattened left-to-right postfix chain rooted at a base expression.
@@ -173,9 +187,10 @@ fn lower_nullsafe_postfix_chain(
     ctx: &mut LoweringContext<'_, '_>,
     chain: PostfixChain<'_>,
     expr: &Expr,
+    warn_on_missing: bool,
 ) -> LoweredValue {
     let result_type = PhpType::Mixed;
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let null_block = ctx.builder.create_named_block("nullsafe.chain.null", Vec::new());
     let done = ctx.builder.create_named_block("nullsafe.chain.done", Vec::new());
     let mut current = Some(lower_expr(ctx, chain.base));
@@ -187,7 +202,13 @@ fn lower_nullsafe_postfix_chain(
         if ctx.builder.insertion_block_is_terminated() {
             break;
         }
-        current = lower_nullsafe_postfix_segment(ctx, value, segment, null_block);
+        current = lower_nullsafe_postfix_segment(
+            ctx,
+            value,
+            segment,
+            null_block,
+            warn_on_missing,
+        );
     }
 
     if let Some(value) = current {
@@ -203,7 +224,7 @@ fn lower_nullsafe_postfix_chain(
     branch_to(ctx, done);
 
     ctx.builder.position_at_end(done);
-    ctx.load_local(&temp_name, Some(expr.span))
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers one segment of an already flattened nullsafe postfix chain.
@@ -212,6 +233,7 @@ fn lower_nullsafe_postfix_segment(
     current: LoweredValue,
     segment: PostfixSegment<'_>,
     null_block: BlockId,
+    warn_on_missing: bool,
 ) -> Option<LoweredValue> {
     match segment {
         PostfixSegment::Property {
@@ -263,7 +285,13 @@ fn lower_nullsafe_postfix_segment(
             ))
         }
         PostfixSegment::Array { expr, index } => {
-            Some(lower_array_access_from_value(ctx, current, index, expr))
+            Some(lower_array_access_from_value(
+                ctx,
+                current,
+                index,
+                expr,
+                warn_on_missing,
+            ))
         }
         PostfixSegment::ExprCall { expr, args } => {
             Some(lower_expr_call_from_value(ctx, current, args, expr))

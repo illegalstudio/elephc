@@ -1,20 +1,20 @@
 ---
 title: "umask()"
-description: "Lowers `umask(mask?)` through the target-aware runtime helper."
+description: "Changes the current umask."
 sidebar:
-  order: 149
+  order: 151
 ---
 
 ## umask()
 
 ```php
-function umask(int $mask): int
+function umask(int $mask = null): int
 ```
 
-Lowers `umask(mask?)` through the target-aware runtime helper.
+Changes the current umask.
 
 **Parameters**:
-- `$mask` (`int`), optional
+- `$mask` (`int`), default `null`, optional
 
 **Returns**: `int`
 

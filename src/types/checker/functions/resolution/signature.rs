@@ -122,6 +122,7 @@ impl Checker {
             .collect();
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
+        self.resolving_functions.insert(function_key.clone());
         let body_check_result = self.with_local_storage_context(ref_param_names, |checker| {
             for stmt in &decl.body {
                 if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
@@ -137,6 +138,7 @@ impl Checker {
             }
             Ok(())
         });
+        self.resolving_functions.remove(&function_key);
         self.current_by_ref_return = prev_by_ref_return;
         self.callable_param_names = saved_callable_param_names;
         body_check_result?;

@@ -2,14 +2,14 @@
 title: "ptr_read32() — internals"
 description: "Compiler internals for ptr_read32(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 294
+  order: 291
 ---
 
 ## `ptr_read32()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/pointers/ptr_read32.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_read32.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/pointers.rs`:129](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/pointers.rs#L129) (`lower_ptr_read32`)
 - **Function symbol**: `lower_ptr_read32()`
 
@@ -36,4 +36,3 @@ function ptr_read32(pointer $pointer): int
 ## Cross-references
 
 - [User reference for `ptr_read32()`](../../../php/builtins/pointer/ptr_read32.md)
-

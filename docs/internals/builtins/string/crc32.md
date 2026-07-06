@@ -2,14 +2,14 @@
 title: "crc32() — internals"
 description: "Compiler internals for crc32(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 343
+  order: 340
 ---
 
 ## `crc32()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/crc32.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/crc32.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:348](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L348) (`lower_crc32`)
 - **Function symbol**: `lower_crc32()`
 
@@ -39,4 +39,3 @@ function crc32(string $string): int
 ## Cross-references
 
 - [User reference for `crc32()`](../../../php/builtins/string/crc32.md)
-

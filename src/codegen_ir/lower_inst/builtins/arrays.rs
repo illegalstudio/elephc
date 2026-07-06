@@ -35,7 +35,7 @@ mod unshift;
 pub(in crate::codegen_ir::lower_inst::builtins) mod values;
 
 /// Rejects `call_user_func*` calls that escaped the dedicated EIR callback lowering path.
-pub(super) fn lower_call_user_func_builtin_escape(
+pub(crate) fn lower_call_user_func_builtin_escape(
     _ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -48,17 +48,17 @@ pub(super) fn lower_call_user_func_builtin_escape(
 }
 
 /// Lowers `array_sum()` over supported indexed-array payloads.
-pub(super) fn lower_array_sum(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_sum(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_indexed_array_aggregate(ctx, inst, "array_sum", "__rt_array_sum")
 }
 
 /// Lowers `array_product()` over supported indexed-array payloads.
-pub(super) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_indexed_array_aggregate(ctx, inst, "array_product", "__rt_array_product")
 }
 
 /// Lowers `array_push()` by appending one value and publishing the mutated array.
-pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_push", 2)?;
     let array = expect_operand(inst, 0)?;
     if matches!(
@@ -78,7 +78,7 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays.
-pub(super) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_chunk", 2)?;
     let array = expect_operand(inst, 0)?;
     let length = expect_operand(inst, 1)?;
@@ -96,7 +96,7 @@ pub(super) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Lowers `array_pad()` by copying an indexed array and filling missing slots.
-pub(super) fn lower_array_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_pad", 3)?;
     let array = expect_operand(inst, 0)?;
     let target_size = expect_operand(inst, 1)?;
@@ -112,7 +112,7 @@ pub(super) fn lower_array_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `array_fill()` for pointer-sized scalar and refcounted payloads.
-pub(super) fn lower_array_fill(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_fill(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_fill", 3)?;
     let start = expect_operand(inst, 0)?;
     let count = expect_operand(inst, 1)?;
@@ -135,7 +135,7 @@ pub(super) fn lower_array_fill(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `array_fill_keys()` through the legacy hash-building runtime helpers.
-pub(super) fn lower_array_fill_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_fill_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_fill_keys", 2)?;
     let keys = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
@@ -149,7 +149,7 @@ pub(super) fn lower_array_fill_keys(ctx: &mut FunctionContext<'_>, inst: &Instru
 }
 
 /// Lowers `array_combine()` through the legacy hash-building runtime helpers.
-pub(super) fn lower_array_combine(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_combine(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_combine", 2)?;
     let keys = expect_operand(inst, 0)?;
     let values = expect_operand(inst, 1)?;
@@ -163,12 +163,12 @@ pub(super) fn lower_array_combine(ctx: &mut FunctionContext<'_>, inst: &Instruct
 }
 
 /// Lowers `array_column()` through the target-aware legacy column helpers.
-pub(super) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     column::lower_array_column(ctx, inst)
 }
 
 /// Lowers `array_flip()` through the legacy hash-building runtime helpers.
-pub(super) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_flip", 1)?;
     let array = expect_operand(inst, 0)?;
     let value_elem_ty = array_flip_source_element_type(ctx.value_php_type(array)?)?;
@@ -182,7 +182,7 @@ pub(super) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
-pub(super) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_reverse", 1)?;
     let array = expect_operand(inst, 0)?;
     let elem_ty = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
@@ -195,7 +195,7 @@ pub(super) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
 }
 
 /// Lowers `array_unique()` for indexed arrays with 8-byte payload slots.
-pub(super) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_unique", 1)?;
     let array = expect_operand(inst, 0)?;
     let elem_ty = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
@@ -208,7 +208,7 @@ pub(super) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Lowers `array_filter()` for static and first-class callbacks through the runtime helper.
-pub(super) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_filter", 2, 3)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
@@ -309,7 +309,7 @@ pub(super) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Lowers `array_map()` through the callback runtime helper matching the callback result type.
-pub(super) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_map", 2)?;
     let callback = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
@@ -698,7 +698,7 @@ fn array_map_runtime_label(callback_elem_ty: &PhpType, env_bytes: usize) -> &'st
 }
 
 /// Lowers `array_reduce()` through the callback-driven runtime helper.
-pub(super) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_reduce", 3)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
@@ -780,7 +780,7 @@ pub(super) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Lowers `array_walk()` through the callback-driven runtime helper.
-pub(super) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_walk", 2)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
@@ -847,7 +847,7 @@ pub(super) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `array_merge()` for two compatible indexed arrays with 8-byte payload slots.
-pub(super) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_merge", 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
@@ -871,7 +871,7 @@ pub(super) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots.
-pub(super) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_indexed_array_set_op(
         ctx,
         inst,
@@ -882,7 +882,7 @@ pub(super) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `array_intersect()` for two compatible indexed arrays with pointer-sized payload slots.
-pub(super) fn lower_array_intersect(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_intersect(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_indexed_array_set_op(
         ctx,
         inst,
@@ -893,17 +893,17 @@ pub(super) fn lower_array_intersect(ctx: &mut FunctionContext<'_>, inst: &Instru
 }
 
 /// Lowers `array_diff_key()` for two associative arrays by filtering first-operand keys.
-pub(super) fn lower_array_diff_key(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_diff_key(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_assoc_array_key_set_op(ctx, inst, "array_diff_key", "__rt_array_diff_key")
 }
 
 /// Lowers `array_intersect_key()` for two associative arrays by keeping shared first-operand keys.
-pub(super) fn lower_array_intersect_key(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_intersect_key(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_assoc_array_key_set_op(ctx, inst, "array_intersect_key", "__rt_array_intersect_key")
 }
 
 /// Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
-pub(super) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_slice", 2, 3)?;
     let array = expect_operand(inst, 0)?;
     if matches!(
@@ -946,7 +946,7 @@ fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `array_splice()` by mutating an indexed source array and returning removed elements.
-pub(super) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_splice", 2, 3)?;
     let array = expect_operand(inst, 0)?;
     if matches!(
@@ -994,17 +994,17 @@ fn lower_mixed_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `array_values()` through the dedicated values-array builtin emitter.
-pub(super) fn lower_array_values(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_values(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     values::lower_array_values(ctx, inst)
 }
 
 /// Lowers `array_keys()` through the dedicated keys-array builtin emitter.
-pub(super) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     keys::lower_array_keys(ctx, inst)
 }
 
 /// Lowers `array_rand()` for indexed arrays.
-pub(super) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_rand", 1)?;
     let array = expect_operand(inst, 0)?;
     require_indexed_array_builtin(ctx.value_php_type(array)?, "array_rand")?;
@@ -1017,7 +1017,7 @@ pub(super) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `range()` for integer endpoints through the shared runtime constructor.
-pub(super) fn lower_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "range", 2)?;
     let start = expect_operand(inst, 0)?;
     let end = expect_operand(inst, 1)?;
@@ -1045,7 +1045,7 @@ pub(super) fn lower_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `array_pop()` for indexed arrays by mutating length and boxing `T|null` as Mixed.
-pub(super) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_pop", 1)?;
     let array = expect_operand(inst, 0)?;
     let elem_ty = array_pop_element_type(ctx.value_php_type(array)?)?;
@@ -1063,77 +1063,77 @@ pub(super) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `array_shift()` for indexed arrays by compacting slots and boxing `T|null` as Mixed.
-pub(super) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     shift::lower_array_shift(ctx, inst)
 }
 
 /// Lowers `array_unshift()` for indexed arrays by prepending a scalar payload.
-pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     unshift::lower_array_unshift(ctx, inst)
 }
 
 /// Lowers `sort()` for indexed integer arrays by mutating the source array in place.
-pub(super) fn lower_sort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_sort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_indexed_array_sort(ctx, inst, "sort", "__rt_sort_int", Some("__rt_sort_str"))
 }
 
 /// Lowers `rsort()` for indexed integer arrays by mutating the source array in place.
-pub(super) fn lower_rsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_rsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_indexed_array_sort(ctx, inst, "rsort", "__rt_rsort_int", Some("__rt_rsort_str"))
 }
 
 /// Lowers `asort()` for indexed integer arrays through the value-sort runtime wrapper.
-pub(super) fn lower_asort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_asort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_indexed_array_sort(ctx, inst, "asort", "__rt_asort", None)
 }
 
 /// Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper.
-pub(super) fn lower_arsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_arsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_indexed_array_sort(ctx, inst, "arsort", "__rt_arsort", None)
 }
 
 /// Lowers `ksort()` through the legacy key-sort helper surface.
-pub(super) fn lower_ksort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_ksort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_array_key_sort(ctx, inst, "ksort", "__rt_ksort")
 }
 
 /// Lowers `krsort()` through the legacy reverse key-sort helper surface.
-pub(super) fn lower_krsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_krsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_array_key_sort(ctx, inst, "krsort", "__rt_krsort")
 }
 
 /// Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper.
-pub(super) fn lower_natsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_natsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_indexed_array_sort(ctx, inst, "natsort", "__rt_natsort", None)
 }
 
 /// Lowers `natcasesort()` for indexed integer arrays through the case-insensitive wrapper.
-pub(super) fn lower_natcasesort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_natcasesort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_indexed_array_sort(ctx, inst, "natcasesort", "__rt_natcasesort", None)
 }
 
 /// Lowers `shuffle()` for indexed arrays with 8-byte slots by mutating the source array in place.
-pub(super) fn lower_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_indexed_array_shuffle(ctx, inst)
 }
 
 /// Lowers `usort()` for indexed integer arrays with a static user comparator.
-pub(super) fn lower_usort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_usort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_user_sort_static_callback(ctx, inst, "usort")
 }
 
 /// Lowers `uksort()` through the legacy user-sort helper for static comparators.
-pub(super) fn lower_uksort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_uksort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_user_sort_static_callback(ctx, inst, "uksort")
 }
 
 /// Lowers `uasort()` through the legacy user-sort helper for static comparators.
-pub(super) fn lower_uasort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_uasort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_user_sort_static_callback(ctx, inst, "uasort")
 }
 
 /// Lowers `array_key_exists()` through the dedicated key-existence builtin emitter.
-pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     key_exists::lower_array_key_exists(ctx, inst)
 }
 
@@ -1141,7 +1141,7 @@ pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instr
 ///
 /// The runtime helper accepts any array kind (indexed, associative hash, or boxed mixed cell) and
 /// reports `1` when the keys are the sequential integers `0..n-1` in insertion order, `0` otherwise.
-pub(super) fn lower_array_is_list(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_is_list(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_is_list", 1)?;
     let array = expect_operand(inst, 0)?;
     require_array_like_operand(ctx.value_php_type(array)?, "array_is_list")?;
@@ -1152,12 +1152,12 @@ pub(super) fn lower_array_is_list(ctx: &mut FunctionContext<'_>, inst: &Instruct
 }
 
 /// Lowers `array_key_first()` through the shared edge-key helper with selector `0`.
-pub(super) fn lower_array_key_first(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_key_first(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_array_edge_key(ctx, inst, "array_key_first", 0)
 }
 
 /// Lowers `array_key_last()` through the shared edge-key helper with selector `1`.
-pub(super) fn lower_array_key_last(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_key_last(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_array_edge_key(ctx, inst, "array_key_last", 1)
 }
 
@@ -1325,12 +1325,12 @@ fn lower_two_hash_arg_builtin(
 }
 
 /// Lowers `array_replace()` (right-wins hash merge of two hashes).
-pub(super) fn lower_array_replace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_replace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_two_hash_arg_builtin(ctx, inst, "array_replace", "__rt_array_replace", None)
 }
 
 /// Lowers `array_replace_recursive()` (recursive right-wins hash merge).
-pub(super) fn lower_array_replace_recursive(
+pub(crate) fn lower_array_replace_recursive(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1344,12 +1344,12 @@ pub(super) fn lower_array_replace_recursive(
 }
 
 /// Lowers `array_diff_assoc()` via the shared associative diff/intersect helper (mode 0 = diff).
-pub(super) fn lower_array_diff_assoc(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_diff_assoc(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_two_hash_arg_builtin(ctx, inst, "array_diff_assoc", "__rt_assoc_diff_intersect", Some(0))
 }
 
 /// Lowers `array_intersect_assoc()` via the shared associative diff/intersect helper (mode 1 = intersect).
-pub(super) fn lower_array_intersect_assoc(
+pub(crate) fn lower_array_intersect_assoc(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1363,7 +1363,7 @@ pub(super) fn lower_array_intersect_assoc(
 }
 
 /// Lowers `array_merge_recursive()` (recursive merge with scalar collisions combined into lists).
-pub(super) fn lower_array_merge_recursive(
+pub(crate) fn lower_array_merge_recursive(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -1523,23 +1523,23 @@ fn lower_array_predicate_builtin(
 }
 
 /// Lowers `array_find()`: returns the first element satisfying the predicate, boxed as Mixed (or null).
-pub(super) fn lower_array_find(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_find(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_array_predicate_builtin(ctx, inst, "array_find", 0)
 }
 
 /// Lowers `array_any()`: returns true when some element satisfies the predicate.
-pub(super) fn lower_array_any(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_any(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_array_predicate_builtin(ctx, inst, "array_any", 1)
 }
 
 /// Lowers `array_all()`: returns true when every element satisfies the predicate.
-pub(super) fn lower_array_all(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_all(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_array_predicate_builtin(ctx, inst, "array_all", 2)
 }
 
 /// Lowers `array_walk_recursive()`: invokes the callback on each scalar leaf of a (possibly nested)
 /// array, descending into array-valued elements. Returns void; leaves are passed as 8-byte scalars.
-pub(super) fn lower_array_walk_recursive(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_walk_recursive(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_walk_recursive", 2)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
@@ -1655,12 +1655,12 @@ fn lower_two_array_comparator_builtin(
 }
 
 /// Lowers `array_udiff()`: keeps first-array elements not equal (per comparator) to any second-array element.
-pub(super) fn lower_array_udiff(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_udiff(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_two_array_comparator_builtin(ctx, inst, "array_udiff", 0)
 }
 
 /// Lowers `array_uintersect()`: keeps first-array elements equal (per comparator) to some second-array element.
-pub(super) fn lower_array_uintersect(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_uintersect(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_two_array_comparator_builtin(ctx, inst, "array_uintersect", 1)
 }
 
@@ -1668,7 +1668,7 @@ pub(super) fn lower_array_uintersect(ctx: &mut FunctionContext<'_>, inst: &Instr
 /// in tandem, both in place. Both arguments are by-reference, so each is copy-on-write split with
 /// `ensure_unique_sort_source` and the (possibly relocated) pointer is written back to its local
 /// before the runtime mutates the storage. Returns `true`. Supports 8-byte scalar indexed arrays.
-pub(super) fn lower_array_multisort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_multisort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_multisort", 2)?;
     let arr1 = expect_operand(inst, 0)?;
     let arr2 = expect_operand(inst, 1)?;
@@ -1707,7 +1707,7 @@ pub(super) fn lower_array_multisort(ctx: &mut FunctionContext<'_>, inst: &Instru
 }
 
 /// Lowers `array_search()` for indexed arrays with integer-like payloads.
-pub(super) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_search", 2)?;
     let needle = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
@@ -1726,7 +1726,7 @@ pub(super) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Lowers `in_array()` for indexed arrays with scalar or string payloads.
-pub(super) fn lower_in_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_in_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "in_array", 2)?;
     let needle = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
@@ -1985,11 +1985,12 @@ fn lower_user_sort_with_static_callback_binding(
     array: ValueId,
     callback_binding: StaticSortCallbackBinding,
 ) -> Result<()> {
+    let callback_label = sort_callback_label_returning_int(ctx, &callback_binding)?;
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_binding.label);
+    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
     abi::emit_call_label(ctx.emitter, "__rt_usort");
@@ -2002,6 +2003,86 @@ fn lower_user_sort_with_static_callback_binding(
         0x7fff_ffff_ffff_fffe,
     );
     store_if_result(ctx, inst)
+}
+
+/// Returns a callback label whose runtime ABI produces an integer comparison result.
+fn sort_callback_label_returning_int(
+    ctx: &mut FunctionContext<'_>,
+    callback_binding: &StaticSortCallbackBinding,
+) -> Result<String> {
+    match callback_binding.return_ty.codegen_repr() {
+        PhpType::Int | PhpType::Bool => Ok(callback_binding.label.clone()),
+        PhpType::Mixed | PhpType::Union(_) => {
+            Ok(emit_sort_callback_mixed_return_int_adapter(ctx, &callback_binding.label))
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "user sort callback return PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Emits a sort callback adapter that casts an owned Mixed return value to int.
+fn emit_sort_callback_mixed_return_int_adapter(
+    ctx: &mut FunctionContext<'_>,
+    inner_label: &str,
+) -> String {
+    let wrapper_label = ctx.next_label("sort_callback_mixed_return_int");
+    let done_label = ctx.next_label("sort_callback_after_mixed_return_int");
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&wrapper_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #16");                         // reserve wrapper spill space for the runtime sort return address
+            ctx.emitter.instruction("str x30, [sp, #8]");                       // preserve the runtime sort return address across nested callback work
+            abi::emit_call_label(ctx.emitter, inner_label);
+            emit_owned_mixed_result_cast_to_int(ctx);
+            ctx.emitter.instruction("ldr x30, [sp, #8]");                       // restore the runtime sort return address after result coercion
+            ctx.emitter.instruction("add sp, sp, #16");                         // release wrapper spill space before returning to the sort helper
+            ctx.emitter.instruction("ret");                                     // return the integer comparator result to the sort helper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("push rbp");                                // preserve the runtime sort frame pointer across nested callback work
+            ctx.emitter.instruction("mov rbp, rsp");                            // establish an aligned frame for nested runtime calls
+            abi::emit_call_label(ctx.emitter, inner_label);
+            emit_owned_mixed_result_cast_to_int(ctx);
+            ctx.emitter.instruction("pop rbp");                                 // restore the runtime sort frame pointer before returning
+            ctx.emitter.instruction("ret");                                     // return the integer comparator result to the sort helper
+        }
+    }
+    ctx.emitter.label(&done_label);
+    wrapper_label
+}
+
+/// Casts the current owned Mixed result to int and releases the consumed Mixed cell.
+fn emit_owned_mixed_result_cast_to_int(ctx: &mut FunctionContext<'_>) {
+    move_sort_callback_int_result_to_first_arg(ctx);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_push_reg(ctx.emitter, arg_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // save the coerced integer above the saved Mixed pointer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // save the coerced integer above the saved Mixed pointer
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+}
+
+/// Moves the integer result register into the first argument register when required.
+fn move_sort_callback_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if result_reg == arg_reg {
+        return;
+    }
+    ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg));       // move the callback result into the runtime cast argument register
 }
 
 /// Calls the legacy key-sort helper for array-like values.

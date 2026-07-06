@@ -2,14 +2,14 @@
 title: "gethostname() — internals"
 description: "Compiler internals for gethostname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 177
+  order: 179
 ---
 
 ## `gethostname()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/gethostname.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/gethostname.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3409](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3409) (`lower_gethostname`)
 - **Function symbol**: `lower_gethostname()`
 
@@ -38,4 +38,3 @@ function gethostname(): string
 ## Cross-references
 
 - [User reference for `gethostname()`](../../../php/builtins/io/gethostname.md)
-

@@ -2,14 +2,14 @@
 title: "getcwd() — internals"
 description: "Compiler internals for getcwd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 117
+  order: 119
 ---
 
 ## `getcwd()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/getcwd.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/getcwd.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5396](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5396) (`lower_getcwd`)
 - **Function symbol**: `lower_getcwd()`
 
@@ -37,4 +37,3 @@ function getcwd(): string
 ## Cross-references
 
 - [User reference for `getcwd()`](../../../php/builtins/filesystem/getcwd.md)
-

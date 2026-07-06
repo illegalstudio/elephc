@@ -2,15 +2,15 @@
 title: "strlen() — internals"
 description: "Compiler internals for strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 391
+  order: 388
 ---
 
 ## `strlen()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1013](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1013) (`lower_strlen`)
+- **Signature**: [`src/builtins/string/strlen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strlen.rs)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:494](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L494) (`lower_strlen`)
 - **Function symbol**: `lower_strlen()`
 
 
@@ -36,4 +36,3 @@ function strlen(string $string): int
 ## Cross-references
 
 - [User reference for `strlen()`](../../../php/builtins/string/strlen.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "acos()"
-description: "acos() — math builtin supported by Elephc."
+description: "Returns the arccosine of a number in radians."
 sidebar:
-  order: 234
+  order: 236
 ---
 
 ## acos()
@@ -11,7 +11,7 @@ sidebar:
 function acos(float $num): float
 ```
 
-`acos()` is a math builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Returns the arccosine of a number in radians.
 
 **Parameters**:
 - `$num` (`float`)
@@ -25,4 +25,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `acos` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/acos.md).
 

@@ -1,8 +1,8 @@
 ---
 title: "feof()"
-description: "Lowers `feof(stream)` through the runtime EOF-flag table helper."
+description: "Tests for end-of-file on a file pointer."
 sidebar:
-  order: 154
+  order: 156
 ---
 
 ## feof()
@@ -11,7 +11,7 @@ sidebar:
 function feof(resource $stream): bool
 ```
 
-Lowers `feof(stream)` through the runtime EOF-flag table helper.
+Tests for end-of-file on a file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)

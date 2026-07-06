@@ -2,14 +2,14 @@
 title: "getservbyname() — internals"
 description: "Compiler internals for getservbyname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 180
+  order: 182
 ---
 
 ## `getservbyname()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/io/getservbyname.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/getservbyname.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3486](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3486) (`lower_getservbyname`)
 - **Function symbol**: `lower_getservbyname()`
 
@@ -36,4 +36,3 @@ function getservbyname(string $service, string $protocol): mixed
 ## Cross-references
 
 - [User reference for `getservbyname()`](../../../php/builtins/io/getservbyname.md)
-

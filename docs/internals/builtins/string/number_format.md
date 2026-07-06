@@ -2,14 +2,14 @@
 title: "number_format() — internals"
 description: "Compiler internals for number_format(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 371
+  order: 368
 ---
 
 ## `number_format()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/string/number_format.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/number_format.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:875](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L875) (`lower_number_format`)
 - **Function symbol**: `lower_number_format()`
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function number_format(float $num, int $decimals, string $decimal_separator, string $thousands_separator): string
+function number_format(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string
 ```
 
 ## What the type checker enforces
@@ -36,4 +36,3 @@ function number_format(float $num, int $decimals, string $decimal_separator, str
 ## Cross-references
 
 - [User reference for `number_format()`](../../../php/builtins/string/number_format.md)
-

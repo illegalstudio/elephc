@@ -520,6 +520,79 @@ echo count($c);
     assert_eq!(out, "3");
 }
 
+/// Regression for #354: spread of an associative array into a new array literal flattens its
+/// string-keyed entries instead of inserting the source as a single nested value.
+#[test]
+fn test_spread_assoc_array() {
+    let out = compile_and_run(r#"<?php
+$a = ['x' => 1];
+$b = [...$a];
+foreach ($b as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#);
+    assert_eq!(out, "[x:1]");
+}
+
+/// Regression for #354: spread reindexes integer-keyed source entries to fresh sequential keys
+/// (matching PHP) while preserving string keys.
+#[test]
+fn test_spread_mixed_keys() {
+    let out = compile_and_run(r#"<?php
+$a = [10 => 'a', 'x' => 'b'];
+$b = [...$a];
+foreach ($b as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#);
+    assert_eq!(out, "[0:a][x:b]");
+}
+
+/// Regression for #354: later spread operands overwrite earlier ones on string-key collision.
+#[test]
+fn test_spread_overwrite() {
+    let out = compile_and_run(r#"<?php
+$a = ['x' => 1, 'y' => 2];
+$b = ['y' => 3, 'z' => 4];
+$c = [...$a, ...$b];
+foreach ($c as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#);
+    assert_eq!(out, "[x:1][y:3][z:4]");
+}
+
+/// Regression for #354: spread of an indexed array into a new array literal stays on the indexed
+/// storage path and preserves sequential integer keys.
+#[test]
+fn test_spread_indexed_array() {
+    let out = compile_and_run(r#"<?php
+$a = [1, 2, 3];
+$b = [...$a];
+foreach ($b as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#);
+    assert_eq!(out, "[0:1][1:2][2:3]");
+}
+
+/// Regression for #354: a literal element before and after an associative spread continues the
+/// automatic integer key sequence across the reindexed spread entries.
+#[test]
+fn test_spread_literal_interleaved_with_assoc() {
+    let out = compile_and_run(r#"<?php
+$a = ['y' => 1];
+$b = ['w', ...$a, 'x'];
+foreach ($b as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#);
+    assert_eq!(out, "[0:w][y:1][1:x]");
+}
+
+/// Regression for #354: an indexed spread followed by an associative spread continues the
+/// reindex counter across operands.
+#[test]
+fn test_spread_indexed_then_assoc() {
+    let out = compile_and_run(r#"<?php
+$a = [10, 20];
+$b = ['x' => 1];
+$c = [...$a, ...$b];
+foreach ($c as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#);
+    assert_eq!(out, "[0:10][1:20][x:1]");
+}
+
 /// Verifies that a variadic function with a preceding regular parameter receives zero rest elements when called with exactly one argument.
 #[test]
 fn test_variadic_with_regular_and_no_extra() {

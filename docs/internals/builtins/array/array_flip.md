@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`src/builtins/array/array_flip.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_flip.rs)
 - **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:171](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L171) (`lower_array_flip`)
 - **Function symbol**: `lower_array_flip()`
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function array_flip(array $array): float
+function array_flip(array $array): array
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function array_flip(array $array): float
 ## Cross-references
 
 - [User reference for `array_flip()`](../../../php/builtins/array/array_flip.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "closedir()"
-description: "Lowers `closedir(dir_handle)` for libc, glob, and userspace-wrapper handles."
+description: "Closes directory handle."
 sidebar:
-  order: 151
+  order: 153
 ---
 
 ## closedir()
@@ -11,7 +11,7 @@ sidebar:
 function closedir(resource $dir_handle): void
 ```
 
-Lowers `closedir(dir_handle)` for libc, glob, and userspace-wrapper handles.
+Closes directory handle.
 
 **Parameters**:
 - `$dir_handle` (`resource`)

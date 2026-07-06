@@ -29,7 +29,18 @@ pub(crate) fn captured_constant_env(
 /// substitutions applied, followed by constant folding.
 pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     let empty_env;
-    let env = if expr_local_writes(&expr).is_some_and(|writes| !writes.is_empty()) {
+    // Clear the environment when evaluating this expression may write locals, so a stale
+    // constant is never propagated into a read sequenced after the write in the same
+    // expression. A known non-empty write set (e.g. an inline assignment) clears it; an
+    // *unknown* write set (`None`, produced by calls) clears it only when the expression
+    // actually has side effects — i.e. a by-reference-mutating call such as `bump($i)` in
+    // `match(bump($i)) . "|" . $i` (issue #384). A pure call (`gettype`, `strlen`, …) cannot
+    // mutate a local, so its constants stay foldable and behaviour is unchanged.
+    let must_clear = match expr_local_writes(&expr) {
+        Some(writes) => !writes.is_empty(),
+        None => expr_effect(&expr).has_side_effects,
+    };
+    let env = if must_clear {
         empty_env = HashMap::new();
         &empty_env
     } else {

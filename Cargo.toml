@@ -1,7 +1,8 @@
 [package]
 name = "elephc"
-version = "0.25.2"
+version = "0.26.0"
 edition = "2021"
+default-run = "elephc"
 description = "A PHP-to-native AOT compiler"
 license = "MIT"
 repository = "https://github.com/illegalstudio/elephc"
@@ -27,7 +28,12 @@ resolver = "2"
 name = "elephc"
 path = "src/main.rs"
 
+[[bin]]
+name = "gen_builtins"
+path = "src/bin/gen_builtins.rs"
+
 [dependencies]
+inventory = "0.3"
 bitflags = "2"
 serde_json = "1"
 # flate2 (default miniz_oxide backend = pure Rust, no system zlib) is used by the
