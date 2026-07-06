@@ -6,8 +6,8 @@
 //!   backend (lower hook), all via `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates that the first argument is a pointer and the second is an integer,
-//!   and returns the pointer type (preserving the pointer's inner type annotation).
+//! - `check` validates that the first argument is a pointer and the second is an
+//!   integer-compatible offset, preserving the pointer's inner type annotation.
 //! - `lower` is a thin wrapper over the shared `pointers::lower_ptr_offset` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -27,7 +27,7 @@ builtin! {
     summary: "Returns a new pointer offset from the given pointer by the given byte count.",
 }
 
-/// Validates pointer and integer offset arguments and returns the pointer type.
+/// Validates pointer and integer-compatible offset arguments and returns the pointer type.
 ///
 /// The registry's `check_arity` handles arity enforcement (exactly 2 arguments).
 /// Returns the type of the first argument (the pointer) so that pointer type annotations
@@ -36,7 +36,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ptr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.ensure_pointer_type(&ptr_ty, cx.span, "ptr_offset()")?;
     let offset_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    if offset_ty != PhpType::Int {
+    if !matches!(
+        offset_ty,
+        PhpType::Int | PhpType::Mixed | PhpType::Union(_)
+    ) {
         return Err(CompileError::new(
             cx.span,
             "ptr_offset() second argument must be integer",

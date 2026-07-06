@@ -221,6 +221,7 @@ fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::ArrayLiteral(elems) if elems.is_empty())
 }
 
+/// Returns `true` when `expr` is a compile-time integer literal.
 /// Infers the `PhpType` of an expression from its syntactic form.
 ///
 /// A best-effort syntactic heuristic — not full type inference. Handles literals,
@@ -380,8 +381,12 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     ty
                 } else if lt == PhpType::Float || rt == PhpType::Float {
                     PhpType::Float
-                } else {
+                } else if let Some(ty) = checked_literal_int_arithmetic_type(op, left, right) {
+                    ty
+                } else if int_arithmetic_identity_is_always_int(op, left, right) {
                     PhpType::Int
+                } else {
+                    PhpType::Mixed
                 }
             }
             BinOp::Sub | BinOp::Mul | BinOp::Mod => {
@@ -389,6 +394,14 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 let rt = infer_expr_type_syntactic(right);
                 if lt == PhpType::Float || rt == PhpType::Float {
                     PhpType::Float
+                } else if matches!(op, BinOp::Sub | BinOp::Mul) {
+                    if let Some(ty) = checked_literal_int_arithmetic_type(op, left, right) {
+                        ty
+                    } else if int_arithmetic_identity_is_always_int(op, left, right) {
+                        PhpType::Int
+                    } else {
+                        PhpType::Mixed
+                    }
                 } else {
                     PhpType::Int
                 }
@@ -411,6 +424,52 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::InstanceOf { .. } => PhpType::Bool,
         _ => PhpType::Int,
     }
+}
+
+/// Returns the exact result type for literal-only checked integer arithmetic.
+fn checked_literal_int_arithmetic_type(op: &BinOp, left: &Expr, right: &Expr) -> Option<PhpType> {
+    let lhs = int_literal_value(left)?;
+    let rhs = int_literal_value(right)?;
+    let fits = match op {
+        BinOp::Add => lhs.checked_add(rhs).is_some(),
+        BinOp::Sub => lhs.checked_sub(rhs).is_some(),
+        BinOp::Mul => lhs.checked_mul(rhs).is_some(),
+        _ => return None,
+    };
+    Some(if fits { PhpType::Int } else { PhpType::Float })
+}
+
+/// Returns `true` when an integer arithmetic expression cannot overflow.
+fn int_arithmetic_identity_is_always_int(op: &BinOp, left: &Expr, right: &Expr) -> bool {
+    match op {
+        BinOp::Add => is_zero_int_literal(left) || is_zero_int_literal(right),
+        BinOp::Sub => is_zero_int_literal(right),
+        BinOp::Mul => {
+            is_zero_int_literal(left)
+                || is_zero_int_literal(right)
+                || is_one_int_literal(left)
+                || is_one_int_literal(right)
+        }
+        _ => false,
+    }
+}
+
+/// Extracts an integer literal value from a direct AST literal.
+fn int_literal_value(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        _ => None,
+    }
+}
+
+/// Returns `true` for the literal integer zero.
+fn is_zero_int_literal(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::IntLiteral(0))
+}
+
+/// Returns `true` for the literal integer one.
+fn is_one_int_literal(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::IntLiteral(1))
 }
 
 /// Infers the element type for an indexed array literal without scalar coercion widening.

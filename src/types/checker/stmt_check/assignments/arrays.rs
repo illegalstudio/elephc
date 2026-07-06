@@ -133,7 +133,7 @@ pub(super) fn check_array_assign(
                     "Assign packed buffer elements through field access like $buf[$i]->field",
                 ))
             }
-            inner if inner != &val_ty => {
+            inner if !buffer_element_accepts_assignment(inner, &val_ty) => {
                 return Err(CompileError::new(
                     span,
                     &format!(
@@ -153,6 +153,17 @@ pub(super) fn check_array_assign(
         }
     }
     Ok(())
+}
+
+/// Returns whether a buffer element accepts an assignment value after runtime coercion.
+fn buffer_element_accepts_assignment(expected: &PhpType, actual: &PhpType) -> bool {
+    if expected == actual {
+        return true;
+    }
+    matches!(
+        (expected, actual),
+        (PhpType::Float | PhpType::Int | PhpType::Bool, PhpType::Mixed)
+    )
 }
 
 /// Validates a nested array assignment like `$arr[$i] = $value` where the target itself is an array access.

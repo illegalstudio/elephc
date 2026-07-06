@@ -12,8 +12,8 @@
 //!   floats), so the compiled result is unchanged.
 
 use crate::ir::{
-    validate_function, Builder, CmpPredicate, DataPool, Function, Immediate, IrType, Op, Ownership,
-    Terminator, ValueId,
+    validate_function, Builder, CmpPredicate, DataPool, Function, Immediate, IrHeapKind, IrType,
+    Op, Ownership, Terminator, ValueId,
 };
 use crate::ir_passes::const_fold::ConstFold;
 use crate::ir_passes::driver::IrPass;
@@ -39,6 +39,37 @@ fn int_binop_function(
         let result = builder
             .emit(op, vec![lhs, rhs], immediate, IrType::I64, result_php, Ownership::NonHeap)
             .expect("binop result");
+        builder.terminate(Terminator::Return { value: Some(result) });
+    }
+    function
+}
+
+/// Builds `return (const_a checked_OP const_b)` for checked integer arithmetic.
+fn checked_int_binop_function(
+    op: Op,
+    a: i64,
+    b: i64,
+    return_ir: IrType,
+    return_php: PhpType,
+) -> Function {
+    let mut function = Function::new("checked_binop".to_string(), return_ir, return_php);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let lhs = builder.emit_const_i64(a);
+        let rhs = builder.emit_const_i64(b);
+        let result = builder
+            .emit(
+                op,
+                vec![lhs, rhs],
+                None,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::for_php_type(&PhpType::Mixed),
+            )
+            .expect("checked binop result");
         builder.terminate(Terminator::Return { value: Some(result) });
     }
     function
@@ -95,6 +126,29 @@ fn int_add_overflow_wraps() {
     let mut function = int_binop_function(Op::IAdd, i64::MAX, 1, None, PhpType::Int);
     assert!(fold(&mut function));
     assert_eq!(function.instructions[2].immediate, Some(Immediate::I64(i64::MIN)));
+}
+
+/// Checked integer addition overflow folds to PHP's promoted floating-point result.
+#[test]
+fn checked_int_add_overflow_folds_to_promoted_float() {
+    let expected = (i64::MAX as f64) + 1.0;
+    let mut function =
+        checked_int_binop_function(Op::ICheckedAdd, i64::MAX, 1, IrType::F64, PhpType::Float);
+    assert!(fold(&mut function));
+    assert_eq!(function.instructions[2].op, Op::ConstF64);
+    assert_eq!(function.instructions[2].immediate, Some(Immediate::F64(expected)));
+    assert!(validate_function(&function).is_ok());
+}
+
+/// Checked integer multiplication without overflow folds to a plain integer constant.
+#[test]
+fn checked_int_mul_no_overflow_folds_to_int() {
+    let mut function =
+        checked_int_binop_function(Op::ICheckedMul, 6, 7, IrType::I64, PhpType::Int);
+    assert!(fold(&mut function));
+    assert_eq!(function.instructions[2].op, Op::ConstI64);
+    assert_eq!(function.instructions[2].immediate, Some(Immediate::I64(42)));
+    assert!(validate_function(&function).is_ok());
 }
 
 /// A left shift by an in-range count folds (`3 << 4 == 48`).

@@ -61,6 +61,22 @@ impl Checker {
                     env,
                 )
             }
+            ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
+                let old_ty = env.get(name).cloned();
+                let result_ty = self.infer_type(expr, env)?;
+                if matches!(old_ty, Some(PhpType::Int)) {
+                    env.insert(name.clone(), PhpType::Mixed);
+                }
+                Ok(result_ty)
+            }
+            ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => {
+                let old_ty = env.get(name).cloned();
+                let result_ty = self.infer_type(expr, env)?;
+                if matches!(old_ty, Some(PhpType::Int)) {
+                    env.insert(name.clone(), PhpType::Mixed);
+                }
+                Ok(result_ty)
+            }
             ExprKind::BinaryOp { left, op, right } => {
                 self.infer_type_with_assignment_effects(left, env)?;
                 if matches!(op, BinOp::And | BinOp::Or) {

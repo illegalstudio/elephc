@@ -34,6 +34,13 @@ pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             abi::emit_incref_if_refcounted(ctx.emitter, &other);
         }
         PhpType::Void | PhpType::Never => {}
+        // Scalar types (Int, Float) arise when a checked op's result is narrowed
+        // to a scalar by constant folding. The acquire instruction's result is
+        // still typed Heap(Mixed), so box the scalar into a Mixed cell to match
+        // the expected storage type.
+        PhpType::Int | PhpType::Float => {
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &ty);
+        }
         other => {
             if inst.result.is_some() {
                 return Err(CodegenIrError::unsupported(format!(
@@ -73,6 +80,10 @@ pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             abi::emit_decref_if_refcounted(ctx.emitter, &other);
         }
         PhpType::Void | PhpType::Never => {}
+        // Scalar types (Int, Float) arise when a checked op's result is narrowed
+        // to a scalar by constant folding; release is a no-op for non-refcounted
+        // scalars.
+        PhpType::Int | PhpType::Float => {}
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "release for PHP type {:?}",

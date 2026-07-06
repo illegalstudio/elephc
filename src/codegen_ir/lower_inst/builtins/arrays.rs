@@ -1985,11 +1985,12 @@ fn lower_user_sort_with_static_callback_binding(
     array: ValueId,
     callback_binding: StaticSortCallbackBinding,
 ) -> Result<()> {
+    let callback_label = sort_callback_label_returning_int(ctx, &callback_binding)?;
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_binding.label);
+    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
     abi::emit_call_label(ctx.emitter, "__rt_usort");
@@ -2002,6 +2003,86 @@ fn lower_user_sort_with_static_callback_binding(
         0x7fff_ffff_ffff_fffe,
     );
     store_if_result(ctx, inst)
+}
+
+/// Returns a callback label whose runtime ABI produces an integer comparison result.
+fn sort_callback_label_returning_int(
+    ctx: &mut FunctionContext<'_>,
+    callback_binding: &StaticSortCallbackBinding,
+) -> Result<String> {
+    match callback_binding.return_ty.codegen_repr() {
+        PhpType::Int | PhpType::Bool => Ok(callback_binding.label.clone()),
+        PhpType::Mixed | PhpType::Union(_) => {
+            Ok(emit_sort_callback_mixed_return_int_adapter(ctx, &callback_binding.label))
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "user sort callback return PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Emits a sort callback adapter that casts an owned Mixed return value to int.
+fn emit_sort_callback_mixed_return_int_adapter(
+    ctx: &mut FunctionContext<'_>,
+    inner_label: &str,
+) -> String {
+    let wrapper_label = ctx.next_label("sort_callback_mixed_return_int");
+    let done_label = ctx.next_label("sort_callback_after_mixed_return_int");
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&wrapper_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #16");                         // reserve wrapper spill space for the runtime sort return address
+            ctx.emitter.instruction("str x30, [sp, #8]");                       // preserve the runtime sort return address across nested callback work
+            abi::emit_call_label(ctx.emitter, inner_label);
+            emit_owned_mixed_result_cast_to_int(ctx);
+            ctx.emitter.instruction("ldr x30, [sp, #8]");                       // restore the runtime sort return address after result coercion
+            ctx.emitter.instruction("add sp, sp, #16");                         // release wrapper spill space before returning to the sort helper
+            ctx.emitter.instruction("ret");                                     // return the integer comparator result to the sort helper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("push rbp");                                // preserve the runtime sort frame pointer across nested callback work
+            ctx.emitter.instruction("mov rbp, rsp");                            // establish an aligned frame for nested runtime calls
+            abi::emit_call_label(ctx.emitter, inner_label);
+            emit_owned_mixed_result_cast_to_int(ctx);
+            ctx.emitter.instruction("pop rbp");                                 // restore the runtime sort frame pointer before returning
+            ctx.emitter.instruction("ret");                                     // return the integer comparator result to the sort helper
+        }
+    }
+    ctx.emitter.label(&done_label);
+    wrapper_label
+}
+
+/// Casts the current owned Mixed result to int and releases the consumed Mixed cell.
+fn emit_owned_mixed_result_cast_to_int(ctx: &mut FunctionContext<'_>) {
+    move_sort_callback_int_result_to_first_arg(ctx);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_push_reg(ctx.emitter, arg_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // save the coerced integer above the saved Mixed pointer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // save the coerced integer above the saved Mixed pointer
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+}
+
+/// Moves the integer result register into the first argument register when required.
+fn move_sort_callback_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if result_reg == arg_reg {
+        return;
+    }
+    ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg));       // move the callback result into the runtime cast argument register
 }
 
 /// Calls the legacy key-sort helper for array-like values.

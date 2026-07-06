@@ -20,8 +20,9 @@ use crate::codegen::{
 };
 use crate::codegen::context::TRY_HANDLER_SLOT_SIZE;
 use crate::codegen::platform::{Arch, Target};
-use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, Terminator, ValueDef};
+use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, ValueDef, ValueId};
 use crate::ir_passes::{allocate_registers, Allocation};
+use crate::names::ir_global_symbol;
 use crate::types::PhpType;
 
 use super::context::FunctionContext;
@@ -227,6 +228,8 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("epilogue + exit(0)");
     emit_main_local_epilogue_cleanup(ctx);
+    emit_main_static_local_cleanup(ctx);
+    emit_main_global_epilogue_cleanup(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     if ctx.gc_stats {
@@ -238,6 +241,76 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     }
     abi::emit_exit(ctx.emitter, 0);
     ctx.epilogue_emitted = true;
+}
+
+/// Releases initialized function static locals before process-exit diagnostics.
+fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
+    let static_locals = ctx.data.static_locals().to_vec();
+    for record in static_locals {
+        let ty = record.php_type.codegen_repr();
+        if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {
+            continue;
+        }
+        let done = ctx.next_label("static_local_cleanup_done");
+        ctx.emitter
+            .comment(&format!("epilogue cleanup static local {}", record.symbol));
+        abi::emit_load_symbol_to_reg(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            &record.init_symbol,
+            0,
+        );
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+        emit_static_symbol_value_cleanup(ctx, &record.symbol, &ty);
+        abi::emit_store_zero_to_symbol(ctx.emitter, &record.symbol, 0);
+        abi::emit_store_zero_to_symbol(ctx.emitter, &record.symbol, 8);
+        abi::emit_store_zero_to_symbol(ctx.emitter, &record.init_symbol, 0);
+        ctx.emitter.label(&done);
+    }
+}
+
+/// Releases global symbol storage owned by the top-level EIR body before diagnostics.
+fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    let globals = ctx.module.data.global_names.clone();
+    for name in globals {
+        if ctx.module.extern_globals.contains_key(&name) {
+            continue;
+        }
+        let ty = if crate::superglobals::is_superglobal(&name) {
+            crate::superglobals::superglobal_type().codegen_repr()
+        } else {
+            PhpType::Mixed
+        };
+        if !cleanup_tracked_codegen_type(&ty) {
+            continue;
+        }
+        let symbol = ir_global_symbol(&name);
+        ctx.emitter.comment(&format!("epilogue cleanup global ${}", name));
+        emit_static_symbol_value_cleanup(ctx, &symbol, &ty);
+        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
+        if ty == PhpType::Str {
+            abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
+        }
+    }
+}
+
+/// Releases the refcounted value stored in a static-local symbol.
+fn emit_static_symbol_value_cleanup(ctx: &mut FunctionContext<'_>, symbol: &str, ty: &PhpType) {
+    match ty {
+        PhpType::Str => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), symbol, 0);
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        }
+        PhpType::Callable => {
+            abi::emit_load_symbol_to_result(ctx.emitter, symbol, ty);
+            abi::emit_decref_if_refcounted(ctx.emitter, ty);
+        }
+        other if other.is_refcounted() => {
+            abi::emit_load_symbol_to_result(ctx.emitter, symbol, other);
+            abi::emit_decref_if_refcounted(ctx.emitter, other);
+        }
+        _ => {}
+    }
 }
 
 /// Emits the C-callable `--web` top-level handler prologue.
@@ -458,7 +531,7 @@ fn local_slot_has_store(function: &Function, slot: LocalSlotId) -> bool {
 
 /// Returns PHP-visible locals whose slot is rewritten to a ref-cell pointer.
 fn promoted_ref_cell_local_slots(function: &Function) -> HashSet<LocalSlotId> {
-    function
+    let mut slots = function
         .instructions
         .iter()
         .filter_map(|inst| match inst.immediate {
@@ -470,7 +543,34 @@ fn promoted_ref_cell_local_slots(function: &Function) -> HashSet<LocalSlotId> {
             }
             _ => None,
         })
+        .collect::<HashSet<_>>();
+    slots.extend(closure_ref_capture_local_slots(function));
+    slots
+}
+
+/// Returns local slots whose value is captured by reference into a closure descriptor.
+fn closure_ref_capture_local_slots(function: &Function) -> HashSet<LocalSlotId> {
+    function
+        .instructions
+        .iter()
+        .filter(|inst| inst.op == Op::ClosureCapture)
+        .filter(|inst| inst.immediate == Some(Immediate::I64(1)))
+        .filter_map(|inst| inst.operands.first().copied())
+        .filter_map(|value| loaded_local_slot(function, value))
         .collect()
+}
+
+/// Resolves a lowered local read value back to its source slot.
+fn loaded_local_slot(function: &Function, value: ValueId) -> Option<LocalSlotId> {
+    let value = function.value(value)?;
+    let ValueDef::Instruction { inst, .. } = value.def else {
+        return None;
+    };
+    let inst = function.instruction(inst)?;
+    match (inst.op, inst.immediate.as_ref()) {
+        (Op::LoadLocal | Op::LoadRefCell, Some(Immediate::LocalSlot(slot))) => Some(*slot),
+        _ => None,
+    }
 }
 
 /// Releases a string local through the validating heap-free helper.
@@ -517,7 +617,7 @@ fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty
 
 /// Zero-initializes function locals that may be released by the shared epilogue.
 fn zero_initialize_function_cleanup_locals(ctx: &mut FunctionContext<'_>) {
-    for (_, _, ty, offset) in function_cleanup_locals(ctx, true) {
+    for (_, _, ty, offset) in function_cleanup_locals(ctx, None) {
         match ty {
             PhpType::Str => {
                 abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
@@ -530,9 +630,12 @@ fn zero_initialize_function_cleanup_locals(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Releases owned function locals that do not directly provide the return value.
-fn emit_function_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
-    let cleanup_locals = function_cleanup_locals(ctx, false);
+/// Releases owned function locals that do not transfer ownership to this return path.
+fn emit_function_local_epilogue_cleanup(
+    ctx: &mut FunctionContext<'_>,
+    skip_return_slot: Option<LocalSlotId>,
+) {
+    let cleanup_locals = function_cleanup_locals(ctx, skip_return_slot);
     let ref_cell_owners = ref_cell_owner_locals(ctx);
     if cleanup_locals.is_empty() && ref_cell_owners.is_empty() {
         return;
@@ -559,15 +662,12 @@ fn emit_function_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
 
 /// Returns function local slots that receive owned refcounted values through `StoreLocal`.
 ///
-/// `include_returned` controls whether slots directly returned by a `Return` terminator are
-/// part of the set. The zero-initialization pass requests them (`true`) so a returned slot
-/// that is first assigned inside a loop body is null before its first store — the loop-store
-/// old-release path (`store_local` Path 2) then safely releases a null pointer on iteration 1.
-/// The epilogue cleanup pass excludes them (`false`) because the return path already owns the
-/// value; cleaning them at epilogue would double-free.
+/// `skip_return_slot` excludes the one local whose refcounted owner is transferred by the
+/// current return terminator. It is deliberately path-local: another `return` in the same
+/// function may return a scalar or a different value and must still release this slot.
 fn function_cleanup_locals(
     ctx: &FunctionContext<'_>,
-    include_returned: bool,
+    skip_return_slot: Option<LocalSlotId>,
 ) -> Vec<(String, LocalSlotId, PhpType, usize)> {
     let param_names = ctx
         .function
@@ -575,7 +675,6 @@ fn function_cleanup_locals(
         .iter()
         .map(|param| param.name.as_str())
         .collect::<HashSet<_>>();
-    let returned_slots = direct_return_local_slots(ctx.function);
     let mut locals = ctx
         .function
         .locals
@@ -588,11 +687,11 @@ fn function_cleanup_locals(
                 .as_deref()
                 .is_none_or(|name| !param_names.contains(name))
         })
-        .filter(|local| include_returned || !returned_slots.contains(&local.id))
+        .filter(|local| Some(local.id) != skip_return_slot)
         .filter(|local| local_slot_has_store(ctx.function, local.id))
         .filter_map(|local| {
             let ty = local.php_type.codegen_repr();
-            if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {
+            if !cleanup_tracked_codegen_type(&ty) {
                 return None;
             }
             let offset = ctx.local_offset(local.id).ok()?;
@@ -615,22 +714,73 @@ fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
     )
 }
 
-/// Returns local slots whose loaded value is returned directly by any terminator.
-fn direct_return_local_slots(function: &Function) -> HashSet<LocalSlotId> {
-    function
-        .blocks
-        .iter()
-        .filter_map(|block| match &block.terminator {
-            Some(Terminator::Return { value: Some(value) }) => {
-                direct_return_local_slot(function, *value)
-            }
-            _ => None,
-        })
-        .collect()
+/// Returns the local slot whose cleanup this return path must skip, if ownership is transferred.
+pub(super) fn return_cleanup_skip_slot(function: &Function, value: ValueId) -> Option<LocalSlotId> {
+    let result_ty = function.value(value)?.php_type.codegen_repr();
+    let return_ty = function.return_php_type.codegen_repr();
+    let mut visited = HashSet::new();
+    return_cleanup_skip_slot_inner(function, value, &result_ty, &return_ty, &mut visited)
 }
 
-/// Returns the local slot behind a returned local or in-place converted local.
-fn direct_return_local_slot(function: &Function, value: crate::ir::ValueId) -> Option<LocalSlotId> {
+/// Recursively traces forwarding return values back to the owned local they transfer.
+fn return_cleanup_skip_slot_inner(
+    function: &Function,
+    value: ValueId,
+    result_ty: &PhpType,
+    return_ty: &PhpType,
+    visited: &mut HashSet<ValueId>,
+) -> Option<LocalSlotId> {
+    if !visited.insert(value) {
+        return None;
+    }
+    let value_ref = function.value(value)?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return None;
+    };
+    let inst = function.instruction(inst)?;
+    match inst.op {
+        Op::LoadLocal => {
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+                return None;
+            };
+            let local_ty = local_codegen_type(function, slot)?;
+            if local_load_transfers_stored_owner(&local_ty, result_ty)
+                && return_preserves_result_owner(result_ty, return_ty)
+            {
+                Some(slot)
+            } else {
+                None
+            }
+        }
+        Op::ArrayToMixed | Op::HashToMixed => {
+            let source = *inst.operands.first()?;
+            let slot = direct_return_local_slot_inner(function, source, visited)?;
+            let local_ty = local_codegen_type(function, slot)?;
+            if cleanup_tracked_codegen_type(&local_ty)
+                && return_preserves_result_owner(result_ty, return_ty)
+            {
+                Some(slot)
+            } else {
+                None
+            }
+        }
+        Op::Move | Op::Borrow => {
+            let source = *inst.operands.first()?;
+            return_cleanup_skip_slot_inner(function, source, result_ty, return_ty, visited)
+        }
+        _ => None,
+    }
+}
+
+/// Recursively traces forwarding values to the local slot that backs them.
+fn direct_return_local_slot_inner(
+    function: &Function,
+    value: crate::ir::ValueId,
+    visited: &mut HashSet<ValueId>,
+) -> Option<LocalSlotId> {
+    if !visited.insert(value) {
+        return None;
+    }
     let value = function.value(value)?;
     let ValueDef::Instruction { inst, .. } = value.def else {
         return None;
@@ -643,10 +793,58 @@ fn direct_return_local_slot(function: &Function, value: crate::ir::ValueId) -> O
         },
         Op::ArrayToMixed | Op::HashToMixed => {
             let source = *inst.operands.first()?;
-            direct_return_local_slot(function, source)
+            direct_return_local_slot_inner(function, source, visited)
+        }
+        Op::Move | Op::Borrow => {
+            let source = *inst.operands.first()?;
+            direct_return_local_slot_inner(function, source, visited)
         }
         _ => None,
     }
+}
+
+/// Returns a local slot's codegen PHP type.
+fn local_codegen_type(function: &Function, slot: LocalSlotId) -> Option<PhpType> {
+    function
+        .locals
+        .get(slot.as_raw() as usize)
+        .filter(|local| local.id == slot)
+        .map(|local| local.php_type.codegen_repr())
+}
+
+/// Returns true when a codegen type carries refcounted ownership to release or transfer.
+fn cleanup_tracked_codegen_type(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()
+}
+
+/// Returns true when loading a local into an SSA result leaves the same owner in the result.
+fn local_load_transfers_stored_owner(local_ty: &PhpType, result_ty: &PhpType) -> bool {
+    if !cleanup_tracked_codegen_type(local_ty) {
+        return false;
+    }
+    if local_ty == result_ty {
+        return true;
+    }
+    matches!(
+        (local_ty, result_ty),
+        (PhpType::Array(_), PhpType::Array(_))
+            | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+    )
+}
+
+/// Returns true when final return lowering preserves the loaded refcounted result owner.
+fn return_preserves_result_owner(result_ty: &PhpType, return_ty: &PhpType) -> bool {
+    if !cleanup_tracked_codegen_type(result_ty) || !cleanup_tracked_codegen_type(return_ty) {
+        return false;
+    }
+    if result_ty == return_ty {
+        return true;
+    }
+    matches!(
+        (result_ty, return_ty),
+        (PhpType::Array(_), PhpType::Array(_))
+            | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+    )
 }
 
 /// Preserves the current typed return value on the temporary stack.
@@ -713,6 +911,17 @@ fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
     emit_write_literal_stderr(ctx.emitter, &newline_label, 1);
 }
 
+/// Emits a path-specific epilogue for one user-function return terminator.
+pub(super) fn emit_function_return_epilogue(
+    ctx: &mut FunctionContext<'_>,
+    skip_return_slot: Option<LocalSlotId>,
+) {
+    emit_function_local_epilogue_cleanup(ctx, skip_return_slot);
+    emit_callee_saved_restores(ctx);
+    abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
+    abi::emit_return(ctx.emitter);
+}
+
 /// Emits the shared epilogue for a direct-callable user function.
 pub(super) fn emit_function_epilogue(ctx: &mut FunctionContext<'_>) {
     if ctx.epilogue_emitted {
@@ -723,7 +932,7 @@ pub(super) fn emit_function_epilogue(ctx: &mut FunctionContext<'_>) {
         .clone()
         .expect("codegen_ir bug: user function has no epilogue label");
     ctx.emitter.label(&label);
-    emit_function_local_epilogue_cleanup(ctx);
+    emit_function_local_epilogue_cleanup(ctx, None);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);

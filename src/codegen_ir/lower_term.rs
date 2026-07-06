@@ -31,7 +31,7 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                     frame::emit_main_epilogue(ctx);
                 }
             } else {
-                jump_to_function_epilogue(ctx)?;
+                frame::emit_function_return_epilogue(ctx, None);
             }
             Ok(())
         }
@@ -43,9 +43,10 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 // than splitting a `Str`/`Float` declared return across the string/float regs.
                 let int_reg = abi::int_result_reg(ctx.emitter);
                 ctx.load_value_to_reg(*value, int_reg)?;
-                jump_to_function_epilogue(ctx)?;
+                frame::emit_function_return_epilogue(ctx, None);
                 return Ok(());
             }
+            let skip_return_slot = frame::return_cleanup_skip_slot(ctx.function, *value);
             let source_ty = ctx.load_value_to_result(*value)?;
             if ctx.is_main {
                 // The top-level script's return value is discarded (PHP only uses
@@ -62,7 +63,7 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             if ctx.function.return_php_type.codegen_repr() == PhpType::TaggedScalar {
                 super::lower_inst::coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
             }
-            jump_to_function_epilogue(ctx)?;
+            frame::emit_function_return_epilogue(ctx, skip_return_slot);
             Ok(())
         }
         Terminator::Unreachable => {
@@ -212,17 +213,6 @@ fn lower_switch(
     for (label, target, args) in case_edges {
         emit_edge_args(ctx, &label, target, &args, "switch case")?;
     }
-    Ok(())
-}
-
-/// Emits a jump to the current user function's shared epilogue.
-fn jump_to_function_epilogue(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let Some(label) = ctx.epilogue_label.clone() else {
-        return Err(CodegenIrError::unsupported(
-            "return values on the EIR backend entry function",
-        ));
-    };
-    abi::emit_jump(ctx.emitter, &label);
     Ok(())
 }
 

@@ -63,6 +63,11 @@ pub(crate) struct Checker {
     pub function_variant_groups: HashMap<String, Vec<String>>,
     /// Canonical function signatures indexed by fully-qualified name.
     pub functions: HashMap<String, FunctionSig>,
+    /// Functions whose body is currently being checked.
+    ///
+    /// Recursive calls may use their provisional signature, but must not re-specialize the same
+    /// declaration while it is in flight.
+    pub resolving_functions: HashSet<String>,
     /// Top-level constant types indexed by canonical name.
     pub constants: HashMap<String, PhpType>,
     /// Tracks the return type of closures assigned to variables, keyed by variable name.

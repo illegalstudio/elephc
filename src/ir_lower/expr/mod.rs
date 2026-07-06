@@ -361,7 +361,12 @@ fn lower_numeric_binary(
     }
     if let Some(mixed_op) = mixed_numeric_op(op) {
         if should_use_mixed_numeric_binop(lhs.ir_type, rhs.ir_type) {
-            return lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
+            let result = lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
+            release_binary_operand_temporary(ctx, lhs, expr.span);
+            if rhs.value != lhs.value {
+                release_binary_operand_temporary(ctx, rhs, expr.span);
+            }
+            return result;
         }
     }
     if lhs.ir_type == IrType::F64 || rhs.ir_type == IrType::F64 {
@@ -377,6 +382,40 @@ fn lower_numeric_binary(
         return ctx.emit_value(fop, vec![lhs.value, rhs.value], None, PhpType::Float, fop.default_effects(), Some(expr.span));
     }
     if lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 {
+        // Check if the type checker promoted this to Mixed (non-constant int arithmetic
+        // that can overflow to float). If so, emit a checked helper that returns a Mixed box.
+        let result_php_type = fallback_expr_type(expr);
+        if result_php_type == PhpType::Mixed && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) {
+            // Identity shortcuts: x+0, x-0, 0+x, 0-x cannot overflow → keep plain Int.
+            // x*1, 1*x cannot overflow → keep plain Int.
+            // x*0, 0*x always yields 0 → keep plain Int.
+            let lhs_is_zero = matches!(&left.kind, ExprKind::IntLiteral(0));
+            let rhs_is_zero = matches!(&right.kind, ExprKind::IntLiteral(0));
+            let lhs_is_one = matches!(&left.kind, ExprKind::IntLiteral(1));
+            let rhs_is_one = matches!(&right.kind, ExprKind::IntLiteral(1));
+            let is_identity = match op {
+                BinOp::Add => lhs_is_zero || rhs_is_zero,
+                BinOp::Sub => rhs_is_zero,
+                BinOp::Mul => lhs_is_zero || rhs_is_zero || lhs_is_one || rhs_is_one,
+                _ => false,
+            };
+            if !is_identity {
+                let checked_op = match op {
+                    BinOp::Add => Op::ICheckedAdd,
+                    BinOp::Sub => Op::ICheckedSub,
+                    BinOp::Mul => Op::ICheckedMul,
+                    _ => unreachable!(),
+                };
+                return ctx.emit_value(
+                    checked_op,
+                    vec![lhs.value, rhs.value],
+                    None,
+                    PhpType::Mixed,
+                    checked_op.default_effects(),
+                    Some(expr.span),
+                );
+            }
+        }
         let iop = match op {
             BinOp::Add => Op::IAdd,
             BinOp::Sub => Op::ISub,
@@ -401,7 +440,12 @@ fn lower_numeric_binary(
         return LoweredValue { value, ir_type: result_type };
     }
     if let Some(mixed_op) = mixed_numeric_op(op) {
-        return lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
+        let result = lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value {
+            release_binary_operand_temporary(ctx, rhs, expr.span);
+        }
+        return result;
     }
     ctx.emit_value(
         Op::RuntimeCall,
@@ -912,7 +956,17 @@ fn lower_numeric_unary(
     let value = lower_expr(ctx, inner);
     match value.ir_type {
         IrType::F64 => ctx.emit_value(float_op, vec![value.value], None, PhpType::Float, float_op.default_effects(), Some(expr.span)),
-        IrType::I64 => ctx.emit_value(int_op, vec![value.value], None, PhpType::Int, int_op.default_effects(), Some(expr.span)),
+        IrType::I64 => {
+            // Check if the type checker promoted this to Mixed (non-constant int negate
+            // can overflow PHP_INT_MIN to float).
+            let result_php_type = fallback_expr_type(expr);
+            if result_php_type == PhpType::Mixed && int_op == Op::INeg {
+                // Emit a checked negate via the mixed numeric sub helper: 0 - value
+                let zero = lower_int_literal(ctx, 0, expr);
+                return lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
+            }
+            ctx.emit_value(int_op, vec![value.value], None, PhpType::Int, int_op.default_effects(), Some(expr.span))
+        }
         IrType::TaggedScalar => {
             let narrowed = lower_tagged_scalar_to_int(ctx, value, Some(expr.span));
             ctx.emit_value(int_op, vec![narrowed.value], None, PhpType::Int, int_op.default_effects(), Some(expr.span))
@@ -1453,8 +1507,24 @@ fn lower_assignment_expr(
         .unwrap_or_else(|| lower_expr(ctx, value));
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
-        let php_type = ctx.builder.value_php_type(lowered.value);
-        result = ctx.store_local(name, lowered, php_type, Some(expr.span));
+        // For static locals and ref-bound locals, keep the declared type to
+        // avoid widening Int→Mixed. The codegen narrows Mixed→Int when the slot
+        // is Int-typed. Without this, ref cells would hold Mixed boxes instead
+        // of raw ints, breaking the ref cell ownership model.
+        let value_php_type = ctx.builder.value_php_type(lowered.value);
+        let is_static = matches!(
+            ctx.local_kinds.get(name).copied(),
+            Some(crate::ir::LocalKind::StaticLocal)
+        );
+        let is_ref_bound = ctx.is_ref_bound_local(name);
+        let existing_type = ctx.local_types.get(name).cloned();
+        let php_type = if is_static || is_ref_bound {
+            existing_type.unwrap_or(value_php_type)
+        } else {
+            value_php_type
+        };
+        ctx.store_local(name, lowered, php_type, Some(expr.span));
+        result = ctx.load_local(name, Some(expr.span));
         let static_callable = callable_array
             .map(|assignment| assignment.target)
             .or(static_callable);
@@ -1499,7 +1569,7 @@ fn lower_conditional_non_local_null_coalesce_assignment(
         Some(expr.span),
     );
     let result_type = null_coalesce_result_type(ctx, current.value, default);
-    ctx.declare_hidden_temp_with_name(temp_name, result_type.clone());
+    ctx.declare_owned_hidden_temp_with_name(temp_name, result_type.clone());
     let assign_block = ctx.builder.create_named_block("coalesce_assign.default", Vec::new());
     let keep_block = ctx.builder.create_named_block("coalesce_assign.value", Vec::new());
     let merge = ctx.builder.create_named_block("coalesce_assign.merge", Vec::new());
@@ -1608,6 +1678,10 @@ fn lower_dynamic_property_assign(
 }
 
 /// Lowers pre/post increment and decrement expressions.
+///
+/// PHP integer overflow promotion applies: `PHP_INT_MAX + 1` becomes float.
+/// The result is typed Mixed and emitted through a checked helper that
+/// returns a boxed Mixed value (int or float) at runtime.
 fn lower_inc_dec(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -1616,12 +1690,54 @@ fn lower_inc_dec(
     expr: &Expr,
 ) -> LoweredValue {
     let old = ctx.load_local(name, Some(expr.span));
+    let existing_type = ctx.local_type(name);
+    if matches!(existing_type.codegen_repr(), PhpType::Mixed) {
+        let return_old = if post {
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, old, Some(expr.span))
+        } else {
+            old
+        };
+        let one = lower_int_literal(ctx, 1, expr);
+        let op = if increment {
+            MixedNumericOp::Add
+        } else {
+            MixedNumericOp::Sub
+        };
+        let new = lower_mixed_numeric_binary(ctx, old, one, op, expr);
+        let stored = ctx.store_local(name, new, PhpType::Mixed, Some(expr.span));
+        return if post { return_old } else { stored };
+    }
     let one = lower_int_literal(ctx, 1, expr);
     let operand = coerce_to_int(ctx, old, expr);
-    let op = if increment { Op::IAdd } else { Op::ISub };
-    let new = ctx.emit_value(op, vec![operand.value, one.value], None, PhpType::Int, op.default_effects(), Some(expr.span));
-    ctx.store_local(name, new, PhpType::Int, Some(expr.span));
-    if post { old } else { new }
+    let checked_int_local = matches!(existing_type.codegen_repr(), PhpType::Int);
+    let iop = match (increment, checked_int_local) {
+        (true, true) => Op::ICheckedAdd,
+        (false, true) => Op::ICheckedSub,
+        (true, false) => Op::IAdd,
+        (false, false) => Op::ISub,
+    };
+    let result_php_type = if checked_int_local { PhpType::Mixed } else { PhpType::Int };
+    let result_ir_type = if checked_int_local {
+        IrType::Heap(IrHeapKind::Mixed)
+    } else {
+        IrType::I64
+    };
+    let new = ctx
+        .builder
+        .emit_with_effects(
+            iop,
+            vec![operand.value, one.value],
+            None,
+            result_ir_type,
+            result_php_type.clone(),
+            Ownership::for_php_type(&result_php_type),
+            iop.default_effects(),
+            Some(expr.span),
+        )
+        .expect("integer inc/dec produces a value");
+    let new = LoweredValue { value: new, ir_type: result_ir_type };
+    let stored = ctx.store_local(name, new, result_php_type, Some(expr.span));
+    if post { old } else { stored }
 }
 
 /// Lowers a direct function, builtin, or extern call.
@@ -5553,8 +5669,8 @@ fn variadic_tail_value_type(sig: &FunctionSig) -> PhpType {
         .iter()
         .find(|(name, _)| name == variadic_name)
         .map(|(_, ty)| match ty.codegen_repr() {
-            PhpType::Array(elem_ty) => *elem_ty,
-            other => other,
+            PhpType::Array(elem_ty) => variadic_container_element_type(*elem_ty),
+            other => variadic_container_element_type(other),
         })
         .unwrap_or(PhpType::Mixed)
 }
@@ -5568,10 +5684,21 @@ fn variadic_array_type(sig: &FunctionSig) -> PhpType {
         .iter()
         .find(|(name, _)| name == variadic_name)
         .map(|(_, ty)| match ty.codegen_repr() {
-            PhpType::Array(elem_ty) => PhpType::Array(elem_ty),
-            other => PhpType::Array(Box::new(other)),
+            PhpType::Array(elem_ty) => {
+                PhpType::Array(Box::new(variadic_container_element_type(*elem_ty)))
+            }
+            other => PhpType::Array(Box::new(variadic_container_element_type(other))),
         })
         .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Mixed)))
+}
+
+/// Maps checker-only variadic container markers to their stored element type.
+fn variadic_container_element_type(ty: PhpType) -> PhpType {
+    if matches!(ty, PhpType::Iterable) {
+        PhpType::Mixed
+    } else {
+        ty
+    }
 }
 
 /// Boxes variadic tail values when the callee expects an `array<mixed>` slot.
@@ -6340,21 +6467,7 @@ fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Expr], expr: 
     // common `[1, 2, 3]` form does not reorder allocation relative to element evaluation.
     if !items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) {
         let array_ty = array_literal_type_for_ir(ctx, items, expr);
-        let elem_ty = indexed_array_literal_element_type(&array_ty);
-        let array = ctx.emit_value(
-            Op::ArrayNew,
-            Vec::new(),
-            Some(Immediate::Capacity(items.len() as u32)),
-            array_ty,
-            Op::ArrayNew.default_effects(),
-            Some(expr.span),
-        );
-        for item in items {
-            let value = lower_expr(ctx, item);
-            ctx.emit_void(Op::ArrayPush, vec![array.value, value.value], None, Op::ArrayPush.default_effects(), Some(item.span));
-            super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
-        }
-        return array;
+        return lower_array_literal_without_spread(ctx, items, expr, array_ty);
     }
     // Spread-containing literals: lower every item value in source order first so PHP-visible side
     // effects happen in order, then inspect each spread source's actual IR type to decide whether
@@ -6385,6 +6498,82 @@ fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Expr], expr: 
     } else {
         lower_array_literal_as_indexed_from_lowered(ctx, items, &lowered, expr)
     }
+}
+
+/// Lowers an indexed array literal using a contextual element storage type.
+pub(crate) fn lower_array_literal_with_expected_type(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    elem_ty: PhpType,
+) -> LoweredValue {
+    let ExprKind::ArrayLiteral(items) = &expr.kind else {
+        return lower_expr(ctx, expr);
+    };
+    if items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) {
+        return lower_array_literal(ctx, items, expr);
+    }
+    let array_ty = expected_indexed_array_literal_type(elem_ty);
+    lower_array_literal_without_spread(ctx, items, expr, array_ty)
+}
+
+/// Returns an indexed-array type for contextual literal lowering.
+fn expected_indexed_array_literal_type(elem_ty: PhpType) -> PhpType {
+    PhpType::Array(Box::new(elem_ty.codegen_repr()))
+}
+
+/// Lowers a no-spread indexed array literal into the requested array storage type.
+fn lower_array_literal_without_spread(
+    ctx: &mut LoweringContext<'_, '_>,
+    items: &[Expr],
+    expr: &Expr,
+    array_ty: PhpType,
+) -> LoweredValue {
+    let elem_ty = indexed_array_literal_element_type(&array_ty);
+    let array = ctx.emit_value(
+        Op::ArrayNew,
+        Vec::new(),
+        Some(Immediate::Capacity(items.len() as u32)),
+        array_ty,
+        Op::ArrayNew.default_effects(),
+        Some(expr.span),
+    );
+    for item in items {
+        let value = lower_expr(ctx, item);
+        let value = coerce_array_literal_element_to_storage_type(ctx, value, elem_ty.as_ref(), item);
+        ctx.emit_void(
+            Op::ArrayPush,
+            vec![array.value, value.value],
+            None,
+            Op::ArrayPush.default_effects(),
+            Some(item.span),
+        );
+        super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
+    }
+    array
+}
+
+/// Coerces an array literal element to the contextual storage type when needed.
+fn coerce_array_literal_element_to_storage_type(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    elem_ty: Option<&PhpType>,
+    expr: &Expr,
+) -> LoweredValue {
+    let Some(elem_ty) = elem_ty else {
+        return value;
+    };
+    let coerced = match elem_ty.codegen_repr() {
+        PhpType::Int | PhpType::Bool if value.ir_type != IrType::I64 => {
+            coerce_to_int(ctx, value, expr)
+        }
+        PhpType::Float if value.ir_type != IrType::F64 => coerce_to_float(ctx, value, expr),
+        PhpType::Str if value.ir_type != IrType::Str => coerce_to_string(ctx, value, expr),
+        _ => value,
+    };
+    if coerced.value != value.value && ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+    }
+    coerced
 }
 
 /// Lowers a spread-containing indexed-array literal whose spread sources are all indexed arrays.
@@ -7542,6 +7731,9 @@ fn lower_closure_with_context(
         };
         let immediate = by_ref.then_some(Immediate::I64(1));
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
+        if by_ref {
+            ctx.mark_ref_bound_local(capture);
+        }
         captured_values.push(ClosureCapture { value: captured.value });
         capture_params.push((capture.clone(), php_type, by_ref));
     }
@@ -7583,14 +7775,18 @@ fn lower_closure_with_context(
         signature,
         captures: captured_values,
     });
-    ctx.emit_value(
+    let closure = ctx.emit_value(
         Op::ClosureNew,
         closure_operands,
         Some(Immediate::Data(data)),
         PhpType::Callable,
         Op::ClosureNew.default_effects(),
         Some(expr.span),
-    )
+    );
+    if let Some(capture) = self_ref_callable_capture {
+        ctx.set_local_logical_type(capture, PhpType::Callable);
+    }
+    closure
 }
 
 /// Lowers a closure variable call.
@@ -8954,7 +9150,10 @@ fn call_result_may_alias_arg(
     let Some(result) = result else {
         return false;
     };
-    if ctx.builder.value_defining_op(arg) == Some(Op::MixedNumericBinop) {
+    if matches!(
+        ctx.builder.value_defining_op(arg),
+        Some(Op::MixedNumericBinop | Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+    ) {
         return false;
     }
     let arg_ty = ctx.builder.value_php_type(arg).codegen_repr();

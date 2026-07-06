@@ -144,7 +144,7 @@ pub(super) fn check_static_property_array_assign(
             return Ok(());
         }
     }
-    if idx_ty != PhpType::Int {
+    if idx_ty != PhpType::Int && idx_ty != PhpType::Mixed {
         return Err(CompileError::new(span, "Array index must be integer"));
     }
 
