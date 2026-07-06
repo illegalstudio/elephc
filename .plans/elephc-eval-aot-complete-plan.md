@@ -3419,3 +3419,50 @@ Verifiche locali:
 - `cargo test --test codegen_tests codegen::eval::test_literal_eval_static_call_user_func_user_function_uses_aot_without_magician -- --exact --nocapture`
 - `cargo test --test codegen_tests codegen::eval::test_literal_eval_static_method_callbacks_use_aot_without_magician -- --exact --nocapture`
 - `cargo test --test codegen_tests codegen::eval::test_literal_eval_untyped_static_method_callback_keeps_bridge_fallback -- --exact --nocapture`
+
+## Chiusura piano - 2026-07-06
+
+Audit dei criteri di completamento:
+
+1. I literal eval nel subset supportato entrano in percorsi AOT nativi e i
+   fallback restano marcati con motivo leggibile.
+2. Il benchmark prime-sum fino a `100000` passa senza bridge, senza
+   `elephc_magician`, con output `454396537`.
+3. Scope read/write del caller e variabili create da eval sono coperti dai test
+   direct-local/direct-param/scope-helper senza linkare magician quando il
+   frammento e' fully AOT.
+4. `return`, fallthrough/null e output side-effect sono coperti da test dedicati.
+5. Builtin statici comuni, chiamate a funzioni note, metodi statici pubblici,
+   `call_user_func*()` statici e first-class callback statici sono coperti dal
+   percorso AOT.
+6. I fallback non supportati restano verificati: eval dinamico, callback
+   dinamici, signature non tipizzate, spread dinamici, casi array/object non
+   modellati e semantiche PHP conservative.
+7. I programmi con solo eval fully AOT non linkano `elephc_magician`; il test
+   prime-loop verifica anche assenza di helper runtime `__elephc_eval_*`.
+8. La soluzione non embedda il compilatore nel binario finale: l'AOT avviene nel
+   compilatore e i binari fully AOT non linkano il bridge magician.
+9. Il prime-loop AOT e' passato su macOS ARM64 locale, Linux x86_64 Docker e
+   Linux ARM64 Docker con filtro dedicato.
+10. `git diff --check` passa sull'intero worktree corrente; zero file risultano
+    modificati solo da whitespace rispetto a `git diff -w`.
+
+Ultime verifiche locali registrate:
+
+- `cargo build --release`
+- `cargo test --test codegen_tests codegen::eval::test_literal_eval_prime_loop_uses_aot_without_execute_bridge -- --exact --nocapture`
+- `./scripts/test-linux-x86_64.sh test_literal_eval_prime_loop_uses_aot_without_execute_bridge`
+- `./scripts/test-linux-arm64.sh test_literal_eval_prime_loop_uses_aot_without_execute_bridge`
+- benchmark manuale prime-sum fuori repo su 12 run:
+  - Elephc standard `13.35 ms`;
+  - Elephc via eval literal AOT `9.74 ms`;
+  - PHP standard `97.77 ms`;
+  - PHP via eval `117.76 ms`;
+  - RSS sample Elephc via eval `1572864` byte.
+- `python3 scripts/benchmark_magician.py --case algebra_heavy --iterations 5 --warmup 1`
+  - Elephc native `2.84 ms`;
+  - Elephc eval `4.90 ms`;
+  - PHP native `78.54 ms`;
+  - PHP eval `80.17 ms`.
+- `git diff --check`
+- `comm -23 <(git diff --name-only | sort) <(git diff -w --name-only | sort) | wc -l`
