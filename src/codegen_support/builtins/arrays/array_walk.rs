@@ -1,0 +1,161 @@
+//! Purpose:
+//! Emits PHP `array_walk` builtin calls that invoke user-provided callbacks.
+//! Owns callback argument materialization, result shape selection, and runtime helper calls.
+//!
+//! Called from:
+//! - `crate::codegen_support::builtins::arrays::emit()`.
+//!
+//! Key details:
+//! - Callback lowering must preserve PHP source evaluation order, captures, and callable return ownership.
+
+use crate::codegen_support::abi;
+use crate::codegen_support::context::Context;
+use crate::codegen_support::data_section::DataSection;
+use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::expr::emit_expr;
+use crate::parser::ast::Expr;
+use crate::types::PhpType;
+use super::callback_env;
+use super::runtime_callable_array_callback;
+use super::runtime_string_callback;
+
+/// Lowers a `array_walk($array, $callback, $userdata?)` call into target assembly.
+/// Evaluates the array argument first, then the callback argument, preserving PHP source
+/// evaluation order. When the callback requires captures, emits a capture-environment
+/// wrapper and calls `__rt_array_walk` with the environment; otherwise passes the bare
+/// callback address and a null userdata pointer. Branch-shaped captured callable
+/// expressions use descriptor-backed environments so receiver/capture metadata survives
+/// runtime selection. Returns `PhpType::Void` on success.
+pub fn emit(
+    _name: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    emitter.comment("array_walk()");
+    let call_reg = abi::nested_call_reg(emitter);
+    let result_reg = abi::int_result_reg(emitter);
+    let callback_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
+    let array_arg_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let env_arg_reg = abi::int_arg_reg_name(emitter.target, 2);
+
+    // -- evaluate the array argument (first arg) --
+    let arr_ty = emit_expr(&args[0], emitter, ctx, data);
+    let source_elem_ty = match &arr_ty {
+        PhpType::Array(elem_ty) => elem_ty.codegen_repr(),
+        _ => PhpType::Int,
+    };
+
+    // -- save array pointer --
+    abi::emit_push_reg(emitter, result_reg);                                    // push the source array pointer onto the temporary stack
+
+    if runtime_string_callback::emit_after_saved_array(
+        &args[1],
+        Some(&arr_ty),
+        vec![source_elem_ty.clone()],
+        PhpType::Void,
+        array_arg_reg,
+        emitter,
+        ctx,
+        data,
+        |wrapper, emitter, _ctx, _data| {
+            callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
+            abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
+            callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
+            abi::emit_call_label(emitter, "__rt_array_walk");                   // call the callback-driven walk runtime helper with a runtime string descriptor
+        },
+    ) {
+        return Some(PhpType::Void);
+    }
+
+    if let Some(wrapper) = callback_env::emit_callable_array_descriptor_env_after_saved_array(
+        &args[1],
+        array_arg_reg,
+        call_reg,
+        vec![source_elem_ty.clone()],
+        PhpType::Void,
+        emitter,
+        ctx,
+        data,
+    ) {
+        callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
+        abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
+        callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
+        abi::emit_call_label(emitter, "__rt_array_walk");                       // call the callback-driven walk runtime helper with a callable-array descriptor environment
+        callback_env::release_descriptor_callback_env(&wrapper, emitter);
+        return Some(PhpType::Void);
+    }
+
+    if runtime_callable_array_callback::emit_after_saved_array(
+        &args[1],
+        array_arg_reg,
+        vec![source_elem_ty.clone()],
+        PhpType::Void,
+        emitter,
+        ctx,
+        data,
+        |wrapper, emitter, _ctx, _data| {
+            callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
+            abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
+            callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
+            abi::emit_call_label(emitter, "__rt_array_walk");                   // call the callback-driven walk runtime helper with a runtime callable-array descriptor
+        },
+    ) {
+        return Some(PhpType::Void);
+    }
+
+    if callback_env::expr_call_needs_descriptor_callback_env(&args[1], ctx)
+        && callback_env::descriptor_callback_env_supported(&args[1])
+    {
+        emit_expr(&args[1], emitter, ctx, data);
+        emitter.instruction(&format!("mov {}, {}", call_reg, result_reg));      // preserve the selected callable descriptor while recovering the source array
+        abi::emit_pop_reg(emitter, array_arg_reg);                               // recover the source array pointer before building the descriptor environment
+        emitter.instruction(&format!("mov {}, {}", result_reg, call_reg));      // restore the selected callable descriptor as the current result
+        let wrapper = callback_env::emit_descriptor_callback_env_from_result(
+            &args[1],
+            array_arg_reg,
+            vec![source_elem_ty.clone()],
+            PhpType::Void,
+            emitter,
+            ctx,
+        )
+        .expect("descriptor callback env support checked before emitting callback");
+        callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
+        abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
+        callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
+        abi::emit_call_label(emitter, "__rt_array_walk");                       // call the callback-driven walk runtime helper with a descriptor environment
+        callback_env::release_descriptor_callback_env(&wrapper, emitter);
+        return Some(PhpType::Void);
+    }
+
+    // -- evaluate the callback argument and resolve its function address --
+    let captures =
+        callback_env::materialize_callback_address(&args[1], call_reg, emitter, ctx, data);
+
+    // -- place callback and array pointer into the runtime argument registers --
+    if !captures.is_empty() {
+        abi::emit_pop_reg(emitter, result_reg);                                  // recover the source array pointer before building the capture environment
+        let wrapper = callback_env::emit_captured_callback_env(
+            call_reg,
+            result_reg,
+            &captures,
+            vec![source_elem_ty],
+            emitter,
+            ctx,
+        );
+        callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
+        abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
+        callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
+        abi::emit_call_label(emitter, "__rt_array_walk");                       // call the callback-driven walk runtime helper with a capture environment
+        abi::emit_release_temporary_stack(emitter, wrapper.env_bytes);
+        return Some(PhpType::Void);
+    } else {
+        abi::emit_pop_reg(emitter, array_arg_reg);                               // pop the source array pointer into the second runtime argument register
+        emitter.instruction(&format!("mov {}, {}", callback_arg_reg, call_reg)); // move the callback function address into the first runtime argument register
+    }
+    abi::emit_load_int_immediate(emitter, env_arg_reg, 0);
+    abi::emit_call_label(emitter, "__rt_array_walk");                           // call the callback-driven walk runtime helper
+
+    Some(PhpType::Void)
+}

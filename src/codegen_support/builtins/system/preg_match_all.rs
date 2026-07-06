@@ -1,0 +1,50 @@
+//! Purpose:
+//! Emits PHP `preg_match_all` PCRE-style regex builtin calls.
+//! Connects pattern/subject arguments and optional match arrays to runtime regex helpers.
+//!
+//! Called from:
+//! - `crate::codegen_support::builtins::system::emit()`.
+//!
+//! Key details:
+//! - Match arrays and false/error results must use PHP-compatible Mixed array payloads.
+
+use crate::codegen_support::context::Context;
+use crate::codegen_support::data_section::DataSection;
+use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::expr::emit_expr;
+use crate::codegen_support::platform::Arch;
+use crate::parser::ast::Expr;
+use crate::types::PhpType;
+
+/// Emits a `preg_match_all` call, passing pattern (args[0]) and subject (args[1])
+/// to `__rt_preg_match_all` via platform ABI. Returns Int (match count).
+pub fn emit(
+    _name: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    emitter.comment("preg_match_all()");
+
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emit_expr(&args[1], emitter, ctx, data);
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push subject ptr and len
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("ldp x3, x4, [sp], #16");                       // pop subject ptr/len into x3/x4
+            emitter.instruction("bl __rt_preg_match_all");                      // count all regex matches → x0=match count
+        }
+        Arch::X86_64 => {
+            emit_expr(&args[1], emitter, ctx, data);
+            crate::codegen_support::abi::emit_push_reg_pair(emitter, "rax", "rdx");     // push subject ptr and len
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("mov rdi, rax");                                // pass the pattern pointer in the first SysV integer argument register
+            emitter.instruction("mov rsi, rdx");                                // pass the pattern length in the second SysV integer argument register
+            crate::codegen_support::abi::emit_pop_reg_pair(emitter, "rdx", "rcx");      // pop subject ptr/len into the remaining SysV argument registers
+            crate::codegen_support::abi::emit_call_label(emitter, "__rt_preg_match_all"); // count all regex matches → rax=match count
+        }
+    }
+
+    Some(PhpType::Int)
+}

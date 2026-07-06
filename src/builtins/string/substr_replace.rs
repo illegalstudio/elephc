@@ -11,8 +11,8 @@
 //! - `lower` is a thin wrapper over the shared `lower_substr_replace` emitter.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -27,5 +27,5 @@ builtin! {
 
 /// Lowers a `substr_replace` call by dispatching to the shared substr-replace emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_substr_replace(ctx, inst)
+    crate::codegen::lower_inst::builtins::strings::lower_substr_replace(ctx, inst)
 }

@@ -12,8 +12,8 @@
 //! - `lower` is a thin wrapper over `lower_binary_string_runtime` which dispatches
 //!   to the shared `__rt_strcasecmp` runtime helper.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -31,7 +31,7 @@ fn lower(
     ctx: &mut FunctionContext,
     inst: &Instruction,
 ) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_binary_string_runtime(
+    crate::codegen::lower_inst::builtins::strings::lower_binary_string_runtime(
         ctx,
         inst,
         "strcasecmp",

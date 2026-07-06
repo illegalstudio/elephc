@@ -1,0 +1,88 @@
+//! Purpose:
+//! Emits PHP `implode` string transformation or formatting calls.
+//! Marshals string/scalar arguments into runtime helpers that allocate returned PHP strings.
+//!
+//! Called from:
+//! - `crate::codegen_support::builtins::strings::emit()`.
+//!
+//! Key details:
+//! - Returned string pointer/length pairs must be treated as owned runtime values when the helper allocates.
+
+use crate::codegen_support::abi;
+use crate::codegen_support::context::Context;
+use crate::codegen_support::data_section::DataSection;
+use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::expr::emit_expr;
+use crate::codegen_support::platform::Arch;
+use crate::parser::ast::Expr;
+use crate::types::PhpType;
+
+/// Emits the `implode` builtin call.
+///
+/// Compiles PHP `implode($glue, $array)` by evaluating the glue string,
+/// then the array, preserving both across architecture-specific ABI registers,
+/// and calling the appropriate runtime helper.
+///
+/// # Arguments
+/// - `args[0]`: glue string expression
+/// - `args[1]`: array expression
+///
+/// # Return value
+/// Returns `Some(PhpType::Str)` on success.
+///
+/// # ABI constraints
+/// - AArch64: pushes glue (x1/x2) and array pointer (x0) to stack; restores array → x3, glue → x1/x2 before calling `__rt_implode` or `__rt_implode_int`
+/// - X86_64: pushes glue (rdi/rsi) and array pointer (rax) to stack; restores array → rdx, glue → rdi/rsi before calling `__rt_implode` or `__rt_implode_int`
+///
+/// # Runtime helpers
+/// - `__rt_implode`: standard runtime for string/value arrays
+/// - `__rt_implode_int`: specialized runtime for int/bool element arrays
+pub fn emit(
+    _name: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    emitter.comment("implode()");
+    // implode($glue, $array)
+    super::args::emit_string_arg(&args[0], emitter, ctx, data);
+    // -- save glue, evaluate array --
+    let (glue_ptr_reg, glue_len_reg) = abi::string_result_regs(emitter);
+    abi::emit_push_reg_pair(emitter, glue_ptr_reg, glue_len_reg);               // preserve the glue string while evaluating the indexed array argument
+    let arr_ty = emit_expr(&args[1], emitter, ctx, data);
+    if matches!(arr_ty, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(emitter, "__rt_mixed_unbox");                      // unwrap a mixed array argument before passing its payload to implode
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("mov x0, x1");                              // use the unboxed indexed-array payload as the implode array argument
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rax, rdi");                            // use the unboxed indexed-array payload as the implode array argument
+            }
+        }
+    }
+    // -- save array pointer, restore glue --
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the indexed array pointer while restoring the glue string for the runtime call
+
+    let is_int_array = matches!(&arr_ty, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Int | PhpType::Bool));
+
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(emitter, "x3");                                   // restore the indexed array pointer into the runtime array-argument register
+            abi::emit_pop_reg_pair(emitter, "x1", "x2");                        // restore the glue string into the runtime string-argument registers
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(emitter, "rdx");                                  // restore the indexed array pointer into the third SysV integer argument register
+            abi::emit_pop_reg_pair(emitter, "rdi", "rsi");                      // restore the glue string into the first two SysV integer argument registers
+        }
+    }
+
+    if is_int_array {
+        abi::emit_call_label(emitter, "__rt_implode_int");                      // join integer array elements with the glue string through the integer-specialized runtime
+    } else {
+        abi::emit_call_label(emitter, "__rt_implode");                          // join string array elements with the glue string through the standard runtime
+    }
+
+    Some(PhpType::Str)
+}

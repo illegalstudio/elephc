@@ -5984,7 +5984,7 @@ fn pathinfo_builtin_return_type(name: &str, operands: &[crate::ir::ValueId]) -> 
     Some(PhpType::Mixed)
 }
 
-/// Returns precise EIR result metadata for regex builtins lowered by `codegen_ir`.
+/// Returns precise EIR result metadata for regex builtins lowered by `codegen`.
 fn regex_builtin_return_type(name: &str) -> Option<PhpType> {
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "preg_match" | "preg_match_all" => Some(PhpType::Int),

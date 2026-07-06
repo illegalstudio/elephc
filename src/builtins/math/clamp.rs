@@ -11,8 +11,8 @@
 //!   anything else returns Mixed.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -53,5 +53,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers a `clamp` call by dispatching to the shared numeric-clamp emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::math::lower_clamp(ctx, inst)
+    crate::codegen::lower_inst::builtins::math::lower_clamp(ctx, inst)
 }

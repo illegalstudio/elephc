@@ -1,0 +1,182 @@
+//! Purpose:
+//! Dispatches string and byte-oriented PHP builtins to their focused codegen emitters.
+//! Keeps the public builtin category surface small while leaf files own lowering details.
+//!
+//! Called from:
+//! - `crate::codegen_support::builtins::emit_builtin_call()`.
+//!
+//! Key details:
+//! - Dispatcher names must stay aligned with the builtin catalog and signature normalization layer.
+
+mod addslashes;
+mod args;
+mod base64_decode;
+mod base64_encode;
+mod bin2hex;
+mod gzcompress;
+mod gzdeflate;
+mod gzinflate;
+mod gzuncompress;
+mod chr;
+mod inet;
+mod ip2long;
+mod long2ip;
+mod crc32;
+mod ctype_alnum;
+mod ctype_alpha;
+mod ctype_digit;
+mod ctype_space;
+mod explode;
+mod format_args;
+mod grapheme_strrev;
+mod hash;
+mod hash_algos;
+mod hash_context;
+mod hash_equals;
+mod hash_hmac;
+pub(crate) mod hash_crypto;
+mod hex2bin;
+mod html_entity_decode;
+mod htmlentities;
+mod htmlspecialchars;
+mod implode;
+mod intval;
+mod lcfirst;
+mod ltrim;
+mod md5;
+mod nl2br;
+mod number_format;
+mod ord;
+mod printf;
+mod sprintf;
+mod vprintf;
+mod vsprintf;
+mod rawurldecode;
+mod rawurlencode;
+mod rtrim;
+mod sha1;
+mod sscanf;
+mod str_contains;
+mod str_ends_with;
+mod str_ireplace;
+mod str_pad;
+mod str_repeat;
+mod str_replace;
+mod str_split;
+mod str_starts_with;
+mod strcasecmp;
+mod strcmp;
+mod stripslashes;
+mod strlen;
+mod strpos;
+mod strrev;
+mod strrpos;
+mod strstr;
+mod strtolower;
+mod strtoupper;
+mod substr;
+mod substr_replace;
+mod trim;
+mod ucfirst;
+mod ucwords;
+mod urldecode;
+mod urlencode;
+mod wordwrap;
+
+use crate::codegen_support::context::Context;
+use crate::codegen_support::data_section::DataSection;
+use crate::codegen_support::emit::Emitter;
+use crate::parser::ast::Expr;
+use crate::types::PhpType;
+
+/// Dispatches a PHP string/byte builtin call to its focused codegen emitter.
+///
+/// `name` must be a canonical builtin name from the catalog (case-insensitive lookup
+/// is handled by the caller). Returns `Some(PhpType)` with the result type when the
+/// builtin is recognized, or `None` if `name` is not a string-category builtin.
+pub fn emit(
+    name: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    match name {
+        "strlen" => strlen::emit(name, args, emitter, ctx, data),
+        "intval" => intval::emit(name, args, emitter, ctx, data),
+        "number_format" => number_format::emit(name, args, emitter, ctx, data),
+        "substr" => substr::emit(name, args, emitter, ctx, data),
+        "strpos" => strpos::emit(name, args, emitter, ctx, data),
+        "strrpos" => strrpos::emit(name, args, emitter, ctx, data),
+        "strstr" => strstr::emit(name, args, emitter, ctx, data),
+        "strtolower" => strtolower::emit(name, args, emitter, ctx, data),
+        "strtoupper" => strtoupper::emit(name, args, emitter, ctx, data),
+        "ucfirst" => ucfirst::emit(name, args, emitter, ctx, data),
+        "lcfirst" => lcfirst::emit(name, args, emitter, ctx, data),
+        "trim" => trim::emit(name, args, emitter, ctx, data),
+        "ltrim" => ltrim::emit(name, args, emitter, ctx, data),
+        "rtrim" => rtrim::emit(name, args, emitter, ctx, data),
+        "chop" => rtrim::emit(name, args, emitter, ctx, data),
+        "str_repeat" => str_repeat::emit(name, args, emitter, ctx, data),
+        "strrev" => strrev::emit(name, args, emitter, ctx, data),
+        "grapheme_strrev" => grapheme_strrev::emit(name, args, emitter, ctx, data),
+        "ord" => ord::emit(name, args, emitter, ctx, data),
+        "chr" => chr::emit(name, args, emitter, ctx, data),
+        "strcmp" => strcmp::emit(name, args, emitter, ctx, data),
+        "strcasecmp" => strcasecmp::emit(name, args, emitter, ctx, data),
+        "str_contains" => str_contains::emit(name, args, emitter, ctx, data),
+        "str_starts_with" => str_starts_with::emit(name, args, emitter, ctx, data),
+        "str_ends_with" => str_ends_with::emit(name, args, emitter, ctx, data),
+        "str_replace" => str_replace::emit(name, args, emitter, ctx, data),
+        "explode" => explode::emit(name, args, emitter, ctx, data),
+        "implode" => implode::emit(name, args, emitter, ctx, data),
+        "ucwords" => ucwords::emit(name, args, emitter, ctx, data),
+        "str_ireplace" => str_ireplace::emit(name, args, emitter, ctx, data),
+        "substr_replace" => substr_replace::emit(name, args, emitter, ctx, data),
+        "str_pad" => str_pad::emit(name, args, emitter, ctx, data),
+        "str_split" => str_split::emit(name, args, emitter, ctx, data),
+        "addslashes" => addslashes::emit(name, args, emitter, ctx, data),
+        "stripslashes" => stripslashes::emit(name, args, emitter, ctx, data),
+        "nl2br" => nl2br::emit(name, args, emitter, ctx, data),
+        "wordwrap" => wordwrap::emit(name, args, emitter, ctx, data),
+        "bin2hex" => bin2hex::emit(name, args, emitter, ctx, data),
+        "ip2long" => ip2long::emit(name, args, emitter, ctx, data),
+        "inet_ntop" | "inet_pton" => inet::emit(name, args, emitter, ctx, data),
+        "long2ip" => long2ip::emit(name, args, emitter, ctx, data),
+        "hex2bin" => hex2bin::emit(name, args, emitter, ctx, data),
+        "htmlspecialchars" => htmlspecialchars::emit(name, args, emitter, ctx, data),
+        "htmlentities" => htmlentities::emit(name, args, emitter, ctx, data),
+        "html_entity_decode" => html_entity_decode::emit(name, args, emitter, ctx, data),
+        "urlencode" => urlencode::emit(name, args, emitter, ctx, data),
+        "urldecode" => urldecode::emit(name, args, emitter, ctx, data),
+        "rawurlencode" => rawurlencode::emit(name, args, emitter, ctx, data),
+        "rawurldecode" => rawurldecode::emit(name, args, emitter, ctx, data),
+        "base64_encode" => base64_encode::emit(name, args, emitter, ctx, data),
+        "base64_decode" => base64_decode::emit(name, args, emitter, ctx, data),
+        "gzcompress" => gzcompress::emit(name, args, emitter, ctx, data),
+        "gzdeflate" => gzdeflate::emit(name, args, emitter, ctx, data),
+        "gzinflate" => gzinflate::emit(name, args, emitter, ctx, data),
+        "gzuncompress" => gzuncompress::emit(name, args, emitter, ctx, data),
+        "ctype_alpha" => ctype_alpha::emit(name, args, emitter, ctx, data),
+        "ctype_digit" => ctype_digit::emit(name, args, emitter, ctx, data),
+        "ctype_alnum" => ctype_alnum::emit(name, args, emitter, ctx, data),
+        "ctype_space" => ctype_space::emit(name, args, emitter, ctx, data),
+        "sprintf" => sprintf::emit(name, args, emitter, ctx, data),
+        "vsprintf" => vsprintf::emit(name, args, emitter, ctx, data),
+        "md5" => md5::emit(name, args, emitter, ctx, data),
+        "sha1" => sha1::emit(name, args, emitter, ctx, data),
+        "crc32" => crc32::emit(name, args, emitter, ctx, data),
+        "printf" => printf::emit(name, args, emitter, ctx, data),
+        "vprintf" => vprintf::emit(name, args, emitter, ctx, data),
+        "hash" => hash::emit(name, args, emitter, ctx, data),
+        "hash_algos" => hash_algos::emit(name, args, emitter, ctx, data),
+        "hash_equals" => hash_equals::emit(name, args, emitter, ctx, data),
+        "hash_hmac" => hash_hmac::emit(name, args, emitter, ctx, data),
+        "hash_init" => hash_context::emit_init(name, args, emitter, ctx, data),
+        "hash_update" => hash_context::emit_update(name, args, emitter, ctx, data),
+        "hash_final" => hash_context::emit_final(name, args, emitter, ctx, data),
+        "hash_copy" => hash_context::emit_copy(name, args, emitter, ctx, data),
+        "sscanf" => sscanf::emit(name, args, emitter, ctx, data),
+        _ => None,
+    }
+}

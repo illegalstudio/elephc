@@ -10,8 +10,8 @@
 //! - The AOT stub evaluates arguments for side effects and returns void.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -26,7 +26,7 @@ builtin! {
 
 /// Lowers `spl_autoload` by evaluating arguments for side effects and returning null.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::spl::lower_spl_autoload_void(
+    crate::codegen::lower_inst::builtins::spl::lower_spl_autoload_void(
         ctx,
         inst,
         "spl_autoload",

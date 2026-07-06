@@ -1,0 +1,194 @@
+//! Purpose:
+//! Lowers interface method dispatch through vtable-compatible wrapper targets.
+//! Shares receiver preparation and ABI call conventions with the object call dispatcher.
+//!
+//! Called from:
+//! - `crate::codegen_support::expr::objects::dispatch`
+//!
+//! Key details:
+//! - Receiver ownership, late/static binding, and vtable slot layout must match class metadata emission.
+
+use crate::codegen_support::abi;
+use crate::codegen_support::context::Context;
+use crate::codegen_support::emit::Emitter;
+use crate::intrinsics::IntrinsicCall;
+use crate::types::PhpType;
+
+use super::super::super::{
+    restore_concat_offset_after_nested_call, restore_concat_offset_after_owned_string_call,
+    save_concat_offset_before_nested_call,
+};
+
+/// Emits interface method dispatch by scanning the receiver's implemented-interfaces
+/// metadata for a matching interface ID, then branching to the resolved method slot.
+///
+/// Shares receiver preparation and ABI call conventions with the object call dispatcher.
+/// Uses the `_class_interface_ptrs` global symbol; vtable slot layout must match class
+/// metadata emission in the runtime data segment.
+///
+/// # Arguments
+/// * `interface_name` - The target interface name for dispatch
+/// * `method` - The method name to invoke on the interface
+/// * `emitter` - Assembly emitter (consumed/reused for all emitted instructions)
+/// * `ctx` - Codegen context providing interface metadata, labels, and platform info
+///
+/// # Returns
+/// The `PhpType` of the resolved interface method (fallback to `PhpType::Int` if
+/// interface or slot metadata is absent; valid programs never trigger this fallback).
+pub(crate) fn emit_dispatch_interface_method(
+    interface_name: &str,
+    method: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) -> PhpType {
+    let Some(interface_info) = ctx.interfaces.get(interface_name).cloned() else {
+        emitter.comment(&format!(
+            "WARNING: missing interface metadata for {}::{}",
+            interface_name, method
+        ));
+        return PhpType::Int;
+    };
+    let ret_ty = interface_info
+        .methods
+        .get(method)
+        .map(|sig| sig.return_type.clone())
+        .unwrap_or(PhpType::Int);
+    let Some(slot) = interface_info.method_slots.get(method).copied() else {
+        emitter.comment(&format!(
+            "WARNING: missing interface slot for {}::{}",
+            interface_name, method
+        ));
+        return ret_ty;
+    };
+
+    let interface_id = interface_info.interface_id as i64;
+    let scan_loop = ctx.next_label("interface_dispatch_scan");
+    let found = ctx.next_label("interface_dispatch_found");
+    let done = ctx.next_label("interface_dispatch_done");
+    let missing = ctx.next_label("interface_dispatch_missing");
+
+    save_concat_offset_before_nested_call(emitter, ctx);
+    if interface_name == "Iterator" {
+        if let Some(rt_label) = IntrinsicCall::instance_method("Generator", method)
+            .and_then(|intrinsic| intrinsic.runtime_helper())
+        {
+            emit_generator_interface_fast_path(rt_label, &done, emitter, ctx);
+        }
+    }
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction("ldr x10, [x0]");                               // load the receiver object's runtime class id without consuming x0
+            abi::emit_symbol_address(emitter, "x11", "_class_interface_ptrs");
+            emitter.instruction("ldr x11, [x11, x10, lsl #3]");                 // select the receiver class's emitted interface metadata block
+            emitter.instruction("ldr x10, [x11]");                              // load the number of implemented interface entries to scan
+            emitter.instruction("add x11, x11, #8");                            // advance to the first [interface_id, impl_table] pair
+            abi::emit_load_int_immediate(emitter, "x13", interface_id);
+
+            emitter.label(&scan_loop);
+            emitter.instruction(&format!("cbz x10, {}", missing));              // stop scanning if no implemented interface matched the target id
+            emitter.instruction("ldr x12, [x11]");                              // load the current implemented interface id
+            emitter.instruction("cmp x12, x13");                                // compare the current interface id with the dispatch target
+            emitter.instruction(&format!("b.eq {}", found));                    // use this implementation table when the interface id matches
+            emitter.instruction("add x11, x11, #16");                           // advance to the next [interface_id, impl_table] pair
+            emitter.instruction("sub x10, x10, #1");                            // consume one implemented interface metadata entry
+            emitter.instruction(&format!("b {}", scan_loop));                   // continue scanning the receiver's implemented interfaces
+
+            emitter.label(&found);
+            emitter.instruction("ldr x11, [x11, #8]");                          // load the implementation table pointer for the matched interface
+            if slot == 0 {
+                emitter.instruction("ldr x11, [x11]");                          // load the first method implementation pointer from the interface table
+            } else {
+                emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8)); // load the selected method implementation pointer from the interface table
+            }
+            emitter.instruction("blr x11");                                     // call the resolved interface method implementation
+            emitter.instruction(&format!("b {}", done));                        // skip the defensive missing-interface fallback
+
+            emitter.label(&missing);
+            emitter.instruction("mov x0, #0");                                  // defensive fallback for invalid runtime metadata; valid programs never take this path
+            emitter.label(&done);
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction("mov r10, QWORD PTR [rdi]");                    // load the receiver object's runtime class id without consuming rdi
+            abi::emit_symbol_address(emitter, "r11", "_class_interface_ptrs");
+            emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");          // select the receiver class's emitted interface metadata block
+            emitter.instruction("mov r10, QWORD PTR [r11]");                    // load the number of implemented interface entries to scan
+            emitter.instruction("add r11, 8");                                  // advance to the first [interface_id, impl_table] pair
+            abi::emit_load_int_immediate(emitter, "r9", interface_id);
+
+            emitter.label(&scan_loop);
+            emitter.instruction("test r10, r10");                               // check whether any implemented interface entries remain
+            emitter.instruction(&format!("je {}", missing));                    // stop scanning if no implemented interface matched the target id
+            emitter.instruction("mov r8, QWORD PTR [r11]");                     // load the current implemented interface id
+            emitter.instruction("cmp r8, r9");                                  // compare the current interface id with the dispatch target
+            emitter.instruction(&format!("je {}", found));                      // use this implementation table when the interface id matches
+            emitter.instruction("add r11, 16");                                 // advance to the next [interface_id, impl_table] pair
+            emitter.instruction("sub r10, 1");                                  // consume one implemented interface metadata entry
+            emitter.instruction(&format!("jmp {}", scan_loop));                 // continue scanning the receiver's implemented interfaces
+
+            emitter.label(&found);
+            emitter.instruction("mov r11, QWORD PTR [r11 + 8]");                // load the implementation table pointer for the matched interface
+            if slot == 0 {
+                emitter.instruction("mov r11, QWORD PTR [r11]");                // load the first method implementation pointer from the interface table
+            } else {
+                emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", slot * 8)); // load the selected method implementation pointer from the interface table
+            }
+            emitter.instruction("call r11");                                    // call the resolved interface method implementation
+            emitter.instruction(&format!("jmp {}", done));                      // skip the defensive missing-interface fallback
+
+            emitter.label(&missing);
+            emitter.instruction("xor eax, eax");                                // defensive fallback for invalid runtime metadata; valid programs never take this path
+            emitter.label(&done);
+        }
+    }
+    if ret_ty == PhpType::Str {
+        restore_concat_offset_after_owned_string_call(emitter, ctx);
+    } else {
+        restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
+    }
+
+    ret_ty
+}
+
+/// Emits a fast path for `Iterator` methods when the receiver is the built-in `Generator` class,
+/// bypassing the generic interface-vtable scan.
+///
+/// Checks the receiver's class ID against `_generator_class_id` and, on match, calls the
+/// appropriate runtime helper directly before jumping to `done`. Non-Generator receivers fall
+/// through to the `not_generator` label to continue with normal interface dispatch.
+///
+/// # Arguments
+/// * `rt_label` - Runtime helper label to call when the receiver is a Generator
+/// * `done` - Label to jump to after the fast path completes, skipping the generic dispatch path
+/// * `emitter` - Assembly emitter
+/// * `ctx` - Codegen context providing labels and platform info
+///
+/// # Notes
+/// This fast path is only valid for the `Iterator` interface, which `Generator` implements natively.
+fn emit_generator_interface_fast_path(
+    rt_label: &str,
+    done: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    let not_generator = ctx.next_label("interface_dispatch_not_generator");
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction("ldr x10, [x0]");                               // load the receiver class id before checking for the built-in Generator
+            abi::emit_load_symbol_to_reg(emitter, "x11", "_generator_class_id", 0);
+            emitter.instruction("cmp x10, x11");                                // compare the receiver class id with the built-in Generator class id
+            emitter.instruction(&format!("b.ne {}", not_generator));            // fall back to interface dispatch for non-Generator iterators
+            abi::emit_call_label(emitter, rt_label);                            // call the Generator runtime helper instead of the synthetic stub
+            emitter.instruction(&format!("b {}", done));                        // skip the generic interface-vtable dispatch path
+            emitter.label(&not_generator);
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction("mov r10, QWORD PTR [rdi]");                    // load the receiver class id before checking for the built-in Generator
+            abi::emit_load_symbol_to_reg(emitter, "r11", "_generator_class_id", 0);
+            emitter.instruction("cmp r10, r11");                                // compare the receiver class id with the built-in Generator class id
+            emitter.instruction(&format!("jne {}", not_generator));             // fall back to interface dispatch for non-Generator iterators
+            abi::emit_call_label(emitter, rt_label);                            // call the Generator runtime helper instead of the synthetic stub
+            emitter.instruction(&format!("jmp {}", done));                      // skip the generic interface-vtable dispatch path
+            emitter.label(&not_generator);
+        }
+    }
+}

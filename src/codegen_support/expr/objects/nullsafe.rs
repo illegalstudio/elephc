@@ -1,0 +1,184 @@
+//! Purpose:
+//! Lowers nullsafe property and method chains with short-circuit results.
+//! Produces object-related expression results while respecting runtime metadata and ownership rules.
+//!
+//! Called from:
+//! - `crate::codegen_support::expr::objects`
+//!
+//! Key details:
+//! - Object handles, property storage, and class ids must stay consistent with emitted class tables.
+
+use crate::codegen_support::abi;
+use crate::codegen_support::context::Context;
+use crate::codegen_support::data_section::DataSection;
+use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::functions;
+use crate::codegen_support::platform::Arch;
+use crate::codegen_support::NULL_SENTINEL;
+use crate::names::php_symbol_key;
+use crate::parser::ast::Expr;
+use crate::types::PhpType;
+
+use super::{access, dispatch};
+use crate::codegen_support::expr::emit_expr;
+
+/// Sentinel value representing a plain (non-boxed) null in the runtime.
+/// Uses an unlikely bit pattern to distinguish from valid object pointers.
+
+/// Lowers `$obj?->property` with a short-circuit null result when the receiver is null.
+pub(super) fn emit_nullsafe_property_access(
+    object: &Expr,
+    property: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let Some((class_name, nullable)) = nullsafe_receiver_class(object, ctx) else {
+        emit_expr(object, emitter, ctx, data);
+        emit_plain_null(emitter);
+        return PhpType::Void;
+    };
+    if !nullable {
+        return access::emit_property_access(object, property, emitter, ctx, data);
+    }
+
+    emitter.comment(&format!("?->{}", property));
+    let null_label = ctx.next_label("nullsafe_prop_null");
+    let done_label = ctx.next_label("nullsafe_prop_done");
+    let receiver_ty = emit_expr(object, emitter, ctx, data);
+    if !emit_nullable_receiver_to_object(&receiver_ty, &null_label, emitter) {
+        super::emit_boxed_null(emitter);
+        return PhpType::Mixed;
+    }
+
+    let property_ty =
+        access::emit_loaded_object_property_access(&class_name, property, emitter, ctx, data);
+    super::box_nullable_result(&property_ty, emitter);
+    abi::emit_jump(emitter, &done_label);
+    emitter.label(&null_label);
+    super::emit_boxed_null(emitter);
+    emitter.label(&done_label);
+    PhpType::Mixed
+}
+
+/// Lowers `$obj?->method(...)` with a short-circuit boxed null result when the receiver is null.
+pub(super) fn emit_nullsafe_method_call(
+    object: &Expr,
+    method: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let Some((class_name, nullable)) = nullsafe_receiver_class(object, ctx) else {
+        emit_expr(object, emitter, ctx, data);
+        emit_plain_null(emitter);
+        return PhpType::Void;
+    };
+
+    emitter.comment(&format!("?->{}()", method));
+    let null_label = ctx.next_label("nullsafe_method_null");
+    let done_label = ctx.next_label("nullsafe_method_done");
+    let receiver_ty = emit_expr(object, emitter, ctx, data);
+    if nullable && !emit_nullable_receiver_to_object(&receiver_ty, &null_label, emitter) {
+        super::emit_boxed_null(emitter);
+        return PhpType::Mixed;
+    }
+
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                 // save the receiver below later argument temporaries until the nullsafe branch commits to the call
+    let method_key = php_symbol_key(method);
+    let mut dispatch_method = method_key.as_str();
+    let mut magic_args = None;
+    let sig = ctx.classes.get(&class_name).and_then(|class_info| {
+        if let Some(sig) = class_info.methods.get(&method_key) {
+            return Some(sig.clone());
+        }
+        if let Some(sig) = class_info.methods.get("__call") {
+            dispatch_method = "__call";
+            magic_args = Some(super::magic_method_args(method, args, object.span));
+            return Some(sig.clone());
+        }
+        None
+    });
+    let args_to_emit = magic_args.as_deref().unwrap_or(args);
+    let emitted_args =
+        dispatch::emit_pushed_method_args(args_to_emit, sig.as_ref(), emitter, ctx, data);
+    let return_ty = dispatch::emit_method_call_with_saved_receiver_below_args(
+        &class_name,
+        dispatch_method,
+        &emitted_args.arg_types,
+        emitted_args.source_temp_bytes,
+        emitter,
+        ctx,
+    );
+    if !nullable {
+        return return_ty;
+    }
+    super::box_nullable_result(&return_ty, emitter);
+    abi::emit_jump(emitter, &done_label);
+    emitter.label(&null_label);
+    super::emit_boxed_null(emitter);
+    emitter.label(&done_label);
+    PhpType::Mixed
+}
+
+/// Infers the class name and nullability of the receiver in a nullsafe chain.
+/// Returns `None` when the receiver type cannot be resolved to an object type.
+/// Handles union types by extracting the object member and tracking whether `Void` is present.
+fn nullsafe_receiver_class(object: &Expr, ctx: &Context) -> Option<(String, bool)> {
+    match functions::infer_contextual_type(object, ctx) {
+        PhpType::Object(class_name) => Some((class_name, false)),
+        PhpType::Void => None,
+        PhpType::Union(members) => {
+            let mut class_name = None;
+            let mut nullable = false;
+            for member in members {
+                match member {
+                    PhpType::Void => nullable = true,
+                    PhpType::Object(candidate) => class_name = Some(candidate),
+                    _ => return None,
+                }
+            }
+            class_name.map(|name| (name, nullable))
+        }
+        _ => None,
+    }
+}
+
+/// Emits a null-check that converts a nullable receiver to a non-null object pointer.
+/// For `PhpType::Mixed`, emits a runtime unbox call and a conditional jump to `null_label`
+/// when the boxed value is null. For `PhpType::Void`, returns `false` to signal that the
+/// caller should fall through to the null result path. For other types, returns `true`
+/// since they are already non-nullable object types.
+fn emit_nullable_receiver_to_object(
+    receiver_ty: &PhpType,
+    null_label: &str,
+    emitter: &mut Emitter,
+) -> bool {
+    match receiver_ty.codegen_repr() {
+        PhpType::Void => false,
+        PhpType::Object(_) => true,
+        PhpType::Mixed => {
+            abi::emit_call_label(emitter, "__rt_mixed_unbox");                  // inspect a nullable receiver box before following the object member access
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("cmp x0, #8");                          // runtime tag 8 means the nullsafe receiver is null
+                    emitter.instruction(&format!("b.eq {}", null_label));       // skip member evaluation when the receiver is null
+                    emitter.instruction("mov x0, x1");                          // move the unboxed object pointer into the normal result register
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("cmp rax, 8");                          // runtime tag 8 means the nullsafe receiver is null
+                    emitter.instruction(&format!("je {}", null_label));         // skip member evaluation when the receiver is null
+                    emitter.instruction("mov rax, rdi");                        // move the unboxed object pointer into the normal result register
+                }
+            }
+            true
+        }
+        _ => true,
+    }
+}
+
+/// Writes the NULL_SENTINEL into the integer result register to represent a plain null.
+fn emit_plain_null(emitter: &mut Emitter) {
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), NULL_SENTINEL);
+}

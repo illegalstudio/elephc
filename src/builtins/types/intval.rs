@@ -9,8 +9,8 @@
 //! - Declared with exactly one parameter `value` (no `base` param) matching the legacy golden signature.
 //! - `lower` is a thin wrapper over the shared intval emitter.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -25,5 +25,5 @@ builtin! {
 
 /// Lowers an `intval` call by dispatching to the shared intval emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::lower_intval(ctx, inst)
+    crate::codegen::lower_inst::builtins::lower_intval(ctx, inst)
 }

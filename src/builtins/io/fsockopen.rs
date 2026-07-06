@@ -12,8 +12,8 @@
 //! - `lower` dispatches to `io::lower_fsockopen` in the EIR backend.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
@@ -59,5 +59,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers a `fsockopen` call by dispatching to the shared io emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::io::lower_fsockopen(ctx, inst)
+    crate::codegen::lower_inst::builtins::io::lower_fsockopen(ctx, inst)
 }

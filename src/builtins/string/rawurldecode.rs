@@ -13,8 +13,8 @@
 //!   Like the legacy arm, it reuses the `__rt_urldecode` runtime helper but without
 //!   treating '+' as a space (RFC 3986 raw decoding is handled inside the helper path).
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -32,7 +32,7 @@ fn lower(
     ctx: &mut FunctionContext,
     inst: &Instruction,
 ) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_unary_string_runtime(
+    crate::codegen::lower_inst::builtins::strings::lower_unary_string_runtime(
         ctx,
         inst,
         "rawurldecode",

@@ -10,8 +10,8 @@
 //! - `lower` is a thin wrapper over the shared `pointers::lower_ptr_write16` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -45,5 +45,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers a `ptr_write16` call by dispatching to the shared pointer emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::pointers::lower_ptr_write16(ctx, inst)
+    crate::codegen::lower_inst::builtins::pointers::lower_ptr_write16(ctx, inst)
 }

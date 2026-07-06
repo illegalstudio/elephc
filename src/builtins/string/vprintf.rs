@@ -9,8 +9,8 @@
 //! - Accepts a required `format` string and a `values` array.
 //! - `lower` is a thin wrapper over the shared `lower_vprintf` emitter.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -25,5 +25,5 @@ builtin! {
 
 /// Lowers a `vprintf` call by dispatching to the shared vprintf emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_vprintf(ctx, inst)
+    crate::codegen::lower_inst::builtins::strings::lower_vprintf(ctx, inst)
 }

@@ -1,718 +1,713 @@
 //! Purpose:
-//! Carries mutable codegen state such as local slots, labels, class metadata, and ownership facts.
-//! Provides the shared bookkeeping used while lowering expressions, statements, functions, and wrappers.
+//! Holds per-function state while the EIR backend lowers SSA instructions to assembly.
+//! Provides table lookups, value-slot loads/stores, data-pool access, and label creation.
 //!
 //! Called from:
-//! - `crate::codegen::generate()` and nested codegen emitters
+//! - `crate::codegen::block_emit`, `crate::codegen::lower_inst`, and
+//!   `crate::codegen::lower_term`.
 //!
 //! Key details:
-//! - Ownership states must remain conservative across branches, temporaries, and cleanup paths.
+//! - Phase 04 stores every SSA value in a stack slot and reloads result registers at use sites.
+//! - The context delegates target-specific movement to `crate::codegen::abi`.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::parser::ast::{CallableTarget, ExprKind, Stmt};
-use crate::span::Span;
-use crate::types::{
-    ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
-    PackedClassInfo, PhpType,
-};
+use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
+use crate::codegen::data_section::DataSection;
+use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
+use crate::ir::{BlockId, DataId, Function, LocalKind, LocalSlotId, Module, Op, Ownership, ValueDef, ValueId};
+use crate::ir_passes::Allocation;
+use crate::types::PhpType;
 
-/// Global counter for generating unique labels across all codegen contexts.
-/// Uses sequential atomic increments to ensure label uniqueness.
-static GLOBAL_LABEL_COUNTER: AtomicUsize = AtomicUsize::new(0);
+use super::frame::FrameLayout;
+use super::value_placement::ValuePlacement;
+use super::{CodegenIrError, Result};
 
-/// Size of the pre-allocated try handler slot (224 bytes).
-pub(crate) const TRY_HANDLER_SLOT_SIZE: usize = 224;
-/// Offset within the try handler slot for the diagnostic depth field (16 bytes from slot start).
-pub(crate) const TRY_HANDLER_DIAG_DEPTH_OFFSET: usize = 16;
-/// Offset within the try handler slot for the `jmp_buf` field (24 bytes from slot start).
-pub(crate) const TRY_HANDLER_JMP_BUF_OFFSET: usize = 24;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Heap ownership tracking.
-pub enum HeapOwnership {
-    NonHeap,
-    Owned,
-    Borrowed,
-    MaybeOwned,
+/// Mutable backend state for one EIR function.
+pub(crate) struct FunctionContext<'a> {
+    pub(super) module: &'a Module,
+    pub(super) function: &'a Function,
+    pub(super) emitter: &'a mut Emitter,
+    pub(super) data: &'a mut DataSection,
+    pub(super) placement: ValuePlacement,
+    pub(super) allocation: Allocation,
+    pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
+    local_offsets: HashMap<LocalSlotId, usize>,
+    promoted_ref_cells: HashSet<LocalSlotId>,
+    try_handler_offsets: HashMap<i64, usize>,
+    pub(super) frame_size: usize,
+    pub(super) concat_base_offset: usize,
+    pub(super) epilogue_emitted: bool,
+    pub(super) is_main: bool,
+    pub(super) web: bool,
+    pub(super) gc_stats: bool,
+    pub(super) heap_debug: bool,
+    pub(super) epilogue_label: Option<String>,
+    label_counter: usize,
 }
 
-impl HeapOwnership {
-    /// Returns the heap ownership for a given PHP type.
-    pub fn for_type(ty: &PhpType) -> Self {
-        if ty.is_refcounted() || matches!(ty, PhpType::Str | PhpType::Callable) {
-            HeapOwnership::MaybeOwned
-        } else {
-            HeapOwnership::NonHeap
-        }
-    }
-
-    /// Returns the local owner heap ownership for a given PHP type.
-    pub fn local_owner_for_type(ty: &PhpType) -> Self {
-        if ty.is_refcounted() || matches!(ty, PhpType::Str | PhpType::Callable) {
-            HeapOwnership::Owned
-        } else {
-            HeapOwnership::NonHeap
-        }
-    }
-
-    /// Returns the borrowed alias heap ownership for a given PHP type.
-    pub fn borrowed_alias_for_type(ty: &PhpType) -> Self {
-        if ty.is_refcounted() || matches!(ty, PhpType::Str | PhpType::Callable) {
-            HeapOwnership::Borrowed
-        } else {
-            HeapOwnership::NonHeap
-        }
-    }
-
-    /// Merges two ownership states conservatively.
-    pub fn merge(self, other: Self) -> Self {
-        use HeapOwnership::*;
-        match (self, other) {
-            (NonHeap, NonHeap) => NonHeap,
-            (Owned, Owned) => Owned,
-            (Borrowed, Borrowed) => Borrowed,
-            (MaybeOwned, _) | (_, MaybeOwned) => MaybeOwned,
-            (Owned, Borrowed) | (Borrowed, Owned) => MaybeOwned,
-            (NonHeap, x) | (x, NonHeap) => x,
-        }
-    }
-}
-
-/// A closure body to be emitted after the current function.
-///
-/// Deferred closures capture variables from the enclosing scope and are stored
-/// until the enclosing function's epilogue, at which point their wrapper and
-/// body are emitted. The `needed` flag controls whether the full body or a
-/// minimal `ret`-only stub is emitted.
-#[allow(dead_code)]
-pub struct DeferredClosure {
-    /// Unique label for the closure body.
-    pub label: String,
-    pub params: Vec<String>,
-    pub body: Vec<Stmt>,
-    pub sig: FunctionSig,
-    pub captures: Vec<(String, PhpType, bool)>,
-    pub hidden_params: Vec<(String, PhpType, bool)>,
-    pub current_class: Option<String>,
-    /// `true` when the wrapper body must be emitted because the runtime can
-    /// invoke it. Real closures default to `true` (the only way to call them is
-    /// via the wrapper). First-class-callable wrappers are downgraded to `false`
-    /// at the FCC variable assignment site and only flipped back to `true` if
-    /// the variable's value is read in a context other than the short-circuit
-    /// (see `emit_variable`). When `false`, the wrapper is replaced by a tiny
-    /// `ret`-only stub that keeps the symbol resolvable for the address load.
-    pub needed: bool,
-}
-
-/// A Fiber entry wrapper emitted next to deferred closure bodies.
-///
-/// Fiber wrappers adapt user functions for `Fiber::call()` invocation, exposing
-/// a known calling convention with visible and hidden parameters.
-pub struct DeferredFiberWrapper {
-    pub label: String,
-    pub sig: FunctionSig,
-    pub visible_param_count: usize,
-    pub hidden_arg_types: Vec<PhpType>,
-    /// `true` when hidden descriptor captures must be retained before calling the
-    /// wrapped closure because that closure frame will release them as owned params.
-    pub retain_hidden_args_for_closure_call: bool,
-    /// `true` when the wrapper should call the callable descriptor's uniform
-    /// invoker instead of re-materializing a statically known ABI signature.
-    pub use_descriptor_invoker: bool,
-}
-
-/// A callback wrapper that adapts callback builtins to closures with hidden captures.
-///
-/// Callback wrappers bridge PHP closures to C callback interfaces (e.g., `array_walk`).
-/// They inject hidden capture parameters populated by the builtin and forward
-/// visible arguments to the wrapped closure.
-pub struct DeferredCallbackWrapper {
-    pub label: String,
-    pub visible_arg_types: Vec<PhpType>,
-    pub target_visible_arg_types: Option<Vec<PhpType>>,
-    pub capture_types: Vec<PhpType>,
-    pub descriptor_prefix_types: Vec<PhpType>,
-    pub descriptor_return_type: Option<PhpType>,
-}
-
-/// A C-ABI callback trampoline backed by a callable descriptor slot.
-///
-/// Extern `callable` parameters receive a plain function pointer, so stateful
-/// descriptors need a stable generated symbol that reloads the descriptor from
-/// global storage before invoking the uniform runtime callable invoker.
-pub struct DeferredExternCallbackTrampoline {
-    pub label: String,
-    pub descriptor_slot_label: String,
-    pub visible_arg_types: Vec<PhpType>,
-    pub return_type: PhpType,
-}
-
-/// A generated runtime callable invoker with a descriptor-based ABI.
-///
-/// Invokers receive a callable descriptor pointer plus a normalized Mixed
-/// argument array, load the target entry from the descriptor, materialize
-/// arguments according to the stored signature, and return a boxed `Mixed` result.
-pub struct DeferredRuntimeCallableInvoker {
-    pub label: String,
-    pub sig: FunctionSig,
-    pub captures: Vec<(String, PhpType, bool)>,
-}
-
-/// Carries mutable codegen state while lowering expressions, statements, functions, and wrappers.
-///
-/// Context tracks local variable stack slots, loop labels, class/interface/enum metadata,
-/// deferred closure/fiber/callback wrapper emission, ownership facts, and control-flow
-/// continuation state for `finally` blocks. All fields are public for direct access by
-/// codegen emitters; ownership states must remain conservative across branches, temporaries,
-/// and cleanup paths.
-pub struct Context {
-    pub variables: HashMap<String, VarInfo>,
-    pub stack_offset: usize,
-    pub loop_stack: Vec<LoopLabels>,
-    pub return_label: Option<String>,
-    pub functions: HashMap<String, FunctionSig>,
-    pub function_variant_groups: HashSet<String>,
-    pub deferred_closures: Vec<DeferredClosure>,
-    pub deferred_fiber_wrappers: Vec<DeferredFiberWrapper>,
-    pub deferred_callback_wrappers: Vec<DeferredCallbackWrapper>,
-    pub deferred_extern_callback_trampolines: Vec<DeferredExternCallbackTrampoline>,
-    pub deferred_runtime_callable_invokers: Vec<DeferredRuntimeCallableInvoker>,
-    pub constants: HashMap<String, (ExprKind, PhpType)>,
-    /// Variables declared with `global $var` in the current function scope.
-    pub global_vars: HashSet<String>,
-    /// Variables declared with `static $var` in functions — maps "func_var" to type.
-    pub static_vars: HashSet<String>,
-    /// Reference parameters in the current function — stores their address, not value.
-    pub ref_params: HashSet<String>,
-    /// Hidden flags for compiler-created local reference cells.
-    /// A non-zero flag means the variable's reference slot owns a 16-byte heap cell
-    /// instead of borrowing storage from a caller, global, or array element.
-    pub local_ref_cell_flags: HashMap<String, LocalRefCellFlag>,
-    /// Whether we're in the main scope (not inside a function).
-    pub in_main: bool,
-    /// Set of all variable names that are used globally across the program.
-    pub all_global_var_names: HashSet<String>,
-    /// Static variable declarations: (func_name, var_name) -> type
-    pub all_static_vars: HashMap<(String, String), PhpType>,
-    /// Closure signatures keyed by variable name, for resolving defaults at call sites.
-    pub closure_sigs: HashMap<String, FunctionSig>,
-    /// Callable locals whose signature is known but whose receiver/capture environment
-    /// must be loaded from the runtime descriptor rather than reconstructed locally.
-    pub runtime_callable_vars: HashSet<String>,
-    /// Temporary expected wrapper signature for first-class callables evaluated
-    /// as arguments to APIs that store and invoke the callable later.
-    pub expected_first_class_callable_sig: Option<FunctionSig>,
-    /// Callable signatures inferred for user-function callable parameters.
-    pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
-    /// Callable-typed parameters in the current emitted function or method.
-    pub callable_param_names: HashSet<String>,
-    /// Callable signatures inferred for user-function callable returns.
-    pub callable_return_sigs: HashMap<String, FunctionSig>,
-    /// Callable element signatures inferred for user-function array returns.
-    pub callable_array_return_sigs: HashMap<String, FunctionSig>,
-    /// Fiber callback start signatures inferred for variables holding `Fiber` objects.
-    pub fiber_start_sigs: HashMap<String, FunctionSig>,
-    /// Fiber callback start signatures inferred for functions returning `Fiber` objects.
-    pub fiber_return_sigs: HashMap<String, FunctionSig>,
-    /// Captured variables per closure variable name: maps $fn -> [(capture_name, type, by_ref)].
-    pub closure_captures: HashMap<String, Vec<(String, PhpType, bool)>>,
-    /// Runtime-dispatch wrappers synthesized for PHP builtin callbacks selected
-    /// by a dynamic string name. The key is the canonical builtin name.
-    pub runtime_callable_builtin_wrappers: HashMap<String, String>,
-    /// Runtime-dispatch wrappers synthesized for extern callbacks selected by
-    /// a dynamic string name. The key is the declared extern function name.
-    pub runtime_callable_extern_wrappers: HashMap<String, String>,
-    /// Runtime-dispatch wrappers synthesized for `Class::method` string
-    /// callbacks. The key is the PHP-visible `Class::method` name.
-    pub runtime_callable_static_method_wrappers: HashMap<String, String>,
-    /// Runtime-dispatch wrappers synthesized for instance-method and
-    /// `__invoke` descriptors. The key is the receiver class plus method name.
-    pub runtime_callable_instance_method_wrappers: HashMap<String, String>,
-    /// Callable array targets assigned to variables, for PHP forms such as
-    /// `$cb = [$object, "method"]` and `$cb = [ClassName::class, "method"]`.
-    pub callable_array_targets: HashMap<String, CallableTarget>,
-    /// First-class callable target stored in a variable, mirroring the Checker's
-    /// `first_class_callable_targets` so call sites can short-circuit to a direct
-    /// function/method/static-method call instead of going through the closure
-    /// wrapper. Populated at assignment time; cleared on reassignment to a
-    /// non-FCC value. See `emit_closure_call` for consumers.
-    pub first_class_callable_targets: HashMap<String, CallableTarget>,
-    /// For each variable currently bound to an FCC, the label of the deferred
-    /// wrapper that materialises that FCC. Used by `emit_variable` to mark a
-    /// wrapper as `needed = true` when the FCC value escapes to anything other
-    /// than a short-circuited call — at which point the dead-wrapper stub
-    /// optimisation must back off and emit the full body.
-    pub variable_fcc_label: HashMap<String, String>,
-    /// Frame slot holding the descriptor passed to a runtime callable invoker.
-    ///
-    /// When set, callback argument lowering appends hidden captures by reading
-    /// runtime capture slots from this descriptor instead of caller locals.
-    pub runtime_capture_descriptor_offset: Option<usize>,
-    /// Class definitions for OOP support.
-    pub classes: HashMap<String, ClassInfo>,
-    /// Interface definitions for OOP support.
-    pub interfaces: HashMap<String, InterfaceInfo>,
-    /// Trait declarations preserved for AOT introspection builtins.
-    pub traits: HashSet<String>,
-    /// Enum definitions.
-    pub enums: HashMap<String, EnumInfo>,
-    /// Packed layout-only record definitions.
-    pub packed_classes: HashMap<String, PackedClassInfo>,
-    /// Name of the class currently being compiled (for $this resolution).
-    pub current_class: Option<String>,
-    /// Extern function declarations (FFI).
-    pub extern_functions: HashMap<String, ExternFunctionSig>,
-    /// Extern class (C struct) declarations (FFI).
-    pub extern_classes: HashMap<String, ExternClassInfo>,
-    /// Extern global variable declarations (FFI).
-    pub extern_globals: HashMap<String, PhpType>,
-    /// Current function return type for return/finally control-flow handling.
-    pub return_type: PhpType,
-    /// Hidden activation-record slot offsets: prev frame / cleanup callback / frame base.
-    pub activation_prev_offset: Option<usize>,
-    pub activation_cleanup_offset: Option<usize>,
-    pub activation_frame_base_offset: Option<usize>,
-    /// Hidden control-flow continuation state used to route return/break/continue through finally blocks.
-    pub pending_action_offset: Option<usize>,
-    pub pending_target_offset: Option<usize>,
-    pub nested_concat_offset_offset: Option<usize>,
-    /// Hidden frame slot holding the `_concat_off` value inherited from the caller at
-    /// function entry. Per-statement concat resets restore `_concat_off` to this base
-    /// (instead of 0) so a `_concat_buf`-slice argument passed by the caller is preserved
-    /// across the callee's statement boundaries. `None` in `main`/raw contexts (reset to 0).
-    pub concat_base_offset: Option<usize>,
-    pub pending_return_value_offset: Option<usize>,
-    /// Pre-allocated exception handler slots for try/catch lowering.
-    pub try_slot_offsets: Vec<usize>,
-    pub next_try_slot_idx: usize,
-    /// Stack of active finally regions (innermost last).
-    pub finally_stack: Vec<FinallyContext>,
-}
-
-/// Metadata for a local variable tracked during codegen.
-pub struct VarInfo {
-    pub ty: PhpType,
-    pub static_ty: PhpType,
-    pub stack_offset: usize,
-    pub slot_size: usize,
-    pub ownership: HeapOwnership,
-    pub epilogue_cleanup_safe: bool,
-}
-
-/// Metadata for a compiler-created local reference cell flag.
-///
-/// A non-zero flag indicates the variable's reference slot owns a 16-byte heap cell
-/// instead of borrowing storage from a caller, global, or array element.
-pub struct LocalRefCellFlag {
-    pub variable: String,
-    pub offset: usize,
-    pub value_ty: Option<PhpType>,
-}
-
-/// Labels and stack-adjustment info for a loop or switch construct.
-///
-/// `continue_label` is the target for `continue` statements; `break_label` is the target
-/// for `break` statements. `sp_adjust` indicates bytes pushed to the stack by the loop
-/// entry (e.g., switch tables) so `return` inside the loop can pop before branching.
-pub struct LoopLabels {
-    pub continue_label: String,
-    pub break_label: String,
-    /// If true, this loop entry is a switch that pushed 16 bytes to the stack.
-    /// Return statements inside need to pop this before jumping to epilogue.
-    pub sp_adjust: usize,
-}
-
-/// Metadata for an active `finally` block during codegen.
-///
-/// `entry_label` marks the start of the finally block's code, used by `pending_action`
-/// and `pending_target` to route `return`/`break`/`continue` through the finally before
-/// reaching the actual target.
-#[derive(Debug, Clone)]
-pub struct FinallyContext {
-    pub entry_label: String,
-}
-
-impl Default for Context {
-    /// Builds the default value for the surrounding type.
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Context {
-    // Inherits module-level doc from `Context` struct.
-
-    /// Creates a default `Context` for top-level (non-function) codegen.
-    ///
-    /// All maps and vectors are empty; `in_main` is `false`; `return_type` is `Void`.
-    /// Use `crate::codegen::generate()` to obtain a fully initialized context for a program.
-    pub fn new() -> Self {
+impl<'a> FunctionContext<'a> {
+    /// Creates a lowering context with finalized frame and value-placement metadata.
+    pub(super) fn new(
+        module: &'a Module,
+        function: &'a Function,
+        emitter: &'a mut Emitter,
+        data: &'a mut DataSection,
+        layout: FrameLayout,
+        is_main: bool,
+        gc_stats: bool,
+        heap_debug: bool,
+        epilogue_label: Option<String>,
+    ) -> Self {
         Self {
-            variables: HashMap::new(),
-            stack_offset: 0,
-            loop_stack: Vec::new(),
-            return_label: None,
-            functions: HashMap::new(),
-            function_variant_groups: HashSet::new(),
-            deferred_closures: Vec::new(),
-            deferred_fiber_wrappers: Vec::new(),
-            deferred_callback_wrappers: Vec::new(),
-            deferred_extern_callback_trampolines: Vec::new(),
-            deferred_runtime_callable_invokers: Vec::new(),
-            constants: HashMap::new(),
-            global_vars: HashSet::new(),
-            static_vars: HashSet::new(),
-            ref_params: HashSet::new(),
-            local_ref_cell_flags: HashMap::new(),
-            in_main: false,
-            all_global_var_names: HashSet::new(),
-            all_static_vars: HashMap::new(),
-            closure_sigs: HashMap::new(),
-            runtime_callable_vars: HashSet::new(),
-            expected_first_class_callable_sig: None,
-            callable_param_sigs: HashMap::new(),
-            callable_param_names: HashSet::new(),
-            callable_return_sigs: HashMap::new(),
-            callable_array_return_sigs: HashMap::new(),
-            fiber_start_sigs: HashMap::new(),
-            fiber_return_sigs: HashMap::new(),
-            closure_captures: HashMap::new(),
-            runtime_callable_builtin_wrappers: HashMap::new(),
-            runtime_callable_extern_wrappers: HashMap::new(),
-            runtime_callable_static_method_wrappers: HashMap::new(),
-            runtime_callable_instance_method_wrappers: HashMap::new(),
-            callable_array_targets: HashMap::new(),
-            first_class_callable_targets: HashMap::new(),
-            variable_fcc_label: HashMap::new(),
-            runtime_capture_descriptor_offset: None,
-            classes: HashMap::new(),
-            interfaces: HashMap::new(),
-            traits: HashSet::new(),
-            enums: HashMap::new(),
-            packed_classes: HashMap::new(),
-            current_class: None,
-            extern_functions: HashMap::new(),
-            extern_classes: HashMap::new(),
-            extern_globals: HashMap::new(),
-            return_type: PhpType::Void,
-            activation_prev_offset: None,
-            activation_cleanup_offset: None,
-            activation_frame_base_offset: None,
-            pending_action_offset: None,
-            pending_target_offset: None,
-            nested_concat_offset_offset: None,
-            concat_base_offset: None,
-            pending_return_value_offset: None,
-            try_slot_offsets: Vec::new(),
-            next_try_slot_idx: 0,
-            finally_stack: Vec::new(),
+            module,
+            function,
+            emitter,
+            data,
+            placement: layout.value_placement,
+            allocation: layout.allocation,
+            callee_saved_offsets: layout.callee_saved_offsets,
+            local_offsets: layout.local_offsets,
+            promoted_ref_cells: HashSet::new(),
+            try_handler_offsets: layout.try_handler_offsets,
+            frame_size: layout.frame_size,
+            concat_base_offset: layout.concat_base_offset,
+            epilogue_emitted: false,
+            is_main,
+            web: false,
+            gc_stats,
+            heap_debug,
+            epilogue_label,
+            label_counter: 0,
         }
     }
 
-    /// Allocates a local variable slot on the stack.
-    pub fn alloc_var(&mut self, name: &str, ty: PhpType) -> usize {
-        self.alloc_var_with_static_type(name, ty.clone(), ty)
-    }
-
-    /// Allocates a local variable with a distinct static type.
-    pub fn alloc_var_with_static_type(
-        &mut self,
-        name: &str,
-        ty: PhpType,
-        static_ty: PhpType,
-    ) -> usize {
-        let slot_size = ty.stack_size();
-        self.stack_offset += slot_size;
-        let offset = self.stack_offset;
-        let ownership = HeapOwnership::for_type(&ty);
-        self.variables.insert(
-            name.to_string(),
-            VarInfo {
-                ty,
-                static_ty,
-                stack_offset: offset,
-                slot_size,
-                ownership,
-                epilogue_cleanup_safe: true,
-            },
+    /// Returns a unique local label with a readable prefix.
+    pub(super) fn next_label(&mut self, prefix: &str) -> String {
+        let label = format!(
+            "_eir_{}_{}_{}",
+            label_fragment(&self.function.name),
+            label_fragment(prefix),
+            self.label_counter
         );
-        offset
+        self.label_counter += 1;
+        label
     }
 
-    /// Ensures an already-collected local has enough reserved frame space for a type.
+    /// Returns the assembly label for a non-entry EIR block.
+    pub(super) fn block_label(&self, block_name: &str, raw: u32) -> String {
+        format!("_eir_{}_{}_{}", label_fragment(&self.function.name), label_fragment(block_name), raw)
+    }
+
+    /// Returns the assembly label for a block id.
+    pub(super) fn block_label_for_id(&self, block: BlockId) -> Result<String> {
+        let block = self
+            .function
+            .block(block)
+            .ok_or_else(|| CodegenIrError::missing_entry("block", block.as_raw()))?;
+        Ok(self.block_label(&block.name, block.id.as_raw()))
+    }
+
+    /// Returns a module function by PHP name using PHP's case-insensitive lookup.
+    pub(super) fn function_by_name(&self, name: &str) -> Option<&'a Function> {
+        let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        self.module
+            .functions
+            .iter()
+            .chain(self.module.closures.iter())
+            .find(|function| {
+                crate::names::php_symbol_key(function.name.trim_start_matches('\\')) == key
+            })
+    }
+
+    /// Returns true when an extern declaration exists for a PHP function name.
+    pub(super) fn has_extern_function(&self, name: &str) -> bool {
+        let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        self.module.extern_decls.iter().any(|function| {
+            crate::names::php_symbol_key(function.name.trim_start_matches('\\')) == key
+        })
+    }
+
+    /// Returns the public include-variant group name matching a PHP function name.
+    pub(super) fn function_variant_group_name(&self, name: &str) -> Option<String> {
+        let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        super::function_variants::collect_dispatch_groups(self.module)
+            .into_iter()
+            .find(|group| crate::names::php_symbol_key(group.name.trim_start_matches('\\')) == key)
+            .map(|group| group.name)
+    }
+
+    /// Returns the concrete function whose signature should be used for a PHP call target.
+    pub(super) fn callable_function_by_name(&self, name: &str) -> Option<&'a Function> {
+        self.function_by_name(name)
+            .or_else(|| super::function_variants::variant_callee_for_group(self.module, name))
+    }
+
+    /// Returns a function value or a structured backend error.
+    pub(super) fn value_php_type(&self, value: ValueId) -> Result<PhpType> {
+        self.function
+            .value(value)
+            .map(|metadata| metadata.php_type.codegen_repr())
+            .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
+    }
+
+    /// Returns a function value's source PHP metadata before codegen representation erasure.
+    pub(super) fn raw_value_php_type(&self, value: ValueId) -> Result<PhpType> {
+        self.function
+            .value(value)
+            .map(|metadata| metadata.php_type.clone())
+            .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
+    }
+
+    /// Returns the EIR ownership metadata attached to an SSA value.
+    pub(super) fn value_ownership(&self, value: ValueId) -> Result<Ownership> {
+        self.function
+            .value(value)
+            .map(|metadata| metadata.ownership)
+            .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
+    }
+
+    /// Returns the runtime PHP type stored in a local slot.
+    pub(super) fn local_php_type(&self, slot: LocalSlotId) -> Result<PhpType> {
+        self.function
+            .locals
+            .get(slot.as_raw() as usize)
+            .map(|metadata| metadata.php_type.codegen_repr())
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
+    }
+
+    /// Returns the semantic role attached to a local slot.
+    pub(super) fn local_kind(&self, slot: LocalSlotId) -> Result<LocalKind> {
+        self.function
+            .locals
+            .get(slot.as_raw() as usize)
+            .map(|metadata| metadata.kind)
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
+    }
+
+    /// Returns the local slot with the requested source name.
+    pub(super) fn local_slot_by_name(&self, name: &str) -> Option<LocalSlotId> {
+        self.function
+            .locals
+            .iter()
+            .find(|local| local.name.as_deref() == Some(name))
+            .map(|local| local.id)
+    }
+
+    /// Marks a local slot as storing a heap reference cell pointer instead of its raw value.
+    pub(super) fn mark_promoted_ref_cell(&mut self, slot: LocalSlotId) {
+        self.promoted_ref_cells.insert(slot);
+    }
+
+    /// Marks a local slot as storing its raw value again after an `unset()` unbind.
+    pub(super) fn unmark_promoted_ref_cell(&mut self, slot: LocalSlotId) {
+        self.promoted_ref_cells.remove(&slot);
+    }
+
+    /// Returns true when a local slot has been promoted to a heap reference cell.
+    pub(super) fn is_promoted_ref_cell(&self, slot: LocalSlotId) -> bool {
+        self.promoted_ref_cells.contains(&slot)
+    }
+
+    /// Returns true when a local slot stores a heap reference-cell pointer.
+    pub(super) fn local_stores_ref_cell_pointer(&self, slot: LocalSlotId) -> bool {
+        self.is_by_ref_param_slot(slot) || self.is_promoted_ref_cell(slot)
+    }
+
+    /// Returns true when the local slot is the storage slot for a by-reference parameter.
+    fn is_by_ref_param_slot(&self, slot: LocalSlotId) -> bool {
+        self.function
+            .params
+            .get(slot.as_raw() as usize)
+            .is_some_and(|param| param.by_ref)
+    }
+
+    /// Loads a stored SSA value into the target's canonical result register(s).
     ///
-    /// This is only safe during pre-emission local collection. When a later write needs a
-    /// wider representation, such as replacing an 8-byte int slot with a 16-byte string
-    /// slot, the variable is moved to a fresh slot and the old slot is left unused.
-    pub fn ensure_var_slot_capacity_for_type(&mut self, name: &str, ty: &PhpType) {
-        let required_size = ty.stack_size();
-        let Some(var) = self.variables.get_mut(name) else {
-            return;
+    /// When the value lives in an allocated register, it is moved from there
+    /// into the result register instead of loaded from a stack slot.
+    pub(super) fn load_value_to_result(&mut self, value: ValueId) -> Result<PhpType> {
+        let ty = self.value_php_type(value)?;
+        if let Some(reg) = self.allocation.register_of(value) {
+            let dst = if ty.codegen_repr() == PhpType::Float {
+                abi::float_result_reg(self.emitter)
+            } else {
+                abi::int_result_reg(self.emitter)
+            };
+            abi::emit_reg_move(self.emitter, dst, reg);
+        } else {
+            let offset = self.value_offset(value)?;
+            abi::emit_load(self.emitter, &ty.codegen_repr(), offset);
+        }
+        Ok(ty)
+    }
+
+    /// Loads a single-register SSA value into a caller-selected register.
+    ///
+    /// When the value lives in an allocated register, it is moved register to
+    /// register (a no-op when the source already is the requested register).
+    pub(super) fn load_value_to_reg(&mut self, value: ValueId, reg: &str) -> Result<PhpType> {
+        let ty = self.value_php_type(value)?;
+        if let Some(home) = self.allocation.register_of(value) {
+            abi::emit_reg_move(self.emitter, reg, home);
+        } else {
+            let offset = self.value_offset(value)?;
+            abi::load_at_offset(self.emitter, reg, offset);
+        }
+        Ok(ty)
+    }
+
+    /// Loads a string SSA value into a caller-selected register pair.
+    pub(super) fn load_string_value_to_regs(
+        &mut self,
+        value: ValueId,
+        ptr_reg: &str,
+        len_reg: &str,
+    ) -> Result<()> {
+        let ty = self.value_php_type(value)?;
+        if ty != PhpType::Str {
+            return Err(CodegenIrError::unsupported(format!(
+                "string register materialization for PHP type {:?}",
+                ty
+            )));
+        }
+        let offset = self.value_offset(value)?;
+        abi::load_at_offset(self.emitter, ptr_reg, offset);
+        abi::load_at_offset(self.emitter, len_reg, offset - 8);
+        Ok(())
+    }
+
+    /// Loads a local slot into the target's canonical result register(s).
+    pub(super) fn load_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
+        if self.local_stores_ref_cell_pointer(slot) {
+            return self.load_ref_cell_local_to_result(slot);
+        }
+        let ty = self.local_php_type(slot)?;
+        let offset = self.local_offset(slot)?;
+        abi::emit_load(self.emitter, &ty.codegen_repr(), offset);
+        Ok(ty)
+    }
+
+    /// Loads the value pointed to by a local ref-cell pointer slot.
+    fn load_ref_cell_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
+        let ty = self.local_php_type(slot)?;
+        reject_multiword_ref_cell_local(&ty, "load")?;
+        let offset = self.local_offset(slot)?;
+        let pointer_reg = abi::symbol_scratch_reg(self.emitter);
+        abi::load_at_offset(self.emitter, pointer_reg, offset);
+        match ty.codegen_repr() {
+            PhpType::Str => {
+                let (ptr_reg, len_reg) = abi::string_result_regs(self.emitter);
+                abi::emit_load_from_address(self.emitter, ptr_reg, pointer_reg, 0);
+                abi::emit_load_from_address(self.emitter, len_reg, pointer_reg, 8);
+            }
+            PhpType::Float => {
+                abi::emit_load_from_address(self.emitter, abi::float_result_reg(self.emitter), pointer_reg, 0);
+            }
+            PhpType::TaggedScalar => {
+                abi::emit_load_from_address(self.emitter, abi::int_result_reg(self.emitter), pointer_reg, 0);
+                abi::emit_load_from_address(
+                    self.emitter,
+                    crate::codegen::sentinels::tagged_scalar_tag_reg(self.emitter),
+                    pointer_reg,
+                    8,
+                );
+            }
+            _ => {
+                abi::emit_load_from_address(self.emitter, abi::int_result_reg(self.emitter), pointer_reg, 0);
+            }
+        }
+        Ok(ty)
+    }
+
+    /// Stores the current result register(s) into the SSA value's home.
+    ///
+    /// When the value lives in an allocated register, the result register is
+    /// moved into it; otherwise it is stored into the value's stack slot.
+    pub(super) fn store_result_value(&mut self, value: ValueId) -> Result<()> {
+        let ty = self.value_php_type(value)?;
+        if let Some(reg) = self.allocation.register_of(value) {
+            let src = if ty.codegen_repr() == PhpType::Float {
+                abi::float_result_reg(self.emitter)
+            } else {
+                abi::int_result_reg(self.emitter)
+            };
+            abi::emit_reg_move(self.emitter, reg, src);
+        } else {
+            let offset = self.value_offset(value)?;
+            self.store_current_result_at_offset(&ty, offset);
+        }
+        Ok(())
+    }
+
+    /// Stores the integer result register as a single machine word into the SSA value's home.
+    ///
+    /// Reference-cell pointers are always one pointer-sized word regardless of the element
+    /// type they alias (a `string` cell pointer is still one word, not a `{ptr,len}` pair).
+    /// `LoadPropRefCell` and by-reference call results materialize the cell pointer into the
+    /// integer result register, so it must be stored single-word; the type-driven
+    /// `store_result_value` would otherwise split a `Str`/`Float` result across the string or
+    /// float result registers and drop the pointer.
+    pub(super) fn store_int_result_value(&mut self, value: ValueId) -> Result<()> {
+        if let Some(reg) = self.allocation.register_of(value) {
+            abi::emit_reg_move(self.emitter, reg, abi::int_result_reg(self.emitter));
+        } else {
+            let offset = self.value_offset(value)?;
+            abi::store_at_offset(self.emitter, abi::int_result_reg(self.emitter), offset);
+        }
+        Ok(())
+    }
+
+    /// Stores an SSA value into an addressable local slot.
+    pub(super) fn store_value_to_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
+        if self.local_stores_ref_cell_pointer(slot) {
+            return self.store_value_to_ref_cell_local(slot, value);
+        }
+        let source_ty = self.load_value_to_result(value)?;
+        let target_ty = self.local_php_type(slot)?;
+        if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
+            if self.value_can_own_mixed_box_source(value)? {
+                emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
+            } else {
+                emit_box_current_value_as_mixed(self.emitter, &source_ty);
+            }
+        }
+        coerce_current_result_for_target_store(self.emitter, &source_ty, &target_ty)?;
+        let offset = self.local_offset(slot)?;
+        self.store_current_result_at_offset(&target_ty, offset);
+        Ok(())
+    }
+
+    /// After an in-place hash/array mutation whose runtime helper returns the
+    /// possibly-reallocated container pointer in `value`'s register (already
+    /// persisted via `store_result_value`), writes that pointer back to global
+    /// storage when `value` was loaded from a global — i.e. a superglobal such as
+    /// `$_SERVER`/`$_GET`/`$_POST`. Mirrors the local-slot write-back that array
+    /// and hash set/append lowerings already perform; without it a global array
+    /// that grows past its initial capacity leaves the global symbol pointing at
+    /// freed storage (corruption / crash). No-op unless `value` came from
+    /// `Op::LoadGlobal`.
+    pub(super) fn writeback_global_array_source(&mut self, value: ValueId) -> Result<()> {
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
         };
-        if var.slot_size >= required_size {
-            return;
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(());
+        };
+        let Some(inst_ref) = self.function.instruction(inst) else {
+            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+        };
+        if inst_ref.op != Op::LoadGlobal {
+            return Ok(());
         }
-        self.stack_offset += required_size;
-        var.stack_offset = self.stack_offset;
-        var.slot_size = required_size;
+        let Some(crate::ir::Immediate::GlobalName(data)) = inst_ref.immediate else {
+            return Ok(());
+        };
+        let name = self.global_name_data(data)?.to_string();
+        let symbol = crate::names::ir_global_symbol(&name);
+        let ty = self.value_php_type(value)?;
+        self.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
+        self.load_value_to_result(value)?;
+        abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
+        Ok(())
     }
 
-    /// Allocates a hidden stack slot of the given size.
-    pub fn alloc_hidden_slot(&mut self, size: usize) -> usize {
-        self.stack_offset += size;
-        self.stack_offset
-    }
-
-    /// Generates a key for a local reference cell flag from variable name and span.
-    pub fn foreach_local_ref_cell_flag_key(name: &str, span: Span) -> String {
-        format!("{}:{}:{}", name, span.line, span.col)
-    }
-
-    /// Ensures a local reference cell flag exists for the given key, allocating a hidden slot if needed.
-    pub fn ensure_local_ref_cell_flag(&mut self, key: String, name: &str) -> usize {
-        if let Some(flag) = self.local_ref_cell_flags.get(&key) {
-            return flag.offset;
+    /// Stores an SSA value through a local ref-cell pointer slot.
+    fn store_value_to_ref_cell_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
+        let source_ty = self.load_value_to_result(value)?;
+        let target_ty = self.local_php_type(slot)?;
+        reject_multiword_ref_cell_local(&target_ty, "store")?;
+        if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
+            if self.value_can_own_mixed_box_source(value)? {
+                emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
+            } else {
+                emit_box_current_value_as_mixed(self.emitter, &source_ty);
+            }
         }
-        let offset = self.alloc_hidden_slot(8);
-        self.local_ref_cell_flags.insert(
-            key,
-            LocalRefCellFlag {
-                variable: name.to_string(),
-                offset,
-                value_ty: None,
-            },
-        );
-        offset
-    }
-
-    /// Sets the value type for a local reference cell flag.
-    pub fn set_local_ref_cell_flag_type(&mut self, key: &str, value_ty: PhpType) {
-        if let Some(flag) = self.local_ref_cell_flags.get_mut(key) {
-            flag.value_ty = Some(value_ty);
+        coerce_current_result_for_target_store(self.emitter, &source_ty, &target_ty)?;
+        let offset = self.local_offset(slot)?;
+        let pointer_reg = abi::symbol_scratch_reg(self.emitter);
+        abi::load_at_offset(self.emitter, pointer_reg, offset);
+        match target_ty.codegen_repr() {
+            PhpType::Str => {
+                let (ptr_reg, len_reg) = abi::string_result_regs(self.emitter);
+                abi::emit_store_to_address(self.emitter, ptr_reg, pointer_reg, 0);
+                abi::emit_store_to_address(self.emitter, len_reg, pointer_reg, 8);
+            }
+            PhpType::Float => {
+                abi::emit_store_to_address(self.emitter, abi::float_result_reg(self.emitter), pointer_reg, 0);
+            }
+            PhpType::TaggedScalar => {
+                abi::emit_store_to_address(self.emitter, abi::int_result_reg(self.emitter), pointer_reg, 0);
+                abi::emit_store_to_address(
+                    self.emitter,
+                    crate::codegen::sentinels::tagged_scalar_tag_reg(self.emitter),
+                    pointer_reg,
+                    8,
+                );
+            }
+            _ => {
+                abi::emit_store_to_address(self.emitter, abi::int_result_reg(self.emitter), pointer_reg, 0);
+            }
         }
+        Ok(())
     }
 
-    /// Sets the heap ownership for the named variable, overwriting the previous value.
-    pub fn set_var_ownership(&mut self, name: &str, ownership: HeapOwnership) {
-        if let Some(var) = self.variables.get_mut(name) {
-            var.ownership = ownership;
-        }
-    }
-
-    /// Marks a variable as not safe for epilogue cleanup.
-    pub fn disable_epilogue_cleanup(&mut self, name: &str) {
-        if let Some(var) = self.variables.get_mut(name) {
-            var.epilogue_cleanup_safe = false;
-        }
-    }
-
-    /// Marks a variable as safe for epilogue cleanup.
-    pub fn enable_epilogue_cleanup(&mut self, name: &str) {
-        if let Some(var) = self.variables.get_mut(name) {
-            var.epilogue_cleanup_safe = true;
-        }
-    }
-
-    /// Updates both the runtime type and heap ownership for a variable.
-    pub fn update_var_type_and_ownership(
-        &mut self,
-        name: &str,
-        ty: PhpType,
-        ownership: HeapOwnership,
-    ) {
-        self.update_var_type_static_and_ownership(name, ty.clone(), ty, ownership);
-    }
-
-    /// Marks the deferred FCC wrapper backing `var` as `needed = true`, so the
-    /// emission loop emits its body instead of the dead-wrapper stub. Call this
-    /// from any site that consumes an FCC variable's runtime value (loads its
-    /// address for an indirect call, threads its captures through a callback
-    /// builtin, materialises it into a Fiber, etc.). The short-circuit paths
-    /// in `emit_closure_call` deliberately do NOT call this — that's the whole
-    /// point of the optimisation.
-    pub fn mark_fcc_used(&mut self, var: &str) {
-        if let Some(label) = self.variable_fcc_label.get(var).cloned() {
-            if let Some(deferred) =
-                self.deferred_closures.iter_mut().find(|d| d.label == label)
-            {
-                deferred.needed = true;
+    /// Stores the current result register(s) into a frame offset.
+    fn store_current_result_at_offset(&mut self, ty: &PhpType, offset: usize) {
+        match &ty.codegen_repr() {
+            PhpType::Str => {
+                let (ptr_reg, len_reg) = abi::string_result_regs(self.emitter);
+                abi::store_at_offset(self.emitter, ptr_reg, offset);
+                abi::store_at_offset(self.emitter, len_reg, offset - 8);
+            }
+            PhpType::TaggedScalar => {
+                abi::store_at_offset(self.emitter, abi::int_result_reg(self.emitter), offset);
+                abi::store_at_offset(
+                    self.emitter,
+                    crate::codegen::sentinels::tagged_scalar_tag_reg(self.emitter),
+                    offset - 8,
+                );
+            }
+            PhpType::Float => {
+                abi::store_at_offset(self.emitter, abi::float_result_reg(self.emitter), offset);
+            }
+            PhpType::Void => {
+                abi::store_at_offset(self.emitter, abi::int_result_reg(self.emitter), offset);
+            }
+            PhpType::Never => {}
+            _ => {
+                abi::store_at_offset(self.emitter, abi::int_result_reg(self.emitter), offset);
             }
         }
     }
 
-    /// Updates the runtime type, static type, and heap ownership for a variable.
-    pub fn update_var_type_static_and_ownership(
-        &mut self,
-        name: &str,
-        ty: PhpType,
-        static_ty: PhpType,
-        ownership: HeapOwnership,
-    ) {
-        if let Some(var) = self.variables.get_mut(name) {
-            var.ty = ty;
-            var.static_ty = static_ty;
-            var.ownership = ownership;
+    /// Returns true when a value producer can leave an owned source consumed by Mixed boxing.
+    pub(super) fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
+        if self.value_php_type(value)?.codegen_repr() == PhpType::Str {
+            return self.value_is_heap_owned_string_for_mixed_box(value);
         }
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(false);
+        };
+        let inst = self
+            .function
+            .instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        Ok(matches!(
+            inst.op,
+            Op::Acquire
+                | Op::ArrayNew
+                | Op::HashNew
+                | Op::ArrayToMixed
+                | Op::ArrayCloneShallow
+                | Op::HashCloneShallow
+                | Op::ArrayUnion
+                | Op::HashUnion
+                | Op::ArrayHashUnion
+                | Op::HashArrayUnion
+                | Op::ArrayToHash
+                | Op::ObjectNew
+                | Op::DynamicObjectNew
+                | Op::DynamicObjectNewMixed
+                | Op::ClosureNew
+                | Op::FirstClassCallableNew
+                | Op::CallableArrayNew
+                | Op::BufferNew
+                | Op::GeneratorNew
+                | Op::Call
+                | Op::FunctionVariantCall
+                | Op::BuiltinCall
+                | Op::RuntimeCall
+                | Op::ExternCall
+                | Op::MethodCall
+                | Op::NullsafeMethodCall
+                | Op::StaticMethodCall
+                | Op::ClosureCall
+                | Op::CallableDescriptorInvoke
+                | Op::ExprCall
+                | Op::PipeCall
+                | Op::IteratorMethodCall
+                | Op::SplRuntimeCall
+                | Op::FiberRuntimeCall
+        ))
     }
 
-    /// Finds the most specific common object type between two class names.
-    pub fn common_object_type(&self, left: &str, right: &str) -> Option<PhpType> {
-        if left == right {
-            return Some(PhpType::Object(left.to_string()));
-        }
-        if self.is_subclass_of(left, right)
-            || self.class_implements_interface(left, right)
-            || self.interface_extends_interface(left, right)
-        {
-            return Some(PhpType::Object(right.to_string()));
-        }
-        if self.is_subclass_of(right, left)
-            || self.class_implements_interface(right, left)
-            || self.interface_extends_interface(right, left)
-        {
-            return Some(PhpType::Object(left.to_string()));
-        }
-
-        let mut left_ancestors = HashSet::new();
-        let mut current = Some(left.to_string());
-        while let Some(class_name) = current {
-            left_ancestors.insert(class_name.clone());
-            current = self
-                .classes
-                .get(&class_name)
-                .and_then(|class_info| class_info.parent.clone());
-        }
-
-        let mut current = Some(right.to_string());
-        while let Some(class_name) = current {
-            if left_ancestors.contains(&class_name) {
-                return Some(PhpType::Object(class_name));
-            }
-            current = self
-                .classes
-                .get(&class_name)
-                .and_then(|class_info| class_info.parent.clone());
-        }
-
-        None
+    /// Returns true when a string producer leaves a heap-owned payload that Mixed boxing may consume.
+    fn value_is_heap_owned_string_for_mixed_box(&self, value: ValueId) -> Result<bool> {
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(false);
+        };
+        let inst = self
+            .function
+            .instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        Ok(matches!(
+            inst.op,
+            Op::Acquire
+                | Op::StrPersist
+                | Op::Call
+                | Op::FunctionVariantCall
+                | Op::ExternCall
+                | Op::MethodCall
+                | Op::NullsafeMethodCall
+                | Op::StaticMethodCall
+                | Op::ClosureCall
+                | Op::CallableDescriptorInvoke
+                | Op::ExprCall
+                | Op::PipeCall
+                | Op::IteratorMethodCall
+                | Op::SplRuntimeCall
+                | Op::FiberRuntimeCall
+        ))
     }
 
-    /// Returns true when subclass of.
-    fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {
-        let mut current = self
-            .classes
-            .get(class_name)
-            .and_then(|class_info| class_info.parent.as_deref());
-        while let Some(parent) = current {
-            if parent == ancestor_name {
-                return true;
-            }
-            current = self
-                .classes
-                .get(parent)
-                .and_then(|class_info| class_info.parent.as_deref());
-        }
-        false
+    /// Interns a module data-pool string into the assembly data section.
+    pub(super) fn intern_string_data(&mut self, data_id: DataId) -> Result<(String, usize)> {
+        let value = self
+            .module
+            .data
+            .strings
+            .get(data_id.as_raw() as usize)
+            .ok_or_else(|| CodegenIrError::missing_entry("data string", data_id.as_raw()))?;
+        let bytes = crate::string_bytes::literal_bytes(value);
+        Ok(self.data.add_string(&bytes))
     }
 
-    /// Checks if a type (class or interface) implements a given interface.
-    pub(crate) fn object_type_implements_interface(
-        &self,
-        type_name: &str,
-        interface_name: &str,
-    ) -> bool {
-        if self.classes.contains_key(type_name) {
-            return self.class_implements_interface(type_name, interface_name);
-        }
-        if self.interfaces.contains_key(type_name) {
-            return type_name == interface_name
-                || self.interface_extends_interface(type_name, interface_name);
-        }
-        false
+    /// Interns a module class-name data-pool entry into the assembly data section.
+    pub(super) fn intern_class_name_data(&mut self, data_id: DataId) -> Result<(String, usize)> {
+        let value = self
+            .module
+            .data
+            .class_names
+            .get(data_id.as_raw() as usize)
+            .ok_or_else(|| CodegenIrError::missing_entry("class data", data_id.as_raw()))?;
+        Ok(self.data.add_string(value.as_bytes()))
     }
 
-    /// Computes implements interface for the PHP class-introspection builtin.
-    fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
-        self.classes.get(class_name).is_some_and(|class_info| {
-            class_info.interfaces.iter().any(|implemented| {
-                implemented == interface_name
-                    || self.interface_extends_interface(implemented, interface_name)
-            })
-        })
+    /// Returns a module data-pool function name.
+    pub(super) fn function_name_data(&self, data_id: DataId) -> Result<&str> {
+        self.module
+            .data
+            .function_names
+            .get(data_id.as_raw() as usize)
+            .map(String::as_str)
+            .ok_or_else(|| CodegenIrError::missing_entry("function data", data_id.as_raw()))
     }
 
-    /// Provides the Interface extends interface helper used by the context module.
-    fn interface_extends_interface(&self, child_name: &str, ancestor_name: &str) -> bool {
-        if child_name == ancestor_name {
-            return true;
-        }
-        self.interfaces.get(child_name).is_some_and(|interface_info| {
-            interface_info.parents.iter().any(|parent| {
-                parent == ancestor_name || self.interface_extends_interface(parent, ancestor_name)
-            })
-        })
+    /// Returns a module data-pool global name.
+    pub(super) fn global_name_data(&self, data_id: DataId) -> Result<&str> {
+        self.module
+            .data
+            .global_names
+            .get(data_id.as_raw() as usize)
+            .map(String::as_str)
+            .ok_or_else(|| CodegenIrError::missing_entry("global data", data_id.as_raw()))
     }
 
-    /// Generates a unique label with the given prefix.
-    pub fn next_label(&mut self, prefix: &str) -> String {
-        let id = GLOBAL_LABEL_COUNTER.fetch_add(1, Ordering::SeqCst);
-        format!("_{}_{}", prefix, id)
+    /// Returns true when the EIR module has interned a matching global name.
+    pub(super) fn has_global_name(&self, name: &str) -> bool {
+        let normalized = name.trim_start_matches('\\');
+        self.module
+            .data
+            .global_names
+            .iter()
+            .any(|candidate| candidate.trim_start_matches('\\') == normalized)
     }
 
-    /// Returns the next pre-allocated try handler slot offset.
-    pub fn next_try_slot(&mut self) -> usize {
-        let offset = *self
-            .try_slot_offsets
-            .get(self.next_try_slot_idx)
-            .expect("codegen bug: missing pre-allocated try handler slot");
-        self.next_try_slot_idx += 1;
-        offset
+    /// Returns the frame offset assigned to a value by Phase 04 placement.
+    fn value_offset(&self, value: ValueId) -> Result<usize> {
+        self.placement
+            .slot(value)
+            .ok_or_else(|| CodegenIrError::missing_entry("value slot", value.as_raw()))
+    }
+
+    /// Returns the frame offset assigned to a value for custom multi-word lowerings.
+    pub(super) fn value_frame_offset(&self, value: ValueId) -> Result<usize> {
+        self.value_offset(value)
+    }
+
+    /// Returns the frame offset assigned to an addressable EIR local.
+    pub(super) fn local_offset(&self, slot: LocalSlotId) -> Result<usize> {
+        self.local_offsets
+            .get(&slot)
+            .copied()
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot offset", slot.as_raw()))
+    }
+
+    /// Returns the frame offset assigned to a high-level try-handler token.
+    pub(super) fn try_handler_offset(&self, token: i64) -> Result<usize> {
+        self.try_handler_offsets
+            .get(&token)
+            .copied()
+            .ok_or_else(|| CodegenIrError::invalid_module(format!("missing try handler token {}", token)))
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::HeapOwnership;
-    use crate::types::PhpType;
+/// Rejects local ref-cell operations whose frame representation spans multiple words.
+fn reject_multiword_ref_cell_local(ty: &PhpType, action: &str) -> Result<()> {
+    let _ = (ty, action);
+    Ok(())
+}
 
-    /// Verifies that heap ownership type classification.
-    #[test]
-    fn test_heap_ownership_type_classification() {
-        assert_eq!(HeapOwnership::for_type(&PhpType::Int), HeapOwnership::NonHeap);
-        assert_eq!(HeapOwnership::for_type(&PhpType::Str), HeapOwnership::MaybeOwned);
-        assert_eq!(
-            HeapOwnership::local_owner_for_type(&PhpType::AssocArray {
-                key: Box::new(PhpType::Str),
-                value: Box::new(PhpType::Int),
-            }),
-            HeapOwnership::Owned
-        );
-        assert_eq!(
-            HeapOwnership::borrowed_alias_for_type(&PhpType::Object("Foo".to_string())),
-            HeapOwnership::Borrowed
-        );
+/// Coerces the currently loaded result registers before storing into a typed local slot.
+fn coerce_current_result_for_target_store(
+    emitter: &mut Emitter,
+    source_ty: &PhpType,
+    target_ty: &PhpType,
+) -> Result<()> {
+    if target_ty.codegen_repr() != PhpType::TaggedScalar {
+        return Ok(());
     }
+    match source_ty.codegen_repr() {
+        PhpType::TaggedScalar => Ok(()),
+        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+            crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
+            Ok(())
+        }
+        PhpType::Void | PhpType::Never => {
+            crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+            Ok(())
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_mixed_result_as_tagged_scalar(emitter);
+            Ok(())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "local store from PHP type {:?} to PHP type TaggedScalar",
+            other
+        ))),
+    }
+}
 
-    /// Verifies that heap ownership merge.
-    #[test]
-    fn test_heap_ownership_merge() {
-        assert_eq!(
-            HeapOwnership::Owned.merge(HeapOwnership::Owned),
-            HeapOwnership::Owned
-        );
-        assert_eq!(
-            HeapOwnership::Borrowed.merge(HeapOwnership::Borrowed),
-            HeapOwnership::Borrowed
-        );
-        assert_eq!(
-            HeapOwnership::Owned.merge(HeapOwnership::Borrowed),
-            HeapOwnership::MaybeOwned
-        );
-        assert_eq!(
-            HeapOwnership::NonHeap.merge(HeapOwnership::Borrowed),
-            HeapOwnership::Borrowed
-        );
+/// Reorders `__rt_mixed_unbox` output into the EIR tagged-scalar result registers.
+fn emit_mixed_result_as_tagged_scalar(emitter: &mut Emitter) {
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x9, x0");                                  // preserve the unboxed Mixed tag before moving the payload
+            emitter.instruction("mov x0, x1");                                  // place the unboxed payload into the tagged-scalar payload register
+            emitter.instruction("mov x1, x9");                                  // place the unboxed Mixed tag into the tagged-scalar tag register
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r10, rax");                                // preserve the unboxed Mixed tag before moving the payload
+            emitter.instruction("mov rax, rdi");                                // place the unboxed payload into the tagged-scalar payload register
+            emitter.instruction("mov rdx, r10");                                // place the unboxed Mixed tag into the tagged-scalar tag register
+        }
     }
+}
+
+/// Converts arbitrary names into assembly-label-safe fragments.
+fn label_fragment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
 }

@@ -11,8 +11,8 @@
 //!   infers the argument and enforces arity before falling back to `returns`.
 //! - `lower` is a thin wrapper over `debug::lower_print_r` in the EIR backend.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -27,5 +27,5 @@ builtin! {
 
 /// Lowers a `print_r` call by dispatching to the shared debug emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::debug::lower_print_r(ctx, inst)
+    crate::codegen::lower_inst::builtins::debug::lower_print_r(ctx, inst)
 }

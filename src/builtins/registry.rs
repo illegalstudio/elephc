@@ -4,7 +4,7 @@
 //!
 //! Called from:
 //! - `crate::types::checker::builtins::catalog` for name-based lookup.
-//! - `crate::codegen_ir::lower_inst::builtins` for lowering-hook dispatch.
+//! - `crate::codegen::lower_inst::builtins` for lowering-hook dispatch.
 //!
 //! Key details:
 //! - Registry is initialized once at first access via a `OnceLock`; subsequent calls
@@ -300,9 +300,9 @@ mod tests {
 
     /// No-op lowering hook used by test probe builtins; does nothing and succeeds.
     fn noop_lower(
-        _c: &mut crate::codegen_ir::context::FunctionContext,
+        _c: &mut crate::codegen::context::FunctionContext,
         _i: &crate::ir::Instruction,
-    ) -> Result<(), crate::codegen_ir::CodegenIrError> {
+    ) -> Result<(), crate::codegen::CodegenIrError> {
         Ok(())
     }
 

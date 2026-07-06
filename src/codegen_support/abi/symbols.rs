@@ -1,0 +1,561 @@
+//! Purpose:
+//! Emits target-aware loads, stores, and addresses for assembly symbols and external globals.
+//! Bridges local slot values, result registers, and static storage symbols.
+//!
+//! Called from:
+//! - `crate::codegen_support::stmt::storage`, `crate::codegen_support::functions`, and global emitters
+//!
+//! Key details:
+//! - Symbol relocations differ by platform and refcounted stores must preserve ownership cleanup.
+
+use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::NULL_SENTINEL;
+use crate::types::PhpType;
+
+use super::calls::emit_call_label;
+use super::frame::{
+    emit_load_from_address, emit_store_to_address, load_at_offset_scratch, store_at_offset_scratch,
+};
+use super::registers::{
+    float_result_reg, int_result_reg, is_float_register, secondary_scratch_reg,
+    string_result_regs, symbol_scratch_reg, tertiary_scratch_reg,
+};
+use super::values::{emit_decref_if_refcounted, emit_load_int_immediate};
+
+
+/// Stores a local variable from its frame slot into a static/global symbol.
+/// Loads the value from `offset` relative to the frame pointer, then writes it
+/// to `symbol` at `byte_offset`.  Handles Float (single register), Str (pointer
+/// + length pair), Void (null sentinel), and scalar/pointer types differently.
+pub fn emit_store_local_slot_to_symbol(
+    emitter: &mut Emitter,
+    symbol: &str,
+    ty: &PhpType,
+    offset: usize,
+) {
+    let symbol_reg = symbol_scratch_reg(emitter);
+    let local_reg = secondary_scratch_reg(emitter);
+    let local_hi_reg = tertiary_scratch_reg(emitter);
+    match ty.codegen_repr() {
+        PhpType::Float => {
+            load_at_offset_scratch(emitter, float_result_reg(emitter), offset, local_reg); // load the local float value from its frame slot
+            emit_store_reg_to_symbol(emitter, float_result_reg(emitter), symbol, 0);       // store the local float value into symbol storage
+        }
+        PhpType::Str => {
+            load_at_offset_scratch(emitter, local_reg, offset, symbol_reg);            // load the local string pointer from its frame slot
+            load_at_offset_scratch(emitter, local_hi_reg, offset - 8, symbol_reg);     // load the local string length from its paired frame slot
+            emit_store_reg_to_symbol(emitter, local_reg, symbol, 0);                    // store the local string pointer into symbol storage
+            emit_store_reg_to_symbol(emitter, local_hi_reg, symbol, 8);                 // store the local string length into symbol storage
+        }
+        PhpType::Void => {
+            load_at_offset_scratch(emitter, local_reg, offset, symbol_reg);             // load the local null sentinel from its frame slot
+            emit_store_reg_to_symbol(emitter, local_reg, symbol, 0);                    // store the local null sentinel into symbol storage
+        }
+        _ => {
+            load_at_offset_scratch(emitter, local_reg, offset, symbol_reg);             // load the local scalar or pointer-like value from its frame slot
+            emit_store_reg_to_symbol(emitter, local_reg, symbol, 0);                    // store the local scalar or pointer-like value into symbol storage
+        }
+    }
+}
+
+/// Loads a value from a static/global symbol into a local frame slot.
+/// Reads from `symbol` at `byte_offset` and writes it to `offset` relative to
+/// the frame pointer.  Dispatches on `ty` to handle Float, Str (pointer +
+/// length), Void (null sentinel), and scalar/pointer types.
+pub fn emit_load_symbol_to_local_slot(
+    emitter: &mut Emitter,
+    symbol: &str,
+    ty: &PhpType,
+    offset: usize,
+) {
+    let local_reg = secondary_scratch_reg(emitter);
+    let local_hi_reg = tertiary_scratch_reg(emitter);
+    match ty.codegen_repr() {
+        PhpType::Float => {
+            emit_load_symbol_to_reg(emitter, float_result_reg(emitter), symbol, 0);        // load the float value from symbol storage
+            store_at_offset_scratch(emitter, float_result_reg(emitter), offset, local_reg); // write the loaded float value into the local frame slot
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = string_result_regs(emitter);
+            emit_load_symbol_to_reg(emitter, ptr_reg, symbol, 0);                       // load the string pointer from symbol storage
+            emit_load_symbol_to_reg(emitter, len_reg, symbol, 8);                       // load the string length from symbol storage
+            store_at_offset_scratch(emitter, ptr_reg, offset, local_reg);               // write the loaded string pointer into the local frame slot
+            store_at_offset_scratch(emitter, len_reg, offset - 8, local_hi_reg);        // write the loaded string length into the paired local frame slot
+        }
+        PhpType::Void => {
+            emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);       // load the null sentinel from symbol storage
+            store_at_offset_scratch(emitter, int_result_reg(emitter), offset, local_reg); // write the loaded null sentinel into the local frame slot
+        }
+        _ => {
+            emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);       // load the scalar or pointer-like value from symbol storage
+            store_at_offset_scratch(emitter, int_result_reg(emitter), offset, local_reg); // write the loaded scalar or pointer-like value into the local frame slot
+        }
+    }
+}
+
+/// Materializes the address of a local/internal symbol into `dest`.
+/// Uses ADRP+ADD on AArch64 (page-relative) and LEA with RIP-relative
+/// addressing on x86_64.  The symbol must be defined in the current module's
+/// data section.
+pub fn emit_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
+    if emitter.pic_data_refs {
+        emit_extern_symbol_address(emitter, dest, symbol);
+        return;
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.adrp(dest, &format!("{}", symbol));                                  // load the page of the requested symbol storage
+            emitter.add_lo12(dest, dest, &format!("{}", symbol));                       // resolve the exact address of the requested symbol storage
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("lea {}, [rip + {}]", dest, symbol));  // materialize the symbol address through a RIP-relative LEA
+        }
+    }
+}
+
+/// Materializes the address of an external/global symbol into `dest`.
+/// Resolves the symbol through the GOT on both targets: ADRP+GOT on AArch64
+/// and MOVQ with GOTPCREL on x86_64.  Used for symbols defined outside the
+/// current translation unit.
+pub fn emit_extern_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.adrp_got(dest, symbol);                                          // load the GOT page that points at the requested extern symbol
+            emitter.ldr_got_lo12(dest, dest, symbol);                                // resolve the GOT entry into the actual extern symbol address
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {}, QWORD PTR {}@GOTPCREL[rip]", dest, symbol)); // materialize the extern symbol address through the ELF GOTPCREL slot
+        }
+    }
+}
+
+/// Loads a value from an external symbol into `reg`.
+/// First resolves the extern symbol address via the GOT, then performs a
+/// load from `byte_offset` into `reg`.  Used for reading global variables
+/// defined in external libraries or other compilation units.
+pub fn emit_load_extern_symbol_to_reg(
+    emitter: &mut Emitter,
+    reg: &str,
+    symbol: &str,
+    byte_offset: usize,
+) {
+    let scratch = symbol_scratch_reg(emitter);
+    emit_extern_symbol_address(emitter, scratch, symbol);
+    emit_load_from_address(emitter, reg, scratch, byte_offset);
+}
+
+/// Stores the contents of `reg` into an external symbol at a byte offset.
+/// First resolves the extern symbol address via the GOT, then performs a
+/// store from `reg` to `byte_offset`.  Used for writing to global variables
+/// defined in external libraries or other compilation units.
+pub fn emit_store_reg_to_extern_symbol(
+    emitter: &mut Emitter,
+    reg: &str,
+    symbol: &str,
+    byte_offset: usize,
+) {
+    let scratch = symbol_scratch_reg(emitter);
+    emit_extern_symbol_address(emitter, scratch, symbol);
+    emit_store_to_address(emitter, reg, scratch, byte_offset);
+}
+
+/// Loads a value from a local/internal symbol into `reg`.
+/// Uses a temporary scratch register (x9 on AArch64) to compute the symbol
+/// address, then loads from `byte_offset`.  On x86_64 uses RIP-relative
+/// addressing directly when offset is zero.  Dispatches on register type
+/// for float vs. integer moves on x86_64.
+///
+/// In PIC mode the x86_64 path keeps the register footprint identical to the
+/// non-PIC emission: integer destinations resolve the GOT entry through the
+/// destination register itself, and float destinations borrow r11 behind a
+/// push/pop so call sites never see an extra clobbered register.
+pub fn emit_load_symbol_to_reg(
+    emitter: &mut Emitter,
+    reg: &str,
+    symbol: &str,
+    byte_offset: usize,
+) {
+    if emitter.pic_data_refs {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emit_load_extern_symbol_to_reg(emitter, reg, symbol, byte_offset);
+            }
+            Arch::X86_64 => {
+                if is_float_register(reg) {
+                    emitter.instruction("push r11");                            // preserve the borrowed GOT scratch register around the float load
+                    emit_extern_symbol_address(emitter, "r11", symbol);
+                    emit_load_from_address(emitter, reg, "r11", byte_offset);
+                    emitter.instruction("pop r11");                             // restore the borrowed GOT scratch register after the float load
+                } else {
+                    emit_extern_symbol_address(emitter, reg, symbol);
+                    emit_load_from_address(emitter, reg, reg, byte_offset);
+                }
+            }
+        }
+        return;
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emit_symbol_address(emitter, "x9", symbol);
+            if byte_offset == 0 {
+                emitter.instruction(&format!("ldr {}, [x9]", reg));             // load the symbol payload directly from its base address
+            } else {
+                emitter.instruction(&format!("ldr {}, [x9, #{}]", reg, byte_offset)); // load the symbol payload from the requested byte offset
+            }
+        }
+        Arch::X86_64 => {
+            let scratch = symbol_scratch_reg(emitter);
+            if byte_offset == 0 {
+                if is_float_register(reg) {
+                    emitter.instruction(&format!("movsd {}, QWORD PTR [rip + {}]", reg, symbol)); // load the floating-point symbol payload through RIP-relative addressing
+                } else {
+                    emitter.instruction(&format!("mov {}, QWORD PTR [rip + {}]", reg, symbol)); // load the integer or pointer symbol payload through RIP-relative addressing
+                }
+            } else {
+                emit_symbol_address(emitter, scratch, symbol);
+                if is_float_register(reg) {
+                    emitter.instruction(&format!("movsd {}, QWORD PTR [{} + {}]", reg, scratch, byte_offset)); // load the floating-point symbol payload from a non-zero byte offset
+                } else {
+                    emitter.instruction(&format!("mov {}, QWORD PTR [{} + {}]", reg, scratch, byte_offset)); // load the integer or pointer symbol payload from a non-zero byte offset
+                }
+            }
+        }
+    }
+}
+
+/// Stores the contents of `reg` into a local/internal symbol at a byte offset.
+/// Uses a temporary scratch register (x9 on AArch64) to compute the symbol
+/// address, then stores at `byte_offset`.  On x86_64 uses RIP-relative
+/// addressing directly when offset is zero.  Dispatches on register type
+/// for float vs. integer moves on x86_64.
+///
+/// In PIC mode the x86_64 path needs a general-purpose register to hold the
+/// GOT-resolved address; it borrows r11 (or r10 when r11 is the stored value)
+/// behind a push/pop so call sites never see an extra clobbered register.
+pub fn emit_store_reg_to_symbol(
+    emitter: &mut Emitter,
+    reg: &str,
+    symbol: &str,
+    byte_offset: usize,
+) {
+    if emitter.pic_data_refs {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emit_store_reg_to_extern_symbol(emitter, reg, symbol, byte_offset);
+            }
+            Arch::X86_64 => {
+                let scratch = if reg == "r11" { "r10" } else { "r11" };
+                emitter.instruction(&format!("push {}", scratch));              // preserve the borrowed GOT scratch register around the store
+                emit_extern_symbol_address(emitter, scratch, symbol);
+                emit_store_to_address(emitter, reg, scratch, byte_offset);
+                emitter.instruction(&format!("pop {}", scratch));               // restore the borrowed GOT scratch register after the store
+            }
+        }
+        return;
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emit_symbol_address(emitter, "x9", symbol);
+            if byte_offset == 0 {
+                emitter.instruction(&format!("str {}, [x9]", reg));             // store the register payload directly into the symbol base slot
+            } else {
+                emitter.instruction(&format!("str {}, [x9, #{}]", reg, byte_offset)); // store the register payload into the requested symbol byte offset
+            }
+        }
+        Arch::X86_64 => {
+            let scratch = symbol_scratch_reg(emitter);
+            if byte_offset == 0 {
+                if is_float_register(reg) {
+                    emitter.instruction(&format!("movsd QWORD PTR [rip + {}], {}", symbol, reg)); // store the floating-point payload directly into RIP-relative symbol storage
+                } else {
+                    emitter.instruction(&format!("mov QWORD PTR [rip + {}], {}", symbol, reg)); // store the integer or pointer payload directly into RIP-relative symbol storage
+                }
+            } else {
+                emit_symbol_address(emitter, scratch, symbol);
+                if is_float_register(reg) {
+                    emitter.instruction(&format!("movsd QWORD PTR [{} + {}], {}", scratch, byte_offset, reg)); // store the floating-point payload into a non-zero symbol byte offset
+                } else {
+                    emitter.instruction(&format!("mov QWORD PTR [{} + {}], {}", scratch, byte_offset, reg)); // store the integer or pointer payload into a non-zero symbol byte offset
+                }
+            }
+        }
+    }
+}
+
+/// Stores the architectural zero register (xzr / zero) into a symbol slot.
+/// On AArch64 this is a single STR using xzr; on x86_64 it emits a MOV
+/// immediate zero.  Used to initialize symbol storage to null/zero without
+/// a separate load-from-register step.
+pub fn emit_store_zero_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offset: usize) {
+    if emitter.pic_data_refs {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emit_store_reg_to_extern_symbol(emitter, "xzr", symbol, byte_offset);
+            }
+            Arch::X86_64 => {
+                emitter.instruction("push r11");                                // preserve the borrowed GOT scratch register around the zero store
+                emit_extern_symbol_address(emitter, "r11", symbol);
+                if byte_offset == 0 {
+                    emitter.instruction("mov QWORD PTR [r11], 0");              // zero the symbol base slot through the GOT-resolved address
+                } else {
+                    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", byte_offset)); // zero the requested symbol byte offset through the GOT-resolved address
+                }
+                emitter.instruction("pop r11");                                 // restore the borrowed GOT scratch register after the zero store
+            }
+        }
+        return;
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emit_store_reg_to_symbol(emitter, "xzr", symbol, byte_offset);              // store architectural zero directly into symbol-backed storage
+        }
+        Arch::X86_64 => {
+            let scratch = symbol_scratch_reg(emitter);
+            if byte_offset == 0 {
+                emitter.instruction(&format!("mov QWORD PTR [rip + {}], 0", symbol)); // zero the symbol base slot through RIP-relative addressing
+            } else {
+                emit_symbol_address(emitter, scratch, symbol);
+                emitter.instruction(&format!("mov QWORD PTR [{} + {}], 0", scratch, byte_offset)); // zero the requested symbol byte offset through the computed address
+            }
+        }
+    }
+}
+
+/// Loads a 64-bit value from a symbol using the AArch64 paged addressing idiom:
+/// `adrp addr_reg, sym` followed by `ldr dest, [addr_reg, :lo12:sym]` (two
+/// instructions, matching the historical hand-written emission). In PIC mode
+/// the GOT entry is resolved into `addr_reg` first and the payload loaded
+/// through it. `addr_reg` is clobbered in both modes; `dest` may be an integer
+/// or floating-point register. AArch64-only: x86_64 callers use
+/// `emit_load_symbol_to_reg`, which already covers both modes there.
+pub fn emit_load_symbol_to_reg_via_page(
+    emitter: &mut Emitter,
+    dest: &str,
+    addr_reg: &str,
+    symbol: &str,
+) {
+    emitter
+        .target
+        .ensure_aarch64_backend("paged symbol load emission");
+    if emitter.pic_data_refs {
+        emitter.adrp_got(addr_reg, symbol);                                     // load the GOT page that points at the requested symbol
+        emitter.ldr_got_lo12(addr_reg, addr_reg, symbol);                       // resolve the GOT entry into the symbol address
+        emitter.instruction(&format!("ldr {}, [{}]", dest, addr_reg));          // load the symbol payload through the GOT-resolved address
+    } else {
+        emitter.adrp(addr_reg, symbol);                                         // load the page address that contains the symbol storage
+        emitter.ldr_lo12(dest, addr_reg, symbol);                               // load the symbol payload from its page offset
+    }
+}
+
+/// Stores a small integer immediate into a local/internal symbol slot.
+/// On x86_64 non-PIC this is a single RIP-relative MOV with an immediate
+/// operand; in PIC mode the GOT-resolved address is borrowed into r11 behind
+/// a push/pop. On AArch64 the immediate is materialized in x10 and stored
+/// through x9 (both clobbered).
+pub fn emit_store_imm_to_symbol(
+    emitter: &mut Emitter,
+    symbol: &str,
+    byte_offset: usize,
+    imm: i64,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emit_symbol_address(emitter, "x9", symbol);                         // resolve the symbol address into the x9 scratch register
+            emit_load_int_immediate(emitter, "x10", imm);
+            if byte_offset == 0 {
+                emitter.instruction("str x10, [x9]");                           // store the immediate payload into the symbol base slot
+            } else {
+                emitter.instruction(&format!("str x10, [x9, #{}]", byte_offset)); // store the immediate payload into the requested symbol byte offset
+            }
+        }
+        Arch::X86_64 => {
+            let slot_suffix = if byte_offset == 0 {
+                String::new()
+            } else {
+                format!(" + {}", byte_offset)
+            };
+            if emitter.pic_data_refs {
+                emitter.instruction("push r11");                                // preserve the borrowed GOT scratch register around the immediate store
+                emit_extern_symbol_address(emitter, "r11", symbol);
+                emitter.instruction(&format!("mov QWORD PTR [r11{}], {}", slot_suffix, imm)); // store the immediate payload through the GOT-resolved address
+                emitter.instruction("pop r11");                                 // restore the borrowed GOT scratch register after the immediate store
+            } else {
+                let inst = format!("mov QWORD PTR [rip + {}{}], {}", symbol, slot_suffix, imm);
+                emitter.instruction(&inst);                                     // store the immediate payload through RIP-relative addressing
+            }
+        }
+    }
+}
+
+/// Compares `reg` against the 64-bit value stored at a local/internal symbol,
+/// setting the condition flags for a following conditional branch.
+/// On x86_64 non-PIC this is a single memory-operand CMP; in PIC mode the
+/// GOT-resolved address is held in a borrowed scratch register (r11, or r10
+/// when `reg` is r11) protected by push/pop, which do not alter flags.
+/// On AArch64 the symbol payload is loaded through x9 (clobbered) and compared
+/// register-to-register.
+pub fn emit_cmp_reg_to_symbol(emitter: &mut Emitter, reg: &str, symbol: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emit_load_symbol_to_reg(emitter, "x9", symbol, 0);                  // load the symbol payload into the x9 scratch register
+            emitter.instruction(&format!("cmp {}, x9", reg));                   // compare the register payload against the symbol payload
+        }
+        Arch::X86_64 => {
+            if emitter.pic_data_refs {
+                let scratch = if reg == "r11" { "r10" } else { "r11" };
+                emitter.instruction(&format!("push {}", scratch));              // preserve the borrowed GOT scratch register (push leaves flags intact)
+                emit_extern_symbol_address(emitter, scratch, symbol);
+                emitter.instruction(&format!("cmp {}, QWORD PTR [{}]", reg, scratch)); // compare the register payload against the GOT-resolved symbol payload
+                emitter.instruction(&format!("pop {}", scratch));               // restore the borrowed GOT scratch register (pop leaves flags intact)
+            } else {
+                emitter.instruction(&format!("cmp {}, QWORD PTR [rip + {}]", reg, symbol)); // compare the register payload against the RIP-relative symbol payload
+            }
+        }
+    }
+}
+
+/// Decrements the 64-bit counter stored at a local/internal symbol by one.
+/// On x86_64 non-PIC this is a single memory-operand DEC; in PIC mode the
+/// GOT-resolved address is held in r11 behind a push/pop. On AArch64 the
+/// counter is loaded through x9/x10 (both clobbered), decremented, and stored
+/// back.
+pub fn emit_dec_symbol(emitter: &mut Emitter, symbol: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emit_symbol_address(emitter, "x9", symbol);                         // resolve the symbol address into the x9 scratch register
+            emitter.instruction("ldr x10, [x9]");                               // load the current counter value
+            emitter.instruction("sub x10, x10, #1");                            // decrement the counter by one
+            emitter.instruction("str x10, [x9]");                               // store the decremented counter back into symbol storage
+        }
+        Arch::X86_64 => {
+            if emitter.pic_data_refs {
+                emitter.instruction("push r11");                                // preserve the borrowed GOT scratch register around the decrement
+                emit_extern_symbol_address(emitter, "r11", symbol);
+                emitter.instruction("dec QWORD PTR [r11]");                     // decrement the counter through the GOT-resolved address
+                emitter.instruction("pop r11");                                 // restore the borrowed GOT scratch register after the decrement
+            } else {
+                emitter.instruction(&format!("dec QWORD PTR [rip + {}]", symbol)); // decrement the counter through RIP-relative addressing
+            }
+        }
+    }
+}
+
+/// Loads a symbol's value and places it into the appropriate result registers.
+/// Reads from `symbol` at offset 0 (and 8 for strings) and places the value
+/// into the target's canonical result registers: float_result_reg for Float,
+/// string_result_regs for Str, tagged-scalar result registers for TaggedScalar,
+/// int_result_reg otherwise. Used to return a symbol's value as a call result.
+pub fn emit_load_symbol_to_result(emitter: &mut Emitter, symbol: &str, ty: &PhpType) {
+    match ty.codegen_repr() {
+        PhpType::Float => {
+            emit_load_symbol_to_reg(emitter, float_result_reg(emitter), symbol, 0);     // load the float payload from symbol storage into the result register
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = string_result_regs(emitter);
+            emit_load_symbol_to_reg(emitter, ptr_reg, symbol, 0);                       // load the string pointer from symbol storage into the result register pair
+            emit_load_symbol_to_reg(emitter, len_reg, symbol, 8);                       // load the string length from symbol storage into the result register pair
+        }
+        PhpType::Void => {
+            emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);       // load the null sentinel from symbol storage into the result register
+        }
+        PhpType::TaggedScalar => {
+            emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);       // load the tagged scalar payload from symbol storage
+            emit_load_symbol_to_reg(
+                emitter,
+                crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter),
+                symbol,
+                8,
+            );                                                                          // load the tagged scalar tag from symbol storage
+        }
+        _ => {
+            emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);       // load the scalar or pointer-like payload from symbol storage into the result register
+        }
+    }
+}
+
+/// Stores the current result registers into a static/global symbol.
+/// If `release_previous` is true, first loads the old symbol value and
+/// releases it: strings call `__rt_heap_free_safe`, refcounted types call
+/// `emit_decref_if_refcounted`.  Incoming results are preserved on the stack
+/// during the release call. Handles Float, Str (pointer + length pair),
+/// TaggedScalar (payload + tag pair), Void (null sentinel), and scalar/pointer types.
+pub fn emit_store_result_to_symbol(
+    emitter: &mut Emitter,
+    symbol: &str,
+    ty: &PhpType,
+    release_previous: bool,
+) {
+    let ty = ty.codegen_repr();
+    if release_previous {
+        if matches!(ty, PhpType::Str) {
+            let (ptr_reg, len_reg) = string_result_regs(emitter);
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // preserve the incoming string result while releasing the previous symbol payload
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("push {}", ptr_reg));          // preserve the incoming string pointer result while releasing the previous symbol payload
+                    emitter.instruction(&format!("push {}", len_reg));          // preserve the incoming string length result while releasing the previous symbol payload
+                }
+            }
+            emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);
+            emit_call_label(emitter, "__rt_heap_free_safe");                             // release the previous string allocation before overwriting the symbol slot
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("ldp x1, x2, [sp], #16");               // restore the incoming string result after the release helper call
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("pop {}", len_reg));           // restore the incoming string length result after the release helper call
+                    emitter.instruction(&format!("pop {}", ptr_reg));           // restore the incoming string pointer result after the release helper call
+                }
+            }
+        } else if ty.is_refcounted() {
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("str x0, [sp, #-16]!");                 // preserve the incoming heap pointer while decreffing the previous symbol payload
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("push {}", int_result_reg(emitter))); // preserve the incoming heap pointer while decreffing the previous symbol payload
+                }
+            }
+            emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);
+            emit_decref_if_refcounted(emitter, &ty);
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("ldr x0, [sp], #16");                   // restore the incoming heap pointer after decreffing the previous payload
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("pop {}", int_result_reg(emitter))); // restore the incoming heap pointer after decreffing the previous payload
+                }
+            }
+        }
+    }
+
+    match ty {
+        PhpType::Float => {
+            emit_store_reg_to_symbol(emitter, float_result_reg(emitter), symbol, 0);    // store the float result into symbol storage
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = string_result_regs(emitter);
+            emit_store_reg_to_symbol(emitter, ptr_reg, symbol, 0);                      // store the string pointer result into symbol storage
+            emit_store_reg_to_symbol(emitter, len_reg, symbol, 8);                      // store the string length result into symbol storage
+        }
+        PhpType::Void => {
+            let null_reg = secondary_scratch_reg(emitter);
+            emit_load_int_immediate(emitter, null_reg, NULL_SENTINEL);
+            emit_store_reg_to_symbol(emitter, null_reg, symbol, 0);                     // store the null sentinel result into symbol storage
+        }
+        PhpType::TaggedScalar => {
+            emit_store_reg_to_symbol(emitter, int_result_reg(emitter), symbol, 0);      // store the tagged scalar payload into symbol storage
+            emit_store_reg_to_symbol(
+                emitter,
+                crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter),
+                symbol,
+                8,
+            );                                                                          // store the tagged scalar tag into symbol storage
+        }
+        _ => {
+            emit_store_reg_to_symbol(emitter, int_result_reg(emitter), symbol, 0);      // store the scalar or pointer-like result into symbol storage
+        }
+    }
+}

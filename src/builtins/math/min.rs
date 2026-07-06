@@ -11,8 +11,8 @@
 //! - `min_args: 2` enforces the legacy requirement that at least two values be provided.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -49,5 +49,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers a `min` call by dispatching to the shared min/max emitter with `want_max = false`.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::math::lower_min_max(ctx, inst, false)
+    crate::codegen::lower_inst::builtins::math::lower_min_max(ctx, inst, false)
 }

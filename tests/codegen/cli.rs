@@ -9,6 +9,37 @@
 
 use crate::support::*;
 
+/// Verifies the removed legacy AST backend flag fails before compilation starts.
+#[test]
+fn test_cli_ast_backend_is_unsupported() {
+    let dir = make_cli_test_dir("elephc_cli_ast_backend");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1;").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--ast-backend")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI with --ast-backend");
+
+    assert!(
+        !output.status.success(),
+        "--ast-backend should be rejected"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--ast-backend is no longer supported"),
+        "expected unsupported backend diagnostic, got stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !dir.join("main.s").exists(),
+        "--ast-backend failure should not emit assembly"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--check` stops after type-checking and produces "Checked" output
 /// without emitting any assembly (.s), object (.o), or binary files.
 #[test]

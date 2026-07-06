@@ -1,0 +1,45 @@
+//! Purpose:
+//! Emits PHP `rawurldecode` string transformation or formatting calls.
+//! Marshals string/scalar arguments into runtime helpers that allocate returned PHP strings.
+//!
+//! Called from:
+//! - `crate::codegen_support::builtins::strings::emit()`.
+//!
+//! Key details:
+//! - Returned string pointer/length pairs must be treated as owned runtime values when the helper allocates.
+
+use crate::codegen_support::context::Context;
+use crate::codegen_support::data_section::DataSection;
+use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::abi;
+use crate::parser::ast::Expr;
+use crate::types::PhpType;
+
+/// Emits the `rawurldecode` builtin call.
+///
+/// Arguments:
+/// - `args[0]`: the string to decode (evaluated and pushed as the runtime argument)
+///
+/// Behavior:
+/// - Emits `args[0]` expression to obtain the source string.
+/// - Calls `__rt_urldecode` runtime helper which percent-decodes the string.
+/// - The helper allocates and returns a new PHP-owned string; the caller receives
+///   ownership of the returned value.
+///
+/// Returns:
+/// - `PhpType::Str` indicating the result is a PHP string type.
+pub fn emit(
+    _name: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    emitter.comment("rawurldecode()");
+    // Coerce the operand to a string in the string ABI registers via emit_string_arg, so a
+    // Mixed argument is cast through __rt_mixed_cast_string instead of leaving a boxed cell in
+    // the result register with stale string registers.
+    super::args::emit_string_arg(&args[0], emitter, ctx, data);
+    abi::emit_call_label(emitter, "__rt_urldecode");                            // rawurldecode() currently reuses the shared target-aware percent-decoder runtime helper
+    Some(PhpType::Str)
+}

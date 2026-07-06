@@ -1,0 +1,317 @@
+//! Purpose:
+//! Lowers prefix positional elements produced by spread arrays before named arguments.
+//! Works with the shared call-argument plan to preserve PHP named-argument semantics.
+//!
+//! Called from:
+//! - `crate::codegen_support::expr::calls::args::named`
+//!
+//! Key details:
+//! - Side effects occur in source order, while final argument materialization follows parameter and ABI order.
+
+use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::{abi, context::Context, data_section::DataSection};
+use crate::parser::ast::Expr;
+use crate::types::{PhpType};
+
+use super::temps::source_temp_offset;
+use super::super::{
+    array_element_stride, emit_array_length_bounds_check, emit_hash_lookup_for_param_or_index,
+    emit_named_spread_duplicate_abort, emit_named_spread_length_abort,
+    load_array_element_to_result, push_expr_arg, push_loaded_array_element_arg,
+    push_loaded_hash_value_arg, spread_source_elem_ty,
+};
+
+/// Emits a bounds check for the positional prefix length before named spread args.
+pub(super) fn emit_prefix_array_length_check(
+    prefix_temp_idx: usize,
+    source_temp_types: &[PhpType],
+    min_len: usize,
+    max_len: Option<usize>,
+    max_len_param_name: Option<&str>,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    let ok_label = ctx.next_label("named_prefix_len_ok");
+    let underflow_label = ctx.next_label("named_prefix_len_underflow");
+    let overflow_label = ctx.next_label("named_prefix_len_overflow");
+    emitter.comment("validate named-argument positional prefix length");
+    let prefix_offset = source_temp_offset(source_temp_types, prefix_temp_idx, 0);
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "x8", prefix_offset);
+            emitter.instruction("ldr x9, [x8]");                                // load the evaluated positional-prefix array length
+            emit_array_length_bounds_check(
+                "x9",
+                min_len,
+                max_len,
+                &underflow_label,
+                &overflow_label,
+                &ok_label,
+                emitter,
+            );
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "r8", prefix_offset);
+            emitter.instruction("mov r10, QWORD PTR [r8]");                     // load the evaluated positional-prefix array length
+            emit_array_length_bounds_check(
+                "r10",
+                min_len,
+                max_len,
+                &underflow_label,
+                &overflow_label,
+                &ok_label,
+                emitter,
+            );
+        }
+    }
+    emitter.label(&underflow_label);
+    emit_named_spread_length_abort(emitter, data);
+    emitter.label(&overflow_label);
+    if let Some(param_name) = max_len_param_name {
+        emit_named_spread_duplicate_abort(emitter, data, param_name);
+    } else {
+        emit_named_spread_length_abort(emitter, data);
+    }
+    emitter.label(&ok_label);
+}
+
+/// Checks dynamic associative spread prefixes for numeric keys that would fill
+/// parameters later assigned by explicit named arguments.
+pub(super) fn emit_prefix_duplicate_named_checks(
+    prefix_temp_idx: usize,
+    source_temp_types: &[PhpType],
+    duplicate_params: &[(usize, &str)],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    if duplicate_params.is_empty()
+        || !matches!(source_temp_types[prefix_temp_idx], PhpType::AssocArray { .. })
+    {
+        return;
+    }
+
+    let prefix_offset = source_temp_offset(source_temp_types, prefix_temp_idx, 0);
+    for (param_idx, param_name) in duplicate_params {
+        let ok_label = ctx.next_label("named_prefix_duplicate_ok");
+        let fail_label = ctx.next_label("named_prefix_duplicate_fail");
+        emitter.comment("validate named-argument prefix duplicate");
+        match emitter.target.arch {
+            crate::codegen_support::platform::Arch::AArch64 => {
+                abi::emit_load_temporary_stack_slot(emitter, "x8", prefix_offset);
+                emitter.instruction("mov x0, x8");                              // pass the associative prefix hash to the numeric-key duplicate probe
+                abi::emit_load_int_immediate(emitter, "x1", *param_idx as i64);
+                abi::emit_load_int_immediate(emitter, "x2", -1);
+                abi::emit_call_label(emitter, "__rt_hash_get");
+            }
+            crate::codegen_support::platform::Arch::X86_64 => {
+                abi::emit_load_temporary_stack_slot(emitter, "r8", prefix_offset);
+                emitter.instruction("mov rdi, r8");                             // pass the associative prefix hash to the numeric-key duplicate probe
+                abi::emit_load_int_immediate(emitter, "rsi", *param_idx as i64);
+                abi::emit_load_int_immediate(emitter, "rdx", -1);
+                abi::emit_call_label(emitter, "__rt_hash_get");
+            }
+        }
+        abi::emit_branch_if_int_result_nonzero(emitter, &fail_label);
+        abi::emit_jump(emitter, &ok_label);
+        emitter.label(&fail_label);
+        emit_named_spread_duplicate_abort(emitter, data, param_name);
+        emitter.label(&ok_label);
+    }
+}
+
+/// Pushes a prefix array element as a named call argument, with optional default.
+pub(super) fn push_prefix_array_element_arg(
+    prefix_temp_idx: usize,
+    element_idx: usize,
+    param_name: Option<&str>,
+    default: Option<&Expr>,
+    target_ty: Option<&PhpType>,
+    source_temp_types: &[PhpType],
+    final_pushed_bytes: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    if matches!(source_temp_types[prefix_temp_idx], PhpType::AssocArray { .. }) {
+        return push_assoc_prefix_array_element_arg(
+            prefix_temp_idx,
+            element_idx,
+            param_name,
+            default,
+            target_ty,
+            source_temp_types,
+            final_pushed_bytes,
+            emitter,
+            ctx,
+            data,
+        );
+    }
+
+    if let Some(default) = default {
+        let use_default = ctx.next_label("named_prefix_default");
+        let done = ctx.next_label("named_prefix_done");
+        emit_branch_if_prefix_element_missing(
+            prefix_temp_idx,
+            element_idx,
+            source_temp_types,
+            final_pushed_bytes,
+            &use_default,
+            emitter,
+        );
+        let loaded_ty = push_existing_prefix_array_element_arg(
+            prefix_temp_idx,
+            element_idx,
+            target_ty,
+            source_temp_types,
+            final_pushed_bytes,
+            emitter,
+            ctx,
+            data,
+        );
+        abi::emit_jump(emitter, &done);
+        emitter.label(&use_default);
+        let default_ty = push_expr_arg(default, target_ty, emitter, ctx, data);
+        emitter.label(&done);
+        return super::super::super::super::widen_codegen_type(&loaded_ty, &default_ty);
+    }
+
+    push_existing_prefix_array_element_arg(
+        prefix_temp_idx,
+        element_idx,
+        target_ty,
+        source_temp_types,
+        final_pushed_bytes,
+        emitter,
+        ctx,
+        data,
+    )
+}
+
+/// Emits a conditional branch to `label` when the positional-prefix array is too short
+/// to contain `element_idx` (i.e., when prefix length <= element index).
+///
+/// Loads the prefix array length from the temporary stack slot, compares it against
+/// `element_idx`, and jumps to `label` via `b.le` (ARM64) or `jle` (x86_64) if the
+/// element does not exist and a default value should be used instead.
+fn emit_branch_if_prefix_element_missing(
+    prefix_temp_idx: usize,
+    element_idx: usize,
+    source_temp_types: &[PhpType],
+    final_pushed_bytes: usize,
+    label: &str,
+    emitter: &mut Emitter,
+) {
+    let prefix_offset = source_temp_offset(source_temp_types, prefix_temp_idx, final_pushed_bytes);
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "x8", prefix_offset);
+            emitter.instruction("ldr x9, [x8]");                                // load prefix length before choosing spread element or default
+            abi::emit_load_int_immediate(emitter, "x10", element_idx as i64);
+            emitter.instruction("cmp x9, x10");                                 // check whether this optional prefix element exists
+            emitter.instruction(&format!("b.le {}", label));                    // use the default when the prefix is too short for this slot
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "r8", prefix_offset);
+            emitter.instruction("mov r10, QWORD PTR [r8]");                     // load prefix length before choosing spread element or default
+            abi::emit_load_int_immediate(emitter, "r11", element_idx as i64);
+            emitter.instruction("cmp r10, r11");                                // check whether this optional prefix element exists
+            emitter.instruction(&format!("jle {}", label));                     // use the default when the prefix is too short for this slot
+        }
+    }
+}
+
+/// Loads the element at `element_idx` from a positional-prefix array and pushes it as a
+/// call argument.
+///
+/// Uses `array_element_stride` to compute the byte offset into the payload region
+/// (skipping the 24-byte array header). Requires the element to exist; does not handle
+/// defaults or missing elements. Returns the PHP type of the loaded element.
+fn push_existing_prefix_array_element_arg(
+    prefix_temp_idx: usize,
+    element_idx: usize,
+    target_ty: Option<&PhpType>,
+    source_temp_types: &[PhpType],
+    final_pushed_bytes: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let prefix_ty = source_temp_types[prefix_temp_idx].clone();
+    let source_elem_ty = spread_source_elem_ty(&prefix_ty);
+    let elem_stride = array_element_stride(&source_elem_ty);
+    let prefix_offset = source_temp_offset(source_temp_types, prefix_temp_idx, final_pushed_bytes);
+    let array_data_reg = match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => "x20",
+        crate::codegen_support::platform::Arch::X86_64 => "r10",
+    };
+    abi::emit_load_temporary_stack_slot(emitter, array_data_reg, prefix_offset);
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("add {}, {}, #24", array_data_reg, array_data_reg)); // address the positional-prefix array payload
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("add {}, 24", array_data_reg));        // address the positional-prefix array payload
+        }
+    }
+    load_array_element_to_result(emitter, &source_elem_ty, array_data_reg, element_idx * elem_stride);
+    push_loaded_array_element_arg(&source_elem_ty, target_ty, emitter, ctx, data)
+}
+
+/// Loads and pushes an element from an associative-prefix array as a named call argument.
+///
+/// Performs a hash lookup for `param_name` within the associative-prefix array.
+/// If `default` is provided, returns the loaded value or the default if the key is absent.
+/// If no default is provided and the key is missing, emits a runtime abort (matching PHP
+/// behavior for missing required named arguments from spread arrays).
+///
+/// Returns the widened PHP type resulting from merging the loaded element type with the
+/// default expression type when a default is present.
+#[allow(clippy::too_many_arguments)]
+fn push_assoc_prefix_array_element_arg(
+    prefix_temp_idx: usize,
+    element_idx: usize,
+    param_name: Option<&str>,
+    default: Option<&Expr>,
+    target_ty: Option<&PhpType>,
+    source_temp_types: &[PhpType],
+    final_pushed_bytes: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let PhpType::AssocArray { value, .. } = &source_temp_types[prefix_temp_idx] else {
+        unreachable!("assoc prefix helper requires an associative spread prefix");
+    };
+    let source_elem_ty = *value.clone();
+    let prefix_offset = source_temp_offset(source_temp_types, prefix_temp_idx, final_pushed_bytes);
+    let hash_reg = match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => "x20",
+        crate::codegen_support::platform::Arch::X86_64 => "r12",
+    };
+    abi::emit_load_temporary_stack_slot(emitter, hash_reg, prefix_offset);
+    emit_hash_lookup_for_param_or_index(hash_reg, param_name, element_idx, emitter, ctx, data);
+
+    if let Some(default) = default {
+        let use_default = ctx.next_label("named_assoc_prefix_default");
+        let done = ctx.next_label("named_assoc_prefix_done");
+        abi::emit_branch_if_int_result_zero(emitter, &use_default);
+        let loaded_ty = push_loaded_hash_value_arg(&source_elem_ty, target_ty, emitter, ctx, data);
+        abi::emit_jump(emitter, &done);
+        emitter.label(&use_default);
+        let default_ty = push_expr_arg(default, target_ty, emitter, ctx, data);
+        emitter.label(&done);
+        return super::super::super::super::widen_codegen_type(&loaded_ty, &default_ty);
+    }
+
+    let missing = ctx.next_label("named_assoc_prefix_missing");
+    let done = ctx.next_label("named_assoc_prefix_done");
+    abi::emit_branch_if_int_result_zero(emitter, &missing);
+    let loaded_ty = push_loaded_hash_value_arg(&source_elem_ty, target_ty, emitter, ctx, data);
+    abi::emit_jump(emitter, &done);
+    emitter.label(&missing);
+    emit_named_spread_length_abort(emitter, data);
+    emitter.label(&done);
+    loaded_ty
+}

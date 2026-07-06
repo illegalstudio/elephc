@@ -8,11 +8,11 @@
 //! Key details:
 //! - `check` validates that the argument is a string literal (AOT requirement: the
 //!   constant name must be statically known at compile time).
-//! - `lower` delegates to the module-level `lower_defined` in `src/codegen_ir/lower_inst/builtins.rs`.
+//! - `lower` delegates to the module-level `lower_defined` in `src/codegen/lower_inst/builtins.rs`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
@@ -45,5 +45,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers a `defined` call by delegating to the shared module-level emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::lower_defined(ctx, inst)
+    crate::codegen::lower_inst::builtins::lower_defined(ctx, inst)
 }

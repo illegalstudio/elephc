@@ -101,9 +101,9 @@ mod tests {
 
     /// No-op lowering hook for test probe; does nothing and succeeds.
     fn noop_lower(
-        _c: &mut crate::codegen_ir::context::FunctionContext,
+        _c: &mut crate::codegen::context::FunctionContext,
         _i: &crate::ir::Instruction,
-    ) -> Result<(), crate::codegen_ir::CodegenIrError> {
+    ) -> Result<(), crate::codegen::CodegenIrError> {
         Ok(())
     }
 

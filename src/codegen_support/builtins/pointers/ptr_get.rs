@@ -1,0 +1,41 @@
+//! Purpose:
+//! Emits compiler-extension `ptr_get` pointer operations.
+//! Lowers raw address arithmetic, loads, or stores using the target ABI without PHP runtime boxing.
+//!
+//! Called from:
+//! - `crate::codegen_support::builtins::pointers::emit()`.
+//!
+//! Key details:
+//! - Pointer builtins are elephc extensions and must keep raw memory effects explicit and target-aware.
+
+use crate::codegen_support::context::Context;
+use crate::codegen_support::data_section::DataSection;
+use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::expr::emit_expr;
+use crate::codegen_support::{abi, platform::Arch};
+use crate::parser::ast::Expr;
+use crate::types::PhpType;
+
+/// Emits the `ptr_get` builtin: loads a machine-word (8 bytes) through a pointer.
+/// Checks the pointer is non-null before loading; returns `PhpType::Int`.
+pub fn emit(
+    _name: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    emitter.comment("ptr_get() — dereference pointer");
+    emit_expr(&args[0], emitter, ctx, data);
+    abi::emit_call_label(emitter, "__rt_ptr_check_nonnull");                    // abort with fatal error on null pointer dereference before loading from pointer memory
+    // -- load 8 bytes at the pointer address --
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [x0]");                                // load one machine-word integer payload through the validated pointer on AArch64
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, QWORD PTR [rax]");                    // load one machine-word integer payload through the validated pointer on x86_64
+        }
+    }
+    Some(PhpType::Int)
+}
