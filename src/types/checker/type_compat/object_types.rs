@@ -241,11 +241,13 @@ impl Checker {
                 // PHP's int-backed enum `from()`/`tryFrom()` accepts a numeric string and
                 // coerces it to the integer backing value at runtime: a numeric string with
                 // no matching case throws `ValueError`, a non-numeric string throws
-                // `TypeError`. Accept a string argument here and defer the coercion and error
-                // to codegen instead of rejecting it at compile time (issue #349).
-                let accepts_numeric_string_coercion =
-                    matches!(backing_ty, PhpType::Int) && matches!(arg_ty, PhpType::Str);
-                if !accepts_numeric_string_coercion && !self.type_accepts(backing_ty, &arg_ty) {
+                // `TypeError`. A `Mixed`/dynamic argument (e.g. a `foreach` value or untyped
+                // parameter) coerces on its runtime tag. Accept these here and defer the
+                // coercion and error to codegen instead of rejecting at compile time
+                // (issues #349, #449).
+                let accepts_runtime_coercion = matches!(backing_ty, PhpType::Int)
+                    && matches!(arg_ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_));
+                if !accepts_runtime_coercion && !self.type_accepts(backing_ty, &arg_ty) {
                     return Err(CompileError::new(
                         span,
                         &format!(

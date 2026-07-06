@@ -698,6 +698,8 @@ Pure and backed enums. Every case exposes the read-only `->name` property (the c
 
 Like PHP, an `int`-backed enum's `::from()` / `::tryFrom()` accept a numeric string and coerce it to the integer backing value (`Color::from("2")` returns `Color::Green`). A numeric string with no matching case throws `ValueError`; a non-numeric string (e.g. `"x"`, `"1abc"`, `"0x1"`, `"INF"`, or `"NAN"`) throws `TypeError`, matching PHP's coercive typing.
 
+A dynamically-typed (`mixed`) argument — such as a `foreach` value or an untyped parameter — is also accepted and coerced on its runtime type: an integer or numeric string resolves (or throws `ValueError`), a float truncates, a bool/null coerces, and an array/object/resource/closure throws `TypeError` naming the given type (objects report `object` rather than the class name).
+
 ### Enum methods, constants, and interfaces
 
 Enums may declare instance methods, static methods, constants, and an `implements` clause. Instance methods dispatch on the case singleton, so `$this` is the case:

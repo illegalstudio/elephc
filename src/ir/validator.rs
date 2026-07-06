@@ -274,7 +274,7 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
-        | EnumBackingStringToInt => {
+        | EnumBackingStringToInt | EnumBackingMixedToInt => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
         LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
