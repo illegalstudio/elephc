@@ -574,6 +574,25 @@ fn test_backed_int_enum_from_numeric_string() {
     assert_eq!(out, "LowHigh");
 }
 
+/// Regression for #349: PHP's coercive int parameter rules accept signed,
+/// whitespace-padded, decimal-float, and exponent-form numeric strings for
+/// int-backed enum `from()`, with float strings truncated toward zero.
+#[test]
+fn test_backed_int_enum_from_numeric_string_coercion_forms() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Zero = 0; case One = 1; case Thousand = 1000; }
+        echo Level::from(\" 1 \")->name, \"|\";
+        echo Level::from(\"+1\")->name, \"|\";
+        echo Level::from(\"1.0\")->name, \"|\";
+        echo Level::from(\"1.5\")->name, \"|\";
+        echo Level::from(\"1e3\")->name, \"|\";
+        echo Level::from(\".5\")->name;
+        ",
+    );
+    assert_eq!(out, "One|One|One|One|Thousand|Zero");
+}
+
 /// Regression for #349: `tryFrom()` on an int-backed enum coerces a numeric string and
 /// returns the matching case, or `null` when the coerced value matches no case.
 #[test]
@@ -606,6 +625,26 @@ fn test_backed_int_enum_from_unmatched_numeric_string_throws_value_error() {
     assert_eq!(out, "ValueError:3 is not a valid backing value for enum Level");
 }
 
+/// Regression for #349: negative numeric strings still coerce successfully before
+/// enum lookup, so a missing negative backing value raises `ValueError`, not `TypeError`.
+#[test]
+fn test_backed_int_enum_from_negative_numeric_string_throws_value_error() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        try {
+            Level::from(\"-1\");
+        } catch (ValueError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(
+        out,
+        "ValueError:-1 is not a valid backing value for enum Level"
+    );
+}
+
 /// Regression for #349: a non-numeric string passed to an int-backed enum's `from()`
 /// throws a `TypeError` at runtime with PHP's exact argument-type message, matching
 /// PHP's coercive-typing behavior instead of being accepted or rejected at compile time.
@@ -625,6 +664,40 @@ fn test_backed_int_enum_from_non_numeric_string_throws_type_error() {
         out,
         "TypeError:Level::from(): Argument #1 ($value) must be of type int, string given"
     );
+}
+
+/// Regression for #349: enum int-parameter coercion must reject libc `strtod`
+/// extensions (`0x` hex floats, `INF`/`INFINITY`, and `NAN`) as `TypeError`, even
+/// though the general numeric-string probe used by loose comparison accepts them.
+#[test]
+fn test_backed_int_enum_from_rejects_strtod_only_numeric_forms() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        function mark(string $value) {
+            try {
+                Level::from($value);
+                echo \"ok\";
+            } catch (TypeError $e) {
+                echo \"T\";
+            } catch (ValueError $e) {
+                echo \"V\";
+            }
+            echo \"|\";
+        }
+        mark(\"0x1\");
+        mark(\"0X1\");
+        mark(\"INF\");
+        mark(\"inf\");
+        mark(\"+inf\");
+        mark(\"Infinity\");
+        mark(\"NAN\");
+        mark(\"nan\");
+        mark(\"1abc\");
+        mark(\"\");
+        ",
+    );
+    assert_eq!(out, "T|T|T|T|T|T|T|T|T|T|");
 }
 
 /// Regression for #349: repeatedly coercing a heap-owned numeric string through an
@@ -659,6 +732,27 @@ fn test_backed_int_enum_tryfrom_non_numeric_string_throws_type_error() {
         enum Level: int { case Low = 1; case High = 2; }
         try {
             Level::tryFrom(\"x\");
+        } catch (TypeError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(
+        out,
+        "TypeError:Level::tryFrom(): Argument #1 ($value) must be of type int, string given"
+    );
+}
+
+/// Regression for #349: `tryFrom()` shares the same int-parameter coercion probe as
+/// `from()`, so strtod-only forms such as `NAN` throw `TypeError` instead of returning
+/// `null` or entering enum backing-value lookup.
+#[test]
+fn test_backed_int_enum_tryfrom_rejects_strtod_only_numeric_forms() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        try {
+            Level::tryFrom(\"NAN\");
         } catch (TypeError $e) {
             echo get_class($e), \":\", $e->getMessage();
         }

@@ -239,13 +239,13 @@ fn emit_int_enum_from_scan(
         };
         let next_label = ctx.next_label("enum_from_next");
         abi::emit_load_int_immediate(ctx.emitter, case_value_reg, *value);
+        let compare_inst = format!("cmp {}, {}", result_reg, case_value_reg);
+        ctx.emitter.instruction(&compare_inst);                                 // compare the input integer with this enum backing value
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_value_reg)); // compare the input integer with this enum backing value
                 ctx.emitter.instruction(&format!("b.ne {}", next_label));       // continue scanning when this enum case does not match
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_value_reg)); // compare the input integer with this enum backing value
                 ctx.emitter.instruction(&format!("jne {}", next_label));        // continue scanning when this enum case does not match
             }
         }
@@ -454,9 +454,10 @@ fn emit_throw_value_error_from_string_result_x86_64(ctx: &mut FunctionContext<'_
 
 /// Lowers `Op::EnumBackingStringToInt`: coerces a PHP numeric string operand into the
 /// integer backing value for an int-backed enum `from()`/`tryFrom()`. A valid PHP numeric
-/// string (whitespace-tolerant, float-form truncated toward zero) is converted via
-/// `__rt_str_to_int`; a non-numeric string throws a catchable `TypeError` whose message is
-/// carried by the instruction's data immediate, matching PHP's coercive-typing behavior.
+/// string (whitespace-tolerant, float-form truncated toward zero) is accepted by the
+/// int-parameter coercion probe and converted via `__rt_str_to_int`; a non-numeric string
+/// throws a catchable `TypeError` whose message is carried by the instruction's data
+/// immediate, matching PHP's coercive-typing behavior.
 /// The integer result flows to the enum `from()` call as an ordinary scalar operand, so
 /// the backing scan and its refcount handling run on a plain int (not a heap string).
 pub(super) fn lower_enum_backing_string_to_int(
@@ -480,12 +481,13 @@ pub(super) fn lower_enum_backing_string_to_int(
     // Preserve the input string across the numeric-validity probe, which clobbers the
     // string-result registers.
     abi::emit_push_reg_pair(ctx.emitter, string_ptr_reg, string_len_reg);
-    abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
-    // `__rt_str_to_number` returns 1 in the int-result register for a valid PHP numeric
-    // string, 0 otherwise; a non-numeric string is a PHP `TypeError`.
+    abi::emit_call_label(ctx.emitter, "__rt_str_looks_like_int_for_coercion");
+    // The coercion probe returns 1 in the int-result register for strings PHP accepts
+    // for an int parameter, 0 otherwise; rejected strings throw `TypeError`.
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz {}, {}", int_reg, type_error_label)); // non-numeric string throws TypeError
+            let type_error_branch = format!("cbz {}, {}", int_reg, type_error_label);
+            ctx.emitter.instruction(&type_error_branch);                        // non-numeric string throws TypeError
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {}, {}", int_reg, int_reg)); // set flags from the numeric-validity result

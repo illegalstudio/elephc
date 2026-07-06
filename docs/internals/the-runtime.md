@@ -137,7 +137,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 |---|---|---|---|
 | `__rt_strcopy` | Copy string into concat buffer | `x1`/`x2` | `x1`/`x2` |
 | `__rt_str_to_number` | Parse a PHP numeric string for loose comparison and numeric-string casts | `x1`/`x2` | numeric payload + success flag |
-| `__rt_str_to_int` | Parse a PHP numeric-string prefix (via `__rt_str_to_number`) and truncate toward zero like PHP `(int)` casts | `x1`/`x2` | `x0` (integer) |
+| `__rt_str_looks_like_int_for_coercion` | Validate PHP coercive int-parameter numeric strings while rejecting libc-only `strtod` forms such as `0x`, `INF`, and `NAN` | `x1`/`x2` | `x0` (0 or 1) |
+| `__rt_str_to_int` | Parse a PHP numeric-string prefix with integer/float forms and truncate toward zero like PHP `(int)` casts | `x1`/`x2` | `x0` (integer) |
 | `__rt_str_loose_eq` | Compare two strings using PHP loose-comparison numeric-string rules before falling back to bytes | two strings | `x0` (0 or 1) |
 | `__rt_strtolower` | Lowercase conversion | `x1`/`x2` | `x1`/`x2` |
 | `__rt_strtoupper` | Uppercase conversion | `x1`/`x2` | `x1`/`x2` |
