@@ -133,6 +133,8 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_decref_any_object");                           // objects release through the x86_64 object decref helper
     emitter.instruction("cmp r10, 5");                                          // does this heap-backed payload point at a boxed mixed cell?
     emitter.instruction("je __rt_decref_any_mixed");                            // mixed cells release through the x86_64 mixed decref helper
+    emitter.instruction("cmp r10, 6");                                          // does this heap-backed payload point at a throwable object (issue #448)?
+    emitter.instruction("je __rt_decref_any_object");                           // throwables release through the x86_64 object decref helper like plain objects
     emitter.instruction("jmp __rt_decref_any_done");                            // unknown/raw heap kinds need no release work in the current x86_64 bootstrap runtime
 
     emitter.label("__rt_decref_any_string");

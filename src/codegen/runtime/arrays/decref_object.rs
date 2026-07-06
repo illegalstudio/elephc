@@ -110,8 +110,12 @@ fn emit_decref_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r11d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // ignore foreign pointers that do not carry the elephc x86_64 heap marker
     emitter.instruction("jne __rt_decref_object_skip");                         // only elephc-owned objects participate in x86_64 decref bookkeeping
     emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for a final ownership sanity check
-    emitter.instruction("cmp r10, 4");                                          // is this heap-backed payload really an object instance?
+    emitter.instruction("cmp r10, 4");                                          // is this heap-backed payload a plain object instance?
+    emitter.instruction("je __rt_decref_object_counted");                       // plain objects release through the shared refcount bookkeeping
+    emitter.instruction("cmp r10, 6");                                          // is this heap-backed payload a throwable object instance (issue #448)?
     emitter.instruction("jne __rt_decref_object_skip");                         // other heap kinds must not be released through the object decref helper
+
+    emitter.label("__rt_decref_object_counted");
     emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit object refcount from the uniform heap header
     emitter.instruction("sub r10d, 1");                                         // decrement the object refcount for the releasing x86_64 owner
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented object refcount back into the uniform heap header

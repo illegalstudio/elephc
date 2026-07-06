@@ -283,8 +283,12 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r11d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // ignore foreign pointers that do not carry the elephc x86_64 heap marker
     emitter.instruction("jne __rt_object_free_deep_done");                      // only elephc-owned objects participate in x86_64 deep-free bookkeeping
     emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for a final ownership sanity check
-    emitter.instruction("cmp r10, 4");                                          // is this heap-backed payload really an object instance?
+    emitter.instruction("cmp r10, 4");                                          // is this heap-backed payload a plain object instance?
+    emitter.instruction("je __rt_object_free_deep_kind_ok");                    // plain objects release through the shared deep-free walk
+    emitter.instruction("cmp r10, 6");                                          // is this heap-backed payload a throwable object instance (issue #448)?
     emitter.instruction("jne __rt_object_free_deep_done");                      // other heap kinds must not be released through the object deep-free helper
+
+    emitter.label("__rt_object_free_deep_kind_ok");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving object deep-free spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved object pointer, descriptor pointer, count, and loop index
     emitter.instruction("sub rsp, 32");                                         // reserve local storage for the object pointer, descriptor pointer, property count, and loop index
