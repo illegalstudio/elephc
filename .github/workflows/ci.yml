@@ -584,8 +584,14 @@ jobs:
       - name: Run benchmark suite
         run: python3 scripts/benchmark_suite.py --iterations 3 --warmup 1 --json benchmark-results.json --markdown benchmark-results.md
 
+      - name: Run magician benchmark suite
+        run: python3 scripts/benchmark_magician.py --iterations 3 --warmup 1 --json magician-benchmark-results.json --markdown magician-benchmark-results.md
+
       - name: Publish benchmark summary
-        run: cat benchmark-results.md >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          cat benchmark-results.md >> "$GITHUB_STEP_SUMMARY"
+          printf '\n## Magician eval benchmark suite\n\n' >> "$GITHUB_STEP_SUMMARY"
+          cat magician-benchmark-results.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
@@ -594,3 +600,5 @@ jobs:
           path: |
             benchmark-results.json
             benchmark-results.md
+            magician-benchmark-results.json
+            magician-benchmark-results.md
