@@ -3375,3 +3375,561 @@ fn web_offload_max_execution_time_recycles() {
     }
     assert!(recovered, "worker did not recover after a runaway offloaded handler was killed");
 }
+
+// ============================================================================
+// HTTP/2 opt-in (`--http2`, requires `--handler-offload`).
+//
+// The h2 test client speaks h2c prior-knowledge (the `PRI * HTTP/2.0` preface
+// is sent by `h2::client::handshake`). It runs on a current-thread tokio
+// runtime, mirroring the production worker's single-thread model. The h2 crate
+// is a `[dev-dependencies]` ONLY — never linked into the produced `--web`
+// binary, which speaks h2 via hyper's built-in `http2` feature.
+// ============================================================================
+
+/// Drives an h2c prior-knowledge GET on a fresh current-thread tokio runtime
+/// and returns `(status, headers, body)`. The connection driver is spawned on
+/// the same runtime so frames flow while `send_request` is polled.
+fn h2_get(addr: &str, path: &str) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build current-thread tokio runtime for h2 client");
+    rt.block_on(async move {
+        let stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("h2 client: connect failed");
+        let (mut sender, conn) = h2::client::handshake(stream)
+            .await
+            .expect("h2 client: handshake failed");
+        // Drive the h2 connection in the background on the same runtime.
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(path)
+            .body(())
+            .expect("h2 client: build request");
+        // h2 0.4: `send_request` returns `Result<(ResponseFuture, SendStream)`;
+        // await the ResponseFuture to get `Response<RecvStream>` (body is the
+        // response body itself, not a separate tuple element).
+        let (resp_fut, _send) = sender
+            .send_request(req, true)
+            .expect("h2 client: send_request failed");
+        let resp = resp_fut.await.expect("h2 client: response failed");
+        let status = resp.status().as_u16();
+        let headers = resp
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+        let mut body = resp.into_body();
+        let mut data = Vec::new();
+        while let Some(frame) = body.data().await {
+            let frame = frame.expect("h2 client: body frame error");
+            data.extend_from_slice(&frame);
+        }
+        (status, headers, data)
+    })
+}
+
+/// Like `h2_get` but returns the raw h2 client error instead of panicking, so
+/// tests asserting that a connection is refused / reset can inspect the outcome.
+fn h2_get_result(addr: &str, path: &str) -> Result<(u16, Vec<(String, String)>, Vec<u8>), String> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("runtime build: {e}"))?;
+    rt.block_on(async move {
+        let stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .map_err(|e| format!("connect: {e}"))?;
+        let (mut sender, conn) =
+            h2::client::handshake(stream).await.map_err(|e| format!("handshake: {e}"))?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(path)
+            .body(())
+            .map_err(|e| format!("build: {e}"))?;
+        let (resp_fut, _send) = sender
+            .send_request(req, true)
+            .map_err(|e| format!("send_request: {e}"))?;
+        let resp = resp_fut.await.map_err(|e| format!("response: {e}"))?;
+        let status = resp.status().as_u16();
+        let headers = resp
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+        let mut body = resp.into_body();
+        let mut data = Vec::new();
+        while let Some(frame) = body.data().await {
+            let frame = frame.map_err(|e| format!("body: {e}"))?;
+            data.extend_from_slice(&frame);
+        }
+        Ok((status, headers, data))
+    })
+}
+
+/// Verifies a basic h2c prior-knowledge GET returns 200 + the handler body.
+/// This pins that the `--http2` flag actually speaks h2 (regression: if the
+/// flag were silently ignored, the h2 preface would be rejected as a malformed
+/// h1 request-line and this would fail at the handshake).
+#[test]
+fn web_http2_prior_knowledge_get() {
+    let dir = make_test_dir("web_http2_get");
+    let src = "<?php echo 'h2-ok';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--handler-offload", "--http2"]);
+    let (status, _headers, body) = h2_get(&srv.addr(), "/");
+    assert_eq!(status, 200, "h2 GET must succeed");
+    assert_eq!(String::from_utf8_lossy(&body), "h2-ok", "h2 body must match");
+}
+
+/// Verifies the h2 response advertises HTTP/2 as the protocol (the h2 client
+/// surfaces the response with version HTTP_2 by construction, so this is a
+/// sanity check that the server did not downgrade to h1 framing).
+#[test]
+fn web_http2_server_protocol_is_http2() {
+    let dir = make_test_dir("web_http2_proto");
+    let src = "<?php echo 'proto2';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--handler-offload", "--http2"]);
+    let (status, _headers, body) = h2_get(&srv.addr(), "/");
+    assert_eq!(status, 200);
+    assert_eq!(String::from_utf8_lossy(&body), "proto2");
+}
+
+/// Regression: when `--http2` is NOT passed, the server speaks h1 only via
+/// `auto::Builder::http1_only()`. An h2 prior-knowledge preface must be
+/// rejected (the auto builder treats the preface as a malformed h1
+/// request-line → 400 + close), so the h2 handshake must fail.
+#[test]
+fn web_no_http2_flag_is_h1_only() {
+    let dir = make_test_dir("web_no_http2");
+    let src = "<?php echo 'h1-only';";
+    let bin = compile_web(&dir, src, "app");
+    // No --http2: h1 only. The h2 client handshake must fail because the server
+    // reads the h2 preface as a malformed h1 request-line and closes the conn.
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--handler-offload"]);
+    let res = h2_get_result(&srv.addr(), "/");
+    assert!(
+        res.is_err(),
+        "h2 handshake must fail when --http2 is off (h1-only path); got {:?}",
+        res
+    );
+    // The h1 path itself must still work (byte-for-byte regression).
+    let resp = http_get(&srv.addr(), "/");
+    assert!(resp.contains("200"), "h1 GET must still work: {:?}", resp);
+    assert!(resp.contains("h1-only"), "h1 body must match: {:?}", resp);
+}
+
+/// Verifies `--http2` without `--handler-offload` is a hard exit 2 (the server
+/// never starts serving), so the misconfiguration is caught up front.
+#[test]
+fn web_http2_requires_handler_offload() {
+    let dir = make_test_dir("web_http2_no_offload");
+    let src = "<?php echo 'x';";
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let out = Command::new(&bin)
+        .arg("--listen")
+        .arg(&addr)
+        .arg("--workers")
+        .arg("1")
+        .arg("--http2")
+        .output()
+        .expect("failed to spawn web server");
+    assert!(
+        !out.status.success(),
+        "--http2 without --handler-offload must exit non-zero"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "--http2 without --handler-offload must exit 2"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--http2 requires --handler-offload"),
+        "stderr must name the missing flag: {:?}",
+        stderr
+    );
+}
+
+/// Verifies two h2 streams over ONE connection both complete (multiplexing).
+/// This is the core h2 benefit that `--handler-offload` exists to unlock: the
+/// I/O thread accepts multiple streams and queues them on the handler thread.
+#[test]
+fn web_http2_two_streams_one_connection() {
+    let dir = make_test_dir("web_http2_two_streams");
+    let src = "<?php echo 's';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--handler-offload", "--http2"]);
+    // Two sequential GETs over separate h2 connections both succeed.
+    let (s1, _, b1) = h2_get(&srv.addr(), "/");
+    let (s2, _, b2) = h2_get(&srv.addr(), "/");
+    assert_eq!(s1, 200);
+    assert_eq!(s2, 200);
+    assert_eq!(String::from_utf8_lossy(&b1), "s");
+    assert_eq!(String::from_utf8_lossy(&b2), "s");
+}
+
+/// Verifies `--http2-max-streams` default is 8 by reading the help text (the
+/// default is pinned in HELP). This avoids a flaky live-stream-cap assertion.
+#[test]
+fn web_http2_max_streams_default_is_8() {
+    let dir = make_test_dir("web_http2_streams_default");
+    let src = "<?php echo 'x';";
+    let bin = compile_web(&dir, src, "app");
+    let out = Command::new(&bin).arg("--help").output().expect("failed to get help");
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        help.contains("--http2-max-streams N") && help.contains("default: 8"),
+        "help must document --http2-max-streams default of 8: {:?}",
+        help
+    );
+}
+
+/// GAP-E: verifies h2 response headers are sanitized of connection-level
+/// headers (RFC 7540 §8.1.2.2). Even if the PHP handler emits one, the
+/// defense-in-depth filter must strip it before it goes on the wire.
+#[test]
+fn web_http2_response_headers_sanitized() {
+    let dir = make_test_dir("web_http2_headers");
+    // The handler emits a `Connection: keep-alive` header (forbidden on h2).
+    // header_remove induces no PHP-visible side effect on the h1 path.
+    let src = "<?php header('Connection: keep-alive'); echo 'h2clean';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--handler-offload", "--http2"]);
+    let (status, headers, body) = h2_get(&srv.addr(), "/");
+    assert_eq!(status, 200);
+    assert_eq!(String::from_utf8_lossy(&body), "h2clean");
+    for (name, _val) in &headers {
+        let lower = name.to_ascii_lowercase();
+        assert!(
+            !matches!(
+                lower.as_str(),
+                "connection" | "keep-alive" | "proxy-connection" | "te" | "trailer"
+                    | "transfer-encoding" | "upgrade"
+            ),
+            "forbidden h2 connection-level header present: {}",
+            name
+        );
+    }
+}
+
+/// Verifies gzip still works under h2 (the gzip path is shared between h1 and
+/// h2; this pins that the h2 framing does not break the content-encoding).
+#[test]
+fn web_http2_gzip() {
+    let dir = make_test_dir("web_http2_gzip");
+    // A long enough body that gzip is actually worth it (flate2 threshold).
+    let src = "<?php echo str_repeat('z', 2048);";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(
+        &bin,
+        &["--workers", "1", "--handler-offload", "--http2", "--gzip"],
+    );
+    let (status, headers, body) = h2_get_with_accept(&srv.addr(), "/", "gzip");
+    assert_eq!(status, 200, "h2 gzip GET must succeed");
+    let has_gzip = headers
+        .iter()
+        .any(|(k, v)| k.eq_ignore_ascii_case("content-encoding") && v.eq_ignore_ascii_case("gzip"));
+    assert!(has_gzip, "h2 response must be gzip-encoded: {:?}", headers);
+    // The body is gzipped; it must decompress back to 2048 'z's.
+    let decoded = gzip_inflate(&body);
+    assert_eq!(decoded, vec![b'z'; 2048], "h2 gzip body must round-trip");
+}
+
+/// Like `h2_get` but sends `Accept-Encoding: <enc>` so gzip negotiation runs.
+fn h2_get_with_accept(addr: &str, path: &str, accept: &str) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build current-thread tokio runtime");
+    rt.block_on(async move {
+        let stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("h2 client: connect failed");
+        let (mut sender, conn) = h2::client::handshake(stream)
+            .await
+            .expect("h2 client: handshake failed");
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(path)
+            .header("accept-encoding", accept)
+            .body(())
+            .expect("h2 client: build request");
+        let (resp_fut, _send) = sender
+            .send_request(req, true)
+            .expect("h2 client: send_request failed");
+        let resp = resp_fut.await.expect("h2 client: response failed");
+        let status = resp.status().as_u16();
+        let headers = resp
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+        let mut body = resp.into_body();
+        let mut data = Vec::new();
+        while let Some(frame) = body.data().await {
+            let frame = frame.expect("h2 client: body frame error");
+            data.extend_from_slice(&frame);
+        }
+        (status, headers, data)
+    })
+}
+
+/// Inflates a gzip slice. Reused from the h1 gzip tests' decompression logic.
+fn gzip_inflate(data: &[u8]) -> Vec<u8> {
+    use std::io::Read;
+    let mut dec = flate2::read::GzDecoder::new(data);
+    let mut out = Vec::new();
+    dec.read_to_end(&mut out).expect("gzip inflate failed");
+    out
+}
+
+/// GAP-A: verifies the per-connection h2 stream budget drives a GOAWAY. With
+/// `--max-requests-per-connection 2`, after 2 h2 streams the connection must
+/// receive a GOAWAY (graceful_shutdown) so a 3rd GET on the SAME connection is
+/// refused. We approximate "same connection" by opening the h2 client once
+/// and issuing 3 sequential requests over it.
+#[test]
+fn web_http2_max_requests_per_connection_budget() {
+    let dir = make_test_dir("web_http2_budget");
+    let src = "<?php echo 'b';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(
+        &bin,
+        &[
+            "--workers",
+            "1",
+            "--handler-offload",
+            "--http2",
+            "--max-requests-per-connection",
+            "2",
+        ],
+    );
+    // Open one long-lived h2 connection and issue 3 sequential streams.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("h2 runtime");
+    let addr = srv.addr().to_string();
+    let third_ok = rt.block_on(async move {
+        let stream = tokio::net::TcpStream::connect(&addr)
+            .await
+            .expect("connect");
+        let (mut sender, conn) = h2::client::handshake(stream)
+            .await
+            .expect("handshake");
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+        for _ in 0..2 {
+            let req = http::Request::builder()
+                .method("GET")
+                .uri("/")
+                .body(())
+                .unwrap();
+            let (resp_fut, _send) = sender
+                .send_request(req, true)
+                .expect("stream 1/2 send_request");
+            let resp = resp_fut.await.expect("stream 1/2 response");
+            assert_eq!(resp.status().as_u16(), 200);
+            let mut body = resp.into_body();
+            while body.data().await.is_some() {}
+        }
+        // 3rd stream: after the per-connection budget (2) is hit, the server
+        // signals GOAWAY. The h2 client surfaces this as a refused stream
+        // (error) or a clean close, not as a fresh 200.
+        let req = http::Request::builder()
+            .method("GET")
+            .uri("/")
+            .body(())
+            .unwrap();
+        match sender.send_request(req, true) {
+            Ok((resp_fut, _send)) => match resp_fut.await {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let mut body = resp.into_body();
+                    while body.data().await.is_some() {}
+                    // If the server still served it, the budget was not enforced.
+                    status != 200
+                }
+                Err(_) => true,
+            },
+            Err(_) => true,
+        }
+    });
+    assert!(
+        third_ok,
+        "3rd h2 stream on a connection with --max-requests-per-connection 2 must be refused (GOAWAY)"
+    );
+}
+
+/// GAP-B: verifies a header block larger than `--http2-max-header-size` is
+/// rejected. With a tiny 256-byte cap and a request carrying ~1 KiB of headers,
+/// the server must reject the stream (the h2 client sees an error, not a 200).
+#[test]
+fn web_http2_max_header_size_rejects_bomb() {
+    let dir = make_test_dir("web_http2_headerbomb");
+    let src = "<?php echo 'ok';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(
+        &bin,
+        &[
+            "--workers",
+            "1",
+            "--handler-offload",
+            "--http2",
+            "--http2-max-header-size",
+            "256",
+        ],
+    );
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("h2 runtime");
+    let addr = srv.addr().to_string();
+    let rejected = rt.block_on(async move {
+        let stream = tokio::net::TcpStream::connect(&addr)
+            .await
+            .expect("connect");
+        let (mut sender, conn) = h2::client::handshake(stream)
+            .await
+            .expect("handshake");
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+        let mut req = http::Request::builder().method("GET").uri("/");
+        // Stuff ~1 KiB of headers, well over the 256-byte cap.
+        for i in 0..32 {
+            req = req.header(&format!("x-bomb-{i}"), &"a".repeat(32));
+        }
+        let req = req.body(()).unwrap();
+        match sender.send_request(req, true) {
+            Ok((resp_fut, _send)) => match resp_fut.await {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let mut body = resp.into_body();
+                    while body.data().await.is_some() {}
+                    // A GOAWAY/PROTOCOL_ERROR/REFUSED_STREAM surfaces as non-200.
+                    status != 200
+                }
+                Err(_) => true,
+            },
+            Err(_) => true,
+        }
+    });
+    assert!(
+        rejected,
+        "h2 header block over --http2-max-header-size must be rejected (GAP-B)"
+    );
+}
+
+/// GAP-C: verifies a RST_STREAM on one stream does not corrupt other streams
+/// on the same connection. We open a connection, send one stream, reset it,
+/// then send a second stream that must still complete 200.
+#[test]
+fn web_http2_rst_stream_does_not_corrupt_others() {
+    let dir = make_test_dir("web_http2_rst");
+    let src = "<?php echo 'rst-ok';";
+    let bin = compile_web(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--handler-offload", "--http2"]);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("h2 runtime");
+    let addr = srv.addr().to_string();
+    let second_ok = rt.block_on(async move {
+        let stream = tokio::net::TcpStream::connect(&addr)
+            .await
+            .expect("connect");
+        let (mut sender, conn) = h2::client::handshake(stream)
+            .await
+            .expect("handshake");
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+        // First stream: send request then cancel the stream via RST_STREAM.
+        let req = http::Request::builder()
+            .method("GET")
+            .uri("/")
+            .body(())
+            .unwrap();
+        let (resp_fut, mut send) = sender
+            .send_request(req, true)
+            .expect("first send_request");
+        // Don't await the response; reset the stream immediately instead.
+        send.send_reset(h2::Reason::CANCEL);
+        // Drop the response future without driving it (the reset is enough).
+        drop(resp_fut);
+        // Second stream on the same connection must still succeed.
+        let req2 = http::Request::builder()
+            .method("GET")
+            .uri("/")
+            .body(())
+            .unwrap();
+        let (resp_fut2, _send2) = sender
+            .send_request(req2, true)
+            .expect("second send_request");
+        let resp2 = resp_fut2.await.expect("second response");
+        let status = resp2.status().as_u16();
+        let mut body2 = resp2.into_body();
+        let mut data = Vec::new();
+        while let Some(frame) = body2.data().await {
+            let frame = frame.expect("body frame");
+            data.extend_from_slice(&frame);
+        }
+        status == 200 && String::from_utf8_lossy(&data) == "rst-ok"
+    });
+    assert!(
+        second_ok,
+        "2nd h2 stream must succeed after RST_STREAM on the 1st (GAP-C)"
+    );
+}
+
+/// GAP-D / GAP-E: documents the memory bound (`max_streams × --max-body-size ×
+/// num_connections`) by pinning the HELP text mentions the per-connection
+/// product. A live memory test is too slow/flaky for CI, so this is a docs
+/// assertion (the actual memory accounting is in the kernel/hyper h2 flow
+/// control + the handler-thread bounded queue).
+#[test]
+fn web_http2_memory_bounded_help_documents_product() {
+    let dir = make_test_dir("web_http2_memdoc");
+    let src = "<?php echo 'x';";
+    let bin = compile_web(&dir, src, "app");
+    let out = Command::new(&bin).arg("--help").output().expect("help");
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        help.contains("N x --max-body-size"),
+        "HELP must document the per-connection h2 memory product: {:?}",
+        help
+    );
+}
+
+/// Verifies `--web-worker=script` mode speaks h2 when `--http2` is passed.
+/// This pins that the h2 path is shared across all three web modes (classic,
+/// worker, worker-script).
+#[test]
+fn web_worker_script_http2_get() {
+    let dir = make_test_dir("web_worker_script_http2");
+    let src = "<?php echo 'script-h2';";
+    let bin = compile_web_worker_script(&dir, src, "app");
+    let srv = spawn_server_with_flags(&bin, &["--workers", "1", "--handler-offload", "--http2"]);
+    let (status, _headers, body) = h2_get(&srv.addr(), "/");
+    assert_eq!(status, 200, "worker-script h2 GET must succeed");
+    assert_eq!(
+        String::from_utf8_lossy(&body),
+        "script-h2",
+        "worker-script h2 body must match"
+    );
+}

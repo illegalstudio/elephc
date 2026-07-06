@@ -471,6 +471,51 @@ off by default. On Linux the `SO_REUSEPORT` hash spreads reconnects evenly; on
 macOS the distribution is less uniform, so p99 validation benchmarks are
 authoritative on Linux.
 
+### HTTP/2
+
+`--http2` opts in to HTTP/2. It is **off by default**: without the flag the
+server speaks HTTP/1.1 only via a single `http1_only()` code path (byte-for-byte
+with the pre-h2 path). `--http2` **requires `--handler-offload`** — without
+offload, h2's multiplexed streams all stall on the single inline handler (one
+PHP call at a time per worker), which defeats the point of h2 and can deadlock
+under backpressure; the server rejects the combination at startup (exit 2).
+
+With `--http2` the server speaks h2c prior-knowledge on plaintext connections
+(the `PRI * HTTP/2.0` preface). Over TLS, ALPN still advertises only `http/1.1`
+in this release, so a TLS client negotiates h1; h2 over TLS (ALPN `h2`) is a
+follow-up. There is no h1→h2c Upgrade handshake (use prior knowledge on
+plaintext). Supported: per-connection concurrent streams, GOAWAY-based graceful
+shutdown, gzip content-encoding. Not supported: server push, trailers,
+WebSocket-over-h2, gRPC framing, response streaming (the body is buffered,
+same as h1).
+
+Tunables and bounds:
+
+- `--http2-max-streams N` (default `8`) — max concurrent h2 streams per
+  connection. This is both hyper's `max_concurrent_streams` cap and the
+  per-connection stream budget (see `--max-requests-per-connection` below).
+  `N < 1` is rejected (exit 2).
+- `--http2-max-header-size N` (default `65536` = 64 KiB) — HPACK header-bomb
+  clamp (hyper's `max_header_list_size`). h1 is unaffected (h1 headers are
+  bounded by `--max-body-size`).
+- `--max-requests-per-connection N` (default `0`, off) — under h2 this acts as a
+  **per-connection stream budget**: once N streams have been served on one
+  connection, the server signals GOAWAY so the client reconnects (and the kernel
+  re-picks a worker). If unset, `--max-requests` is used as the fallback budget;
+  if both are unset, the h2 connection is unbounded.
+
+**Memory bound.** h2 flow control and the handler-thread bounded queue together
+bound buffered-body memory to roughly `max_streams × --max-body-size ×
+num_connections`. With the defaults (8 streams, 1 MiB body, modest connection
+count) this is small; raise `--max-body-size` or `--http2-max-streams` and the
+product grows linearly, so size them together. `--max-pending` (default 16)
+bounds the handler-thread job queue independently.
+
+`SERVER_PROTOCOL` is `HTTP/2.0` on h2 streams and `HTTP/1.1` on h1 requests.
+Connection-level headers (`Connection`, `Keep-Alive`, `Transfer-Encoding`,
+`Upgrade`, `TE`, `Trailer`, `Proxy-Connection`) are stripped from h2 responses
+(RFC 7540 §8.1.2.2) — the handler may emit them, but they never reach the wire.
+
 ### Connection dispatch: kernel vs master
 
 `--dispatch` selects how connections reach workers. It is orthogonal to the web
@@ -612,9 +657,11 @@ available. The following are not yet available:
 - **`--listen` is TCP only** — Unix-domain-socket listening is not yet supported.
 - **No sessions** — `$_SESSION` / `session_start()` are not provided. Cookies
   (`$_COOKIE`, `setcookie()`) are, so you can build session handling yourself.
-- **Not supported in this release:** sessions, static file serving, HTTP/2–3,
+- **Not supported in this release:** sessions, static file serving, HTTP/3,
   automatic certificate management (ACME) — front the server with a reverse proxy
-  for these (below). In-process TLS **is** supported (see [TLS / HTTPS](#tls--https)).
+  for these (below). HTTP/2 **is** supported as an opt-in flag (see
+  [HTTP/2](#http2) below). In-process TLS **is** supported (see
+  [TLS / HTTPS](#tls--https)).
 
 ## TLS / HTTPS
 
@@ -650,7 +697,9 @@ Behavior and semantics:
 - **All three modes.** The flags work identically under `--web`, `--web-worker`,
   and `--web-worker=script`.
 - **Protocol.** HTTP/1.1 over TLS 1.2/1.3 (rustls, ring crypto). ALPN advertises
-  only `http/1.1`. `SERVER_PROTOCOL` stays `HTTP/1.1`.
+  only `http/1.1` (h2 over TLS is a follow-up; h2c prior-knowledge on plaintext
+  works today with `--http2`). `SERVER_PROTOCOL` is `HTTP/1.1` on h1 and
+  `HTTP/2.0` on h2 streams.
 - **No hot reload.** Certificates are read once at startup; rotating a cert means
   restarting the server (Let's Encrypt certs renew on a ~60-day cadence, so a
   restart-on-renew hook suffices). Encrypted (passphrase-protected) PEM keys are
@@ -673,7 +722,8 @@ Performance notes:
 
 ## Behind a reverse proxy
 
-elephc-web terminates TLS itself (above) and speaks HTTP/1.1. For HTTP/2/3,
+elephc-web terminates TLS itself (above) and speaks HTTP/1.1 (and optionally
+HTTP/2, see [HTTP/2](#http2) below). For HTTP/3,
 automatic certificate management (ACME/Let's Encrypt), SNI multi-certificates,
 static asset serving, or virtual hosting, run it behind a reverse proxy (nginx,
 Caddy, HAProxy). A typical setup binds the server to `127.0.0.1:8080` and points

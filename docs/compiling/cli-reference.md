@@ -64,6 +64,9 @@ arguments (not elephc compiler flags):
 | `--access-log` | No | off | Log one line per request to stderr. |
 | `--tls-cert FILE` | No | — | PEM certificate chain; enables TLS on `--listen`. Requires `--tls-key`. See [TLS / HTTPS](../beyond-php/web.md#tls--https). |
 | `--tls-key FILE` | No | — | PEM private key (PKCS#8/PKCS#1/SEC1, unencrypted) matching `--tls-cert`. Requires `--tls-cert`. |
+| `--http2` | No | off | Opt in to HTTP/2 (h2c prior-knowledge on plaintext; h2 over TLS is a follow-up). **Requires `--handler-offload`** (without offload, multiplexed h2 streams all stall on the single inline handler; exit 2 otherwise). Default off: the server speaks HTTP/1.1 only via one `http1_only()` code path. See [HTTP/2](../beyond-php/web.md#http2). |
+| `--http2-max-streams N` | No | `8` | Max concurrent h2 streams per connection. Also the per-connection stream budget (with `--max-requests-per-connection` as the cap, else `--max-requests`). Per-connection memory bound is `N × --max-body-size`. `N < 1` is rejected (exit 2). Ignored (warns) without `--http2`. |
+| `--http2-max-header-size N` | No | `65536` (64 KiB) | HPACK header-bomb clamp in bytes (hyper `max_header_list_size`). h1 is unaffected. Ignored (warns) without `--http2`. |
 | `--help`, `--version` | No | — | Print usage / version and exit. |
 
 ```bash

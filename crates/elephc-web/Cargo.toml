@@ -10,11 +10,18 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-# hyper 1.x is the HTTP engine; http carries the Request/Response types.
-hyper = { version = "1", features = ["server", "http1"] }
+# hyper 1.x is the HTTP engine; http carries the Request/Response types. The
+# `http2` feature is compiled in once and gated at runtime by the `--http2`
+# flag: when off, `auto::Builder::http1_only()` keeps the hot path on the h1
+# parser (byte-for-byte with the previous `http1::Builder` path), so the h2
+# framing code never runs on a connection that did not opt in.
+hyper = { version = "1", features = ["server", "http1", "http2"] }
 http = "1"
 http-body-util = "0.1"
-hyper-util = { version = "0.1", features = ["tokio"] }
+# `server-auto` pulls the auto-negotiating builder (h1/h2 on one socket via the
+# `PRI * HTTP/2.0` prior-knowledge preface); `http1`/`http2` are listed
+# explicitly to document the intent (server-auto already enables both).
+hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1", "http2"] }
 # tokio current-thread runtime only: each prefork worker runs single-threaded,
 # so PHP execution (a blocking call) never overlaps within a worker.
 tokio = { version = "1", default-features = false, features = ["net", "rt", "io-util", "sync", "time"] }
@@ -42,3 +49,17 @@ rustls-pemfile = "2"
 # no certificate/key material is ever committed. Ring backend only (no aws-lc-rs),
 # matching the runtime crypto provider and staying musl-friendly.
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+# h2 drives the HTTP/2 prior-knowledge test client in `tests/web_tests.rs`. It
+# is a TEST-ONLY dependency (never linked into the produced `--web` binary):
+# the production runtime speaks h2 via hyper's built-in `http2` feature, with
+# no direct `h2` runtime dep. Pinned to the 0.4 line to match the h2 version
+# hyper 1.x itself uses for its server, so the test client and the server
+# share one HPACK/frame implementation.
+h2 = "0.4"
+# The h2 test client is async; run it on a current-thread tokio runtime inside
+# the test binary (no multi-thread needed). `macros` for the `#[tokio::test]`
+# attribute used by the h2 test helpers; `net`/`time` for connect + timeouts.
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "net", "time"] }
+# `bytes` and `http` for building h2 request frames in the test client.
+bytes = "1"
+http = "1"

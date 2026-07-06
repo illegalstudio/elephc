@@ -52,6 +52,21 @@ Options:
   --max-pending N        With --handler-offload: max parsed requests queued for the
                          handler before new requests get 503; queued-body memory is
                          bounded by N x --max-body-size. 0 is rejected (default: 16)
+  --http2                Opt in to HTTP/2 (h2c prior-knowledge on plaintext; h2
+                         over TLS is a follow-up). REQUIRES --handler-offload
+                         (without offload, h2 multiplexed streams all stall on the
+                         single inline handler). Default off: the server speaks
+                         HTTP/1.1 only (byte-for-byte the h1 path)
+  --http2-max-streams N  Max concurrent h2 streams per connection (default: 8). The
+                         per-connection memory bound is N x --max-body-size, so 8
+                         caps a single connection at 8 x --max-body-size of buffered
+                         bodies before the handler drains them. N < 1 is rejected
+                         (omit --http2 to disable HTTP/2)
+  --http2-max-header-size N
+                         Max h2 header block in BYTES (HPACK header-bomb clamp,
+                         default: 65536 = 64 KiB). h1 is unaffected (h1 headers are
+                         bounded by --max-body-size). Generous for JWT+cookies+tracing,
+                         far below h2's 16 MiB default
   --tls-cert FILE        PEM certificate chain; enables TLS on --listen (requires --tls-key)
   --tls-key FILE         PEM private key matching --tls-cert (PKCS#8, PKCS#1 or SEC1)
   --help                 Show this help and exit
@@ -132,6 +147,16 @@ const DEFAULT_MAX_BODY: usize = 8 * 1024 * 1024;
 /// queued-body memory is `16 × --max-body-size` per worker.
 const DEFAULT_MAX_PENDING: usize = 16;
 
+/// Default `--http2-max-streams`: max concurrent h2 streams per connection. Kept
+/// at 8 (not the spec's 16): 16 × `--max-body-size` (8 MiB default) = 128 MiB/conn
+/// worst case is reckless for a feature with ZERO parallelism payoff until ZTS;
+/// 8 → 64 MiB/conn and matches the "no parallelism, just batching" reality.
+const DEFAULT_HTTP2_MAX_STREAMS: u32 = 8;
+
+/// Default `--http2-max-header-size` in BYTES (GAP-B): the HPACK header-bomb clamp.
+/// 64 KiB is generous for JWT+cookies+tracing, far below h2's 16 MiB default.
+const DEFAULT_HTTP2_MAX_HEADER_SIZE: u32 = 64 * 1024;
+
 /// Parsed server configuration from the binary's own argv.
 struct ServerArgs {
     listen: String,
@@ -178,6 +203,17 @@ struct ServerArgs {
     /// `503` (`--max-pending`, default 16). Bounds queued-body memory to
     /// `max_pending × --max-body-size`. Only meaningful with `--handler-offload`.
     max_pending: usize,
+    /// Opt in to HTTP/2 (`--http2`, default off). When off, the server speaks
+    /// HTTP/1.1 only via `auto::Builder::http1_only()` — one code path. When on,
+    /// `--handler-offload` is required (validated at parse time).
+    http2: bool,
+    /// Max concurrent h2 streams per connection (`--http2-max-streams`, default
+    /// 8). Acts as hyper's `max_concurrent_streams` cap AND the per-connection
+    /// stream budget (GAP-A). `0` only valid when `http2` is off.
+    http2_max_streams: u32,
+    /// Max h2 header block in bytes (`--http2-max-header-size`, default 64 KiB;
+    /// GAP-B). Sets hyper's `max_header_list_size`. h1 is unaffected.
+    http2_max_header_size: u32,
 }
 
 impl ServerArgs {
@@ -185,6 +221,17 @@ impl ServerArgs {
     /// Kept SEPARATE from `dispatch_config` so the `Copy` `WorkerConfig` does not
     /// carry master-only fields.
     fn worker_config(&self) -> WorkerConfig {
+        // GAP-A: per-connection h2 stream budget. `max_conn_requests` is the
+        // operator's per-CONNECTION cap (closest semantic match for a per-conn h2
+        // budget); `max_requests` is the per-WORKER recycle cap, used as a fallback
+        // so `--max-requests` alone still bounds h2 connections; 0 = unbounded.
+        let h2_stream_budget = if self.max_conn_requests > 0 {
+            self.max_conn_requests
+        } else if self.max_requests > 0 {
+            self.max_requests
+        } else {
+            0
+        };
         WorkerConfig {
             max_body: self.max_body,
             max_requests: self.max_requests,
@@ -196,6 +243,12 @@ impl ServerArgs {
             idle_timeout_secs: self.idle_timeout_secs,
             handler_offload: self.handler_offload,
             max_pending: self.max_pending,
+            h2: worker::Http2Config {
+                http2: self.http2,
+                max_streams: self.http2_max_streams,
+                max_header_size: self.http2_max_header_size,
+            },
+            h2_stream_budget,
         }
     }
 
@@ -269,6 +322,17 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
     let mut handler_offload = false;
     let mut max_pending: usize = DEFAULT_MAX_PENDING;
     let mut max_pending_set = false;
+    // HTTP/2 opt-in (`--http2`, default off) and its tunables. `http2` is the
+    // on/off switch; `http2_max_streams` is the per-connection concurrent
+    // stream cap (also the GAP-A stream budget); `http2_max_header_size` is the
+    // HPACK header-bomb guard (GAP-B). The `_set` flag distinguishes "operator
+    // passed the flag" from "default value" so inert-flag warnings fire only
+    // when the operator actually opted into a tunable without `--http2`.
+    let mut http2 = false;
+    let mut http2_max_streams: u32 = DEFAULT_HTTP2_MAX_STREAMS;
+    let mut http2_max_streams_set = false;
+    let mut http2_max_header_size: u32 = DEFAULT_HTTP2_MAX_HEADER_SIZE;
+    let mut http2_max_header_size_set = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -325,6 +389,21 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             }
             "--tls-cert" => { i += 1; tls_cert = args.get(i).cloned(); }
             "--tls-key" => { i += 1; tls_key = args.get(i).cloned(); }
+            "--http2" => { http2 = true; }
+            "--http2-max-streams" => {
+                i += 1;
+                if let Some(v) = args.get(i).and_then(|v| v.parse().ok()) {
+                    http2_max_streams = v;
+                    http2_max_streams_set = true;
+                }
+            }
+            "--http2-max-header-size" => {
+                i += 1;
+                if let Some(v) = args.get(i).and_then(|v| v.parse().ok()) {
+                    http2_max_header_size = v;
+                    http2_max_header_size_set = true;
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -357,6 +436,36 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
     if max_pending_set && !handler_offload {
         eprintln!("warning: --max-pending is ignored without --handler-offload");
     }
+    // `--http2` REQUIRES `--handler-offload`: without offload, h2's multiplexed
+    // streams all stall on the single inline handler (one PHP call at a time per
+    // worker), which defeats the point of h2 and can deadlock under backpressure.
+    // Hard error (exit 2) — not a warning — because the misconfiguration is
+    // silent at runtime and looks like a hang.
+    if http2 && !handler_offload {
+        eprintln!(
+            "error: --http2 requires --handler-offload (without offload, h2 multiplexed \
+             streams all stall on the single inline handler; see --help)"
+        );
+        return ParsedArgs::Exit(2);
+    }
+    // `--http2-max-streams` must be at least 1 when set; 0 streams means no h2
+    // traffic can ever flow. Hard error (exit 2). The operator disables h2 by
+    // simply not passing `--http2` (it is opt-in, default off).
+    if http2_max_streams_set && http2_max_streams < 1 {
+        eprintln!(
+            "error: --http2-max-streams must be greater than 0 (omit --http2 to \
+             disable HTTP/2; try --help)"
+        );
+        return ParsedArgs::Exit(2);
+    }
+    // Inert h2 tunables: warn (do not error) when the operator passed one of the
+    // tunables without `--http2`, so a stray flag is not silently misleading.
+    if http2_max_streams_set && !http2 {
+        eprintln!("warning: --http2-max-streams is ignored without --http2");
+    }
+    if http2_max_header_size_set && !http2 {
+        eprintln!("warning: --http2-max-header-size is ignored without --http2");
+    }
     // Worker-mode defaults: recycle after 1000 requests and collect cycles
     // every request, unless the operator explicitly overrode either flag.
     if worker_mode && !max_requests_set {
@@ -381,6 +490,9 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             dispatch_backlog: dispatch_backlog.max(1),
             handler_offload,
             max_pending: max_pending.max(1),
+            http2,
+            http2_max_streams,
+            http2_max_header_size,
         }),
         None => {
             eprintln!("error: --web binary requires --listen host:port (try --help)");
@@ -980,6 +1092,83 @@ mod tests {
                 assert_eq!(a.max_pending, 8, "value still applied");
             }
             ParsedArgs::Exit(c) => panic!("expected Run, got Exit({c})"),
+        }
+    }
+
+    /// Verifies HTTP/2 defaults: opt-in OFF, 8 streams, 64 KiB header budget —
+    /// so a plain `--listen` invocation never silently turns h2 on.
+    #[test]
+    fn http2_defaults_off_streams_8_header_64kib() {
+        match parse(&["--listen", "127.0.0.1:0"]) {
+            ParsedArgs::Run(a) => {
+                assert!(!a.http2, "--http2 must default off (opt-in)");
+                assert_eq!(a.http2_max_streams, 8, "default max_streams must be 8");
+                assert_eq!(
+                    a.http2_max_header_size, 64 * 1024,
+                    "default max_header_size must be 64 KiB"
+                );
+                assert!(!a.handler_offload, "offload stays off when --http2 absent");
+            }
+            ParsedArgs::Exit(c) => panic!("expected Run, got Exit({c})"),
+        }
+    }
+
+    /// Verifies `--http2` + `--handler-offload` parse through to the config and
+    /// that the tunables are honored when overridden.
+    #[test]
+    fn http2_flags_parse_with_offload() {
+        match parse(&[
+            "--listen",
+            "127.0.0.1:0",
+            "--handler-offload",
+            "--http2",
+            "--http2-max-streams",
+            "4",
+            "--http2-max-header-size",
+            "32768",
+        ]) {
+            ParsedArgs::Run(a) => {
+                assert!(a.http2, "--http2 must be on");
+                assert!(a.handler_offload, "--handler-offload must be on");
+                assert_eq!(a.http2_max_streams, 4, "--http2-max-streams override");
+                assert_eq!(
+                    a.http2_max_header_size, 32768,
+                    "--http2-max-header-size override"
+                );
+            }
+            ParsedArgs::Exit(c) => panic!("expected Run, got Exit({c})"),
+        }
+    }
+
+    /// Verifies `--http2-max-streams 0` is a usage error (exit 2): zero streams
+    /// means no h2 traffic can ever flow, so it is rejected rather than clamped.
+    #[test]
+    fn http2_max_streams_zero_is_exit_2() {
+        match parse(&[
+            "--listen",
+            "127.0.0.1:0",
+            "--handler-offload",
+            "--http2",
+            "--http2-max-streams",
+            "0",
+        ]) {
+            ParsedArgs::Exit(2) => {}
+            ParsedArgs::Exit(c) => {
+                panic!("expected Exit(2) for --http2-max-streams 0, got Exit({c})")
+            }
+            ParsedArgs::Run(_) => panic!("expected Exit(2) for --http2-max-streams 0, got Run"),
+        }
+    }
+
+    /// Verifies `--http2` without `--handler-offload` is a hard exit 2: without
+    /// offload, h2 multiplexed streams stall on the single inline handler, so
+    /// the misconfiguration is rejected up front rather than hanging at runtime.
+    #[test]
+    fn http2_without_offload_is_exit_2() {
+        match parse(&["--listen", "127.0.0.1:0", "--http2"]) {
+            ParsedArgs::Exit(2) => {}
+            ParsedArgs::Exit(c) => panic!("expected Exit(2) for --http2 w/o offload, got Exit({c})"),
+            ParsedArgs::Run(_) => panic!("expected Exit(2) for --http2 w/o offload, got Run"),
         }
     }
 }

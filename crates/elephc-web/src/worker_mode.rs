@@ -56,18 +56,16 @@ use std::time::{Duration, Instant};
 
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
-use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
-use hyper_util::rt::TokioTimer;
 use tokio::net::TcpListener;
 
 use crate::handler;
 use crate::offload::{self, RequestJob, ResponseParts};
 use crate::request_state;
 use crate::worker::{
-    drive_connection, reuseport_listener, should_close_connection, ConnSource, NextConn,
-    WorkerConfig,
+    conn_builder, filter_h2_connection_headers, drive_connection, reuseport_listener,
+    should_close_connection, ConnSource, NextConn, WorkerConfig,
 };
 
 // Runtime cycle collector provided by the compiled program's runtime. Called
@@ -288,6 +286,8 @@ pub(crate) fn enter_worker_loop() -> ! {
         idle_timeout_secs,
         handler_offload,
         max_pending,
+        h2,
+        h2_stream_budget,
     } = cfg;
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
@@ -366,14 +366,15 @@ pub(crate) fn enter_worker_loop() -> ! {
         };
         // Idle-watchdog duration, computed once (used only when `--idle-timeout` > 0).
         let idle = Duration::from_secs(idle_timeout_secs as u64);
-        // Connection-serving config is identical for every connection, so build the
-        // hyper HTTP/1 builder once and reuse it (serve_connection takes &self).
-        // `header_read_timeout(30s)` is kept for anti-slowloris; the configurable
-        // idle rotation lives in the `--idle-timeout` watchdog. See the WI-4/Q4
-        // note in `crate::worker::serve` for hyper 1.10.1's idle semantics.
-        let mut http = http1::Builder::new();
-        http.timer(TokioTimer::new())
-            .header_read_timeout(Duration::from_secs(30));
+        // `--http2` OFF: `conn_builder` calls `http1_only()` — one code path,
+        // byte-for-byte the previous h1 path. `--http2` ON: the h2 arm is
+        // configured (max_concurrent_streams + max_header_list_size GAP-B) and the
+        // service_fn enforces the per-connection stream budget (GAP-A). See
+        // `crate::worker::serve` for the WI-4/Q4 note on hyper 1.10.1's
+        // `header_read_timeout` idle semantics.
+        let http = conn_builder(h2);
+        // GAP-A: per-connection h2 stream budget, enforced via a goaway cell.
+        let h2_budget_on = h2.http2 && h2_stream_budget > 0;
         loop {
             // --max-requests recycling. In master mode this runs BEFORE `next()`
             // sends READY (cap-before-READY), so a capped worker exits without being
@@ -407,9 +408,15 @@ pub(crate) fn enter_worker_loop() -> ! {
             // cell lives in this connection's !Send task.
             let rotate_on = cfg.max_conn_requests > 0 || cfg.max_requests > 0;
             let idle_on = idle_timeout_secs > 0;
-            let conn_served = rotate_on.then(|| Rc::new(Cell::new(0usize)));
+            // `conn_served` is allocated when EITHER `rotate_on` OR `h2_budget_on`
+            // is true: the h2 stream budget (GAP-A) reuses it to count streams.
+            let conn_served = (rotate_on || h2_budget_on).then(|| Rc::new(Cell::new(0usize)));
             let last_activity = idle_on.then(|| Rc::new(Cell::new(Instant::now())));
             let watchdog_activity = last_activity.clone();
+            // GAP-A: per-connection goaway cell. Clone the driver handle BEFORE the
+            // service_fn closure moves the original.
+            let goaway = h2_budget_on.then(|| Rc::new(Cell::new(false)));
+            let goaway_for_driver = goaway.clone();
             // Per-connection clone of the offload sender (cloning `None` is free);
             // each request further clones it into its own `async move`.
             let conn_offload_tx = offload_tx.clone();
@@ -421,6 +428,7 @@ pub(crate) fn enter_worker_loop() -> ! {
                 let conn_served = conn_served.clone();
                 let last_activity = last_activity.clone();
                 let offload_tx = conn_offload_tx.clone();
+                let goaway = goaway.clone();
                 async move {
                     // A request just arrived on this connection: stamp activity so
                     // the idle watchdog measures inactivity from now (only when the
@@ -434,6 +442,24 @@ pub(crate) fn enter_worker_loop() -> ! {
                     let path = req.uri().path().to_string();
                     let query = req.uri().query().unwrap_or("").to_string();
                     let protocol = crate::worker::version_str(req.version());
+                    // h2 detection for GAP-A (per-conn stream budget) and GAP-E
+                    // (defense-in-depth header filter).
+                    let is_h2 = req.version() == hyper::Version::HTTP_2;
+                    // GAP-A: under h2, count this stream against the per-connection
+                    // budget. When it exceeds the budget, set the goaway cell so the
+                    // driver emits a GOAWAY and the client reconnects (the in-flight
+                    // stream that tripped the threshold completes normally; the NEXT
+                    // stream is refused). `>=` not `>` so budget=N allows exactly N.
+                    if is_h2 && goaway.is_some() {
+                        if let Some(c) = &conn_served {
+                            c.set(c.get() + 1);
+                            if c.get() >= h2_stream_budget {
+                                if let Some(g) = &goaway {
+                                    g.set(true);
+                                }
+                            }
+                        }
+                    }
                     let log_method_path = if access_log { Some((method.clone(), path.clone())) } else { None };
                     let accepts_gzip = gzip
                         && req.headers().get(hyper::header::ACCEPT_ENCODING).is_some_and(|v| {
@@ -528,6 +554,15 @@ pub(crate) fn enter_worker_loop() -> ! {
                     };
                     let do_gzip = gzipped.is_some();
                     let resp_body = gzipped.unwrap_or(resp_body);
+                    // GAP-E: defense-in-depth h2 header filter (RFC 7540 §8.1.2.2).
+                    // hyper already strips connection-level headers on h2 responses;
+                    // we filter them explicitly so a hyper behavior change cannot leak
+                    // one onto the wire (jury decision 5). The h1 path is untouched.
+                    let resp_headers = if is_h2 {
+                        filter_h2_connection_headers(resp_headers)
+                    } else {
+                        resp_headers
+                    };
                     let mut builder = Response::builder().status(status);
                     for (name, value) in resp_headers {
                         builder = builder.header(name, value);
@@ -540,8 +575,12 @@ pub(crate) fn enter_worker_loop() -> ! {
                     // (`Connection: close`) when this connection hit its per-connection
                     // cap OR the worker hit its `--max-requests` recycle cap (the C3
                     // drain). Uses this module's own `SERVED`. With both features off
-                    // this block is skipped entirely (`conn_served` is `None`).
-                    if rotate_on {
+                    // this block is skipped entirely. Under h2 the `Connection` header
+                    // is forbidden and stripped by GAP-E above, and the per-connection
+                    // cap is enforced via the goaway mechanism (GAP-A), so this block
+                    // runs only on the h1 path. The worker-level `--max-requests`
+                    // recycle is still honored under h2 via the accept-loop check.
+                    if rotate_on && !is_h2 {
                         let served = conn_served
                             .as_ref()
                             .map(|c| {
@@ -581,19 +620,21 @@ pub(crate) fn enter_worker_loop() -> ! {
             // struct, so the per-connection clone is cheap.
             let http = http.clone();
             // Drive the whole connection lifecycle (TLS handshake + serve + PR1 idle
-            // watchdog) via the shared helper. Kernel mode spawns it so connections
-            // interleave concurrently, exactly as before; master mode (slot = 1)
-            // awaits it inline so the worker serves one connection at a time and only
-            // sends the next READY once this connection's `serve_connection`
-            // completes.
+            // watchdog + GAP-A goaway) via the shared helper. Kernel mode spawns it
+            // so connections interleave concurrently, exactly as before; master mode
+            // (slot = 1) awaits it inline so the worker serves one connection at a
+            // time and only sends the next READY once this connection's
+            // `serve_connection` completes.
             if conn_source.is_serial() {
                 drive_connection(
-                    stream, peer, acceptor, http, service, watchdog_activity, idle, access_log,
+                    stream, peer, acceptor, http, service, watchdog_activity, idle,
+                    goaway_for_driver, access_log,
                 )
                 .await;
             } else {
                 tokio::task::spawn_local(drive_connection(
-                    stream, peer, acceptor, http, service, watchdog_activity, idle, access_log,
+                    stream, peer, acceptor, http, service, watchdog_activity, idle,
+                    goaway_for_driver, access_log,
                 ));
             }
         }
@@ -722,6 +763,12 @@ mod tests {
             idle_timeout_secs: 45,
             handler_offload: true,
             max_pending: 16,
+            h2: crate::worker::Http2Config {
+                http2: false,
+                max_streams: 8,
+                max_header_size: 64 * 1024,
+            },
+            h2_stream_budget: 0,
         };
         set_worker_config(cfg);
         let peeked = peek_worker_config();

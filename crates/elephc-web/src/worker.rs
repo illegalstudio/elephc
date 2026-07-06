@@ -22,6 +22,7 @@
 use std::cell::Cell;
 use std::convert::Infallible;
 use std::ffi::CString;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::rc::Rc;
@@ -30,10 +31,10 @@ use std::time::{Duration, Instant};
 
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
-use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioIo, TokioTimer};
+use hyper_util::server::conn::auto;
 use socket2::{Domain, Protocol, SockRef, Socket, Type};
 use tokio::io::unix::AsyncFd;
 use tokio::net::{TcpListener, TcpStream};
@@ -57,6 +58,108 @@ pub(crate) fn version_str(version: hyper::Version) -> &'static str {
         v if v == hyper::Version::HTTP_3 => "HTTP/3.0",
         _ => "HTTP/1.1",
     }
+}
+
+/// Single-threaded hyper executor for the `auto::Builder`: spawns every
+/// connection/stream future via `tokio::task::spawn_local` on the worker's
+/// `LocalSet`, so the future stays on this thread. `F` is deliberately NOT
+/// `Send` — the connection future owns `Rc<Cell<_>>` per-connection state and,
+/// under h2, the `service_fn` closures move `RequestJob`s through a `mpsc`
+/// sender that is itself `!Send`; both must stay on the one worker thread
+/// (PHP never runs on two threads in a worker). `Clone + Copy` so the
+/// `auto::Builder` (which clones its executor per connection) can copy it
+/// freely. Shared by both serve loops (`serve` and `worker_mode`).
+#[derive(Clone, Copy)]
+pub(crate) struct LocalExec;
+
+impl<F> hyper::rt::Executor<F> for LocalExec
+where
+    F: Future + 'static,
+    F::Output: 'static,
+{
+    /// Spawns `fut` on the current `LocalSet` (the worker's only thread).
+    fn execute(&self, fut: F) {
+        tokio::task::spawn_local(fut);
+    }
+}
+
+/// HTTP/2 runtime configuration, derived once from `ServerArgs` and threaded
+/// into `WorkerConfig`. `Copy` so it moves freely into per-connection tasks.
+/// When `http2` is `false`, `conn_builder` calls `http1_only()` on the auto
+/// builder, so the h2 framing code never runs on that connection.
+#[derive(Clone, Copy, Debug)]
+pub struct Http2Config {
+    /// `--http2` opt-in. When `false`, the server speaks HTTP/1.1 only.
+    pub http2: bool,
+    /// `--http2-max-streams N` (default 8): hyper's `max_concurrent_streams`
+    /// cap, AND the per-connection stream budget used by GAP-A.
+    pub max_streams: u32,
+    /// `--http2-max-header-size N` (default 64 KiB): hyper's
+    /// `max_header_list_size`, the HPACK header-bomb clamp (GAP-B). `u32`
+    /// matches hyper's parameter type so no cast is needed at the builder call.
+    pub max_header_size: u32,
+}
+
+/// Builds the per-worker hyper connection builder. Always compiled in (the
+/// `http2` feature is a compile-time dep), but at runtime the h2 framing path
+/// only runs when `cfg.http2` is `true`: when off, `.http1_only()` makes the
+/// auto builder reject the `PRI * HTTP/2.0` preface as a malformed h1
+/// request-line (→ 400 + close), keeping ONE code path that is byte-for-byte
+/// the previous `http1::Builder` path. The h1 timer + 30s
+/// `header_read_timeout` (anti-slowloris) are configured unconditionally so
+/// the h1 path is identical whether or not h2 is enabled. When h2 is on, the
+/// h2 timer, `max_concurrent_streams` (= `--http2-max-streams`), and
+/// `max_header_list_size` (= `--http2-max-header-size`, GAP-B) are configured.
+/// Shared by `serve` and `worker_mode::enter_worker_loop`.
+pub(crate) fn conn_builder(cfg: Http2Config) -> auto::Builder<LocalExec> {
+    let mut b = auto::Builder::new(LocalExec);
+    b.http1()
+        .timer(TokioTimer::new())
+        .header_read_timeout(Duration::from_secs(30));
+    if cfg.http2 {
+        b.http2()
+            .timer(TokioTimer::new())
+            .max_concurrent_streams(cfg.max_streams)
+            .max_header_list_size(cfg.max_header_size);
+    } else {
+        // One code path: reject the h2 prior-knowledge preface as a malformed
+        // h1 request-line (→ 400 + close). The auto builder's h1 arm IS the
+        // h1 path; no fallback to the old `http1::Builder`. `http1_only`
+        // consumes `self` and returns `Self`, so rebind.
+        b = b.http1_only();
+    }
+    b
+}
+
+/// Connection-level headers that MUST NOT be sent on an h2 response
+/// (RFC 7540 §8.1.2.2). Defense-in-depth: hyper already strips these, but we
+/// filter them explicitly in the response-assembly path so a hyper behavior
+/// change cannot leak one onto the wire (jury decision 5). Compared with
+/// `eq_ignore_ascii_case` so header-name case variants are caught.
+const H2_FORBIDDEN_HEADERS: &[&str] = &[
+    "connection",
+    "keep-alive",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+];
+
+/// Removes connection-level headers from an h2 response's header set
+/// (defense-in-depth, decision 5). Called only when `req.version() ==
+/// HTTP_2` so the h1 path is untouched. Takes ownership and filters in place
+/// via `.retain` (no double allocation on the hot path). Shared with
+/// `crate::worker_mode`.
+pub(crate) fn filter_h2_connection_headers(
+    mut headers: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    headers.retain(|(name, _)| {
+        !H2_FORBIDDEN_HEADERS
+            .iter()
+            .any(|forbidden| name.eq_ignore_ascii_case(forbidden))
+    });
+    headers
 }
 
 /// Builds a listening std::net::TcpListener with SO_REUSEPORT set, bound to `addr`.
@@ -152,6 +255,17 @@ pub struct WorkerConfig {
     /// `max_pending × max_body`. Default `16`; ignored when `handler_offload` is
     /// off. Never `0` (rejected at parse time).
     pub max_pending: usize,
+    /// HTTP/2 configuration (`--http2` opt-in). When `http2` is `false`, the
+    /// server speaks HTTP/1.1 only via `auto::Builder::http1_only()` — one
+    /// code path, byte-for-byte the previous h1 path.
+    pub h2: Http2Config,
+    /// Per-connection h2 stream budget (GAP-A). When `--http2` is on and this
+    /// is `> 0`, the service_fn counts streams per connection and drives a
+    /// `graceful_shutdown` (GOAWAY) once the budget is hit, so `--max-requests`
+    /// is honored per-stream under h2 (not just per-accept). Derived once in
+    /// `server::worker_config()` as `max_conn_requests` if set, else
+    /// `max_requests` if set, else `0` (unbounded). `0` disables the budget.
+    pub h2_stream_budget: usize,
 }
 
 /// Minimum response size (bytes) worth gzip-compressing; below this the framing
@@ -306,20 +420,24 @@ async fn next_master(chan: &AsyncFd<OwnedFd>, listen_addr: SocketAddr) -> NextCo
 /// the master path (`drive_connection(..).await`, slot = 1) share IDENTICAL
 /// per-connection semantics. A failed handshake just drops the connection (the
 /// worker survives), with an optional `--access-log` line.
-pub(crate) async fn drive_connection<S>(
+pub(crate) async fn drive_connection<S, B>(
     stream: TcpStream,
     peer: SocketAddr,
     acceptor: Option<&'static TlsAcceptor>,
-    http: http1::Builder,
+    http: auto::Builder<LocalExec>,
     service: S,
     watchdog_activity: Option<Rc<Cell<Instant>>>,
     idle: Duration,
+    goaway: Option<Rc<Cell<bool>>>,
     access_log: bool,
 ) where
-    S: hyper::service::HttpService<hyper::body::Incoming> + 'static,
+    S: hyper::service::Service<
+            hyper::Request<hyper::body::Incoming>,
+            Response = hyper::Response<B>,
+        > + 'static,
     S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    S::ResBody: hyper::body::Body + 'static,
-    <S::ResBody as hyper::body::Body>::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    B: hyper::body::Body + 'static,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     let io = match crate::tls::wrap_accepted(stream, acceptor).await {
         Some(io) => io,
@@ -330,12 +448,15 @@ pub(crate) async fn drive_connection<S>(
             return;
         }
     };
-    let conn = http.serve_connection(TokioIo::new(io), service);
-    match watchdog_activity {
-        Some(wa) => serve_connection_with_idle(conn, wa, idle).await,
-        None => {
-            let _ = conn.await;
-        }
+    // `into_owned()` requires `Builder<E>: Clone` (LocalExec is Copy), and
+    // yields a `Connection<'static, ...>` so the future is owned and can be
+    // `spawn_local`'d / awaited without borrowing the loop-local builder.
+    let conn = http.serve_connection(TokioIo::new(io), service).into_owned();
+    let has_trigger = watchdog_activity.is_some() || goaway.is_some();
+    if has_trigger {
+        serve_connection_with_idle(conn, watchdog_activity, idle, goaway).await;
+    } else {
+        let _ = conn.await;
     }
 }
 
@@ -356,6 +477,8 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         idle_timeout_secs,
         handler_offload,
         max_pending,
+        h2,
+        h2_stream_budget,
     } = cfg;
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
@@ -431,25 +554,20 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         };
         // Idle-watchdog duration, computed once (used only when `--idle-timeout` > 0).
         let idle = Duration::from_secs(idle_timeout_secs as u64);
-        // Connection-serving config is identical for every connection, so build the
-        // hyper HTTP/1 builder once and reuse it (serve_connection takes &self).
-        //
-        // WI-4 / Q4 note on `header_read_timeout` idle semantics (hyper 1.10.1,
-        // locked in Cargo.lock): hyper arms this timer inside `poll_read_head` as
-        // soon as the connection starts waiting for a request head — which INCLUDES
-        // the idle wait for the next keep-alive request. So on this version it
-        // already doubles as an implicit ~30s idle bound, conflated with the
-        // anti-slowloris header-read budget. We keep it at 30s (anti-slowloris) and
-        // put the configurable idle rotation in the `--idle-timeout` watchdog
-        // instead. Consequence: because this timer stays at 30s, when
-        // `--idle-timeout` is set > 30, it is effectively capped at ~30s by
-        // `header_read_timeout`; values <= 30 are honored by the watchdog, which
-        // fires first. Verified empirically by
-        // `web_idle_timeout_zero_keeps_connection` (a sub-30s idle wait with the
-        // watchdog off keeps the connection alive).
-        let mut http = http1::Builder::new();
-        http.timer(TokioTimer::new())
-            .header_read_timeout(Duration::from_secs(30));
+        // `--http2` OFF: `conn_builder` calls `http1_only()` — ONE code path,
+        // byte-for-byte the previous `http1::Builder` path (the auto builder's
+        // h1 arm IS the h1 path; it rejects the h2 prior-knowledge preface as a
+        // malformed h1 request-line → 400 + close). `--http2` ON: the h2 arm is
+        // configured with `max_concurrent_streams` + `max_header_list_size`
+        // (GAP-B), and the service_fn enforces the per-connection stream budget
+        // (GAP-A). See the WI-4/Q4 note below for hyper 1.10.1's
+        // `header_read_timeout` idle semantics.
+        let http = conn_builder(h2);
+        // GAP-A: per-connection h2 stream budget, enforced via a goaway cell the
+        // service_fn sets and the driver polls. Allocated only when h2 is on AND
+        // a budget is configured, so the h1 path and unbounded-h2 path keep the
+        // original zero-allocation behavior.
+        let h2_budget_on = h2.http2 && h2_stream_budget > 0;
         loop {
             // --max-requests recycling: stop accepting once the cap is reached so
             // the master respawns a fresh worker (bounds memory growth over time).
@@ -485,9 +603,16 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             // suffices (no atomics).
             let rotate_on = cfg.max_conn_requests > 0 || cfg.max_requests > 0;
             let idle_on = idle_timeout_secs > 0;
-            let conn_served = rotate_on.then(|| Rc::new(Cell::new(0usize)));
+            // `conn_served` is allocated when EITHER `rotate_on` OR `h2_budget_on`
+            // is true: the h2 stream budget (GAP-A) reuses it to count streams.
+            let conn_served = (rotate_on || h2_budget_on).then(|| Rc::new(Cell::new(0usize)));
             let last_activity = idle_on.then(|| Rc::new(Cell::new(Instant::now())));
             let watchdog_activity = last_activity.clone();
+            // GAP-A: per-connection goaway cell. The driver handle is cloned
+            // BEFORE the service_fn closure moves the original so the driver can
+            // poll it independently.
+            let goaway = h2_budget_on.then(|| Rc::new(Cell::new(false)));
+            let goaway_for_driver = goaway.clone();
             // Per-connection clone of the offload sender (cloning `None` is free);
             // each request further clones it into its own `async move` so the mpsc
             // handle is owned by the request task.
@@ -501,6 +626,7 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                 let conn_served = conn_served.clone();
                 let last_activity = last_activity.clone();
                 let offload_tx = conn_offload_tx.clone();
+                let goaway = goaway.clone();
                 async move {
                     // A request just arrived on this connection: stamp activity so
                     // the idle watchdog measures inactivity from now (only when the
@@ -514,6 +640,27 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     let path = req.uri().path().to_string();
                     let query = req.uri().query().unwrap_or("").to_string();
                     let protocol = version_str(req.version());
+                    // h2 detection: hyper sets `req.version() == HTTP_2` for streams
+                    // on an h2 connection. Used for GAP-A (per-conn stream budget)
+                    // and GAP-E (defense-in-depth header filter).
+                    let is_h2 = req.version() == hyper::Version::HTTP_2;
+                    // GAP-A: under h2, count this stream against the per-connection
+                    // budget. When the count REACHES the budget, set the goaway
+                    // cell so the driver emits a GOAWAY (the in-flight stream that
+                    // tripped the threshold completes normally; the NEXT stream is
+                    // refused with last_stream_id at or below the budget). `>=` not
+                    // `>` so budget=N allows exactly N streams, not N+1.
+                    // `goaway.is_some()` is the precise gate for the budget path.
+                    if is_h2 && goaway.is_some() {
+                        if let Some(c) = &conn_served {
+                            c.set(c.get() + 1);
+                            if c.get() >= h2_stream_budget {
+                                if let Some(g) = &goaway {
+                                    g.set(true);
+                                }
+                            }
+                        }
+                    }
                     // Captured for the optional access log (method/path are moved into set_request).
                     let log_method_path = if access_log { Some((method.clone(), path.clone())) } else { None };
                     let accepts_gzip = gzip
@@ -614,6 +761,15 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     };
                     let do_gzip = gzipped.is_some();
                     let resp_body = gzipped.unwrap_or(resp_body);
+                    // GAP-E: defense-in-depth h2 header filter (RFC 7540 §8.1.2.2).
+                    // hyper already strips connection-level headers on h2 responses;
+                    // we filter them explicitly so a hyper behavior change cannot leak
+                    // one onto the wire (jury decision 5). The h1 path is untouched.
+                    let resp_headers = if is_h2 {
+                        filter_h2_connection_headers(resp_headers)
+                    } else {
+                        resp_headers
+                    };
                     let mut builder = Response::builder().status(status);
                     for (name, value) in resp_headers {
                         builder = builder.header(name, value);
@@ -627,8 +783,12 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     // cap OR the worker hit its `--max-requests` recycle cap (the C3
                     // drain), so the client reconnects and SO_REUSEPORT re-picks a
                     // worker instead of being cut at exit. With both features off this
-                    // block is skipped entirely (`conn_served` is `None`).
-                    if rotate_on {
+                    // block is skipped entirely. Under h2 the `Connection` header is
+                    // forbidden and stripped by GAP-E above, and the per-connection
+                    // cap is enforced via the goaway mechanism (GAP-A), so this block
+                    // runs only on the h1 path. The worker-level `--max-requests`
+                    // recycle is still honored under h2 via the accept-loop check.
+                    if rotate_on && !is_h2 {
                         let served = conn_served
                             .as_ref()
                             .map(|c| {
@@ -668,19 +828,21 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             // struct, so the per-connection clone is cheap.
             let http = http.clone();
             // Drive the whole connection lifecycle (TLS handshake + serve + PR1 idle
-            // watchdog) via the shared helper. Kernel mode spawns it so connections
-            // interleave concurrently, exactly as before; master mode (slot = 1)
-            // awaits it inline so the worker serves one connection at a time and only
-            // sends the next READY once this connection's `serve_connection`
-            // completes.
+            // watchdog + GAP-A goaway) via the shared helper. Kernel mode spawns it
+            // so connections interleave concurrently, exactly as before; master mode
+            // (slot = 1) awaits it inline so the worker serves one connection at a
+            // time and only sends the next READY once this connection's
+            // `serve_connection` completes.
             if conn_source.is_serial() {
                 drive_connection(
-                    stream, peer, acceptor, http, service, watchdog_activity, idle, access_log,
+                    stream, peer, acceptor, http, service, watchdog_activity, idle,
+                    goaway_for_driver, access_log,
                 )
                 .await;
             } else {
                 tokio::task::spawn_local(drive_connection(
-                    stream, peer, acceptor, http, service, watchdog_activity, idle, access_log,
+                    stream, peer, acceptor, http, service, watchdog_activity, idle,
+                    goaway_for_driver, access_log,
                 ));
             }
         }
@@ -720,52 +882,81 @@ pub(crate) fn should_close_connection(
 /// This is a hand-rolled select (poll the connection, then the idle timer) via
 /// `poll_fn` rather than `tokio::select!`, because the crate does not enable
 /// tokio's `macros` feature.
-pub(crate) async fn serve_connection_with_idle<I, B, S>(
-    conn: http1::Connection<I, S>,
-    last_activity: Rc<Cell<Instant>>,
+pub(crate) async fn serve_connection_with_idle<I, S, E, B>(
+    conn: auto::Connection<'static, I, S, E>,
+    watchdog_activity: Option<Rc<Cell<Instant>>>,
     idle: Duration,
+    goaway: Option<Rc<Cell<bool>>>,
 ) where
     I: hyper::rt::Read + hyper::rt::Write + Unpin + 'static,
-    S: hyper::service::HttpService<hyper::body::Incoming, ResBody = B> + 'static,
+    S: hyper::service::Service<
+            hyper::Request<hyper::body::Incoming>,
+            Response = hyper::Response<B>,
+        > + 'static,
     S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    E: Clone + 'static + hyper_util::server::conn::auto::HttpServerConnExec<S::Future, B>,
     B: hyper::body::Body + 'static,
     B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    auto::Connection<'static, I, S, E>: Future,
 {
-    use std::future::Future;
     use std::task::Poll;
-    // Box::pin both futures so they are movable into the FnMut poll closure and
+    // Box::pin the connection so it is movable into the FnMut poll closure and
     // pinned for `poll` / `graceful_shutdown` (both are `!Unpin`).
     let mut conn = Box::pin(conn);
-    let mut sleep = Box::pin(tokio::time::sleep_until(tokio::time::Instant::from_std(
-        last_activity.get() + idle,
-    )));
+    // Only arm the idle timer when the watchdog is on; otherwise the sleep is
+    // never polled (the goaway-only path skips it entirely).
+    let mut sleep = watchdog_activity.as_ref().map(|wa| {
+        Box::pin(tokio::time::sleep_until(tokio::time::Instant::from_std(
+            wa.get() + idle,
+        )))
+    });
     let mut shutting_down = false;
     std::future::poll_fn(move |cx| {
         // Drive the connection first, so an in-flight request/response always makes
-        // progress before the idle timer can act.
+        // progress before any trigger can act.
         if let Poll::Ready(res) = conn.as_mut().poll(cx) {
             let _ = res;
             return Poll::Ready(());
         }
-        if !shutting_down && sleep.as_mut().poll(cx).is_ready() {
-            let deadline = last_activity.get() + idle;
-            if Instant::now() < deadline {
-                // A request arrived while we waited and pushed the deadline forward;
-                // re-arm the timer to the new deadline and keep serving.
-                sleep
-                    .as_mut()
-                    .reset(tokio::time::Instant::from_std(deadline));
-                let _ = sleep.as_mut().poll(cx);
-            } else {
-                // Genuinely idle past the timeout: begin a graceful shutdown. The
-                // connection is still polled above until it finishes, so any
-                // in-flight response completes before the socket closes.
+        if shutting_down {
+            return Poll::Pending;
+        }
+        // Idle watchdog: only when armed.
+        if let Some(sleep) = sleep.as_mut() {
+            if sleep.as_mut().poll(cx).is_ready() {
+                if let Some(wa) = &watchdog_activity {
+                    let deadline = wa.get() + idle;
+                    if Instant::now() < deadline {
+                        // A request arrived while we waited and pushed the deadline
+                        // forward; re-arm the timer and keep serving.
+                        sleep
+                            .as_mut()
+                            .reset(tokio::time::Instant::from_std(deadline));
+                        let _ = sleep.as_mut().poll(cx);
+                        return Poll::Pending;
+                    }
+                }
+                // Genuinely idle past the timeout: begin a graceful shutdown.
                 conn.as_mut().graceful_shutdown();
                 shutting_down = true;
                 if let Poll::Ready(res) = conn.as_mut().poll(cx) {
                     let _ = res;
                     return Poll::Ready(());
                 }
+                return Poll::Pending;
+            }
+        }
+        // GAP-A goaway: polled every time so a budget hit during an active h2
+        // connection is acted on promptly.
+        if let Some(goaway) = &goaway {
+            if goaway.get() {
+                conn.as_mut().graceful_shutdown();
+                shutting_down = true;
+                if let Poll::Ready(res) = conn.as_mut().poll(cx) {
+                    let _ = res;
+                    return Poll::Ready(());
+                }
+                return Poll::Pending;
             }
         }
         Poll::Pending

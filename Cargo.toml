@@ -74,6 +74,14 @@ rustls-pemfile = "2"
 # suite, written to a temp dir and never committed. Ring backend only (no
 # aws-lc-rs), matching the runtime crypto provider and staying musl-friendly.
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+# HTTP/2 client for the web_tests h2c prior-knowledge suite. `h2` is pinned to
+# 0.4 (hyper 1.10.1 transitively pins h2 0.4.x); dev-only, never linked into
+# the produced `--web` binary. `tokio` is the current-thread runtime the h2
+# client drives; `bytes`/`http` are h2's frame/body types.
+h2 = "0.4"
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time"] }
+bytes = "1"
+http = "1"
 
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of
