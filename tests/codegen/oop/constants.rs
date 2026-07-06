@@ -221,3 +221,13 @@ echo Derived::get() . "\n";
     );
     assert_eq!(out, "10\n20\n");
 }
+
+/// PHP 8.3 typed class constants: `const TYPE NAME = ...` parses in class-like bodies and the
+/// constants read back byte-identically to PHP 8.5.
+#[test]
+fn test_typed_class_constants_parse_and_read() {
+    let out = compile_and_run(
+        "<?php final class C { public const string NAME = 'n'; private const int LIMIT = 3; public static function d(): string { return self::NAME . ':' . (string) self::LIMIT; } } echo C::d();",
+    );
+    assert_eq!(out, "n:3");
+}
