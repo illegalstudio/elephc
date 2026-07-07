@@ -6,6 +6,10 @@ Releases are listed newest first.
 ## [Unreleased]
 - Removed the legacy direct AST → ASM backend completely. EIR is now the only
   codegen implementation path.
+- `in_array()` now honors its optional third `$strict` argument: omitted/false
+  uses PHP loose membership for supported scalar/string paths, including
+  numeric-string coercion, string loose equality, and bool/int truthiness, while
+  `true` uses strict type-identical membership.
 - Int-backed enum `from()` / `tryFrom()` now accept a dynamically-typed (`mixed`) argument (issue #449): a `foreach` value over a heterogeneous array, an untyped parameter, etc. are coerced on their runtime type before the enum lookup — integer/numeric-string resolve (or throw `ValueError`), float truncates, bool/null coerce, and array/object/resource/closure throw `TypeError` naming the given type. Previously any `mixed` argument was rejected at compile time. Target-aware on every supported backend.
 - Int-backed enum `from()` / `tryFrom()` now accept a numeric string (issue #349): `Level::from("1")` coerces the string to the integer backing value (as a distinct EIR coercion lowered before the enum call) and returns the matching case, instead of being rejected at compile time. A numeric string with no matching case throws `ValueError`; a non-numeric string (e.g. `"x"`) throws `TypeError` with PHP's exact argument-type message — matching PHP's coercive typing on every supported target, including PHP-rejected libc `strtod` extensions such as hexadecimal `"0x1"`, `"INF"`, and `"NAN"`.
 - Fixed an enum `from()` / `tryFrom()` refcount bug (surfaced while fixing #349): the returned case singleton was under-retained, so storing the result into a reassigned variable inside a loop drove the persistent singleton's refcount to zero and freed it — producing garbage reads or a heap crash after a few iterations. `from()`/`tryFrom()` now retain the matched singleton, keeping it alive like direct case access. Affected both backed-enum backings.
