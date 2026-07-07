@@ -26,6 +26,7 @@ mod offload;
 mod request_state;
 mod rss;
 mod server;
+mod static_asset;
 mod tls;
 mod worker;
 mod worker_mode;

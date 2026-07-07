@@ -646,6 +646,25 @@ blocking PHP `handler()` off the I/O thread without letting handlers overlap.
   or the latency/rps windows. Off by default; the hot path is byte-for-byte
   unchanged when `--metrics` is absent (the intercept is a single `if` that
   short-circuits on the captured `metrics` bool). Same in all three web modes.
+- **Static-asset fast path** — opt-in `--static-dir DIR` serves files from a
+  directory on the I/O thread (in the worker process), before the PHP handler
+  runs, so a static asset never occupies the PHP runtime or blocks a dynamic
+  request. `--static-prefix PATH` (default `/assets`) is the URL prefix that
+  triggers the intercept; any other path falls through to PHP unchanged. Files
+  are read off-thread via `spawn_blocking` + `std::fs` (no `tokio::fs`
+  dependency), and each worker keeps a per-worker in-memory LRU cache sized by
+  `--static-cache-size MIB` (default 64; `0` disables caching). `--static-max-age
+  SECS` (default 3600) sets the `Cache-Control: max-age` on hits.
+  `--static-max-file-size BYTES` caps the largest file served (default 1 MiB;
+  `0` = no cap). Responses carry `Content-Type` from a small extension table,
+  `ETag` (`"<size>-<mtime_secs>"`, no hashing), and, on a matching
+  `If-None-Match`, return `304`. Path traversal is rejected with `404` (not
+  `403`, to avoid leaking the directory layout). The fast path records 200/304/
+  404/500 through `--metrics` like any other request, so it does not skew the
+  stats. Off by default; the hot path is byte-for-byte unchanged when
+  `--static-dir` is absent (the intercept is a single `if` short-circuited by
+  the captured `static_enabled` bool, which is `false` and constant-folds away).
+  Same in all three web modes.
 - **Graceful shutdown** — the master shuts down cleanly on `SIGINT` (Ctrl-C) and
   `SIGTERM`: it forwards termination to the workers, reaps them, and exits `0`. An
   in-flight request may be dropped when shutdown arrives.
@@ -686,11 +705,12 @@ available. The following are not yet available:
 - **`--listen` is TCP only** — Unix-domain-socket listening is not yet supported.
 - **No sessions** — `$_SESSION` / `session_start()` are not provided. Cookies
   (`$_COOKIE`, `setcookie()`) are, so you can build session handling yourself.
-- **Not supported in this release:** sessions, static file serving, HTTP/3,
+- **Not supported in this release:** sessions, HTTP/3,
   automatic certificate management (ACME) — front the server with a reverse proxy
   for these (below). HTTP/2 **is** supported as an opt-in flag (see
   [HTTP/2](#http2) below). In-process TLS **is** supported (see
-  [TLS / HTTPS](#tls--https)).
+  [TLS / HTTPS](#tls--https)). Static-asset serving **is** supported as an opt-in
+  flag (see [Static-asset fast path](#robustness) above).
 
 ## TLS / HTTPS
 

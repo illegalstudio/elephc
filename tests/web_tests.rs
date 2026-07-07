@@ -4554,3 +4554,144 @@ fn web_metrics_records_status_classes() {
         resp,
     );
 }
+
+// ---------------------------------------------------------------------------
+// T2#5: static-asset fast path (`--static-dir` / `--static-prefix`).
+// ---------------------------------------------------------------------------
+
+/// Makes a unique temp dir for a static-asset test (deterministic unique name
+/// via an `AtomicU64` counter, not time) and returns its path. Each test
+/// cleans up with `remove_dir_all` (best effort) at the end.
+static STATIC_TEST_ID: AtomicUsize = AtomicUsize::new(0);
+
+/// Builds a unique temp dir for a static-asset test.
+fn make_static_dir(label: &str) -> PathBuf {
+    let id = STATIC_TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("elephc_static_web_{}_{}", label, id));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Extracts the value of a header (case-insensitive name) from a raw HTTP
+/// response, or `None` if absent. Used for `ETag`/`Content-Type`/`Cache-Control`
+/// assertions on the static-asset tests.
+fn header_value(resp: &str, name: &str) -> Option<String> {
+    let headers = resp.split_once("\r\n\r\n").map(|(h, _)| h).unwrap_or(resp);
+    for line in headers.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case(name) {
+                return Some(v.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Verifies `--static-dir DIR` serves a file under DIR from `/assets` on the
+/// I/O thread: status 200, the file body, a `Content-Type` matching the
+/// extension, an `ETag`, and a `Cache-Control` with the default `max-age=3600`.
+#[test]
+fn web_static_serves_file_from_dir() {
+    let dir = make_static_dir("serve");
+    let bin = compile_web(&dir, "<?php echo \"php\";", "app");
+    std::fs::write(dir.join("hello.txt"), "asset").unwrap();
+    let server = spawn_web_with_args(&bin, &["--static-dir", dir.to_str().unwrap()]);
+    let resp = http_get(server.addr(), "/assets/hello.txt");
+    assert!(resp.starts_with("HTTP/1.1 200"), "status 200: {:?}", resp);
+    assert!(resp.ends_with("asset"), "body is the file: {:?}", resp);
+    assert!(
+        header_value(&resp, "content-type").is_some_and(|c| c.contains("text/plain")),
+        "content-type text/plain: {:?}",
+        resp,
+    );
+    assert!(header_value(&resp, "etag").is_some(), "etag present: {:?}", resp);
+    assert!(
+        header_value(&resp, "cache-control").is_some_and(|c| c.contains("max-age=3600")),
+        "cache-control max-age=3600: {:?}",
+        resp,
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Verifies that WITHOUT `--static-dir`, a request to `/assets/anything.txt`
+/// falls through to the PHP handler (body is `php`, the intercept is off).
+/// Guards the OFF path (byte-for-byte the original hot path).
+#[test]
+fn web_static_falls_through_to_php_without_flag() {
+    let dir = make_static_dir("off");
+    let bin = compile_web(&dir, "<?php echo \"php\";", "app");
+    let server = spawn_web_with_args(&bin, &[]);
+    let resp = http_get(server.addr(), "/assets/anything.txt");
+    assert!(resp.ends_with("php"), "falls through to PHP: {:?}", resp);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Verifies a missing file under `--static-dir` returns 404 and does NOT fall
+/// through to the PHP handler (the body is NOT `php`).
+#[test]
+fn web_static_404_missing_file() {
+    let dir = make_static_dir("404");
+    let bin = compile_web(&dir, "<?php echo \"php\";", "app");
+    let server = spawn_web_with_args(&bin, &["--static-dir", dir.to_str().unwrap()]);
+    let resp = http_get(server.addr(), "/assets/nope.txt");
+    assert!(resp.starts_with("HTTP/1.1 404"), "status 404: {:?}", resp);
+    assert!(
+        !resp.ends_with("php"),
+        "must NOT fall through to PHP: {:?}",
+        resp,
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Verifies a `..` traversal attempt (percent-encoded `%2e%2e`) is rejected as
+/// 404 and the file outside the root is NOT served. Uses a raw TCP HTTP request
+/// with the literal `%2e%2e` path so the encoded `..` reaches the server
+/// unmodified (curl may normalize it otherwise).
+#[test]
+fn web_static_traversal_rejected() {
+    let dir = make_static_dir("traversal");
+    let bin = compile_web(&dir, "<?php echo \"php\";", "app");
+    std::fs::write(dir.join("inside.txt"), "inside").unwrap();
+    // Write a sibling file OUTSIDE the static root.
+    let parent = dir.parent().unwrap().to_path_buf();
+    let outside_name = format!("elephc_static_outside_{}.txt", STATIC_TEST_ID.load(Ordering::SeqCst));
+    std::fs::write(parent.join(&outside_name), "outside-secret").unwrap();
+    let server = spawn_web_with_args(&bin, &["--static-dir", dir.to_str().unwrap()]);
+    // Raw TCP request with the literal `%2e%2e` path so the server's
+    // `percent_decode` decodes it to `..` and the traversal guard rejects it.
+    let path = format!("/assets/%2e%2e/{}", outside_name);
+    let resp = http_get(server.addr(), &path);
+    assert!(resp.starts_with("HTTP/1.1 404"), "traversal is 404: {:?}", resp);
+    assert!(
+        !resp.contains("outside-secret"),
+        "outside file must NOT be served: {:?}",
+        resp,
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_file(parent.join(&outside_name));
+}
+
+/// Verifies `If-None-Match` matching the ETag returns 304 with an empty body.
+/// The first GET captures the ETag; the second GET (with `If-None-Match: <etag>`)
+/// returns 304.
+#[test]
+fn web_static_if_none_match_returns_304() {
+    let dir = make_static_dir("304");
+    let bin = compile_web(&dir, "<?php echo \"php\";", "app");
+    std::fs::write(dir.join("etag.txt"), "v").unwrap();
+    let server = spawn_web_with_args(&bin, &["--static-dir", dir.to_str().unwrap()]);
+    let first = http_get(server.addr(), "/assets/etag.txt");
+    let etag = header_value(&first, "etag").expect("etag on first response");
+    let resp = http_request(
+        server.addr(),
+        "GET",
+        "/assets/etag.txt",
+        &[("If-None-Match", etag.as_str())],
+        "",
+    );
+    assert!(resp.starts_with("HTTP/1.1 304"), "status 304: {:?}", resp);
+    // 304 has no body (after the blank line).
+    let body = http_body(&resp);
+    assert!(body.is_empty(), "304 body is empty: {:?}", resp);
+    let _ = std::fs::remove_dir_all(&dir);
+}

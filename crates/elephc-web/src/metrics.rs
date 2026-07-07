@@ -347,13 +347,6 @@ impl Drop for H2StreamGuard {
     }
 }
 
-/// Returns the current `HANDLER_INFLIGHT` count (used only by tests; the
-/// service_fn touches the static directly via `fetch_add`/`fetch_sub`).
-#[cfg(test)]
-pub(crate) fn handler_inflight_load() -> usize {
-    HANDLER_INFLIGHT.load(Ordering::Relaxed)
-}
-
 /// Returns the current `OVERLOAD_503` count (used only by tests).
 #[cfg(test)]
 pub(crate) fn overload_503_load() -> u64 {

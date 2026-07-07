@@ -54,6 +54,18 @@ Options:
                           request lands on a random worker; scrape repeatedly for a cluster view
   --metrics-path PATH    Path that serves the metrics snapshot (default /_status; only
                           meaningful with --metrics)
+  --static-dir DIR        Serve files under DIR from --static-prefix (default off).
+                          Served on the I/O thread without invoking the PHP handler
+                          (raises concurrency under N=1). Files are cached per worker
+                          up to --static-cache-size MiB; reload via SIGHUP (T1#2)
+  --static-prefix PATH   URL prefix that maps to --static-dir (default /assets)
+  --static-max-file-size BYTES
+                          Refuse a single file larger than this (default 10485760 = 10
+                          MiB; 0 = no cap). Defense, not a cache limit
+  --static-cache-size MiB
+                          Per-worker LRU byte cap for the static cache (default 64).
+                          0 is rejected when --static-dir is set
+  --static-max-age SECS  Cache-Control max-age on static responses (default 3600)
   --max-execution-time N Kill (and respawn) a worker whose handler runs > N seconds; 0 = no limit
   --worker-gc-interval N Run the cycle collector every N requests; 0 = never, 1 = every request (worker mode default: 1)
   --gzip                 Compress responses when the client sends Accept-Encoding: gzip
@@ -295,6 +307,27 @@ struct ServerArgs {
     /// Threaded into `WorkerConfig.metrics_path`. An empty value is rejected
     /// (exit 2) when `--metrics` is on.
     metrics_path: String,
+    /// Opt-in `--static-dir DIR` (None = off). When set, each worker serves
+    /// files under DIR from `--static-prefix` (default `/assets`) directly on
+    /// the I/O thread WITHOUT invoking the PHP handler — the lever that raises
+    /// effective concurrency under N=1. Files are cached per worker in an LRU
+    /// (`--static-cache-size` MiB, default 64); misses load from disk via
+    /// `spawn_blocking`. Threaded into `WorkerConfig.static_dir` (leaked once
+    /// to `&'static str`).
+    static_dir: Option<String>,
+    /// URL prefix that maps to `--static-dir` (`--static-prefix`, default
+    /// `/assets`). Only meaningful with `--static-dir`.
+    static_prefix: String,
+    /// Per-file size cap in BYTES (`--static-max-file-size`, default 10 MiB).
+    /// `0` means no cap (allow any size). Defense, not a cache limit.
+    static_max_file_size: u64,
+    /// Per-worker LRU byte cap in MiB (`--static-cache-size`, default 64).
+    /// Converted to bytes in `worker_config()`. `0` is rejected when
+    /// `--static-dir` is set.
+    static_cache_size_mib: u64,
+    /// `Cache-Control: public, max-age=<secs>` on static responses
+    /// (`--static-max-age`, default 3600).
+    static_max_age: u32,
 }
 
 impl ServerArgs {
@@ -341,6 +374,24 @@ impl ServerArgs {
             // entry point per process, so this leaks at most once.
             metrics_path: Box::leak(self.metrics_path.clone().into_boxed_str())
                 as &'static str,
+            // T2#5: static-asset fast path. Leak the two strings ONCE so the
+            // `Copy` `WorkerConfig` carries `&'static str` handles (mirrors the
+            // `metrics_path` pattern). When `--static-dir` is off, `static_dir`
+            // is `None` and the intercept is a no-op; `static_prefix` is still
+            // leaked (a ~10-byte string once at startup is negligible) so the
+            // field is always a valid `&'static str`. The cache byte cap is
+            // converted from MiB → bytes here so the per-accept check compares
+            // bytes without redoing the unit math.
+            static_dir: self.static_dir.as_ref().map(|s| {
+                Box::leak(s.clone().into_boxed_str()) as &'static str
+            }),
+            static_prefix: Box::leak(self.static_prefix.clone().into_boxed_str())
+                as &'static str,
+            static_max_file_size: self.static_max_file_size,
+            static_cache_size_bytes: self.static_cache_size_mib
+                .saturating_mul(1024)
+                .saturating_mul(1024),
+            static_max_age: self.static_max_age,
         }
     }
 
@@ -444,6 +495,20 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
     let mut metrics = false;
     let mut metrics_path: String = "/_status".into();
     let mut metrics_path_set = false;
+    // T2#5: static-asset fast path. `--static-dir DIR` is the on/off switch;
+    // the tunables are inert without it (one combined inert-flag warning).
+    // `--static-max-file-size 0` means "no cap" (allowed). `--static-cache-size
+    // 0` is rejected when `--static-dir` is set (an empty cache would re-load
+    // every file on every request — pointless; exit 2).
+    let mut static_dir: Option<String> = None;
+    let mut static_prefix: String = "/assets".into();
+    let mut static_max_file_size: u64 = 10 * 1024 * 1024;
+    let mut static_cache_size_mib: u64 = 64;
+    let mut static_max_age: u32 = 3600;
+    let mut static_prefix_set = false;
+    let mut static_max_file_size_set = false;
+    let mut static_cache_size_set = false;
+    let mut static_max_age_set = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -529,6 +594,74 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
                     }
                     None => {
                         eprintln!("error: --metrics-path requires a value (try --help)");
+                        return ParsedArgs::Exit(2);
+                    }
+                }
+            }
+            "--static-dir" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => static_dir = Some(v.clone()),
+                    None => {
+                        eprintln!("error: --static-dir requires a value (try --help)");
+                        return ParsedArgs::Exit(2);
+                    }
+                }
+            }
+            "--static-prefix" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => {
+                        static_prefix = v.clone();
+                        static_prefix_set = true;
+                    }
+                    None => {
+                        eprintln!("error: --static-prefix requires a value (try --help)");
+                        return ParsedArgs::Exit(2);
+                    }
+                }
+            }
+            "--static-max-file-size" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u64>().ok()) {
+                    Some(v) => {
+                        static_max_file_size = v;
+                        static_max_file_size_set = true;
+                    }
+                    None => {
+                        eprintln!(
+                            "error: --static-max-file-size requires a non-negative integer BYTES value (try --help)"
+                        );
+                        return ParsedArgs::Exit(2);
+                    }
+                }
+            }
+            "--static-cache-size" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u64>().ok()) {
+                    Some(v) => {
+                        static_cache_size_mib = v;
+                        static_cache_size_set = true;
+                    }
+                    None => {
+                        eprintln!(
+                            "error: --static-cache-size requires a non-negative integer MiB value (try --help)"
+                        );
+                        return ParsedArgs::Exit(2);
+                    }
+                }
+            }
+            "--static-max-age" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u32>().ok()) {
+                    Some(v) => {
+                        static_max_age = v;
+                        static_max_age_set = true;
+                    }
+                    None => {
+                        eprintln!(
+                            "error: --static-max-age requires a non-negative integer SECS value (try --help)"
+                        );
                         return ParsedArgs::Exit(2);
                     }
                 }
@@ -633,6 +766,24 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
         eprintln!("error: --metrics-path must not be empty (try --help)");
         return ParsedArgs::Exit(2);
     }
+    // T2#5: inert static tunables. One combined warning when any tunable is
+    // set without `--static-dir` so a stray flag is not silently misleading.
+    let any_static_tunable_set = static_prefix_set
+        || static_max_file_size_set
+        || static_cache_size_set
+        || static_max_age_set;
+    if any_static_tunable_set && static_dir.is_none() {
+        eprintln!("warning: --static-* flags are ignored without --static-dir");
+    }
+    // `--static-cache-size 0` is rejected when `--static-dir` is set: an empty
+    // cache would re-load every file on every request, defeating the fast path.
+    // `--static-max-file-size 0` means "no cap" and is allowed (documented).
+    if static_dir.is_some() && static_cache_size_mib == 0 {
+        eprintln!(
+            "error: --static-cache-size must be greater than 0 when --static-dir is set (try --help)"
+        );
+        return ParsedArgs::Exit(2);
+    }
     // Worker-mode defaults: recycle after 1000 requests and collect cycles
     // every request, unless the operator explicitly overrode either flag.
     if worker_mode && !max_requests_set {
@@ -664,6 +815,11 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             reload_grace_secs,
             metrics,
             metrics_path,
+            static_dir,
+            static_prefix,
+            static_max_file_size,
+            static_cache_size_mib,
+            static_max_age,
         }),
         None => {
             eprintln!("error: --web binary requires --listen host:port (try --help)");

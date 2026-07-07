@@ -46,10 +46,11 @@
 //!   `elephc_web_worker_register` and serve at least one request reliably
 //!   outlive the FAST_DEATH window.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::convert::Infallible;
 use std::ffi::{c_char, CString};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -333,6 +334,11 @@ pub(crate) fn enter_worker_loop(mode: &'static str) -> ! {
         reload_grace_secs,
         metrics,
         metrics_path: _,
+        static_dir,
+        static_prefix: _,
+        static_max_file_size: _,
+        static_cache_size_bytes: _,
+        static_max_age: _,
     } = cfg;
     // T1#3: stamp the worker start instant + web-mode label ONCE so the
     // `/_status` snapshot can report uptime/mode. Idempotent (`get_or_init`);
@@ -341,6 +347,27 @@ pub(crate) fn enter_worker_loop(mode: &'static str) -> ! {
     // (call-site distinction, avoiding a `WorkerConfig.mode` field).
     crate::metrics::mark_started();
     crate::metrics::mark_mode(mode);
+    // T2#5: static-asset fast path. Build the per-worker LRU cache +
+    // canonicalize the root ONCE. When `--static-dir` is off, `static_cache`
+    // is None and the intercept is a no-op (byte-for-byte the original path).
+    // When on, the cache is `Rc<RefCell<...>>`, cloned cheaply into each
+    // connection's service_fn closure.
+    let static_cache: Option<Rc<RefCell<crate::static_asset::StaticCache>>> = static_dir.map(|_| {
+        Rc::new(RefCell::new(crate::static_asset::StaticCache::new(
+            cfg.static_cache_size_bytes as usize,
+        )))
+    });
+    let static_root: Option<PathBuf> = match static_dir {
+        Some(d) => match std::fs::canonicalize(d) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                eprintln!("elephc-web: --static-dir {:?} could not be canonicalized: {}", d, e);
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
+    let static_enabled = static_cache.is_some();
     // Install the SIGUSR1 graceful-drain handler. This runs AFTER
     // `server::reset_signal_handlers_to_default` (called in the forked child
     // before boot), so the handler is not clobbered. SIGTERM stays DFL (hard
@@ -516,6 +543,12 @@ pub(crate) fn enter_worker_loop(mode: &'static str) -> ! {
             } else {
                 None
             };
+            // T2#5: per-connection clone of the static cache + root. Cloning
+            // `Option<Rc<RefCell<...>>>` is free when `None` (the OFF path) and
+            // one `Rc` clone when on. The root `PathBuf` is cloned ONLY when
+            // `static_enabled` so the OFF path is zero-alloc.
+            let conn_static_cache = static_cache.clone();
+            let static_root_for_conn = if static_enabled { static_root.clone() } else { None };
             // `service_fn` is FnMut — called once per request on this connection —
             // so the OUTER closure is non-async and clones the per-connection
             // `Option<Rc<..>>` handles into each returned `async move` block (cloning
@@ -526,6 +559,8 @@ pub(crate) fn enter_worker_loop(mode: &'static str) -> ! {
                 let offload_tx = conn_offload_tx.clone();
                 let goaway = goaway.clone();
                 let metrics_path = conn_metrics_path.clone();
+                let conn_static_cache = conn_static_cache.clone();
+                let static_root_for_conn = static_root_for_conn.clone();
                 async move {
                     // A request just arrived on this connection: stamp activity so
                     // the idle watchdog measures inactivity from now (only when the
@@ -582,6 +617,48 @@ pub(crate) fn enter_worker_loop(mode: &'static str) -> ! {
                                 }
                             }
                         }
+                    }
+                    // T2#5: static-asset fast path. Serve files under
+                    // --static-dir from --static-prefix directly on the I/O
+                    // thread (cache hit = memory; miss = spawn_blocking disk
+                    // read), WITHOUT invoking the PHP handler — the lever that
+                    // raises concurrency under N=1. When `--static-dir` is off,
+                    // `static_enabled` is false and this `if` short-circuits
+                    // with no allocation (byte-for-byte the original hot path).
+                    // Static responses ARE recorded as requests (real traffic),
+                    // via `record_request` below. The intercept runs AFTER
+                    // `let started` so it can record, and AFTER the h2 guard so
+                    // h2 static requests count as streams.
+                    if static_enabled
+                        && req.uri().path().starts_with(cfg.static_prefix)
+                        && (req.method() == hyper::Method::GET
+                            || req.method() == hyper::Method::HEAD)
+                    {
+                        let rel_raw = &req.uri().path()[cfg.static_prefix.len()..];
+                        // Strip a leading `/` so `root.join(rel)` stays under root
+                        // (a leading slash would make it absolute, bypassing root).
+                        let rel_raw = rel_raw.strip_prefix('/').unwrap_or(rel_raw);
+                        let rel = crate::static_asset::percent_decode(rel_raw);
+                        let if_none_match = req
+                            .headers()
+                            .get(hyper::header::IF_NONE_MATCH)
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.to_string());
+                        let (resp, status) = crate::static_asset::serve_static(
+                            conn_static_cache.as_ref().unwrap().clone(),
+                            static_root_for_conn.clone().unwrap(),
+                            rel,
+                            req.method().as_str(),
+                            if_none_match.as_deref(),
+                            cfg.static_max_file_size,
+                            cfg.static_max_age,
+                        )
+                        .await;
+                        crate::metrics::record_request(
+                            started.elapsed().as_micros() as u64,
+                            status,
+                        );
+                        return Ok::<_, Infallible>(resp);
                     }
                     let log_method_path = if access_log { Some((method.clone(), path.clone())) } else { None };
                     let accepts_gzip = gzip
@@ -964,6 +1041,11 @@ mod tests {
             reload_grace_secs: 10,
             metrics: false,
             metrics_path: "/_status",
+            static_dir: None,
+            static_prefix: "/assets",
+            static_max_file_size: 10 * 1024 * 1024,
+            static_cache_size_bytes: 64 * 1024 * 1024,
+            static_max_age: 3600,
         };
         set_worker_config(cfg);
         let peeked = peek_worker_config();
