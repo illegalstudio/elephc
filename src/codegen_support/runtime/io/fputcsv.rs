@@ -8,7 +8,9 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen::{
+    abi::emit_symbol_address, emit::Emitter, platform::Arch,
+};
 
 /// Emits the `__rt_fputcsv` runtime helper that writes a PHP string array as a CSV line to a file descriptor.
 ///
@@ -66,8 +68,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     // -- write comma separator before 2nd+ fields --
     emitter.instruction("cbz x9, __rt_fputcsv_field");                          // skip comma for first field
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.adrp("x1", "__rt_fputcsv_comma_lit");                // load comma literal address
-    emitter.add_lo12("x1", "x1", "__rt_fputcsv_comma_lit");          // resolve exact address
+    emit_symbol_address(emitter, "x1", "__rt_fputcsv_comma_lit");               // resolve comma literal address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (comma)
     emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
@@ -110,8 +111,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
 
     // -- write opening quote --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.adrp("x1", "__rt_fputcsv_quote_lit");                // load quote literal address
-    emitter.add_lo12("x1", "x1", "__rt_fputcsv_quote_lit");          // resolve exact address
+    emit_symbol_address(emitter, "x1", "__rt_fputcsv_quote_lit");               // resolve quote literal address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (quote)
     emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
@@ -132,8 +132,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
 
     // -- escape quote by writing two quotes --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.adrp("x1", "__rt_fputcsv_quote_lit");                // load quote literal address
-    emitter.add_lo12("x1", "x1", "__rt_fputcsv_quote_lit");          // resolve exact address
+    emit_symbol_address(emitter, "x1", "__rt_fputcsv_quote_lit");               // resolve quote literal address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (escape quote)
     emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
@@ -159,8 +158,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     // -- write closing quote --
     emitter.label("__rt_fputcsv_close_q");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.adrp("x1", "__rt_fputcsv_quote_lit");                // load quote literal address
-    emitter.add_lo12("x1", "x1", "__rt_fputcsv_quote_lit");          // resolve exact address
+    emit_symbol_address(emitter, "x1", "__rt_fputcsv_quote_lit");               // resolve quote literal address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (quote)
     emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
@@ -188,8 +186,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     // -- write trailing newline --
     emitter.label("__rt_fputcsv_newline");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.adrp("x1", "__rt_fputcsv_nl_lit");                   // load newline literal address
-    emitter.add_lo12("x1", "x1", "__rt_fputcsv_nl_lit");             // resolve exact address
+    emit_symbol_address(emitter, "x1", "__rt_fputcsv_nl_lit");               // resolve nl literal address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (newline)
     emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes

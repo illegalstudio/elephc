@@ -1910,8 +1910,7 @@ fn emit_fatal_message(ctx: &mut FunctionContext<'_>, message: &[u8]) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #2");                              // select stderr for the fatal diagnostic
-            ctx.emitter.adrp("x1", &message_label);
-            ctx.emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);               // resolve the message diagnostic address
             ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the fatal diagnostic byte length to write()
             ctx.emitter.syscall(4);
         }
@@ -2730,8 +2729,7 @@ fn emit_property_on_null_warning(ctx: &mut FunctionContext<'_>, property: &str) 
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.adrp("x1", &message_label);
-            ctx.emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);               // resolve the message diagnostic address
             ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the property-on-null warning byte length
         }
         Arch::X86_64 => {
@@ -3636,8 +3634,7 @@ fn emit_property_assign_on_null_fatal(ctx: &mut FunctionContext<'_>, property: &
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #2");                              // write the property-assign-on-null fatal to stderr
-            ctx.emitter.adrp("x1", &message_label);
-            ctx.emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);               // resolve the message diagnostic address
             ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the property-assign-on-null fatal byte length
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);

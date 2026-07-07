@@ -1,0 +1,24 @@
+[package]
+name = "elephc-globals-audit"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "elephc_globals_audit"
+path = "src/lib.rs"
+
+[[bin]]
+name = "elephc-globals-audit"
+path = "src/main.rs"
+
+[dependencies]
+# The audit tool stays dependency-light: parsing is text-scanning based and the
+# baseline is a simple `sym = "CLASS"  # notes` text format parsed by hand, to
+# avoid pulling a TOML/regex dependency into the standalone tool. Output is
+# plain text.
+
+[dev-dependencies]
+
+# The audit crate is a standalone tool and never links the compiler or any
+# bridge crate: it reads source files and emitted assembly as text.

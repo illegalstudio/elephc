@@ -20,7 +20,9 @@
 //!   `__rt_strtotime_ret` / `__rt_strtotime_fail` (or branches to the offsets strategy on
 //!   day-first fallback).
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen::{
+    abi::emit_symbol_address, emit::Emitter, platform::Arch,
+};
 
 /// Dispatches to the architecture-specific textual-date parser.
 pub(crate) fn emit_textual_date(emitter: &mut Emitter) {
@@ -50,8 +52,7 @@ fn emit_textual_date_arm64(emitter: &mut Emitter) {
 
     // -- month-first: "Month D[,] Y" — month is at the start, already in lc16 --
     emitter.instruction("add x6, sp, #64");                                     // candidate = lc16 buffer
-    emitter.adrp("x7", "_strtotime_keyword_tab");                               // month/keyword table page
-    emitter.add_lo12("x7", "x7", "_strtotime_keyword_tab");                     // resolve table address
+    emit_symbol_address(emitter, "x7", "_strtotime_keyword_tab");               // resolve keyword table address
     emitter.instruction("mov x8, x2");                                          // available bytes = len
     emitter.instruction("mov x11, #16");                                        // capped to lc16 width
     emitter.instruction("cmp x8, x11");                                         // len > 16 ?
@@ -93,8 +94,7 @@ fn emit_textual_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_strtotime_offsets_entry");                   // yes → let offsets try
     emitter.instruction("bl __rt_strtotime_lc_cursor");                         // lowercase 16 bytes from the cursor into lc16
     emitter.instruction("add x6, sp, #64");                                     // candidate = lc16 buffer
-    emitter.adrp("x7", "_strtotime_keyword_tab");                               // month/keyword table page
-    emitter.add_lo12("x7", "x7", "_strtotime_keyword_tab");                     // resolve table address
+    emit_symbol_address(emitter, "x7", "_strtotime_keyword_tab");               // resolve keyword table address
     emitter.instruction("sub x8, x4, x3");                                      // remaining input bytes
     emitter.instruction("mov x11, #16");                                        // capped to lc16 width
     emitter.instruction("cmp x8, x11");                                         // remaining > 16 ?

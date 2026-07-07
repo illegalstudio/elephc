@@ -20,8 +20,8 @@ categories = ["compilers", "command-line-utilities"]
 # libelephc_web.a (--web prefork HTTP server) into target/<profile>/, where
 # linker.rs locates them for programs that use those features.
 [workspace]
-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web"]
-default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web"]
+members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-globals-audit"]
+default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-globals-audit"]
 resolver = "2"
 
 [[bin]]

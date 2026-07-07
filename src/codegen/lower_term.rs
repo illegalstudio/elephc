@@ -186,8 +186,7 @@ fn lower_fatal(ctx: &mut FunctionContext<'_>, message: DataId) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #2");                              // fd = stderr for the EIR fatal diagnostic
-            ctx.emitter.adrp("x1", &message_label);
-            ctx.emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);               // resolve the message diagnostic address
             ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the EIR fatal diagnostic byte length to write
             ctx.emitter.syscall(4);
         }

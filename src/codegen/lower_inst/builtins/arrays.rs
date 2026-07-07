@@ -655,11 +655,9 @@ fn emit_dynamic_string_callback_abort(ctx: &mut FunctionContext<'_>, owner: &str
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the unresolved runtime callback diagnostic to stderr
-            ctx.emitter.adrp("x1", &message_label); // load the runtime callback diagnostic page
-            ctx.emitter.add_lo12("x1", "x1", &message_label); // resolve the runtime callback diagnostic address
-            ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the runtime callback diagnostic byte length to write
+            ctx.emitter.instruction("mov x0, #2");                              // write the unresolved runtime callback diagnostic to stderr
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);               // resolve the message diagnostic address
+            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the runtime callback diagnostic byte length to write
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }

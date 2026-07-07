@@ -1,0 +1,6 @@
+# Compiled microbench artifacts. The .c/.s sources under microbench/ are
+# tracked; only the extensionless built binaries and object files are ignored.
+microbench/bench
+microbench/bench_linux_aarch64
+microbench/bench_linux_x86_64
+microbench/*.o

@@ -242,8 +242,7 @@ pub(crate) fn lower_pi(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
     let label = ctx.data.add_float(std::f64::consts::PI);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.adrp("x9", &label);                                     // load the page address that contains the M_PI floating constant
-            ctx.emitter.ldr_lo12("d0", "x9", &label);                          // load the M_PI floating constant into the floating result register
+            abi::emit_load_symbol_to_reg_via_page(ctx.emitter, "d0", "x9", &label); // load the M_PI floating constant into the floating result register
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("movsd xmm0, QWORD PTR [rip + {}]", label)); // load the M_PI floating constant into the floating result register

@@ -9,7 +9,7 @@
 //! Key details:
 //! - Formatting reads libc tm fields and fixed date tables using AArch64 pointer/length return conventions.
 
-use crate::codegen_support::emit::Emitter;
+use crate::codegen::{abi::emit_symbol_address, emit::Emitter};
 
 /// Emits the `__rt_date` and `__rt_gmdate` runtime helpers for arm64.
 ///
@@ -620,8 +620,7 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldr x6, [sp, #24]");                                   // load tm pointer (kept in x6)
     emitter.instruction("ldr w1, [x6, #16]");                                   // load tm_mon (0-based)
     emitter.instruction("sxtw x1, w1");                                         // sign-extend month index
-    emitter.adrp("x2", "_days_in_month");                            // load page of days-in-month table
-    emitter.add_lo12("x2", "x2", "_days_in_month");                      // resolve days-in-month address
+    emit_symbol_address(emitter, "x2", "_days_in_month");                       // resolve days-in-month table address
     emitter.instruction("ldrb w7, [x2, x1]");                                   // w7 = base days for this month
     emitter.instruction("cmp x1, #1");                                          // is it February (index 1)?
     emitter.instruction("b.ne __rt_date_t_write");                              // non-February uses table value directly
@@ -733,8 +732,7 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #88]");                                  // save the main format length
     emitter.instruction("ldr x10, [sp, #48]");                                  // current main index (at this token)
     emitter.instruction("str x10, [sp, #96]");                                  // save the main index
-    emitter.adrp("x10", "_date_fmt_c");                                         // page of the ISO 8601 sub-format
-    emitter.add_lo12("x10", "x10", "_date_fmt_c");                              // resolve the sub-format address
+    emit_symbol_address(emitter, "x10", "_date_fmt_c");                         // resolve the ISO 8601 sub-format address
     emitter.instruction("str x10, [sp, #8]");                                   // switch the format pointer to the sub-format
     emitter.instruction("mov x10, #13");                                        // ISO 8601 sub-format length
     emitter.instruction("str x10, [sp, #16]");                                  // switch the format length
@@ -749,8 +747,7 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #88]");                                  // save the main format length
     emitter.instruction("ldr x10, [sp, #48]");                                  // current main index (at this token)
     emitter.instruction("str x10, [sp, #96]");                                  // save the main index
-    emitter.adrp("x10", "_date_fmt_r");                                         // page of the RFC 2822 sub-format
-    emitter.add_lo12("x10", "x10", "_date_fmt_r");                              // resolve the sub-format address
+    emit_symbol_address(emitter, "x10", "_date_fmt_r");                         // resolve the RFC 2822 sub-format address
     emitter.instruction("str x10, [sp, #8]");                                   // switch the format pointer to the sub-format
     emitter.instruction("mov x10, #16");                                        // RFC 2822 sub-format length
     emitter.instruction("str x10, [sp, #16]");                                  // switch the format length

@@ -8229,8 +8229,7 @@ fn emit_stream_type_error_and_exit(ctx: &mut FunctionContext<'_>, label: &str, l
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #2");                              // write the stream TypeError diagnostic to stderr
-            ctx.emitter.adrp("x1", label);                                      // load the diagnostic string page
-            ctx.emitter.add_lo12("x1", "x1", label);                            // resolve the diagnostic string address within the page
+            abi::emit_symbol_address(ctx.emitter, "x1", label);               // resolve the diagnostic diagnostic address
             ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the diagnostic byte length to write()
             ctx.emitter.syscall(4);
             ctx.emitter.instruction("mov x0, #1");                              // exit with status 1 after reporting the TypeError

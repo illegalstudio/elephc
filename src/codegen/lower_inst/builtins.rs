@@ -114,8 +114,7 @@ pub(crate) fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 fn emit_duplicate_define_warning(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.adrp("x1", "_diag_define_already_defined_msg");
-            ctx.emitter.add_lo12("x1", "x1", "_diag_define_already_defined_msg");
+            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_define_already_defined_msg");               // resolve the define-already-defined diagnostic address
             ctx.emitter.instruction(&format!("mov x2, #{}", DEFINE_ALREADY_DEFINED_WARNING.len())); // pass the duplicate-define warning byte length
         }
         Arch::X86_64 => {

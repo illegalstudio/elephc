@@ -9,7 +9,9 @@
 //! - Strategy bodies execute inside the dispatcher's frame and end with a branch to `__rt_strtotime_ret` / `__rt_strtotime_ret_linux_x86_64`.
 //! - The shared `__rt_strtotime_today_tm` helper materializes today's localtime fields at `[sp+0..36]` with sec/min/hour zeroed and `tm_isdst=-1`; callers then mutate before calling libc `mktime`.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen::{
+    abi::emit_symbol_address, emit::Emitter, platform::Arch,
+};
 
 /// Dispatches to the target-specific keyword emitter based on `emitter.target.arch`.
 /// `x9` (ARM64) or `rdx` (x86_64) holds the keyword kind (0=now, 1=today, 2=tomorrow,
@@ -48,8 +50,7 @@ fn emit_keywords_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: kw_now ---");
     emitter.label("__rt_strtotime_kw_now");
-    emitter.adrp("x0", "_strtotime_clock");                                     // page of the effective-clock global
-    emitter.add_lo12("x0", "x0", "_strtotime_clock");                           // resolve the clock global address
+    emit_symbol_address(emitter, "x0", "_strtotime_clock");                      // resolve the effective-clock global address
     emitter.instruction("ldr x0, [x0]");                                        // x0 = effective clock (base timestamp or current time)
     emitter.instruction("b __rt_strtotime_ret");                                // return through shared epilogue
 
@@ -112,8 +113,7 @@ fn emit_today_tm_arm64(emitter: &mut Emitter) {
     // Caller's `[sp+0..36]` is accessed as `[sp+16..52]` while the sub-frame is in place.
     emitter.instruction("sub sp, sp, #16");                                     // allocate today_tm sub-frame
     emitter.instruction("str x30, [sp, #0]");                                   // save link register before nested calls
-    emitter.adrp("x0", "_strtotime_clock");                                     // page of the effective-clock global
-    emitter.add_lo12("x0", "x0", "_strtotime_clock");                           // resolve the clock global address
+    emit_symbol_address(emitter, "x0", "_strtotime_clock");                      // resolve the effective-clock global address
     emitter.instruction("ldr x0, [x0]");                                        // x0 = effective clock (base timestamp or current time)
     emitter.instruction("str x0, [sp, #8]");                                    // save ts into local slot
     emitter.instruction("add x0, sp, #8");                                      // x0 = &ts (libc localtime takes time_t*)
@@ -149,8 +149,7 @@ fn emit_now_tm_arm64(emitter: &mut Emitter) {
     // the base time is "now", not "today midnight".
     emitter.instruction("sub sp, sp, #16");                                     // allocate now_tm sub-frame
     emitter.instruction("str x30, [sp, #0]");                                   // save link register before nested calls
-    emitter.adrp("x0", "_strtotime_clock");                                     // page of the effective-clock global
-    emitter.add_lo12("x0", "x0", "_strtotime_clock");                           // resolve the clock global address
+    emit_symbol_address(emitter, "x0", "_strtotime_clock");                      // resolve the effective-clock global address
     emitter.instruction("ldr x0, [x0]");                                        // x0 = effective clock (base timestamp or current time)
     emitter.instruction("str x0, [sp, #8]");                                    // save ts into local slot
     emitter.instruction("add x0, sp, #8");                                      // x0 = &ts (libc localtime takes time_t*)

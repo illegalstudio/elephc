@@ -95,8 +95,7 @@ fn emit_function_variant_dispatcher(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #2");                                  // write the undefined-function diagnostic to stderr
-            emitter.adrp("x1", &message_label);                                 // load the diagnostic string page for stderr output
-            emitter.add_lo12("x1", "x1", &message_label);                      // resolve the diagnostic string address for stderr output
+            abi::emit_symbol_address(emitter, "x1", &message_label);               // resolve the diagnostic string address for stderr output
             emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the diagnostic byte length to write
             emitter.syscall(4);
             abi::emit_exit(emitter, 1);
