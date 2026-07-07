@@ -10,6 +10,18 @@ If you're planning to work on a significant feature or architectural change, ple
 
 This helps avoid duplicated work and ensures that the proposed solution aligns with the project's long-term direction.
 
+## AI-Assisted Contributions
+
+Contributions created with the help of AI tools are welcome. What matters to us is the quality and correctness of the result, not how it was produced — so the usual expectations still apply: the code must build, be covered by tests, follow the surrounding style, and come with a clear description. Please review anything an AI helps you write as carefully as you would your own work, since you remain responsible for whatever you submit.
+
+## Planning Larger Work
+
+If you're working toward something bigger than a single, self-contained change, we recommend writing a plan before you dive into the code. Plans live in the `.plans` directory of the repository.
+
+Start each plan with a checklist of the tasks it involves, then follow it with the detailed implementation notes for each of them. Keeping the task list up front makes the plan's progress easy to verify at a glance — whether it's complete is simply a matter of checking which tasks are marked done.
+
+Leave your plan in the repository until the work it describes is entirely finished. You don't have to land everything in one Pull Request: a plan may be split across several PRs, as long as the test suite stays green at every step. Once a plan is complete, the maintainers will clear it out during periodic cleanups, so there's no need to remove it yourself.
+
 ## Reporting Bugs
 
 When reporting a bug, please include as much information as possible:
@@ -68,8 +80,9 @@ Before opening a Pull Request, please ensure that:
 * New functionality includes tests whenever possible.
 * Documentation is updated when appropriate.
 * Commits are reasonably organized and have meaningful commit messages.
+* When the Pull Request addresses an existing issue, reference it in the description.
 
-Please keep Pull Requests focused. Smaller PRs are much easier to review than very large ones.
+Please keep Pull Requests focused and self-contained. A Pull Request that solves a single, well-defined problem is far easier to review than a large one that bundles several unrelated changes together.
 
 ### Draft until it's ready
 
@@ -86,6 +99,45 @@ and will handle reviewing, updating, and integrating it.
 Try to follow the style already used throughout the codebase.
 
 Consistency is generally more important than personal preference.
+
+### Assembly comment alignment
+
+The assembly elephc emits is meant to be read and understood by someone learning
+how compilers work, so **every `emitter.instruction(...)` call must carry an inline
+`//` comment** explaining what the instruction does — and those comments are aligned
+to a fixed column. A few rules keep them consistent:
+
+1. **Every instruction line gets a comment.** No exceptions: if you add an
+   `emitter.instruction(...)`, it gets a `// comment`.
+2. **The `//` starts at column 81.** Pad the line with spaces so the `//` sits at the
+   81st character (1-indexed). If the code itself already reaches 80 characters or
+   more, put exactly one space before the `//`.
+3. **Group related instructions under a block comment.** Put a standalone
+   `// -- description --` line before a block of related instructions (e.g.
+   `// -- set up stack frame --`).
+4. **Explain intent, not the mnemonic.** Write "store argc from OS", not "store x0 to
+   memory" — the reader can already see the instruction; the comment should say *why*
+   it's there.
+
+For example:
+
+```rust
+    // -- set up stack frame --
+    emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // set new frame pointer
+```
+
+To verify alignment, run `./scripts/check_asm_comments.py` against any codegen file you
+touch before opening a Pull Request. It flags every `emitter.instruction(...)` whose
+`//` comment is misaligned and exits non-zero if it finds any, so it also works in a
+pre-commit hook or CI:
+
+```bash
+./scripts/check_asm_comments.py src/codegen/lower_inst/your_file.rs
+```
+
+It accepts multiple files at once, e.g. `./scripts/check_asm_comments.py src/codegen/lower_inst/*.rs`.
 
 ## Adding a new operator
 

@@ -4,6 +4,10 @@
 
 A PHP-to-native compiler written in Rust. Compiles a static subset of PHP to native assembly for the supported target matrix, producing standalone binaries. No interpreter, no VM, no runtime dependencies.
 
+## Read CONTRIBUTING.md first
+
+Before contributing, read `CONTRIBUTING.md` in full. It holds the complete step-by-step recipes — adding an operator, a statement type, a built-in function, an EIR optimization pass, and a crate-backed `--with-<crate>` feature — plus the assembly comment policy, the coding style, and the Pull Request workflow. This guide covers the architecture, invariants, and context that go alongside those recipes; it deliberately does not repeat them.
+
 ## Supported target policy
 
 All supported targets are first-class targets. The supported target matrix is currently `macos-aarch64`, `linux-aarch64`, and `linux-x86_64`.
@@ -180,9 +184,6 @@ crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
 (`src/pipeline.rs`: force-link + prelude forcing) → linker
 (`src/linker.rs`: `forced_whole_archive`).
 
-The full recipe for adding a new crate-backed feature and its `--with-<crate>`
-flag lives in `CONTRIBUTING.md` ("Adding functionality via a Rust crate").
-
 ### Codegen layout
 
 - `src/ir_lower/` is the active high-level lowering layer. Add PHP-visible semantics there.
@@ -194,7 +195,7 @@ flag lives in `CONTRIBUTING.md` ("Adding functionality via a Rust crate").
 
 ### Adding a new operator
 
-**The full step-by-step recipe lives in `CONTRIBUTING.md` ("Adding a new operator").** Key invariants:
+Key invariants:
 
 - A new operator touches the whole pipeline: token (`src/lexer/`), Pratt binding power (`infix_bp()` in `src/parser/expr/pratt.rs`), `BinOp` variant (`src/parser/ast.rs`), type inference (`src/types/checker/`, usually `inference/ops.rs`), optimizer folding/effects (`src/optimize/`), and EIR lowering (`src/ir_lower/expr/` + `src/codegen/lower_inst/`).
 - Precedence and associativity must match PHP; keep folds PHP-equivalent and cross-check edge cases with `php -r`.
@@ -202,7 +203,7 @@ flag lives in `CONTRIBUTING.md` ("Adding functionality via a Rust crate").
 
 ### Adding a new statement type
 
-**The full step-by-step recipe lives in `CONTRIBUTING.md` ("Adding a new statement type").** Key invariants:
+Key invariants:
 
 - A new statement touches parser (`StmtKind` in `src/parser/ast.rs` + `src/parser/stmt.rs`), resolver/name-resolver (if it holds names, declarations, includes, function variants, or expressions), type checker (`src/types/checker/`), optimizer/effects/warnings (`src/optimize/`), and EIR lowering (`src/ir_lower/stmt/` + `src/codegen/`).
 - If it introduces variables or hidden temporaries, update EIR local/temp declaration in `src/ir_lower/context.rs` and frame-layout allocation before frame sizing.
@@ -236,7 +237,7 @@ entry, the EIR lowering dispatch (`spec.lower`), and the generated docs. Do **no
 re-add builtin names to hand-maintained tables (`catalog.rs`, `signatures.rs`, per-area
 `check_builtin` arms) — they are superseded by the registry.
 
-**The full step-by-step recipe lives in `CONTRIBUTING.md` ("Adding a built-in function").** Key invariants:
+Key invariants:
 
 - **One builtin per home file.** The `lower` hook is a thin wrapper over the real
   emitter in `src/codegen/lower_inst/builtins/<area>/`; leaf emitter files hold
@@ -258,7 +259,7 @@ re-add builtin names to hand-maintained tables (`catalog.rs`, `signatures.rs`, p
 
 IR-level transformations run after EIR lowering/validation through a fixed-point driver (`src/ir_passes/`), not in the AST optimizer.
 
-**The full step-by-step recipe lives in `CONTRIBUTING.md` ("Adding a new EIR optimization pass").** Key invariants:
+Key invariants:
 
 - Implement the `IrPass` trait in `src/ir_passes/<pass>.rs` and register it in `default_passes()` (`src/ir_passes/driver.rs`); the driver re-runs the whole set per function to a fixed point, capped by `MAX_PASS_ITERATIONS`.
 - Reuse `src/ir_passes/rewrite.rs` (RAUW via `replace_all_uses` + shared fold helpers) instead of re-walking operands/terminators. Keep rewrites dominance-safe and PHP-equivalent; cross-check edge cases (division by zero, signed-zero/`NaN` floats) with `php -r`.
@@ -402,41 +403,8 @@ Adding or updating function docblocks must not change code behavior. Do not alte
 
 ### Assembly comment policy
 
-**Every `emitter.instruction(...)` call MUST have an inline `//` comment** explaining what the assembly instruction does. This is mandatory — the generated assembly is meant to be read, and every assembly line must be understandable by someone learning how compilers work.
-
-Rules:
-
-1. **Every instruction line gets a comment.** No exceptions. If you add a new `emitter.instruction(...)`, it must have a `// comment`.
-2. **Alignment: `//` starts at column 81.** Pad with spaces so the `//` is at the 81st character position (1-indexed). If the code itself is >= 80 characters, add exactly one space before `//`.
-3. **Block comments before related groups.** Use `// -- description --` on a standalone line before a block of related instructions (e.g., `// -- set up stack frame --`, `// -- copy bytes from source --`).
-4. **Comments explain intent, not mnemonics.** Write "store argc from OS" not "store x0 to memory". The reader can see the instruction — explain *why* it's there.
-
-Example of correct formatting:
-
-```rust
-    // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #32");                                 // allocate 32 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #16]");                        // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                // set new frame pointer
-
-    // -- convert integer to string and write to stdout --
-    emitter.instruction("bl __rt_itoa");                                    // convert x0 to decimal string → x1=ptr, x2=len
-    emitter.instruction("mov x0, #1");                                     // fd = stdout
-    emitter.instruction("mov x16, #4");                                    // syscall 4 = sys_write
-    emitter.instruction("svc #0x80");                                      // invoke macOS kernel
-```
-
-To verify alignment, run:
-```bash
-python3 -c "
-with open('path/to/file.rs') as f:
-    for i, line in enumerate(f, 1):
-        if 'emitter.instruction' in line and '//' in line:
-            pos = line.rstrip().index('//')
-            if pos != 80 and len(line[:pos].rstrip()) < 80:
-                print(f'Line {i}: // at col {pos+1}')
-"
-```
+Every `emitter.instruction(...)` call must have an inline `//` comment aligned to
+column 81, with `// -- description --` block comments before related groups.
 
 ## Examples
 
