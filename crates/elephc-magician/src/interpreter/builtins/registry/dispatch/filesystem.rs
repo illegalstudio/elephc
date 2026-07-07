@@ -19,12 +19,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
-        "closedir" | "readdir" | "rewinddir" => {
-            let [dir_handle] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_unary_directory_result(name, *dir_handle, context, values)?
-        }
         "fclose"
         | "fgetc"
         | "fgets"
@@ -143,12 +137,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             }
             let prompt = evaluated_args.first().copied();
             eval_readline_result(prompt, values)?
-        }
-        "opendir" => {
-            let [directory] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_opendir_result(*directory, context, values)?
         }
         "stream_copy_to_stream" => match evaluated_args {
             [from, to] => {

@@ -204,6 +204,7 @@ mod tests {
             "chgrp",
             "chmod",
             "chown",
+            "closedir",
             "clearstatcache",
             "copy",
             "count",
@@ -284,6 +285,7 @@ mod tests {
             "mktime",
             "nl2br",
             "number_format",
+            "opendir",
             "pathinfo",
             "pclose",
             "popen",
@@ -294,12 +296,14 @@ mod tests {
             "preg_split",
             "range",
             "rawurlencode",
+            "readdir",
             "readfile",
             "readlink",
             "realpath",
             "realpath_cache_get",
             "realpath_cache_size",
             "rename",
+            "rewinddir",
             "rmdir",
             "scandir",
             "sleep",
@@ -612,6 +616,22 @@ mod tests {
         assert_eq!(
             eval_declared_builtin_param_names("pclose"),
             Some(["handle"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("opendir"),
+            Some(["directory"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("closedir"),
+            Some(["dir_handle"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("readdir"),
+            Some(["dir_handle"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("rewinddir"),
+            Some(["dir_handle"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("tmpfile"),

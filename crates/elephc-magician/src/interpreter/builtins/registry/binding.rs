@@ -168,8 +168,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "interface_exists" => Some(&["interface", "autoload"]),
         "trait_exists" => Some(&["trait", "autoload"]),
         "is_a" | "is_subclass_of" => Some(&["object_or_class", "class", "allow_string"]),
-        "opendir" => Some(&["directory"]),
-        "closedir" | "readdir" | "rewinddir" => Some(&["dir_handle"]),
         "define" => Some(&["constant_name", "value"]),
         "defined" => Some(&["constant_name"]),
         "die" | "exit" => Some(&["status"]),

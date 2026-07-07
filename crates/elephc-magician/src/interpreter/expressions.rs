@@ -1572,9 +1572,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_class_like_exists(name, args, context, scope, values)
         }
         "is_a" | "is_subclass_of" => eval_builtin_is_a_relation(name, args, context, scope, values),
-        "closedir" | "readdir" | "rewinddir" => {
-            eval_builtin_unary_directory(name, args, context, scope, values)
-        }
         "define" => eval_builtin_define(args, context, scope, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
         "die" | "exit" => eval_builtin_exit(args, context, scope, values),
@@ -1646,7 +1643,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "iterator_to_array" => eval_builtin_iterator_to_array(args, context, scope, values),
         "http_response_code" => eval_builtin_http_response_code(args, context, scope, values),
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
-        "opendir" => eval_builtin_opendir(args, context, scope, values),
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
         "phpversion" => eval_builtin_phpversion(args, values),
         "buffer_free" | "buffer_len" | "buffer_new" | "ptr" | "ptr_get" | "ptr_is_null"

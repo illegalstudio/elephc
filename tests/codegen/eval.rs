@@ -8177,6 +8177,36 @@ echo function_exists("file"); echo function_exists("readfile"); echo function_ex
     );
 }
 
+/// Verifies eval directory resource builtins dispatch directly and dynamically.
+#[test]
+fn test_eval_dispatches_directory_resource_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('mkdir("eval-dir-handle");
+file_put_contents("eval-dir-handle/a.txt", "a");
+$dh = opendir(directory: "eval-dir-handle");
+$first = readdir(dir_handle: $dh);
+$second = readdir($dh);
+$third = readdir($dh);
+$end = readdir($dh);
+$found = ($first === "a.txt" || $second === "a.txt" || $third === "a.txt") ? 1 : 0;
+rewinddir($dh);
+$again = readdir($dh);
+closedir($dh);
+echo is_string($first) && is_string($second) && is_string($third) && $end === false && $found === 1 && $again === $first ? "iter" : "bad"; echo ":";
+$call = call_user_func("opendir", "eval-dir-handle");
+$call_first = call_user_func("readdir", $call);
+echo is_string($call_first) ? "callread" : "bad"; echo ":";
+echo call_user_func("rewinddir", $call) === null ? "callrewind" : "bad"; echo ":";
+echo call_user_func_array("closedir", ["dir_handle" => $call]) === null ? "callclose" : "bad"; echo ":";
+echo unlink("eval-dir-handle/a.txt") && rmdir("eval-dir-handle") ? "cleanup" : "bad"; echo ":";
+echo function_exists("opendir"); echo function_exists("readdir"); echo function_exists("rewinddir"); echo function_exists("closedir");
+');
+"#,
+    );
+    assert_eq!(out, "iter:callread:callrewind:callclose:cleanup:1111");
+}
+
 /// Verifies eval `glob()` expands local patterns and dispatches dynamically.
 #[test]
 fn test_eval_dispatches_glob_builtin_calls() {

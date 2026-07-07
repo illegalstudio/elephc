@@ -17,6 +17,7 @@ mod chdir;
 mod chgrp;
 mod chmod;
 mod chown;
+mod closedir;
 mod clearstatcache;
 mod copy;
 mod dirname;
@@ -51,15 +52,18 @@ mod link;
 mod linkinfo;
 mod lstat;
 mod mkdir;
+mod opendir;
 mod pathinfo;
 mod pclose;
 mod popen;
+mod readdir;
 mod readfile;
 mod readlink;
 mod realpath;
 mod realpath_cache_get;
 mod realpath_cache_size;
 mod rename;
+mod rewinddir;
 mod rmdir;
 mod scandir;
 mod stat;
@@ -112,9 +116,13 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call(
         "getcwd" => eval_builtin_getcwd(args, values),
         "glob" => eval_builtin_glob(args, context, scope, values),
         "linkinfo" => eval_builtin_linkinfo(args, context, scope, values),
+        "opendir" => eval_builtin_opendir(args, context, scope, values),
         "pathinfo" => eval_builtin_pathinfo(args, context, scope, values),
         "pclose" => eval_builtin_pclose(args, context, scope, values),
         "popen" => eval_builtin_popen(args, context, scope, values),
+        "closedir" | "readdir" | "rewinddir" => {
+            eval_builtin_unary_directory(name, args, context, scope, values)
+        }
         "readfile" => eval_builtin_readfile(args, context, scope, values),
         "readlink" => eval_builtin_readlink(args, context, scope, values),
         "realpath" => eval_builtin_realpath(args, context, scope, values),
@@ -231,6 +239,10 @@ pub(in crate::interpreter) fn eval_filesystem_values_result(
             [path] => eval_linkinfo_result(*path, values),
             _ => Err(EvalStatus::RuntimeFatal),
         },
+        "opendir" => match evaluated_args {
+            [directory] => eval_opendir_result(*directory, context, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
         "pathinfo" => match evaluated_args {
             [path] => eval_pathinfo_result(*path, None, values),
             [path, flags] => eval_pathinfo_result(*path, Some(*flags), values),
@@ -242,6 +254,10 @@ pub(in crate::interpreter) fn eval_filesystem_values_result(
         },
         "popen" => match evaluated_args {
             [command, mode] => eval_popen_result(*command, *mode, context, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "closedir" | "readdir" | "rewinddir" => match evaluated_args {
+            [dir_handle] => eval_unary_directory_result(name, *dir_handle, context, values),
             _ => Err(EvalStatus::RuntimeFatal),
         },
         "readfile" => match evaluated_args {
