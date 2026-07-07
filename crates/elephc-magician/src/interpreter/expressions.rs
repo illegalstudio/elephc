@@ -1586,9 +1586,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "define" => eval_builtin_define(args, context, scope, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
         "die" | "exit" => eval_builtin_exit(args, context, scope, values),
-        "disk_free_space" | "disk_total_space" => {
-            eval_builtin_disk_space(name, args, context, scope, values)
-        }
         "empty" => eval_builtin_empty(args, context, scope, values),
         "exec" | "shell_exec" | "system" | "passthru" => {
             eval_builtin_process_command(name, args, context, scope, values)
@@ -1645,9 +1642,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "get_resource_id" | "get_resource_type" => {
             eval_builtin_resource_introspection(name, args, context, scope, values)
         }
-        "getcwd" => eval_builtin_getcwd(args, values),
         "getenv" => eval_builtin_getenv(args, context, scope, values),
-        "glob" => eval_builtin_glob(args, context, scope, values),
         "gzcompress" | "gzdeflate" | "gzinflate" | "gzuncompress" => {
             eval_builtin_gzip(name, args, context, scope, values)
         }
@@ -1673,7 +1668,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         | "is_writeable" => eval_builtin_file_probe(name, args, context, scope, values),
         "http_response_code" => eval_builtin_http_response_code(args, context, scope, values),
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
-        "linkinfo" => eval_builtin_linkinfo(args, context, scope, values),
         "opendir" => eval_builtin_opendir(args, context, scope, values),
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
         "phpversion" => eval_builtin_phpversion(args, values),
@@ -1691,10 +1685,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "random_int" => eval_builtin_random_int(args, context, scope, values),
         "readfile" => eval_builtin_readfile(args, context, scope, values),
         "readline" => eval_builtin_readline(args, context, scope, values),
-        "readlink" => eval_builtin_readlink(args, context, scope, values),
-        "realpath" => eval_builtin_realpath(args, context, scope, values),
-        "realpath_cache_get" => eval_builtin_realpath_cache_get(args, values),
-        "realpath_cache_size" => eval_builtin_realpath_cache_size(args, values),
         "scandir" => eval_builtin_scandir(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
         "spl_autoload_register" | "spl_autoload_unregister" => {
@@ -1715,7 +1705,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         }
         "sscanf" => eval_builtin_sscanf(args, context, scope, values),
         "sprintf" | "printf" => eval_builtin_sprintf_like(name, args, context, scope, values),
-        "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
         "tempnam" => eval_builtin_tempnam(args, context, scope, values),
         "touch" => eval_builtin_touch(args, context, scope, values),
         "tmpfile" => eval_builtin_tmpfile(args, context, values),
@@ -1724,9 +1713,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         }
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => {
             eval_builtin_stream_introspection(name, args, context, values)
-        }
-        "stream_resolve_include_path" => {
-            eval_builtin_stream_resolve_include_path(args, context, scope, values)
         }
         "stream_copy_to_stream" => eval_builtin_stream_copy_to_stream(args, context, scope, values),
         "stream_context_create" => eval_builtin_stream_context_create(args, context, scope, values),

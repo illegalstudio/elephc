@@ -206,12 +206,16 @@ mod tests {
             "date_default_timezone_get",
             "date_default_timezone_set",
             "dirname",
+            "disk_free_space",
+            "disk_total_space",
             "floatval",
             "fnmatch",
             "getdate",
+            "getcwd",
             "gettype",
             "gmdate",
             "gmmktime",
+            "glob",
             "grapheme_strrev",
             "hash_equals",
             "hex2bin",
@@ -241,6 +245,7 @@ mod tests {
             "json_last_error",
             "json_last_error_msg",
             "json_validate",
+            "linkinfo",
             "localtime",
             "log",
             "microtime",
@@ -256,7 +261,12 @@ mod tests {
             "preg_split",
             "range",
             "rawurlencode",
+            "readlink",
+            "realpath",
+            "realpath_cache_get",
+            "realpath_cache_size",
             "sleep",
+            "stream_resolve_include_path",
             "str_contains",
             "str_pad",
             "str_replace",
@@ -265,6 +275,7 @@ mod tests {
             "strrev",
             "strtotime",
             "substr",
+            "sys_get_temp_dir",
             "time",
             "trim",
             "strval",
@@ -441,6 +452,38 @@ mod tests {
         assert_eq!(
             eval_declared_builtin_default_value("pathinfo", 1),
             Some(EvalBuiltinDefaultValue::Int(15))
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("disk_free_space"),
+            Some(["directory"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("getcwd"),
+            Some([].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("glob"),
+            Some(["pattern"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("linkinfo"),
+            Some(["path"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("realpath"),
+            Some(["path"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_resolve_include_path"),
+            Some(["filename"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("realpath_cache_get"),
+            Some([].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("sys_get_temp_dir"),
+            Some([].as_slice())
         );
     }
 }

@@ -217,12 +217,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_stat_array_result(name, *filename, context, values)?
         }
-        "linkinfo" => {
-            let [path] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_linkinfo_result(*path, values)?
-        }
         "readfile" => {
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -242,24 +236,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_scandir_result(*directory, values)?
         }
-        "disk_free_space" | "disk_total_space" => {
-            let [directory] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_disk_space_result(name, *directory, values)?
-        }
-        "getcwd" => {
-            if !evaluated_args.is_empty() {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            eval_getcwd_result(values)?
-        }
-        "glob" => {
-            let [pattern] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_glob_result(*pattern, values)?
-        }
         "opendir" => {
             let [directory] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -277,18 +253,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_popen_result(*command, *mode, context, values)?
-        }
-        "realpath" => {
-            let [path] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_realpath_result(*path, values)?
-        }
-        "stream_resolve_include_path" => {
-            let [filename] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_stream_resolve_include_path_result(*filename, values)?
         }
         "stream_copy_to_stream" => match evaluated_args {
             [from, to] => {
@@ -542,24 +506,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             )?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
-        "realpath_cache_get" => {
-            if !evaluated_args.is_empty() {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            eval_realpath_cache_get_result(values)?
-        }
-        "realpath_cache_size" => {
-            if !evaluated_args.is_empty() {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            eval_realpath_cache_size_result(values)?
-        }
-        "sys_get_temp_dir" => {
-            if !evaluated_args.is_empty() {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            eval_sys_get_temp_dir_result(values)?
-        }
         "tempnam" => {
             let [directory, prefix] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -593,12 +539,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             [mask] => eval_umask_result(Some(*mask), values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
-        "readlink" => {
-            let [path] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_readlink_result(*path, values)?
-        }
         "unlink" => {
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);

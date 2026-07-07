@@ -7622,6 +7622,21 @@ echo ":"; echo function_exists("realpath");');
     assert_eq!(out, "resolved:false:call:array-false:1");
 }
 
+/// Verifies eval `stream_resolve_include_path()` dispatches directly and dynamically.
+#[test]
+fn test_eval_dispatches_stream_resolve_include_path_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo stream_resolve_include_path("/tmp") !== false ? "resolved" : "bad"; echo ":";
+echo stream_resolve_include_path(filename: "elephc-magician-missing-path") === false ? "false" : "bad"; echo ":";
+echo call_user_func("stream_resolve_include_path", "/tmp") !== false ? "call" : "bad"; echo ":";
+echo call_user_func_array("stream_resolve_include_path", ["filename" => "elephc-magician-missing-path"]) === false ? "array-false" : "bad";
+echo ":"; echo function_exists("stream_resolve_include_path");');
+"#,
+    );
+    assert_eq!(out, "resolved:false:call:array-false:1");
+}
+
 /// Verifies eval regex builtins handle captures, replacement, callbacks, and splitting.
 #[test]
 fn test_eval_dispatches_preg_builtin_calls() {
