@@ -7,11 +7,8 @@
 //!
 //! Key details:
 //! - `check` validates that the second argument is an array and returns `Bool`.
-//! - The optional `strict` (3rd) argument is accepted (min=2, max=3). `lower_in_array`'s
-//!   per-type comparison (int/float/bool by value, string by byte-equality) is already
-//!   type-specific, so for the homogeneously-typed arrays real code uses `in_array($x, $a, true)`
-//!   with, the result already matches strict `===` membership; the `strict` flag itself is not
-//!   separately consulted (a heterogeneous-array + type-juggling distinction would need it).
+//! - The optional `strict` (3rd) argument selects PHP `===` membership; omitted or
+//!   false strictness uses PHP `==` semantics for the supported scalar/string paths.
 //! - `lower` is a thin wrapper over the shared `arrays::lower_in_array` emitter.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
@@ -34,9 +31,8 @@ builtin! {
 
 /// Validates that the second argument is an array and returns `Bool`.
 ///
-/// The registry's `check_arity` handles arity enforcement (capped at 2 by `max_args`
-/// to match the legacy CHECK arm). This hook validates that `haystack` is an array
-/// and returns the `Bool` return type.
+/// The registry's `check_arity` handles the 2-to-3 argument range. This hook validates
+/// that `haystack` is an array and returns the `Bool` return type.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
