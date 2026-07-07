@@ -27,10 +27,11 @@ use super::super::{
     eval_builtin_array_slice, eval_builtin_array_unique, eval_builtin_cast,
     eval_builtin_grapheme_strrev, eval_builtin_hash_equals, eval_builtin_html_entity,
     eval_builtin_json_call, eval_builtin_nl2br, eval_builtin_range, eval_builtin_str_pad,
-    eval_builtin_str_replace, eval_builtin_str_split, eval_builtin_string_case,
-    eval_builtin_string_compare, eval_builtin_string_position, eval_builtin_string_search,
-    eval_builtin_strrev, eval_builtin_strstr, eval_builtin_substr, eval_builtin_substr_replace,
-    eval_builtin_time_call, eval_builtin_trim_like, eval_builtin_ucwords, eval_builtin_wordwrap,
+    eval_builtin_regex_call, eval_builtin_str_replace, eval_builtin_str_split,
+    eval_builtin_string_case, eval_builtin_string_compare, eval_builtin_string_position,
+    eval_builtin_string_search, eval_builtin_strrev, eval_builtin_strstr, eval_builtin_substr,
+    eval_builtin_substr_replace, eval_builtin_time_call, eval_builtin_trim_like,
+    eval_builtin_ucwords, eval_builtin_wordwrap,
 };
 
 /// Direct expression-level dispatch hooks for migrated builtins.
@@ -116,6 +117,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Round,
     /// Dispatches `range(...)`.
     Range,
+    /// Dispatches regex builtins.
+    Regex,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
     Slashes,
     /// Dispatches `sqrt(...)`.
@@ -215,6 +218,7 @@ impl EvalDirectHook {
             Self::Pow => eval_builtin_pow(args, context, scope, values),
             Self::Round => eval_builtin_round(args, context, scope, values),
             Self::Range => eval_builtin_range(args, context, scope, values),
+            Self::Regex => eval_builtin_regex_call(name, args, context, scope, values),
             Self::Slashes => eval_builtin_slashes(name, args, context, scope, values),
             Self::Sqrt => eval_builtin_sqrt(args, context, scope, values),
             Self::StringCase => eval_builtin_string_case(name, args, context, scope, values),

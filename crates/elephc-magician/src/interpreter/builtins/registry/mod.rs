@@ -87,6 +87,16 @@ fn validate_declared_builtin_spec(spec: &EvalBuiltinSpec) {
             );
         }
     }
+    for by_ref_name in spec.by_ref_params {
+        assert!(
+            spec.params
+                .iter()
+                .any(|param| param.name == *by_ref_name && param.by_ref),
+            "eval builtin {} lists {} as by-ref without marking the parameter",
+            spec.name,
+            by_ref_name
+        );
+    }
     if let Some(variadic) = spec.variadic {
         assert_eq!(
             spec.param_names.last().copied(),
@@ -235,6 +245,11 @@ mod tests {
             "mktime",
             "nl2br",
             "number_format",
+            "preg_match",
+            "preg_match_all",
+            "preg_replace",
+            "preg_replace_callback",
+            "preg_split",
             "range",
             "rawurlencode",
             "sleep",
@@ -379,5 +394,29 @@ mod tests {
             Some(["datetime", "baseTimestamp"].as_slice())
         );
         assert_eq!(eval_declared_builtin_param_names("time"), Some([].as_slice()));
+        assert_eq!(
+            eval_declared_builtin_param_names("preg_match"),
+            Some(["pattern", "subject", "matches", "flags"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("preg_match", 2),
+            Some(EvalBuiltinDefaultValue::EmptyArray)
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("preg_match_all", 3),
+            Some(EvalBuiltinDefaultValue::Int(0))
+        );
+        assert_eq!(
+            eval_builtin_signature_shape("preg_match").map(|shape| shape.by_ref_params),
+            Some(["matches"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("preg_replace_callback"),
+            Some(["pattern", "callback", "subject"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("preg_split", 2),
+            Some(EvalBuiltinDefaultValue::Int(-1))
+        );
     }
 }

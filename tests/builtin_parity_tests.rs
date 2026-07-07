@@ -33,9 +33,6 @@ const EVAL_DYNAMIC_DISPATCH_SOURCES: &[&str] = &[
         "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/network_env.rs"
     ),
     include_str!(
-        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/regex.rs"
-    ),
-    include_str!(
         "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/scalars.rs"
     ),
     include_str!(
@@ -192,6 +189,11 @@ const EVAL_DECLARATIVE_REGISTRY_BUILTINS: &[&str] = &[
     "ord",
     "pi",
     "pow",
+    "preg_match",
+    "preg_match_all",
+    "preg_replace",
+    "preg_replace_callback",
+    "preg_split",
     "rad2deg",
     "range",
     "rawurldecode",

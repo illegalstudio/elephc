@@ -106,8 +106,6 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "array_walk" | "usort" | "uksort" | "uasort" => fixed_by_ref(params, &["array"]),
         "call_user_func" => variadic(params, &[]),
 
-        "preg_match" | "preg_match_all" => optional_by_ref(params, 2, &["matches"]),
-        "preg_split" => optional(params, 2),
         "print_r" => optional(params, 1),
         "var_dump" => variadic(params, &[]),
 
@@ -187,10 +185,6 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("array_filter", 2) => Int(0),
         ("array_reduce", 2) => Null,
 
-        ("preg_match" | "preg_match_all", 2) => EmptyArray,
-        ("preg_match" | "preg_match_all", 3) => Int(0),
-        ("preg_split", 2) => Int(-1),
-        ("preg_split", 3) => Int(0),
         ("print_r", 1) => Bool(false),
 
         ("touch", 1 | 2) => Null,

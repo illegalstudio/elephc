@@ -26,6 +26,8 @@ pub(in crate::interpreter) enum EvalArea {
     Json,
     /// Numeric and mathematical builtins.
     Math,
+    /// PCRE-style regex builtins.
+    Regex,
     /// String-processing builtins.
     String,
     /// Date, time, and sleep builtins.

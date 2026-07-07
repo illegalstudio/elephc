@@ -13,7 +13,6 @@ mod core;
 mod filesystem;
 mod formatting;
 mod network_env;
-mod regex;
 mod scalars;
 mod strings;
 mod symbols;
@@ -27,7 +26,6 @@ use core::*;
 use filesystem::*;
 use formatting::*;
 use network_env::*;
-use regex::*;
 use scalars::*;
 use strings::*;
 use symbols::*;
@@ -55,9 +53,6 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
     if let Some(result) =
         eval_formatting_builtin_with_values(name, evaluated_args, context, values)?
     {
-        return Ok(Some(result));
-    }
-    if let Some(result) = eval_regex_builtin_with_values(name, evaluated_args, context, values)? {
         return Ok(Some(result));
     }
     if let Some(result) =

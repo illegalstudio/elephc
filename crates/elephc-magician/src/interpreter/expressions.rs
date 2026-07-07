@@ -1683,11 +1683,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "phpversion" => eval_builtin_phpversion(args, values),
         "pclose" => eval_builtin_pclose(args, context, scope, values),
         "popen" => eval_builtin_popen(args, context, scope, values),
-        "preg_match" => eval_builtin_preg_match(args, context, scope, values),
-        "preg_match_all" => eval_builtin_preg_match_all(args, context, scope, values),
-        "preg_replace" => eval_builtin_preg_replace(args, context, scope, values),
-        "preg_replace_callback" => eval_builtin_preg_replace_callback(args, context, scope, values),
-        "preg_split" => eval_builtin_preg_split(args, context, scope, values),
         "buffer_free" | "buffer_len" | "buffer_new" | "ptr" | "ptr_get" | "ptr_is_null"
         | "ptr_null" | "ptr_offset" | "ptr_read8" | "ptr_read16" | "ptr_read32"
         | "ptr_read_string" | "ptr_set" | "ptr_sizeof" | "ptr_write8" | "ptr_write16"

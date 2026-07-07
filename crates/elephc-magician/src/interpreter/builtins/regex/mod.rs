@@ -11,6 +11,7 @@
 //!   behavior through `RuntimeValueOps`.
 
 mod captures;
+mod declarations;
 mod engine;
 mod match_all;
 mod match_one;
@@ -22,6 +23,7 @@ mod split_helpers;
 mod targets;
 
 pub(in crate::interpreter) use captures::*;
+pub(in crate::interpreter) use declarations::*;
 pub(in crate::interpreter) use engine::*;
 pub(in crate::interpreter) use match_all::*;
 pub(in crate::interpreter) use match_one::*;
