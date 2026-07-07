@@ -266,6 +266,14 @@ pub struct WorkerConfig {
     /// `server::worker_config()` as `max_conn_requests` if set, else
     /// `max_requests` if set, else `0` (unbounded). `0` disables the budget.
     pub h2_stream_budget: usize,
+    /// RSS recycle cap in BYTES (`--max-rss` MiB × 1024 × 1024). When > 0 the
+    /// worker self-measures its resident set in the accept loop and exits
+    /// cleanly when over the cap, so the master respawns a fresh worker
+    /// (bounding memory growth over time, complementing `max_requests`).
+    /// `0` means off (the default) and the RSS check is skipped entirely —
+    /// byte-for-byte the original behavior. Measurement is gated to at most
+    /// once per 64 accepts; see `crate::rss`.
+    pub max_rss_bytes: u64,
 }
 
 /// Minimum response size (bytes) worth gzip-compressing; below this the framing
@@ -479,6 +487,7 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         max_pending,
         h2,
         h2_stream_budget,
+        max_rss_bytes,
     } = cfg;
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
@@ -575,6 +584,23 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             // so a capped worker exits without being handed one more connection.
             if max_requests > 0 && SERVED.load(Ordering::Relaxed) >= max_requests {
                 break;
+            }
+            // --max-rss recycling: a worker whose resident set exceeds the operator cap
+            // exits cleanly so the master respawns a fresh worker (bounds memory growth
+            // over time, complementing --max-requests). Measured at most once per 64
+            // accepts (and on the first accept) so the RSS syscall never lands on every
+            // hot-path iteration; an idle worker's RSS does not grow while parked in
+            // accept, so a request-count gate is sufficient. `max_rss_bytes == 0` means
+            // off (the default) and this branch is skipped entirely.
+            if max_rss_bytes > 0 {
+                let served = SERVED.load(Ordering::Relaxed);
+                if served == 0 || served % 64 == 0 {
+                    if let Some(rss) = crate::rss::current_rss_bytes() {
+                        if rss >= max_rss_bytes {
+                            break;
+                        }
+                    }
+                }
             }
             // Next connection: kernel `accept()` (peer from accept, addr = listen
             // addr) or master READY→recv_fd (peer/addr via getpeername/getsockname).

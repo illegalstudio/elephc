@@ -23,6 +23,7 @@ mod handler;
 mod multipart;
 mod offload;
 mod request_state;
+mod rss;
 mod server;
 mod tls;
 mod worker;

@@ -288,6 +288,7 @@ pub(crate) fn enter_worker_loop() -> ! {
         max_pending,
         h2,
         h2_stream_budget,
+        max_rss_bytes,
     } = cfg;
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
@@ -381,6 +382,23 @@ pub(crate) fn enter_worker_loop() -> ! {
             // handed one more connection.
             if max_requests > 0 && SERVED.load(Ordering::Relaxed) >= max_requests {
                 break;
+            }
+            // --max-rss recycling: a worker whose resident set exceeds the operator cap
+            // exits cleanly so the master respawns a fresh worker (bounds memory growth
+            // over time, complementing --max-requests). Measured at most once per 64
+            // accepts (and on the first accept) so the RSS syscall never lands on every
+            // hot-path iteration; an idle worker's RSS does not grow while parked in
+            // accept, so a request-count gate is sufficient. `max_rss_bytes == 0` means
+            // off (the default) and this branch is skipped entirely.
+            if max_rss_bytes > 0 {
+                let served = SERVED.load(Ordering::Relaxed);
+                if served == 0 || served % 64 == 0 {
+                    if let Some(rss) = crate::rss::current_rss_bytes() {
+                        if rss >= max_rss_bytes {
+                            break;
+                        }
+                    }
+                }
             }
             // Next connection: kernel `accept()` (peer from accept, addr = listen
             // addr) or master READY→recv_fd (peer/addr via getpeername/getsockname).
@@ -769,6 +787,7 @@ mod tests {
                 max_header_size: 64 * 1024,
             },
             h2_stream_budget: 0,
+            max_rss_bytes: 0,
         };
         set_worker_config(cfg);
         let peeked = peek_worker_config();

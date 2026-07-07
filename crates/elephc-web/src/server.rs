@@ -37,6 +37,7 @@ Options:
                          all workers are busy (default: 1024)
   --max-body-size BYTES  Max request body in bytes; 0 = unlimited (default: 8388608)
   --max-requests N       Recycle a WORKER PROCESS after N requests; 0 = never (default: 0; worker mode: 1000)
+  --max-rss MiB          Recycle a worker whose resident set exceeds this many MiB
   --max-requests-per-connection N
                          Close a keep-alive CONNECTION after N responses (sends
                          \"Connection: close\" so the client reconnects and the
@@ -215,6 +216,12 @@ struct ServerArgs {
     /// Max h2 header block in bytes (`--http2-max-header-size`, default 64 KiB;
     /// GAP-B). Sets hyper's `max_header_list_size`. h1 is unaffected.
     http2_max_header_size: u32,
+    /// Recycle a worker whose resident set exceeds this many MiB (`--max-rss`); `0`
+    /// means off (the default, byte-for-byte the original behavior). The worker
+    /// self-measures RSS and exits cleanly when over the cap, so the master respawns
+    /// a fresh worker — bounding memory growth over time. Applies to all three web
+    /// modes. Measurement is gated to at most once per 64 accepts.
+    max_rss_mib: u64,
 }
 
 impl ServerArgs {
@@ -250,6 +257,7 @@ impl ServerArgs {
                 max_header_size: self.http2_max_header_size,
             },
             h2_stream_budget,
+            max_rss_bytes: self.max_rss_mib.saturating_mul(1024).saturating_mul(1024),
         }
     }
 
@@ -334,6 +342,11 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
     let mut http2_max_streams_set = false;
     let mut http2_max_header_size: u32 = DEFAULT_HTTP2_MAX_HEADER_SIZE;
     let mut http2_max_header_size_set = false;
+    // `--max-rss MiB` recycles a worker whose resident set exceeds the cap; `0`
+    // = off (the default, byte-for-byte the original behavior). Parsed into MiB
+    // here and converted to bytes once in `worker_config()` so the per-accept
+    // check compares bytes without redoing the unit math.
+    let mut max_rss_mib: u64 = 0;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -366,6 +379,21 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
                 if let Some(v) = args.get(i).and_then(|v| v.parse().ok()) {
                     max_requests = v;
                     max_requests_set = true;
+                }
+            }
+            "--max-rss" => {
+                // `--max-rss MiB`: `0` = off (the default). A missing or
+                // non-numeric value is a usage error (exit 2), matching the
+                // explicit-value flags' error handling.
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u64>().ok()) {
+                    Some(v) => max_rss_mib = v,
+                    None => {
+                        eprintln!(
+                            "error: --max-rss requires a non-negative integer MiB value (try --help)"
+                        );
+                        return ParsedArgs::Exit(2);
+                    }
                 }
             }
             "--max-requests-per-connection" => { i += 1; max_conn_requests = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_conn_requests); }
@@ -494,6 +522,7 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             http2,
             http2_max_streams,
             http2_max_header_size,
+            max_rss_mib,
         }),
         None => {
             eprintln!("error: --web binary requires --listen host:port (try --help)");

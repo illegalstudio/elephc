@@ -56,6 +56,7 @@ arguments (not elephc compiler flags):
 | `--max-pending N` | No | `16` | With `--handler-offload`: max parsed requests queued for the handler thread before new requests get `503 Service Unavailable` + `Retry-After: 1` (built on the I/O thread, no PHP). Bounds queued-body memory to `N × --max-body-size`; `0` is rejected (exit 2). Ignored (warns) without `--handler-offload`. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes (`0` = unlimited); oversized bodies get `413`. |
 | `--max-requests N` | No | `0` (classic) / `1000` (worker) | Recycle each worker process after N requests (bounds memory growth). Worker mode defaults to 1000. |
+| `--max-rss MiB` | No | `0` (off) | Recycle a worker whose resident set exceeds this many MiB; `0` = off (the default). Measurement is gated to at most once per 64 accepts. Same in all three web modes. |
 | `--max-requests-per-connection N` | No | `0` (opt-in) | Close a keep-alive connection after N responses (sends `Connection: close`) so the client reconnects and the kernel re-picks a worker; `0` = unlimited (off by default; no behavior change unless set). Same default in all three web modes. |
 | `--idle-timeout SECS` | No | `0` (opt-in) | Close a keep-alive connection idle (no new request) for more than SECS seconds; `0` = never (off by default; no behavior change unless set). Same default in all three web modes. |
 | `--worker-gc-interval N` | No | `0` (classic) / `1` (worker) | Run the cycle collector every N requests (`0` = never, `1` = every request). Worker-mode only. |
