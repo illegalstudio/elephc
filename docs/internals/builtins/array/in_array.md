@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `in_array()` for indexed arrays with scalar or string payloads.
+- Lowers `in_array()` for indexed and associative arrays with PHP loose or strict membership.
 
 ## Runtime helpers
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function in_array(mixed $needle, array $haystack, bool $strict = false): mixed
+function in_array(mixed $needle, array $haystack, bool $strict = false): bool
 ```
 
 ## What the type checker enforces

@@ -1213,8 +1213,6 @@ RETURN_TYPE_OVERRIDES: Dict[str, str] = {
     "next": "mixed",
     "prev": "mixed",
     "reset": "mixed",
-    # in_array returns the value if found, false otherwise → mixed.
-    "in_array": "mixed",
     # String functions with a concrete string return type.
     "addslashes": "string",
     "bin2hex": "string",

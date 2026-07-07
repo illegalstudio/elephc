@@ -7,12 +7,8 @@
 //!
 //! Key details:
 //! - `check` validates that the second argument is an array and returns `Bool`.
-//! - The golden signature carries the optional `strict` param (min=2, max=3), but the
-//!   legacy CHECK arm enforced exactly 2 arguments and the `lower_in_array` emitter
-//!   only supports 2 args. `max_args: 2` reproduces that exact-2 enforcement in
-//!   `check_arity` only; `function_sig` and the parity gate keep the full param-derived
-//!   bounds from the golden. This keeps the clean "takes exactly 2 arguments" checker
-//!   diagnostic for a 3-arg call instead of an EIR backend error.
+//! - The optional `strict` (3rd) argument selects PHP `===` membership; omitted or
+//!   false strictness uses PHP `==` semantics for the supported scalar/string paths.
 //! - `lower` is a thin wrapper over the shared `arrays::lower_in_array` emitter.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
@@ -26,7 +22,6 @@ builtin! {
     name: "in_array",
     area: Array,
     params: [needle: Mixed, haystack: Mixed, strict: Bool = DefaultSpec::Bool(false)],
-    max_args: 2,
     returns: Bool,
     check: check,
     lower: lower,
@@ -36,9 +31,8 @@ builtin! {
 
 /// Validates that the second argument is an array and returns `Bool`.
 ///
-/// The registry's `check_arity` handles arity enforcement (capped at 2 by `max_args`
-/// to match the legacy CHECK arm). This hook validates that `haystack` is an array
-/// and returns the `Bool` return type.
+/// The registry's `check_arity` handles the 2-to-3 argument range. This hook validates
+/// that `haystack` is an array and returns the `Bool` return type.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
