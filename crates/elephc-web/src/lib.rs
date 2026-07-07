@@ -20,6 +20,7 @@
 
 mod dispatch;
 mod handler;
+mod metrics;
 mod multipart;
 mod offload;
 mod request_state;

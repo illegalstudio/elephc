@@ -256,21 +256,34 @@ pub(crate) fn install_drain_signal_handler() {
 /// Allocated unconditionally (one `Rc<AtomicUsize>` per worker + one relaxed
 /// atomic inc/dec per connection — negligible; the default-on trade-off is
 /// documented in the SIGHUP reload spec). Shared with `crate::worker_mode`.
+///
+/// T1#3: the guard ALSO mirrors the active-connection count into
+/// `crate::metrics::ACTIVE_CONNS` so the `/_status` snapshot can report
+/// `active_conns` without touching T1#2's drain `Rc<AtomicUsize>`. The mirror
+/// is one extra relaxed atomic inc in `new` and one extra relaxed atomic dec
+/// in `Drop` per connection — the ONLY change to T1#2's drain path; the `Rc`,
+/// the accept arms' `fetch_add`, and `wait_for_drain_forever` are untouched.
 pub(crate) struct ActiveConnGuard(Rc<AtomicUsize>);
 
 impl ActiveConnGuard {
     /// Builds a guard that will decrement `counter` when dropped. The caller
     /// increments `counter` BEFORE constructing the guard so the count is
-    /// accurate for the guard's entire lifetime.
+    /// accurate for the guard's entire lifetime. ALSO increments the metrics
+    /// `ACTIVE_CONNS` mirror (T1#3) so the `/_status` snapshot sees this
+    /// connection as active until the guard drops.
     pub(crate) fn new(counter: Rc<AtomicUsize>) -> Self {
+        crate::metrics::ACTIVE_CONNS.fetch_add(1, Ordering::Relaxed);
         ActiveConnGuard(counter)
     }
 }
 
 impl Drop for ActiveConnGuard {
     /// Decrements the active-connection counter when a connection task ends.
+    /// ALSO decrements the metrics `ACTIVE_CONNS` mirror (T1#3) so the snapshot
+    /// count stays accurate after the connection task completes.
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::Relaxed);
+        crate::metrics::ACTIVE_CONNS.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -345,6 +358,21 @@ pub struct WorkerConfig {
     /// forever. Drain always happens on SIGUSR1 regardless of this value; the
     /// flag only sets the timeout. Same in all three web modes.
     pub reload_grace_secs: u32,
+    /// Opt in to the per-worker `/_status` metrics JSON endpoint (`--metrics`,
+    /// default off). When on, each worker intercepts `metrics_path` in its
+    /// service_fn before invoking the PHP handler and returns a JSON snapshot
+    /// of this worker's counters. The endpoint is NOT recorded as a request.
+    /// Off keeps the service_fn hot path byte-for-byte (the intercept is a
+    /// single `if metrics && path == metrics_path` check short-circuited by the
+    /// `metrics` bool). Same in all three web modes.
+    pub metrics: bool,
+    /// Path that serves the metrics snapshot (`--metrics-path`, default
+    /// `/_status`). Only meaningful with `metrics`; an empty value is rejected
+    /// at parse time when `--metrics` is on. Held as a `&'static str` (the
+    /// operator-supplied `String` is leaked once at parse time via
+    /// `worker_config()`) so `WorkerConfig` stays `Copy` and the per-connection
+    /// / per-request hot path never clones the path.
+    pub metrics_path: &'static str,
 }
 
 /// Minimum response size (bytes) worth gzip-compressing; below this the framing
@@ -560,7 +588,15 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         h2_stream_budget,
         max_rss_bytes,
         reload_grace_secs,
+        metrics,
+        metrics_path: _,
     } = cfg;
+    // T1#3: stamp the worker start instant + web-mode label ONCE so the
+    // `/_status` snapshot can report uptime/mode. Idempotent (`get_or_init`);
+    // called at serve entry before any request is accepted, so the snapshot's
+    // uptime is always non-zero by the first request.
+    crate::metrics::mark_started();
+    crate::metrics::mark_mode("web");
     // Install the SIGUSR1 graceful-drain handler. This runs AFTER
     // `server::reset_signal_handlers_to_default` (called in the forked child
     // before `serve`), so the handler is not clobbered. SIGTERM stays DFL (hard
@@ -735,6 +771,16 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             // each request further clones it into its own `async move` so the mpsc
             // handle is owned by the request task.
             let conn_offload_tx = offload_tx.clone();
+            // T1#3: per-connection copy of the metrics path. `metrics_path` is a
+            // `&'static str` (Copy), so this is free regardless of `--metrics`;
+            // we still gate it on `metrics` so the OFF path captures `None` and
+            // the inner `async move` per-request clone is `Option<&'static str>`
+            // (Copy → free). The ON path carries the path for the intercept.
+            let conn_metrics_path = if metrics {
+                Some(cfg.metrics_path)
+            } else {
+                None
+            };
             // `service_fn` is FnMut — called once per request on this connection —
             // so the OUTER closure is non-async and clones the per-connection
             // `Option<Rc<..>>` handles into each returned `async move` block (cloning
@@ -745,12 +791,37 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                 let last_activity = last_activity.clone();
                 let offload_tx = conn_offload_tx.clone();
                 let goaway = goaway.clone();
+                let metrics_path = conn_metrics_path.clone();
                 async move {
                     // A request just arrived on this connection: stamp activity so
                     // the idle watchdog measures inactivity from now (only when the
                     // idle timeout is enabled; otherwise the handle is `None`).
                     if let Some(la) = &last_activity {
                         la.set(Instant::now());
+                    }
+                    // T1#3: metrics endpoint. Intercept BEFORE `let started` so the
+                    // snapshot is cheap and is NOT recorded as a request. The
+                    // intercept is a single cheap `if` when `--metrics` is off (no
+                    // allocation, no string compare: `metrics` is a Copy bool
+                    // captured by the closure, short-circuiting the `&&`). The
+                    // `/_status` path itself returns here and never reaches the
+                    // recording call sites below.
+                    if metrics
+                        && metrics_path
+                            .as_deref()
+                            .is_some_and(|mp| req.uri().path() == mp)
+                    {
+                        let ctx = crate::metrics::MetricsCtx {
+                            mode: "web",
+                            draining: WORKER_DRAINING.load(Ordering::Relaxed),
+                            served_total: SERVED.load(Ordering::Relaxed) as u64,
+                            max_rss_bytes: cfg.max_rss_bytes,
+                            max_pending: cfg.max_pending,
+                            handler_offload: cfg.handler_offload,
+                            h2_enabled: cfg.h2.http2,
+                            reload_grace_secs: cfg.reload_grace_secs,
+                        };
+                        return Ok::<_, Infallible>(crate::metrics::snapshot_response(ctx));
                     }
                     let started = Instant::now();
                     let method = req.method().as_str().to_string();
@@ -762,6 +833,12 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     // on an h2 connection. Used for GAP-A (per-conn stream budget)
                     // and GAP-E (defense-in-depth header filter).
                     let is_h2 = req.version() == hyper::Version::HTTP_2;
+                    // T1#3: active h2 stream gauge. The guard is created ONLY when
+                    // this request is h2, so the h1 path pays nothing (the
+                    // `Option::None` from `None.then(...)` is free). Dropped at the
+                    // end of the `async move` block (including early returns),
+                    // decrementing `H2_STREAMS_ACTIVE` on the way out.
+                    let _h2_stream_guard = is_h2.then(crate::metrics::H2StreamGuard::new);
                     // GAP-A: under h2, count this stream against the per-connection
                     // budget. When the count REACHES the budget, set the goaway
                     // cell so the driver emits a GOAWAY (the in-flight stream that
@@ -815,6 +892,11 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                                 .status(413)
                                 .body(Full::new(Bytes::from_static(b"Payload Too Large")))
                                 .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b""))));
+                            // T1#3: record the 413 (oversized body) before returning.
+                            crate::metrics::record_request(
+                                started.elapsed().as_micros() as u64,
+                                413,
+                            );
                             return Ok::<_, Infallible>(resp);
                         }
                     };
@@ -847,13 +929,37 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                             // Queue full (handler busy) → immediate 503 built here,
                             // no PHP; also covers a closed channel (handler gone).
                             if tx.try_send(job).is_err() {
+                                // T1#3: record the 503 (queue full) before returning.
+                                // The job was NOT sent, so HANDLER_INFLIGHT is untouched.
+                                crate::metrics::record_request(
+                                    started.elapsed().as_micros() as u64,
+                                    503,
+                                );
                                 return Ok::<_, Infallible>(offload::queue_full_response());
                             }
+                            // T1#3: job sent successfully → it is now in flight on the
+                            // php-handler thread. Increment the inflight gauge; it is
+                            // decremented when the reply resolves (Ok or Err) below.
+                            crate::metrics::HANDLER_INFLIGHT.fetch_add(1, Ordering::Relaxed);
                             // Await the handler thread's reply. A dropped sender
                             // (handler-thread panic/exit race) → 500.
                             match reply_rx.await {
-                                Ok(parts) => (parts.status, parts.headers, parts.body),
+                                Ok(parts) => {
+                                    // T1#3: reply received → the job is no longer in
+                                    // flight; decrement the gauge before using parts.
+                                    crate::metrics::HANDLER_INFLIGHT
+                                        .fetch_sub(1, Ordering::Relaxed);
+                                    (parts.status, parts.headers, parts.body)
+                                }
                                 Err(_) => {
+                                    // T1#3: reply dropped → decrement the inflight
+                                    // gauge, record the 500, then return the 500 body.
+                                    crate::metrics::HANDLER_INFLIGHT
+                                        .fetch_sub(1, Ordering::Relaxed);
+                                    crate::metrics::record_request(
+                                        started.elapsed().as_micros() as u64,
+                                        500,
+                                    );
                                     return Ok::<_, Infallible>(offload::handler_gone_response());
                                 }
                             }
@@ -937,6 +1043,13 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                             started.elapsed().as_millis()
                         );
                     }
+                    // T1#3: record the normal (PHP or 2xx/3xx/4xx handler) return
+                    // using the handler's response status. The `/_status` intercept
+                    // returned earlier and never reaches this recording site.
+                    crate::metrics::record_request(
+                        started.elapsed().as_micros() as u64,
+                        status,
+                    );
                     Ok::<_, Infallible>(response)
                 }
             });

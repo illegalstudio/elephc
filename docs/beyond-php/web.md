@@ -632,6 +632,20 @@ blocking PHP `handler()` off the I/O thread without letting handlers overlap.
   flag — the flag only sets the timeout. Works in all three web modes and both
   dispatch backends (`kernel` and `master`). `SIGINT`/`SIGTERM` stay hard-kill
   (unchanged) — see [Graceful shutdown](#graceful-shutdown) below.
+- **Metrics endpoint** — opt-in `--metrics` exposes a per-worker JSON snapshot
+  at `--metrics-path` (default `/_status`) before the PHP handler runs. The
+  snapshot reports `pid`, `mode` (`web` / `web-worker` / `web-worker-script`),
+  `uptime_secs`, `served_total`, `rps_last_60s`, `latency_us` (`p50`/`p99`/`max`/
+  `samples`), `status_classes` (1xx..5xx), `overload_503`, `handler_offload`,
+  `handler_inflight`, `max_pending`, `active_conns`, `rss_bytes`, `max_rss_bytes`,
+  `h2_enabled`, `h2_streams_active`, `reload_grace_secs`, and `draining`. The
+  snapshot is **per-worker**: under the default `--dispatch kernel`
+  (SO_REUSEPORT) a request lands on a random worker, so scrape repeatedly for a
+  cluster view (or pair with `--workers 1` for a single-worker reading). The
+  endpoint is **not** recorded as a request, so it does not skew `served_total`
+  or the latency/rps windows. Off by default; the hot path is byte-for-byte
+  unchanged when `--metrics` is absent (the intercept is a single `if` that
+  short-circuits on the captured `metrics` bool). Same in all three web modes.
 - **Graceful shutdown** — the master shuts down cleanly on `SIGINT` (Ctrl-C) and
   `SIGTERM`: it forwards termination to the workers, reaps them, and exits `0`. An
   in-flight request may be dropped when shutdown arrives.

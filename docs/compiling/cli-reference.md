@@ -64,6 +64,8 @@ arguments (not elephc compiler flags):
 | `--max-execution-time N` | No | `0` (none) | Kill a handler that runs longer than N seconds; the master respawns the worker. |
 | `--gzip` | No | off | Gzip-compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--access-log` | No | off | Log one line per request to stderr. |
+| `--metrics` | No | off | Expose a per-worker JSON metrics snapshot at `--metrics-path` (default `/_status`). The snapshot is per-worker: under SO_REUSEPORT a request lands on a random worker, so scrape repeatedly for a cluster view. The endpoint is not recorded as a request. See [Metrics endpoint](../beyond-php/web.md#metrics-endpoint). |
+| `--metrics-path PATH` | No | `/_status` | Path that serves the metrics snapshot (only meaningful with `--metrics`; warns if set without it; empty value is rejected with exit 2 when `--metrics` is on). |
 | `--tls-cert FILE` | No | — | PEM certificate chain; enables TLS on `--listen`. Requires `--tls-key`. See [TLS / HTTPS](../beyond-php/web.md#tls--https). |
 | `--tls-key FILE` | No | — | PEM private key (PKCS#8/PKCS#1/SEC1, unencrypted) matching `--tls-cert`. Requires `--tls-cert`. |
 | `--http2` | No | off | Opt in to HTTP/2 (h2c prior-knowledge on plaintext; h2 over TLS is a follow-up). **Requires `--handler-offload`** (without offload, multiplexed h2 streams all stall on the single inline handler; exit 2 otherwise). Default off: the server speaks HTTP/1.1 only via one `http1_only()` code path. See [HTTP/2](../beyond-php/web.md#http2). |

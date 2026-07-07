@@ -156,9 +156,10 @@ pub extern "C" fn elephc_web_worker_register(handler: WorkerHandler) -> ! {
         core::ptr::write(core::ptr::addr_of_mut!(WORKER_BOOTED), true);
     }
     // Signal the master that boot completed (pipe-based boot signal), then
-    // transfer to the Rust-driven worker loop; never returns.
+    // transfer to the Rust-driven worker loop; never returns. The mode label
+    // `"web-worker"` is passed by the call site (T1#3 metrics `mode` field).
     signal_boot();
-    crate::worker_mode::enter_worker_loop();
+    crate::worker_mode::enter_worker_loop("web-worker");
 }
 
 /// Registers the script-mode handler in the forked child, signals boot
@@ -174,7 +175,10 @@ pub(crate) fn register_script_handler(handler: ScriptHandler) -> ! {
         core::ptr::write(core::ptr::addr_of_mut!(WORKER_BOOTED), true);
     }
     signal_boot();
-    crate::worker_mode::enter_worker_loop();
+    // The mode label `"web-worker-script"` is passed by the call site (T1#3
+    // metrics `mode` field); distinguishes script mode from the registered-
+    // handler `--web-worker` mode.
+    crate::worker_mode::enter_worker_loop("web-worker-script");
 }
 
 #[cfg(test)]

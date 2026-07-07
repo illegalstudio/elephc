@@ -49,6 +49,11 @@ Options:
   --idle-timeout SECS    Close a keep-alive connection idle (no new request) for
                          more than SECS seconds; 0 = never (default: 0)
   --access-log           Log one line per request to stderr
+  --metrics               Expose a per-worker JSON metrics snapshot at --metrics-path
+                          (default off). The snapshot is per-worker: under SO_REUSEPORT a
+                          request lands on a random worker; scrape repeatedly for a cluster view
+  --metrics-path PATH    Path that serves the metrics snapshot (default /_status; only
+                          meaningful with --metrics)
   --max-execution-time N Kill (and respawn) a worker whose handler runs > N seconds; 0 = no limit
   --worker-gc-interval N Run the cycle collector every N requests; 0 = never, 1 = every request (worker mode default: 1)
   --gzip                 Compress responses when the client sends Accept-Encoding: gzip
@@ -277,6 +282,19 @@ struct ServerArgs {
     /// always happens on SIGUSR1 regardless of this value; the flag only sets the
     /// timeout. Threaded into `WorkerConfig.reload_grace_secs`.
     reload_grace_secs: u32,
+    /// Opt in to the per-worker `/_status` metrics JSON endpoint (`--metrics`,
+    /// default off). When on, each worker intercepts `metrics_path` in its
+    /// service_fn before invoking the PHP handler and returns a small JSON
+    /// snapshot of this worker's counters (per-worker: under SO_REUSEPORT a
+    /// request lands on a random worker, so scrape repeatedly for a cluster
+    /// view). The endpoint is NOT recorded as a request. Threaded into
+    /// `WorkerConfig.metrics`. Off keeps the hot path byte-for-byte.
+    metrics: bool,
+    /// Path that serves the metrics snapshot (`--metrics-path`, default
+    /// `/_status`). Only meaningful with `--metrics`; warns if set without it.
+    /// Threaded into `WorkerConfig.metrics_path`. An empty value is rejected
+    /// (exit 2) when `--metrics` is on.
+    metrics_path: String,
 }
 
 impl ServerArgs {
@@ -314,6 +332,15 @@ impl ServerArgs {
             h2_stream_budget,
             max_rss_bytes: self.max_rss_mib.saturating_mul(1024).saturating_mul(1024),
             reload_grace_secs: self.reload_grace_secs,
+            metrics: self.metrics,
+            // Leak the operator-supplied path ONCE per process so the
+            // `WorkerConfig` stays `Copy` (the path is a `&'static str`) and the
+            // per-connection / per-request hot path never clones it. The path
+            // is small and immutable for the process lifetime, so the leak is
+            // bounded and acceptable. `worker_config()` is called once per
+            // entry point per process, so this leaks at most once.
+            metrics_path: Box::leak(self.metrics_path.clone().into_boxed_str())
+                as &'static str,
         }
     }
 
@@ -409,6 +436,14 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
     // `WorkerConfig` because drain always happens on SIGUSR1 — the flag only
     // sets the timeout, not whether drain occurs.
     let mut reload_grace_secs: u32 = DEFAULT_RELOAD_GRACE_SECS;
+    // `--metrics` exposes a per-worker JSON snapshot at `--metrics-path`
+    // (default `/_status`). `metrics_path_set` distinguishes "operator passed
+    // --metrics-path" from "default value" so the inert-flag warning fires only
+    // when the operator actually set it without `--metrics`. An empty
+    // `--metrics-path` paired with `--metrics` is a hard usage error (exit 2).
+    let mut metrics = false;
+    let mut metrics_path: String = "/_status".into();
+    let mut metrics_path_set = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -484,6 +519,20 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
                 }
             }
             "--access-log" => { access_log = true; }
+            "--metrics" => { metrics = true; }
+            "--metrics-path" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => {
+                        metrics_path = v.clone();
+                        metrics_path_set = true;
+                    }
+                    None => {
+                        eprintln!("error: --metrics-path requires a value (try --help)");
+                        return ParsedArgs::Exit(2);
+                    }
+                }
+            }
             "--gzip" => { gzip = true; }
             "--handler-offload" => { handler_offload = true; }
             "--max-pending" => {
@@ -572,6 +621,18 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
     if http2_max_header_size_set && !http2 {
         eprintln!("warning: --http2-max-header-size is ignored without --http2");
     }
+    // `--metrics-path` only means anything with `--metrics`; warn (do not
+    // error) when it is set without it so a stray flag is not silently
+    // misleading.
+    if metrics_path_set && !metrics {
+        eprintln!("warning: --metrics-path is ignored without --metrics");
+    }
+    // An empty `--metrics-path` paired with `--metrics` is a hard usage error:
+    // the intercept path must be non-empty so the snapshot is reachable.
+    if metrics && metrics_path.is_empty() {
+        eprintln!("error: --metrics-path must not be empty (try --help)");
+        return ParsedArgs::Exit(2);
+    }
     // Worker-mode defaults: recycle after 1000 requests and collect cycles
     // every request, unless the operator explicitly overrode either flag.
     if worker_mode && !max_requests_set {
@@ -601,6 +662,8 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             http2_max_header_size,
             max_rss_mib,
             reload_grace_secs,
+            metrics,
+            metrics_path,
         }),
         None => {
             eprintln!("error: --web binary requires --listen host:port (try --help)");

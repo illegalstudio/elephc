@@ -4401,3 +4401,156 @@ fn web_sigterm_still_hard_kills() {
         resp
     );
 }
+
+// ---------------------------------------------------------------------------
+// T1#3: per-worker metrics endpoint (`--metrics` / `/_status`).
+// ---------------------------------------------------------------------------
+
+/// Spawns the `--web` binary on a fresh ephemeral port with the given extra
+/// runtime args (after `--listen`/`--workers`) and returns a kill-on-drop
+/// `ServerHandle`. Reuses the guarded pattern so a failing assertion cannot
+/// orphan the server process.
+fn spawn_web_with_args(bin: &Path, extra_args: &[&str]) -> ServerHandle {
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut cmd = Command::new(bin);
+    cmd.arg("--listen").arg(&addr).arg("--workers").arg("1");
+    for a in extra_args {
+        cmd.arg(a);
+    }
+    let child = cmd.spawn().expect("failed to spawn web server");
+    wait_until_ready(&addr);
+    ServerHandle { child, addr }
+}
+
+/// Verifies `--metrics` exposes a per-worker JSON snapshot at `/_status` after a
+/// few normal requests: the snapshot is status 200, content-type
+/// `application/json`, contains `pid`/`mode`/`active_conns`, and reports
+/// `served_total` equal to the number of prior normal requests (the `/_status`
+/// request itself is NOT recorded).
+#[test]
+fn web_metrics_endpoint_serves_json() {
+    let dir = make_test_dir("web_metrics_json");
+    let bin = compile_web(&dir, "<?php echo \"ok\";", "app");
+    let server = spawn_web_with_args(&bin, &["--metrics"]);
+    for _ in 0..3 {
+        let r = http_get(server.addr(), "/");
+        assert!(r.ends_with("ok"), "normal request body: {:?}", r);
+    }
+    let resp = http_get(server.addr(), "/_status");
+    assert!(resp.starts_with("HTTP/1.1 200"), "status 200: {:?}", resp);
+    assert!(
+        resp.contains("content-type: application/json"),
+        "content-type json: {:?}",
+        resp,
+    );
+    assert!(resp.contains("\"pid\""), "json has pid: {:?}", resp);
+    assert!(resp.contains("\"mode\":\"web\""), "json has mode web: {:?}", resp);
+    assert!(resp.contains("\"active_conns\""), "json has active_conns: {:?}", resp);
+    assert!(
+        resp.contains("\"served_total\":3"),
+        "served_total must be 3 (the 3 prior requests; /_status is not recorded): {:?}",
+        resp,
+    );
+}
+
+/// Verifies that WITHOUT `--metrics`, `/_status` falls through to the PHP handler
+/// (the response is the echo body, NOT JSON). Guards the OFF path.
+#[test]
+fn web_metrics_disabled_by_default() {
+    let dir = make_test_dir("web_metrics_off");
+    let bin = compile_web(&dir, "<?php echo \"ok\";", "app");
+    let server = spawn_web_with_args(&bin, &[]);
+    let resp = http_get(server.addr(), "/_status");
+    assert!(
+        resp.ends_with("ok"),
+        "without --metrics, /_status falls through to PHP (body ok): {:?}",
+        resp,
+    );
+    assert!(
+        !resp.contains("application/json"),
+        "without --metrics, /_status must NOT be JSON: {:?}",
+        resp,
+    );
+}
+
+/// Verifies `--metrics-path` overrides the snapshot path: `/_status` falls
+/// through to PHP while `/custom-status` serves the JSON snapshot.
+#[test]
+fn web_metrics_custom_path() {
+    let dir = make_test_dir("web_metrics_custom");
+    let bin = compile_web(&dir, "<?php echo \"ok\";", "app");
+    let server =
+        spawn_web_with_args(&bin, &["--metrics", "--metrics-path", "/custom-status"]);
+    let default = http_get(server.addr(), "/_status");
+    assert!(
+        default.ends_with("ok"),
+        "default path falls through to PHP when overridden: {:?}",
+        default,
+    );
+    let custom = http_get(server.addr(), "/custom-status");
+    assert!(
+        custom.starts_with("HTTP/1.1 200"),
+        "custom path serves the snapshot: {:?}",
+        custom,
+    );
+    assert!(
+        custom.contains("\"pid\""),
+        "custom path returns JSON with pid: {:?}",
+        custom,
+    );
+}
+
+/// Verifies the metrics endpoint records a latency sample: after one slow
+/// request, the snapshot's `latency_us` block reports `samples:1` (or `>=1`)
+/// and contains the `p50` key. Uses a busy-loop handler so the recorded
+/// latency is non-trivial on the contended box.
+#[test]
+fn web_metrics_records_latency() {
+    let dir = make_test_dir("web_metrics_lat");
+    // Busy loop: ~10M iterations to burn a few ms on the contended box.
+    let src = "<?php $x = 0; for ($i = 0; $i < 10000000; $i++) { $x += $i; } echo \"done\";";
+    let bin = compile_web(&dir, src, "app");
+    let server = spawn_web_with_args(&bin, &["--metrics"]);
+    let r = http_get(server.addr(), "/");
+    assert!(r.ends_with("done"), "handler body: {:?}", r);
+    let resp = http_get(server.addr(), "/_status");
+    assert!(
+        resp.contains("\"latency_us\":{\"p50\":"),
+        "json has latency_us p50: {:?}",
+        resp,
+    );
+    assert!(
+        resp.contains("\"samples\":1") || resp.contains("\"samples\":2"),
+        "samples must be >=1 after one recorded request: {:?}",
+        resp,
+    );
+}
+
+/// Verifies `record_request` tallies status classes: two 200 requests plus one
+/// oversized (413) POST produce `2xx:2` and `4xx:1` in the snapshot. Guards the
+/// status-class recording and the 413 early-return recording.
+#[test]
+fn web_metrics_records_status_classes() {
+    let dir = make_test_dir("web_metrics_classes");
+    let bin = compile_web(&dir, "<?php echo \"ok\";", "app");
+    let server = spawn_web_with_args(&bin, &["--metrics", "--max-body-size", "4"]);
+    // Two normal 200 requests.
+    for _ in 0..2 {
+        let r = http_get(server.addr(), "/");
+        assert!(r.ends_with("ok"), "normal 200 body: {:?}", r);
+    }
+    // One oversized POST → 413.
+    let big = http_request(server.addr(), "POST", "/", &[("Content-Type", "text/plain")], "xxxxxxxx");
+    assert!(big.starts_with("HTTP/1.1 413"), "oversized POST is 413: {:?}", big);
+    let resp = http_get(server.addr(), "/_status");
+    assert!(
+        resp.contains("\"2xx\":2"),
+        "2xx must be 2 (two normal requests): {:?}",
+        resp,
+    );
+    assert!(
+        resp.contains("\"4xx\":1"),
+        "4xx must be 1 (one 413): {:?}",
+        resp,
+    );
+}
