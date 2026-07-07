@@ -45,14 +45,13 @@ const DEFINE_ALREADY_DEFINED_WARNING: &str =
 
 /// Lowers a scalar builtin call by matching the canonical PHP function name.
 ///
-/// Consults the builtin registry first using the canonical key; falls back to the
-/// legacy match table when the name is not registered. This makes the registry the
-/// authoritative dispatch path while keeping the legacy emitters as a fallback.
+/// Consults the builtin registry first using the canonical key, then handles
+/// compiler-resident language constructs that are not registry builtins.
 pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let name = ctx.function_name_data(expect_data(inst)?)?;
     let key = php_symbol_key(name.trim_start_matches('\\'));
     // Registry-first: if the builtin is registered, invoke its lowering hook.
-    // Falls through to the legacy match when the name is not registered.
+    // Falls through to compiler-resident constructs when the name is not registered.
     if let Some(def) = crate::builtins::registry::lookup(key.as_str()) {
         return (def.spec.lower)(ctx, inst);
     }
@@ -79,7 +78,7 @@ pub(super) fn lower_hash_isset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     isset::lower_hash_isset(ctx, inst)
 }
 
-/// Lowers `define("NAME", value)` with the legacy duplicate-name runtime guard.
+/// Lowers `define("NAME", value)` with the duplicate-name runtime guard.
 pub(crate) fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "define", 2)?;
     let name_value = expect_operand(inst, 0)?;

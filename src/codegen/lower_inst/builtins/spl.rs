@@ -6,8 +6,8 @@
 //! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
 //!
 //! Key details:
-//! - The legacy backend exposes the object pointer as a process-stable identity.
-//!   `spl_object_hash()` stringifies that same identity with the shared itoa helper.
+//! - Object ids use the heap pointer as a process-stable identity.
+//!   `spl_object_hash()` stringifies that identity with the shared itoa helper.
 
 use crate::codegen::{
     abi, callable_descriptor, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
@@ -174,7 +174,7 @@ pub(crate) fn lower_spl_autoload_functions(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `spl_autoload_extensions()` against the legacy mutable extension globals.
+/// Lowers `spl_autoload_extensions()` against the mutable extension globals.
 pub(crate) fn lower_spl_autoload_extensions(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,

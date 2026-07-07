@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `array_combine()` through the legacy hash-building runtime helpers.
+- Lowers `array_combine()` through the hash-building runtime helpers.
 
 ## Runtime helpers
 

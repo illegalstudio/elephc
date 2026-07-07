@@ -119,14 +119,9 @@ PHP source → Lexer → Parser → Magic constants → Conditional compilation 
 
 ### Backend policy
 
-EIR is the only active backend for new implementation work. New language
+EIR is the active backend for compiler implementation work. New language
 features, builtins, runtime semantics, optimizer behavior, ownership paths, and
 target support must be implemented through the AST → EIR → EIR codegen path.
-
-The legacy direct AST → ASM backend has been removed. `--ast-backend` is
-unsupported and must remain a hard CLI error. Do not recreate direct AST
-emitters for feature work, parity fixes, diagnostics, or target-specific
-lowering.
 
 Shared target/runtime infrastructure remains active under `src/codegen_support/`,
 including ABI helpers, runtime emitters, runtime data emission, target

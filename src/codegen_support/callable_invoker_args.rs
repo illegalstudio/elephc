@@ -3,7 +3,7 @@
 //! Normalizes indexed/associative argument arrays to boxed Mixed containers.
 //!
 //! Called from:
-//! - `crate::codegen` EIR callable lowerers and legacy callable builtin support.
+//! - `crate::codegen` EIR callable lowerers and callable builtin support.
 //!
 //! Key details:
 //! - Descriptor invokers consume boxed `Mixed` argument containers.

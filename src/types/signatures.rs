@@ -759,9 +759,9 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             PhpType::Float,
         )),
         // NOTE: is_array/is_object/is_scalar are intentionally NOT first-class callable.
-        // The runtime callable wrapper for a builtin is emitted by the legacy backend, which
-        // has no codegen for these three predicates, so listing them here would emit an
-        // undefined `_fn_is_*` invoker reference in any program using dynamic string callbacks.
+        // No runtime callable wrapper is emitted for these three predicates, so listing
+        // them here would emit an undefined `_fn_is_*` invoker reference in any program
+        // using dynamic string callbacks.
         // Direct calls are fully supported; first-class/string-callback use is not (yet).
         "boolval" | "is_bool" | "is_null" | "is_float" | "is_int" | "is_iterable"
         | "is_string" | "is_numeric" | "is_nan" | "is_finite" | "is_infinite"

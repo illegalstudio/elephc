@@ -702,7 +702,7 @@ pub(crate) fn lower_shell_exec(
     lower_shell_exec_like(ctx, inst, "shell_exec")
 }
 
-/// Lowers `system(command)` through libc `system()` and returns the legacy empty string result.
+/// Lowers `system(command)` through libc `system()` and returns the compiler's empty string result.
 pub(crate) fn lower_system(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,

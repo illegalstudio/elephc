@@ -1,7 +1,6 @@
 //! Purpose:
 //! Lowers enum-specific static helper methods for the EIR backend.
-//! Handles enum singleton arrays and backed-enum lookup helpers without relying
-//! on legacy AST method emitters.
+//! Handles enum singleton arrays and backed-enum lookup helpers.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::lower_static_method_call()`.

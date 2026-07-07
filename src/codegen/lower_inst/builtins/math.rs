@@ -236,7 +236,7 @@ pub(crate) fn lower_min_max(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `pi()` as the same data-section float constant used by the legacy backend.
+/// Lowers `pi()` as a data-section float constant.
 pub(crate) fn lower_pi(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "pi", 0)?;
     let label = ctx.data.add_float(std::f64::consts::PI);

@@ -5,14 +5,13 @@ sidebar:
   order: 7
 ---
 
-**Source:** active backend `src/codegen/`; EIR lowering `src/ir_lower/`;
+**Source:** assembly emitter `src/codegen/`; EIR lowering `src/ir_lower/`;
 IR model and validation `src/ir/`; shared runtime/ABI support
 `src/codegen_support/`.
 
-Codegen is now a single EIR pipeline. The checked and optimized AST is always
+Codegen is a single EIR pipeline. The checked and optimized AST is always
 lowered into EIR, IR passes run over that module, and `src/codegen/` emits the
-user assembly for the selected target. The old direct AST emitter is no longer a
-CLI backend; historical notes live in [Legacy Codegen](legacy-codegen.md).
+user assembly for the selected target.
 
 ## Pipeline Position
 
@@ -52,8 +51,8 @@ and link the resulting user object against the cached runtime object.
 | `src/codegen/frame.rs` | Stack-frame sizing, local slots, register allocation integration |
 | `src/codegen/value_placement.rs` | Stack/register placement for EIR values |
 | `src/codegen_support/abi/` | Target ABI helpers for registers, calls, stack slots, symbols, and frame mechanics |
-| `src/codegen_support/arrays.rs` | Shared array metadata helpers used by EIR and retained legacy support code |
-| `src/codegen_support/callable_invoker_args.rs` | Shared descriptor-invoker argument cloning and boxing helpers, without AST backend context coupling |
+| `src/codegen_support/arrays.rs` | Shared array metadata helpers used by EIR and runtime support |
+| `src/codegen_support/callable_invoker_args.rs` | Shared descriptor-invoker argument cloning and boxing helpers |
 | `src/codegen_support/value_boxing.rs` | Shared scalar/string/array/object/iterable boxing into runtime `Mixed` cells |
 | `src/codegen_support/wrappers/` | Shared callback and fiber wrapper emitters used by deferred EIR wrapper emission |
 | `src/codegen_support/runtime/` | Shared `__rt_*` routines and runtime data emission |
@@ -84,9 +83,6 @@ symbols so separate loaded elephc modules do not preempt each other's state.
 
 ## Backend Contract
 
-- EIR is the only user-facing backend.
-- `--ir-backend` is accepted as a compatibility no-op.
-- `--ast-backend` is unsupported and exits during CLI parsing.
 - PHP-visible behavior belongs in `src/ir_lower/` and `src/codegen/`.
 - Shared runtime, ABI, platform, and metadata helpers belong in
   `src/codegen_support/`.

@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `array_flip()` through the legacy hash-building runtime helpers.
+- Lowers `array_flip()` through the hash-building runtime helpers.
 
 ## Runtime helpers
 

@@ -51,7 +51,7 @@ impl RuntimeFeatures {
         }
     }
 
-    /// Returns every optional runtime feature for compatibility with legacy callers.
+    /// Returns every optional runtime feature for callers that need a full feature set.
     #[allow(dead_code)]
     pub const fn all() -> Self {
         Self {

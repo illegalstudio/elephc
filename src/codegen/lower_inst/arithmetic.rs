@@ -6,7 +6,7 @@
 //! - `crate::codegen::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - The lowering mirrors legacy backend scalar semantics and keeps all target
+//! - The lowering preserves PHP scalar semantics and keeps all target
 //!   register choices behind ABI helpers where shared helpers exist.
 
 use crate::codegen::abi;
@@ -77,7 +77,7 @@ pub(super) fn lower_int_checked_binop(
     store_if_result(ctx, inst)
 }
 
-/// Lowers a signed integer modulo operation with the legacy backend's zero-divisor guard.
+/// Lowers a signed integer modulo operation with the established zero-divisor guard.
 pub(super) fn lower_int_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
@@ -95,7 +95,7 @@ pub(super) fn lower_int_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             ctx.emitter.instruction(&format!("msub {}, {}, {}, {}", result_reg, quotient_reg, rhs_reg, result_reg)); // compute left - quotient * right as the remainder
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the modulo zero fallback after a normal remainder
             ctx.emitter.label(&zero_label);
-            ctx.emitter.instruction(&format!("mov {}, #0", result_reg));        // return zero for modulo by zero to match the legacy backend
+            ctx.emitter.instruction(&format!("mov {}, #0", result_reg));        // return zero for modulo by zero
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
@@ -106,7 +106,7 @@ pub(super) fn lower_int_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             ctx.emitter.instruction(&format!("mov {}, rdx", result_reg));       // move the signed remainder into the integer result register
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the modulo zero fallback after a normal remainder
             ctx.emitter.label(&zero_label);
-            ctx.emitter.instruction(&format!("mov {}, 0", result_reg));         // return zero for modulo by zero to match the legacy backend
+            ctx.emitter.instruction(&format!("mov {}, 0", result_reg));         // return zero for modulo by zero
             ctx.emitter.label(&done_label);
         }
     }

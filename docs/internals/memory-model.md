@@ -107,9 +107,9 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 
 elephc has two representations for PHP `null` in scalar slots, selected per compilation by
 `--null-repr=sentinel|tagged` (or `ELEPHC_NULL_REPR`). The tagged representation is the
-default; the sentinel is the legacy opt-out.
+default; the sentinel is the compatibility opt-out.
 
-#### The in-band sentinel (legacy opt-out)
+#### The in-band sentinel (compatibility opt-out)
 
 `null` is represented as the integer `0x7FFFFFFFFFFFFFFE` (`PHP_INT_MAX - 1`). Because every
 64-bit pattern is a valid PHP int, this sentinel collides with the real integer
@@ -150,9 +150,9 @@ cmp x1, #8                ; runtime tag 8 = PHP null
 b.eq value_is_null
 ```
 
-A tagged null carries the legacy sentinel as its payload word, so boxing it into a Mixed
-cell produces exactly the legacy `{tag 8, sentinel}` words and un-audited consumers degrade
-to the legacy behavior. `?int` parameters, returns, and properties keep their boxed Mixed
+A tagged null carries the sentinel as its payload word, so boxing it into a Mixed
+cell produces `{tag 8, sentinel}` words and un-audited consumers degrade
+to sentinel behavior. `?int` parameters, returns, and properties keep their boxed Mixed
 representation under both modes.
 
 ### Pointer values

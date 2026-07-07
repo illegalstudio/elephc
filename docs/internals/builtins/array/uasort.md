@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `uasort()` through the legacy user-sort helper for static comparators.
+- Lowers `uasort()` through the user-sort helper for static comparators.
 
 ## Runtime helpers
 

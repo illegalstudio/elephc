@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Concrete scalar casts stay inline; Mixed numeric casts delegate to boxed runtime helpers.
-//! - String numeric parsing delegates to the shared runtime routines used by the legacy backend paths.
+//! - String numeric parsing delegates to shared runtime routines.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;

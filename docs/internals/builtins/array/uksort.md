@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `uksort()` through the legacy user-sort helper for static comparators.
+- Lowers `uksort()` through the user-sort helper for static comparators.
 
 ## Runtime helpers
 

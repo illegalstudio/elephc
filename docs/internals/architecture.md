@@ -138,8 +138,7 @@ PHP source (.php)
        ▼
 ┌─────────────┐
 │ EIR Codegen │  src/codegen/ + shared src/codegen_support/abi/
-│             │  Emits target assembly text from EIR. EIR is the only
-│             │  selectable backend.
+│             │  Emits target assembly text from EIR.
 └──────┬──────┘
      │
      ▼
@@ -273,7 +272,7 @@ src/
 │   ├── prescan.rs             Constant pre-scan feeding EIR lowering
 │   ├── program_usage.rs       Required-class analysis feeding metadata emission
 │   ├── program_usage/         Required-class scanners
-│   ├── functions/generator/   Legacy closure generator wrapper and resume state-machine lowering
+│   ├── functions/generator/   Closure generator wrapper and resume state-machine lowering
 │   ├── expr.rs                Expression codegen dispatcher
 │   ├── expr/                  Expression submodules
 │   │   ├── arrays.rs          Array-expression dispatch

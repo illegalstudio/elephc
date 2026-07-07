@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `pi()` as the same data-section float constant used by the legacy backend.
+- Lowers `pi()` as a data-section float constant.
 
 ## Runtime helpers
 

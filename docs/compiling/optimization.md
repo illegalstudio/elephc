@@ -292,19 +292,12 @@ on compute-heavy code.
 | Value | Meaning |
 |---|---|
 | `tagged` (default) | Inline two-word `{payload, tag}` scalars. |
-| `sentinel` | In-band `PHP_INT_MAX - 1` sentinel in one-word slots (legacy opt-out). |
+| `sentinel` | In-band `PHP_INT_MAX - 1` sentinel in one-word slots (compatibility opt-out). |
 
 ```bash
-elephc --null-repr=sentinel legacy.php
+elephc --null-repr=sentinel sentinel.php
 ```
 
 `ELEPHC_NULL_REPR` overrides the default for a whole run. Most programs should
-use the default; `sentinel` exists as a legacy opt-out. See
+use the default; `sentinel` exists as a compatibility opt-out. See
 [Memory Model](../internals/memory-model.md).
-
-## Backend Selection
-
-EIR is the only codegen backend. `--ir-backend` remains accepted as a
-compatibility no-op, while `--ast-backend` has been removed and exits with an
-unsupported-flag diagnostic. Historical notes for the removed direct AST backend
-live in [Legacy Codegen](../internals/legacy-codegen.md).

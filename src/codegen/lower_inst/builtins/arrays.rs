@@ -135,7 +135,7 @@ pub(crate) fn lower_array_fill(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_if_result(ctx, inst)
 }
 
-/// Lowers `array_fill_keys()` through the legacy hash-building runtime helpers.
+/// Lowers `array_fill_keys()` through the hash-building runtime helpers.
 pub(crate) fn lower_array_fill_keys(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -156,7 +156,7 @@ pub(crate) fn lower_array_fill_keys(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `array_combine()` through the legacy hash-building runtime helpers.
+/// Lowers `array_combine()` through the hash-building runtime helpers.
 pub(crate) fn lower_array_combine(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_combine", 2)?;
     let keys = expect_operand(inst, 0)?;
@@ -170,12 +170,12 @@ pub(crate) fn lower_array_combine(ctx: &mut FunctionContext<'_>, inst: &Instruct
     store_if_result(ctx, inst)
 }
 
-/// Lowers `array_column()` through the target-aware legacy column helpers.
+/// Lowers `array_column()` through the target-aware column helpers.
 pub(crate) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     column::lower_array_column(ctx, inst)
 }
 
-/// Lowers `array_flip()` through the legacy hash-building runtime helpers.
+/// Lowers `array_flip()` through the hash-building runtime helpers.
 pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_flip", 1)?;
     let array = expect_operand(inst, 0)?;
@@ -1095,12 +1095,12 @@ pub(crate) fn lower_arsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     lower_indexed_array_sort(ctx, inst, "arsort", "__rt_arsort", None)
 }
 
-/// Lowers `ksort()` through the legacy key-sort helper surface.
+/// Lowers `ksort()` through the key-sort helper surface.
 pub(crate) fn lower_ksort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_array_key_sort(ctx, inst, "ksort", "__rt_ksort")
 }
 
-/// Lowers `krsort()` through the legacy reverse key-sort helper surface.
+/// Lowers `krsort()` through the reverse key-sort helper surface.
 pub(crate) fn lower_krsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_array_key_sort(ctx, inst, "krsort", "__rt_krsort")
 }
@@ -1125,12 +1125,12 @@ pub(crate) fn lower_usort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     lower_user_sort_static_callback(ctx, inst, "usort")
 }
 
-/// Lowers `uksort()` through the legacy user-sort helper for static comparators.
+/// Lowers `uksort()` through the user-sort helper for static comparators.
 pub(crate) fn lower_uksort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_user_sort_static_callback(ctx, inst, "uksort")
 }
 
-/// Lowers `uasort()` through the legacy user-sort helper for static comparators.
+/// Lowers `uasort()` through the user-sort helper for static comparators.
 pub(crate) fn lower_uasort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_user_sort_static_callback(ctx, inst, "uasort")
 }
@@ -1954,7 +1954,7 @@ fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_if_result(ctx, inst)
 }
 
-/// Calls the legacy user-sort helper with a static comparator and optional late-static environment.
+/// Calls the user-sort helper with a static comparator and optional late-static environment.
 fn lower_user_sort_static_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -2151,7 +2151,7 @@ fn move_sort_callback_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg));       // move the callback result into the runtime cast argument register
 }
 
-/// Calls the legacy key-sort helper for array-like values.
+/// Calls the key-sort helper for array-like values.
 fn lower_array_key_sort(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,

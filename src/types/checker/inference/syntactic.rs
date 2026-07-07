@@ -454,7 +454,7 @@ fn int_arithmetic_identity_is_always_int(op: &BinOp, left: &Expr, right: &Expr) 
     }
 }
 
-/// Extracts an integer literal value from a direct AST literal.
+/// Extracts an integer literal value from a literal expression.
 fn int_literal_value(expr: &Expr) -> Option<i64> {
     match &expr.kind {
         ExprKind::IntLiteral(value) => Some(*value),

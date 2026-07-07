@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `ksort()` through the legacy key-sort helper surface.
+- Lowers `ksort()` through the key-sort helper surface.
 
 ## Runtime helpers
 

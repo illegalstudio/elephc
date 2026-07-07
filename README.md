@@ -113,7 +113,7 @@ elephc takes a narrower but cleaner route: it is a from-scratch compiler for a s
 
 That tradeoff is intentional:
 
-- **Less legacy compatibility** than a VM-backed PHP implementation.
+- **Less long-tail compatibility** than a VM-backed PHP implementation.
 - **More mechanical transparency**: readable assembly output, source maps, line-by-line commented codegen, and a documented memory model.
 - **No hidden runtime dependency**: the generated binary does not need PHP, the Zend Engine, a loader extension, or an embedded interpreter.
 - **Native-oriented extensions**: `extern`, `ptr`, `buffer<T>`, and `packed class` let PHP-shaped code cross into systems, FFI, game, and performance-sensitive workloads.
@@ -157,9 +157,8 @@ xattr -cr elephc
 
 ## Usage
 
-> **Important:** elephc uses the EIR backend exclusively. The old direct AST
-> backend has been removed from the CLI; `--ast-backend` is reported as
-> unsupported.
+> **Important:** elephc lowers every build through the EIR pipeline and the
+> target-aware assembly emitter.
 
 ```bash
 # Compile a PHP file to a native binary
@@ -533,7 +532,7 @@ src/
 │   ├── stmt.rs          # Statement codegen dispatcher
 │   ├── stmt/            # Focused statement helpers (arrays, control_flow, io, storage, ...)
 │   ├── abi/             # Target-aware calling-convention, frame, and value helpers
-│   ├── functions/       # Legacy closure/FCC wrapper emission and epilogue cleanup
+│   ├── functions/       # Closure/FCC wrapper emission and epilogue cleanup
 │   ├── interface_wrappers.rs # Interface dispatch return-shape adapters
 │   ├── callables.rs     # Top-level callable metadata and indirect-call helpers
 │   ├── ffi.rs           # Extern function/global/class codegen

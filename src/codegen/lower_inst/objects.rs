@@ -6,7 +6,7 @@
 //! - `crate::codegen::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - Object payload layout must match the legacy backend and runtime helpers:
+//! - Object payload layout must match the runtime helpers:
 //!   heap kind word before payload, class id at payload offset 0, then 16 bytes
 //!   per declared property slot plus an optional dynamic-property hash pointer.
 //! - Reference properties store a pointer to a local or heap ref-cell in the

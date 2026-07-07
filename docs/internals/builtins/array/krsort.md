@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `krsort()` through the legacy reverse key-sort helper surface.
+- Lowers `krsort()` through the reverse key-sort helper surface.
 
 ## Runtime helpers
 

@@ -1,6 +1,6 @@
 //! Purpose:
 //! Publishes elephc TLS bridge entry points into runtime function-pointer slots.
-//! Keeps TLS bridge setup available to EIR without depending on legacy I/O builtin modules.
+//! Keeps TLS bridge setup available to EIR without coupling it to I/O builtin lowering.
 //!
 //! Called from:
 //! - `crate::codegen::block_emit` for web/bootstrap paths.

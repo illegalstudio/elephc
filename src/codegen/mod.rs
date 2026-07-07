@@ -6,7 +6,7 @@
 //! - `crate::pipeline::compile()` after AST-to-EIR lowering and IR optimization.
 //!
 //! Key details:
-//! - EIR is the only user-facing backend; `--ast-backend` is rejected by the CLI.
+//! - EIR is the compiler's codegen contract for emitted user assembly.
 //! - `crate::codegen_support` owns shared target, runtime, ABI, and metadata helpers.
 
 mod block_emit;

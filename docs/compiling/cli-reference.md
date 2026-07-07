@@ -81,8 +81,6 @@ spellings.
 | `--no-ir-opt` | — | — | `ELEPHC_IR_OPT=off` | Shorthand for `--ir-opt=off`. |
 | `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Register allocator: linear-scan, or stack-only fallback. |
 | `--null-repr=sentinel\|tagged` | `sentinel`, `tagged` | `tagged` | `ELEPHC_NULL_REPR` | Representation for null-capable scalar slots. |
-| `--ir-backend` | — | on | — | Compatibility no-op; EIR is already the only backend. |
-| `--ast-backend` | — | unsupported | — | Removed legacy backend flag; exits with an unsupported-flag diagnostic. |
 
 See [Optimization and codegen controls](optimization.md).
 

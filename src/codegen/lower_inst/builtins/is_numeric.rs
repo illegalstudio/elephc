@@ -6,7 +6,7 @@
 //! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
 //!
 //! Key details:
-//! - The string grammar mirrors the legacy backend: optional leading `-`,
+//! - The string grammar accepts an optional leading `-`,
 //!   digits, optional `.`, and at least one digit overall.
 
 use crate::codegen::abi;

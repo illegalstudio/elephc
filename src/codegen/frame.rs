@@ -1,13 +1,13 @@
 //! Purpose:
 //! Computes and emits stack-frame setup/teardown for the EIR backend.
-//! Reuses the target-aware ABI frame helpers from the legacy backend.
+//! Reuses the target-aware ABI frame helpers shared by the assembly emitter.
 //!
 //! Called from:
 //! - `crate::codegen::block_emit`.
 //!
 //! Key details:
 //! - Frame size is value-placement bytes plus the target frame footer, rounded to 16 bytes.
-//! - Main currently exits through the process syscall, matching the legacy entry path.
+//! - Main currently exits through the process syscall used by normal executable output.
 //! - Each frame stores the inherited concat-buffer offset so statement resets do not clobber
 //!   `_concat_buf` slices that were passed in by the caller.
 

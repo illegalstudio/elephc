@@ -1152,7 +1152,7 @@
       "codegen_function": "lower_array_combine",
       "codegen_line": 160,
       "notes": [
-        "Lowers `array_combine()` through the legacy hash-building runtime helpers."
+        "Lowers `array_combine()` through the hash-building runtime helpers."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -1369,7 +1369,7 @@
       "codegen_function": "lower_array_fill_keys",
       "codegen_line": 139,
       "notes": [
-        "Lowers `array_fill_keys()` through the legacy hash-building runtime helpers."
+        "Lowers `array_fill_keys()` through the hash-building runtime helpers."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -1513,7 +1513,7 @@
       "codegen_function": "lower_array_flip",
       "codegen_line": 179,
       "notes": [
-        "Lowers `array_flip()` through the legacy hash-building runtime helpers."
+        "Lowers `array_flip()` through the hash-building runtime helpers."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -3332,7 +3332,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_boolval",
-      "codegen_line": 587,
+      "codegen_line": 586,
       "notes": [
         "Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`."
       ],
@@ -4104,7 +4104,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_class_like_exists",
-      "codegen_line": 294,
+      "codegen_line": 293,
       "notes": [
         "Lowers AOT class/interface/enum existence checks for literal names."
       ],
@@ -4528,7 +4528,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_count",
-      "codegen_line": 440,
+      "codegen_line": 439,
       "notes": [
         "Lowers `count(array)` for concrete array values by reading the runtime length header.",
         "Called from `crate::builtins::array::count` (the registry home) via a thin wrapper.",
@@ -4894,9 +4894,9 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_define",
-      "codegen_line": 83,
+      "codegen_line": 82,
       "notes": [
-        "Lowers `define(\"NAME\", value)` with the legacy duplicate-name runtime guard."
+        "Lowers `define(\"NAME\", value)` with the duplicate-name runtime guard."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -4938,7 +4938,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_defined",
-      "codegen_line": 262,
+      "codegen_line": 261,
       "notes": [
         "Lowers `defined(\"NAME\")` for compile-time string constant names."
       ],
@@ -5172,7 +5172,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 619,
+      "codegen_line": 618,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -5211,7 +5211,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_class_like_exists",
-      "codegen_line": 294,
+      "codegen_line": 293,
       "notes": [
         "Lowers AOT class/interface/enum existence checks for literal names."
       ],
@@ -6295,7 +6295,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_floatval",
-      "codegen_line": 557,
+      "codegen_line": 556,
       "notes": [
         "Lowers `floatval()` for concrete scalar operands."
       ],
@@ -7094,7 +7094,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_function_exists",
-      "codegen_line": 277,
+      "codegen_line": 276,
       "notes": [
         "Lowers `function_exists(\"name\")` for compile-time string names.",
         "Recognizes user functions, externs, catalog builtins, and the date/time procedural aliases",
@@ -7815,7 +7815,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_gettype",
-      "codegen_line": 130,
+      "codegen_line": 129,
       "notes": [
         "Lowers `gettype(value)` for statically concrete PHP types."
       ],
@@ -9234,7 +9234,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_class_like_exists",
-      "codegen_line": 294,
+      "codegen_line": 293,
       "notes": [
         "Lowers AOT class/interface/enum existence checks for literal names."
       ],
@@ -9278,7 +9278,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_intval",
-      "codegen_line": 524,
+      "codegen_line": 523,
       "notes": [
         "Lowers `intval()` for concrete scalar operands."
       ],
@@ -9409,7 +9409,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_array",
-      "codegen_line": 1003,
+      "codegen_line": 1002,
       "notes": [
         "Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value",
         "whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is",
@@ -9448,7 +9448,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_static_type_predicate",
-      "codegen_line": 737,
+      "codegen_line": 736,
       "notes": [
         "Lowers a static `is_*` predicate for concrete non-Mixed values."
       ],
@@ -9485,7 +9485,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_callable",
-      "codegen_line": 320,
+      "codegen_line": 319,
       "notes": [
         "Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers."
       ],
@@ -9687,7 +9687,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_static_type_predicate",
-      "codegen_line": 737,
+      "codegen_line": 736,
       "notes": [
         "Lowers a static `is_*` predicate for concrete non-Mixed values."
       ],
@@ -9761,7 +9761,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_static_type_predicate",
-      "codegen_line": 737,
+      "codegen_line": 736,
       "notes": [
         "Lowers a static `is_*` predicate for concrete non-Mixed values."
       ],
@@ -9798,7 +9798,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_iterable",
-      "codegen_line": 795,
+      "codegen_line": 794,
       "notes": [
         "Lowers `is_iterable()` for concrete values and boxed Mixed payloads."
       ],
@@ -9914,7 +9914,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_null_builtin",
-      "codegen_line": 993,
+      "codegen_line": 992,
       "notes": [
         "Lowers `is_null()` for concrete scalar values and boxed Mixed payloads."
       ],
@@ -9988,7 +9988,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_object",
-      "codegen_line": 1018,
+      "codegen_line": 1017,
       "notes": [
         "Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose",
         "runtime tag is an object (6)."
@@ -10104,7 +10104,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_scalar",
-      "codegen_line": 1034,
+      "codegen_line": 1033,
       "notes": [
         "Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed",
         "Mixed/Union value whose runtime tag is int (0), string (1), float (2), or bool (3). Null,",
@@ -10143,7 +10143,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_static_type_predicate",
-      "codegen_line": 737,
+      "codegen_line": 736,
       "notes": [
         "Lowers a static `is_*` predicate for concrete non-Mixed values."
       ],
@@ -10711,7 +10711,7 @@
       "codegen_function": "lower_krsort",
       "codegen_line": 1104,
       "notes": [
-        "Lowers `krsort()` through the legacy reverse key-sort helper surface."
+        "Lowers `krsort()` through the reverse key-sort helper surface."
       ],
       "runtime_helpers": [
         "__rt_krsort",
@@ -10752,7 +10752,7 @@
       "codegen_function": "lower_ksort",
       "codegen_line": 1099,
       "notes": [
-        "Lowers `ksort()` through the legacy key-sort helper surface."
+        "Lowers `ksort()` through the key-sort helper surface."
       ],
       "runtime_helpers": [
         "__rt_krsort",
@@ -12129,7 +12129,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_phpversion",
-      "codegen_line": 252,
+      "codegen_line": 251,
       "notes": [
         "Lowers `phpversion()` as the compiler package version string."
       ],
@@ -12160,7 +12160,7 @@
       "codegen_function": "lower_pi",
       "codegen_line": 240,
       "notes": [
-        "Lowers `pi()` as the same data-section float constant used by the legacy backend."
+        "Lowers `pi()` as a data-section float constant."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -14573,7 +14573,7 @@
       "codegen_function": "lower_spl_autoload_extensions",
       "codegen_line": 178,
       "notes": [
-        "Lowers `spl_autoload_extensions()` against the legacy mutable extension globals."
+        "Lowers `spl_autoload_extensions()` against the mutable extension globals."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -17521,7 +17521,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_strlen",
-      "codegen_line": 494,
+      "codegen_line": 493,
       "notes": [
         "Lowers `strlen()` by coercing string-like values and returning the byte length."
       ],
@@ -18081,7 +18081,7 @@
       "codegen_function": "lower_system",
       "codegen_line": 706,
       "notes": [
-        "Lowers `system(command)` through libc `system()` and returns the legacy empty string result."
+        "Lowers `system(command)` through libc `system()` and returns the compiler's empty string result."
       ],
       "runtime_helpers": [
         "__rt_shell_exec"
@@ -18355,7 +18355,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_class_like_exists",
-      "codegen_line": 294,
+      "codegen_line": 293,
       "notes": [
         "Lowers AOT class/interface/enum existence checks for literal names."
       ],
@@ -18445,7 +18445,7 @@
       "codegen_function": "lower_uasort",
       "codegen_line": 1134,
       "notes": [
-        "Lowers `uasort()` through the legacy user-sort helper for static comparators."
+        "Lowers `uasort()` through the user-sort helper for static comparators."
       ],
       "runtime_helpers": [
         "__rt_array_is_list"
@@ -18577,7 +18577,7 @@
       "codegen_function": "lower_uksort",
       "codegen_line": 1129,
       "notes": [
-        "Lowers `uksort()` through the legacy user-sort helper for static comparators."
+        "Lowers `uksort()` through the user-sort helper for static comparators."
       ],
       "runtime_helpers": [
         "__rt_array_is_list"

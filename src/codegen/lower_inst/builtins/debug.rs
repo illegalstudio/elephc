@@ -6,7 +6,7 @@
 //! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
 //!
 //! Key details:
-//! - Output must match the legacy backend for the supported concrete types.
+//! - Output must match PHP-compatible text for the supported concrete types.
 //! - Mixed dispatch follows the runtime tag/payload contract from `__rt_mixed_unbox`.
 //! - Object dumps read the runtime class id from the object header and map it
 //!   through the EIR module's class metadata.

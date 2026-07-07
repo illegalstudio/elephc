@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Dynamic object lookups use the same dense `_class_name_*` runtime tables
-//!   emitted for the legacy backend, preserving concrete subclasses.
+//!   emitted for codegen, preserving concrete subclasses.
 
 use crate::codegen::abi;
 use crate::codegen::emit_box_current_value_as_mixed;

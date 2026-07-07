@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - PHP ctype checks operate over bytes, reject empty strings, and return scalar booleans.
-//! - The loops are emitted inline to match the legacy backend; there is no shared runtime helper.
+//! - The loops are emitted inline; there is no shared runtime helper.
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};

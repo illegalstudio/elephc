@@ -8,7 +8,7 @@ sidebar:
 **Status:** EIR is the canonical compiler IR and backend contract for v1.0.
 The diagnostic `--emit-ir` path lowers the checked and optimized AST into
 validated textual EIR, and normal executable/cdylib builds lower that same EIR
-into assembly. There is no selectable AST backend.
+into assembly.
 
 **Implementation phases:** `.plans/eir-*.md`
 
@@ -37,27 +37,6 @@ EIR is intentionally PHP-shaped. Arrays, hashes, Mixed boxing, callable
 descriptors, copy-on-write checks, fatal paths, exception paths, runtime calls,
 and exact source evaluation order are first-class compiler concepts. EIR is not
 a generic LLVM- or Cranelift-style IR.
-
-## Historical Design Boundary
-
-The first roadmap item originally covered this document only:
-
-```text
-EIR design specification (`docs/internals/the-ir.md`) - types, instructions,
-terminators, effects, ownership, textual format
-```
-
-That first item did **not** include:
-
-- EIR -> assembly backend
-- `--ir-backend`
-- register allocation
-- IR optimization passes
-
-That design-only milestone is complete. The current implementation has since
-added `src/ir/`, `src/ir_lower/`, `--emit-ir`, and the EIR assembly backend
-under `src/codegen/`. Register allocation and IR optimization passes are part
-of the normal pipeline.
 
 ## Pipeline Position
 
@@ -92,9 +71,8 @@ parameters, liveness, dominance, register placement, CSE, LICM, and inlining.
 
 ## Backend Contract
 
-The compiler has one assembly backend: EIR. `--ir-backend` is accepted as a
-compatibility no-op because EIR is already the default. `--ast-backend` is
-unsupported and fails in CLI parsing.
+The compiler lowers EIR through the target-aware assembly emitter in
+`src/codegen/`.
 
 EIR preserves the hand-written assembly style while adding linear-scan register
 allocation plus a fixed-point IR optimization pass driver (see

@@ -90,9 +90,8 @@ Consistency is generally more important than personal preference.
 ## Adding a new operator
 
 elephc parses expressions with a Pratt parser, so a new binary operator flows
-through the whole pipeline — lexer, parser, type checker, optimizer, and EIR
-codegen. Implement it end-to-end (the legacy direct AST emitter is frozen; do not
-extend it):
+through the whole pipeline — lexer, parser, type checker, optimizer, EIR
+lowering, and target-aware codegen. Implement it end-to-end:
 
 1. Add the token to `src/lexer/token.rs`.
 2. Add scanning logic to `src/lexer/scan.rs`.
@@ -320,8 +319,7 @@ when relevant:
   feature.
 - Document the PHP surface (signature, parameters, return type, a short example) on the
   relevant `docs/php/` page.
-- The signature/arity parity gates (`derived_signatures_match_legacy`,
-  `arity_messages_match_legacy` in `src/builtins/parity_tests.rs`) must stay green.
+- The signature/arity parity gates in `src/builtins/parity_tests.rs` must stay green.
 
 ### 8. Not every "builtin" is a function
 

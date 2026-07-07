@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `system(command)` through libc `system()` and returns the legacy empty string result.
+- Lowers `system(command)` through libc `system()` and returns the compiler's empty string result.
 
 ## Runtime helpers
 

@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Path operands are already evaluated by EIR and are materialized into the
-//!   string result registers expected by the legacy runtime helpers.
+//!   string result registers expected by the shared runtime helpers.
 
 use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed, NULL_SENTINEL};
 use crate::codegen::platform::Arch;

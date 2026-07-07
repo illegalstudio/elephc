@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `array_fill_keys()` through the legacy hash-building runtime helpers.
+- Lowers `array_fill_keys()` through the hash-building runtime helpers.
 
 ## Runtime helpers
 

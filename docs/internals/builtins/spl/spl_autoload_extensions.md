@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `spl_autoload_extensions()` against the legacy mutable extension globals.
+- Lowers `spl_autoload_extensions()` against the mutable extension globals.
 
 ## Runtime helpers
 

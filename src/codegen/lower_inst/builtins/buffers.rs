@@ -6,8 +6,8 @@
 //! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
 //!
 //! Key details:
-//! - Buffer helpers use the same runtime symbols as the legacy backend so fatal
-//!   behavior and buffer header layout remain shared.
+//! - Buffer helpers use shared runtime symbols so fatal behavior and buffer
+//!   header layout remain consistent.
 
 use crate::codegen::Result;
 use crate::ir::Instruction;
