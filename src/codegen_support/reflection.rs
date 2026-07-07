@@ -107,17 +107,6 @@ pub(crate) fn collect_attribute_factories_with_extra(
         .collect()
 }
 
-/// Returns the factory id for the given attribute `attr_name` with
-/// `attr_args`. Returns 0 if the class cannot be resolved or no matching
-/// factory exists.
-pub(crate) fn attribute_factory_id(
-    classes: &HashMap<String, ClassInfo>,
-    attr_name: &str,
-    attr_args: &[AttrArgEntry],
-) -> i64 {
-    attribute_factory_id_with_extra(classes, &[], attr_name, attr_args)
-}
-
 /// Returns the factory id for an attribute, considering classes plus extra
 /// metadata sources such as top-level function attributes retained by EIR.
 pub(crate) fn attribute_factory_id_with_extra(
@@ -137,11 +126,6 @@ pub(crate) fn attribute_factory_id_with_extra(
         .find(|factory| factory.class_name == lookup_name && factory.args == attr_args)
         .map(|factory| factory.id)
         .unwrap_or(0)
-}
-
-/// Builds the synthetic dispatch body for `ReflectionAttribute::newInstance()`.
-pub(crate) fn build_attribute_new_instance_body(classes: &HashMap<String, ClassInfo>) -> Vec<Stmt> {
-    build_attribute_new_instance_body_with_extra(classes, &[])
 }
 
 /// Builds the synthetic `ReflectionAttribute::newInstance()` body using class
@@ -290,18 +274,6 @@ fn attr_key_expr(key: &AttrKey) -> Expr {
         AttrKey::Str(value) => ExprKind::StringLiteral(value.clone()),
     };
     Expr::new(kind, span)
-}
-
-/// Builds the synthetic body for `ReflectionAttribute::getArguments()`. For
-/// each attribute whose class resolves, it dispatches on the factory id and
-/// returns the captured arguments as a lowered array literal — so named
-/// arguments and associative arrays are materialized through the normal array
-/// path. Attributes without a resolvable class fall back to the `$__args`
-/// property populated at construction.
-pub(crate) fn build_attribute_get_arguments_body(
-    classes: &HashMap<String, ClassInfo>,
-) -> Vec<Stmt> {
-    build_attribute_get_arguments_body_with_extra(classes, &[])
 }
 
 /// Builds the synthetic `ReflectionAttribute::getArguments()` body using class

@@ -404,11 +404,6 @@ impl ClassInfo {
             .unwrap_or_else(|| self.reference_properties.contains(property))
     }
 
-    /// Returns whether the property visible by name stores a by-reference cell.
-    pub fn visible_property_is_reference(&self, property: &str) -> bool {
-        self.visible_property(property)
-            .is_some_and(|(index, (name, _))| self.property_slot_is_reference(index, name))
-    }
 }
 
 /// Converts a property offset into a `properties` vector index when it points

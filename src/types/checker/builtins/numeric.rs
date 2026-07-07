@@ -236,18 +236,3 @@ fn unset_property_probe_is_valid_on_class(
     }
     Ok(true)
 }
-
-/// Returns the most precise supported result type for `abs($value)`.
-fn abs_result_type(ty: &PhpType) -> PhpType {
-    match ty {
-        PhpType::Float => PhpType::Float,
-        PhpType::Mixed => PhpType::Mixed,
-        PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Float) => {
-            PhpType::Mixed
-        }
-        PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Mixed) => {
-            PhpType::Mixed
-        }
-        _ => PhpType::Int,
-    }
-}

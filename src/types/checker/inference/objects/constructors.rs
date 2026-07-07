@@ -1263,7 +1263,6 @@ fn is_reflection_owner_class(class_name: &str) -> bool {
             | "ReflectionFunction"
             | "ReflectionMethod"
             | "ReflectionProperty"
-            | "ReflectionFunction"
             | "ReflectionParameter"
             | "ReflectionClassConstant"
             | "ReflectionEnumUnitCase"

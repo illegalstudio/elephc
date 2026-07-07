@@ -50,7 +50,6 @@ pub(in crate::optimize) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "is_long"
             | "is_null"
             | "is_numeric"
-            | "is_object"
             | "is_real"
             | "is_string"
             | "is_resource"
