@@ -25,7 +25,24 @@ use crate::types::{FunctionSig, PhpType};
 
 const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
 const INVOKER_CONCAT_OFFSET: usize = 16;
-const INVOKER_FRAME_SIZE: usize = 32;
+/// First frame slot of the callee-saved register save area (issue #487).
+const INVOKER_SAVED_REGS_OFFSET: usize = 24;
+/// Frame size covering the footer, descriptor/concat slots, and the callee-saved save
+/// area (8 registers × 8 bytes on AArch64).
+const INVOKER_FRAME_SIZE: usize = 96;
+
+/// Callee-saved registers the invoker body uses as scratch. The invoker is an ordinary
+/// ABI function reached through `blr`/`call`, and the register allocator parks caller
+/// values in these registers across `callable_descriptor_invoke` sites, so the trampoline
+/// must preserve them like any compiled function prologue does (issue #487): without the
+/// save/restore, a value such as the loaded LHS of `$acc += $f()` read back as the
+/// trampoline's leftover scratch (the args-array length) after every indirect call.
+fn invoker_saved_callee_regs(arch: Arch) -> &'static [&'static str] {
+    match arch {
+        Arch::AArch64 => &["x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26"],
+        Arch::X86_64 => &["r12", "rbx", "r13", "r14", "r15"],
+    }
+}
 
 /// Runtime invoker metadata emitted beside callable descriptors.
 pub(super) struct RuntimeCallableInvoker<'a> {
@@ -85,6 +102,12 @@ pub(super) fn emit_runtime_callable_invoker(
     emitter.raw(".align 2");
     emitter.label_global(invoker.label);
     abi::emit_frame_prologue(emitter, INVOKER_FRAME_SIZE);
+    // Preserve the caller's callee-saved registers before the body scratches them: the
+    // register allocator keeps values live across the indirect invoke in these registers
+    // (issue #487).
+    for (index, reg) in invoker_saved_callee_regs(emitter.target.arch).iter().enumerate() {
+        abi::store_at_offset(emitter, reg, INVOKER_SAVED_REGS_OFFSET + index * 8);
+    }
     abi::store_at_offset(
         emitter,
         abi::int_arg_reg_name(emitter.target, 0),
@@ -103,6 +126,11 @@ pub(super) fn emit_runtime_callable_invoker(
         data,
     );
     emit_box_current_value_as_mixed(emitter, &ret_ty.codegen_repr());
+    // Restore the caller's callee-saved registers (the boxed result travels in the
+    // return registers, which the restore loads never touch).
+    for (index, reg) in invoker_saved_callee_regs(emitter.target.arch).iter().enumerate() {
+        abi::load_at_offset(emitter, reg, INVOKER_SAVED_REGS_OFFSET + index * 8);
+    }
     abi::emit_frame_restore(emitter, INVOKER_FRAME_SIZE);
     abi::emit_return(emitter);
 }

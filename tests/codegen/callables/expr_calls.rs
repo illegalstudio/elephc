@@ -1451,3 +1451,60 @@ echo $cb();
     );
     assert_eq!(out, "B");
 }
+
+/// Regression for #487: a value the register allocator parks in a callee-saved register
+/// across an indirect callable invoke (here the loaded LHS of `$acc += $f()`) must survive
+/// the call. The generated descriptor-invoker trampoline used callee-saved registers as
+/// scratch without saving them, so the accumulator read back as the trampoline's leftover
+/// (the empty args-array length, 0) and only the last call's value survived.
+#[test]
+fn test_compound_assign_closure_call_rhs_accumulates() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function (): int { return 4; };
+$acc = 0;
+for ($n = 0; $n < 20; $n++) { $acc += $f(); }
+echo $acc;
+"#,
+    );
+    assert_eq!(out, "80");
+}
+
+/// Regression for #487: same defect through a callable string and a first-class callable,
+/// with subtraction and multiplication (any operator whose LHS lives across the invoke).
+#[test]
+fn test_compound_assign_indirect_call_rhs_operators() {
+    let out = compile_and_run(
+        r#"<?php
+function four(): int { return 4; }
+$byName = 'four';
+$fcc = four(...);
+$a = 100;
+for ($n = 0; $n < 20; $n++) { $a -= $byName(); }
+$m = 1;
+for ($n = 0; $n < 5; $n++) { $m *= $fcc(); }
+echo $a, "|", $m;
+"#,
+    );
+    assert_eq!(out, "20|1024");
+}
+
+/// Regression for #487: the non-compound spelling and a property target exercise the same
+/// live-across-invoke registers.
+#[test]
+fn test_value_live_across_closure_invoke_survives() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public int $p = 0; }
+$f = function (): int { return 4; };
+$acc = 0;
+$b = new Box();
+for ($n = 0; $n < 20; $n++) {
+    $acc = $acc + $f();
+    $b->p += $f();
+}
+echo $acc, "|", $b->p;
+"#,
+    );
+    assert_eq!(out, "80|80");
+}

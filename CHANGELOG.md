@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed a silent miscompile around indirect callable invocations (issue #487): the generated descriptor-invoker trampoline used callee-saved registers as scratch without preserving them, so any value the register allocator kept live across a closure / callable-string / first-class-callable call — most visibly the accumulator in `$acc += $f()` inside a loop — was clobbered and read back as the trampoline's leftover scratch. The invoker now saves and restores the callee-saved registers it touches, like every compiled function prologue (AArch64 x19–x26, x86_64 r12/rbx/r13–r15).
 - Removed the legacy direct AST → ASM backend completely. EIR is now the only
   codegen implementation path.
 - Int-backed enum `from()` / `tryFrom()` now accept a dynamically-typed (`mixed`) argument (issue #449): a `foreach` value over a heterogeneous array, an untyped parameter, etc. are coerced on their runtime type before the enum lookup — integer/numeric-string resolve (or throw `ValueError`), float truncates, bool/null coerce, and array/object/resource/closure throw `TypeError` naming the given type. Previously any `mixed` argument was rejected at compile time. Target-aware on every supported backend.
