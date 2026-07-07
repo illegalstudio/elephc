@@ -481,13 +481,15 @@ PHP call at a time per worker), which defeats the point of h2 and can deadlock
 under backpressure; the server rejects the combination at startup (exit 2).
 
 With `--http2` the server speaks h2c prior-knowledge on plaintext connections
-(the `PRI * HTTP/2.0` preface). Over TLS, ALPN still advertises only `http/1.1`
-in this release, so a TLS client negotiates h1; h2 over TLS (ALPN `h2`) is a
-follow-up. There is no h1→h2c Upgrade handshake (use prior knowledge on
-plaintext). Supported: per-connection concurrent streams, GOAWAY-based graceful
-shutdown, gzip content-encoding. Not supported: server push, trailers,
-WebSocket-over-h2, gRPC framing, response streaming (the body is buffered,
-same as h1).
+(the `PRI * HTTP/2.0` preface). Over TLS (when `--tls-cert`/`--tls-key` are set
+together with `--http2`), the ALPN list advertises `h2` ahead of `http/1.1`, so
+a TLS client that offers both negotiates HTTP/2-over-TLS (`h2`); an h1-only
+client falls back to `http/1.1`. With `--http2` off, TLS ALPN advertises
+`http/1.1` only (the prior behavior), and plaintext is h1-only. There is no
+h1→h2c Upgrade handshake (use prior knowledge on plaintext). Supported:
+per-connection concurrent streams, GOAWAY-based graceful shutdown, gzip
+content-encoding. Not supported: server push, trailers, WebSocket-over-h2, gRPC
+framing, response streaming (the body is buffered, same as h1).
 
 Tunables and bounds:
 

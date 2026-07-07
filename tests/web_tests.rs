@@ -3933,3 +3933,136 @@ fn web_worker_script_http2_get() {
         "worker-script h2 body must match"
     );
 }
+
+// ============================================================================
+// HTTP/2 over TLS (ALPN h2). PR5 shipped h2c prior-knowledge on plaintext; the
+// ALPN follow-up makes `--http2` + `--tls-cert`/`--tls-key` advertise `h2` ahead
+// of `http/1.1` so a TLS client that offers both negotiates h2 over TLS.
+//
+// Coverage here is the ALPN-negotiation assertion (the spec's required minimum):
+// a blocking `rustls` client offers `["h2","http/1.1"]` and we assert the
+// negotiated protocol is `Some("h2")` when `--http2` is on and
+// `Some("http/1.1")` when off. The full h2-over-TLS request round-trip is NOT
+// driven here because that needs an async TLS stream (`tokio_rustls`), which is
+// a normal dependency of `elephc-web` but NOT a dev-dependency of the root
+// `elephc` crate, and the spec restricts the diff to tls.rs / server.rs /
+// web_tests.rs / docs / CHANGELOG (no Cargo.toml edit). The `h2` dev-dep only
+// speaks h2 over an `AsyncRead+AsyncWrite` transport; without `tokio_rustls`
+// there is no async TLS client available to the test binary. The ALPN assertion
+// is sufficient proof that the server advertises h2 and a client offering h2
+// selects it — the h2 frame layer above TLS is identical to the h2c path the
+// PR5 suite already covers (`web_http2_prior_knowledge_get` and friends).
+// ============================================================================
+
+/// Builds a `rustls::ClientConfig` that trusts ONLY the given self-signed server
+/// cert (like `tls_client_config`) AND offers ALPN `["h2", "http/1.1"]`, so the
+/// negotiated protocol can be asserted in h2-over-TLS tests. Installs the ring
+/// provider (idempotent) to match the server.
+fn tls_client_config_with_alpn(cert_pem_path: &Path) -> std::sync::Arc<rustls::ClientConfig> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let cert_bytes = fs::read(cert_pem_path).unwrap();
+    let mut reader: &[u8] = &cert_bytes;
+    let mut roots = rustls::RootCertStore::empty();
+    for c in rustls_pemfile::certs(&mut reader) {
+        roots.add(c.expect("cert PEM entry")).expect("add root");
+    }
+    let mut config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    // Offer h2 first so a server that supports h2 picks it; an h1-only server
+    // falls back to http/1.1. The order mirrors a real h2-capable client.
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    std::sync::Arc::new(config)
+}
+
+/// Connects a blocking `rustls` client to `addr`, offering ALPN
+/// `["h2","http/1.1"]`, drives the TLS handshake to completion, and returns the
+/// negotiated ALPN protocol as raw bytes (`Some(b"h2")` or
+/// `Some(b"http/1.1")`). The SNI/verification name is `localhost` (the cert's
+/// CN). Panics on TLS handshake failure. The handshake is driven by writing one
+/// application-data byte through `rustls::Stream` then flushing; rustls completes
+/// the negotiation lazily on the first `write`/`read` cycle, and
+/// `is_handshaking()` flips to false once the peer's Finished message is
+/// processed.
+fn tls_alpn_negotiated(addr: &str, cert_pem_path: &Path) -> Option<Vec<u8>> {
+    let config = tls_client_config_with_alpn(cert_pem_path);
+    let server_name = rustls::pki_types::ServerName::try_from("localhost".to_string())
+        .expect("valid server name");
+    let conn = rustls::ClientConnection::new(config, server_name).expect("client conn");
+    let sock = TcpStream::connect(addr).expect("tcp connect");
+    sock.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    sock.set_nonblocking(false).unwrap();
+    let mut conn = conn;
+    let mut sock = sock;
+    // Drive the handshake to completion. `rustls::Stream::write` pumps
+    // ClientHello + Finished and reads the ServerHello + peer Finished, after
+    // which `is_handshaking()` is false and `alpn_protocol()` is populated.
+    let mut stream = rustls::Stream::new(&mut conn, &mut sock);
+    // Write a single byte of application data to force the handshake forward;
+    // the server will discard it (or treat it as the start of an h1/h2 request).
+    // We do not care about a response — only the negotiated ALPN.
+    let _ = stream.write_all(b"X");
+    let _ = stream.flush();
+    // If still handshaking, a read pumps the rest of the server flight.
+    let mut tmp = [0u8; 1];
+    let _ = stream.read(&mut tmp);
+    conn.alpn_protocol().map(|p| p.to_vec())
+}
+
+/// PR5 ALPN follow-up: with `--http2 --handler-offload --tls-cert --tls-key`, a
+/// TLS client offering `["h2","http/1.1"]` negotiates `h2` (ALPN). This is the
+/// spec's required minimum coverage — the ALPN assertion — proving the server
+/// advertises h2 over TLS when `--http2` is on and a capable client selects it.
+/// The h2 frame layer above TLS is identical to the h2c path covered by
+/// `web_http2_prior_knowledge_get`; see the section comment for why the full
+/// h2-over-TLS round-trip is not driven here.
+#[test]
+fn web_http2_over_tls_alpn() {
+    let dir = make_test_dir("web_http2_tls_alpn");
+    let (cert, key) = generate_tls_pair(&dir);
+    let bin = compile_web(&dir, "<?php echo 'h2tls-ok';", "app");
+    let srv = spawn_server_with_flags(
+        &bin,
+        &[
+            "--workers",
+            "1",
+            "--handler-offload",
+            "--http2",
+            "--tls-cert",
+            cert.to_str().unwrap(),
+            "--tls-key",
+            key.to_str().unwrap(),
+        ],
+    );
+    let alpn = tls_alpn_negotiated(srv.addr(), &cert);
+    assert_eq!(
+        alpn.as_deref(),
+        Some(b"h2".as_slice()),
+        "ALPN must negotiate h2 when --http2 is on over TLS"
+    );
+}
+
+/// ALPN negative assertion: with `--http2` OFF + TLS (just `--tls-cert
+/// --tls-key`), a TLS client offering `["h2","http/1.1"]` negotiates
+/// `http/1.1` (the prior behavior is byte-for-byte unchanged). Proves the OFF
+/// path does not advertise h2. Also re-asserts the h1-over-TLS path still serves
+/// a 200 + the handler body (byte-for-byte regression of the PR2 TLS suite).
+#[test]
+fn web_tls_alpn_h1_when_http2_off() {
+    let dir = make_test_dir("web_tls_alpn_h1_off");
+    let (cert, key) = generate_tls_pair(&dir);
+    let bin = compile_web(&dir, "<?php echo 'h1-tls';", "app");
+    // No --http2: TLS ALPN must advertise http/1.1 only.
+    let srv = spawn_tls_server(&bin, &cert, &key, "1");
+    let alpn = tls_alpn_negotiated(srv.addr(), &cert);
+    assert_eq!(
+        alpn.as_deref(),
+        Some(b"http/1.1".as_slice()),
+        "ALPN must negotiate http/1.1 when --http2 is off (OFF path unchanged)"
+    );
+    // The h1-over-TLS path itself must still serve (byte-for-byte regression).
+    let mut client = TlsClient::connect(srv.addr(), &cert);
+    let resp = client.request("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    assert!(resp.contains("200"), "h1 over TLS must still work: {:?}", resp);
+    assert_eq!(http_body(&resp), "h1-tls", "h1 TLS body must match: {:?}", resp);
+}

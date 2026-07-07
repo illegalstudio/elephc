@@ -23,8 +23,11 @@
 //!   the handshake on a stream reconstructed from a received fd.
 //! - `MaybeTls` is `Unpin` (both variants wrap `Unpin` transports), so
 //!   `TokioIo::new(maybe_tls)` satisfies hyper's `Unpin` connection bound.
-//! - ALPN advertises only `http/1.1`. That single-element list is the one h2 hook
-//!   a future HTTP/2 spec extends; nothing else here anticipates h2.
+//! - ALPN advertises `h2` ahead of `http/1.1` when `--http2` is on (the `http2`
+//!   flag is passed through from `install_tls_if_configured`), so a TLS client
+//!   that supports h2 negotiates HTTP/2-over-TLS; when `--http2` is off the list
+//!   is `http/1.1` only (the prior behavior). Plaintext h2c prior-knowledge is
+//!   unaffected — ALPN only applies to the TLS path.
 //! - Ticketer caveat: the ring `Ticketer` rotates its keys per process over time.
 //!   Built pre-fork, workers start with shared keys (inter-worker TLS resumption
 //!   works), but after the first per-process rotation the workers diverge and
@@ -136,11 +139,31 @@ impl AsyncWrite for MaybeTls {
 /// Loads a TLS acceptor from PEM `cert_path` (certificate chain) and `key_path`
 /// (private key, PKCS#8/PKCS#1/SEC1). Installs the ring crypto provider (idempotent
 /// — `elephc-tls` may have installed it too), builds a `ServerConfig` with no
-/// client auth, advertises only `http/1.1` via ALPN, and attaches a stateless ring
+/// client auth, advertises `h2` ahead of `http/1.1` via ALPN when `http2` is true
+/// (so a TLS client that supports h2 negotiates HTTP/2-over-TLS) or `http/1.1`
+/// only when `http2` is false (the prior behavior), and attaches a stateless ring
 /// `Ticketer` for TLS session resumption. Returns the acceptor or a human-readable
 /// error string (unreadable file, malformed PEM, encrypted/absent key, or a
 /// cert/key mismatch) so the master can fail-fast before forking.
-pub(crate) fn load_acceptor(cert_path: &str, key_path: &str) -> Result<TlsAcceptor, String> {
+pub(crate) fn load_acceptor(
+    cert_path: &str,
+    key_path: &str,
+    http2: bool,
+) -> Result<TlsAcceptor, String> {
+    Ok(TlsAcceptor::from(load_acceptor_config(cert_path, key_path, http2)?))
+}
+
+/// Builds the rustls `ServerConfig` (wrapped in an `Arc`) for `cert_path` /
+/// `key_path`, applying the ALPN list selected by `http2` and the stateless ring
+/// `Ticketer`. Factored out of `load_acceptor` so the unit tests can read
+/// `config.alpn_protocols` back without going through the `TlsAcceptor` wrapper
+/// (`TlsAcceptor` is `Arc<ServerConfig>` but does not expose the inner config
+/// by reference). Returns the config or a human-readable error string.
+fn load_acceptor_config(
+    cert_path: &str,
+    key_path: &str,
+    http2: bool,
+) -> Result<Arc<rustls::ServerConfig>, String> {
     // Install the ring provider explicitly so provider selection never depends on
     // default features. Ignoring the result is correct: an "already installed"
     // error just means elephc-tls (or a prior call) installed the same provider.
@@ -173,9 +196,15 @@ pub(crate) fn load_acceptor(cert_path: &str, key_path: &str) -> Result<TlsAccept
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|e| format!("certificate/key rejected: {}", e))?;
-    // ALPN: advertise ONLY http/1.1. This single-element list is the deliberate
-    // (and only) coupling point with a future HTTP/2 spec, which would prepend h2.
-    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    // ALPN: advertise h2 ahead of http/1.1 when the operator opted into HTTP/2, so
+    // a TLS client that supports h2 negotiates HTTP/2-over-TLS; otherwise advertise
+    // http/1.1 only (the prior behavior). The order matters: h2 first lets a
+    // capable client pick h2, while a client that only knows http/1.1 falls back.
+    config.alpn_protocols = if http2 {
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+    } else {
+        vec![b"http/1.1".to_vec()]
+    };
     // Stateless ring Ticketer for TLS session resumption. Built in the master
     // before fork so the ticket keys live in the inherited (CoW) memory and every
     // worker starts with the same keys; a ticket minted by worker A is then
@@ -187,7 +216,7 @@ pub(crate) fn load_acceptor(cert_path: &str, key_path: &str) -> Result<TlsAccept
     if let Ok(ticketer) = rustls::crypto::ring::Ticketer::new() {
         config.ticketer = ticketer;
     }
-    Ok(TlsAcceptor::from(Arc::new(config)))
+    Ok(Arc::new(config))
 }
 
 /// Stores the TLS acceptor in the process-wide `OnceLock`. Called by the master
@@ -265,13 +294,15 @@ mod tests {
     }
 
     /// A valid cert/key pair loads into a `TlsAcceptor` (the happy path the master
-    /// takes before fork). Cleans up the temp PEM files afterwards.
+    /// takes before fork). Cleans up the temp PEM files afterwards. `http2=false`
+    /// because this test is about PEM loading, not ALPN content.
     #[test]
     fn load_acceptor_accepts_valid_pem() {
         let (cert_path, key_path) = write_temp_cert_key();
         let result = load_acceptor(
             cert_path.to_str().unwrap(),
             key_path.to_str().unwrap(),
+            false,
         );
         let _ = std::fs::remove_file(&cert_path);
         let _ = std::fs::remove_file(&key_path);
@@ -279,7 +310,7 @@ mod tests {
     }
 
     /// Garbage (non-PEM) cert content is rejected with an error, not a panic, so
-    /// the master can fail-fast with a diagnostic.
+    /// the master can fail-fast with a diagnostic. `http2=false` (ALPN-agnostic).
     #[test]
     fn load_acceptor_rejects_garbage_pem() {
         let (_valid_cert, key_path) = write_temp_cert_key();
@@ -289,7 +320,7 @@ mod tests {
             std::process::id()
         ));
         std::fs::write(&garbage, b"this is not a PEM certificate at all\n").unwrap();
-        let result = load_acceptor(garbage.to_str().unwrap(), key_path.to_str().unwrap());
+        let result = load_acceptor(garbage.to_str().unwrap(), key_path.to_str().unwrap(), false);
         let _ = std::fs::remove_file(&garbage);
         let _ = std::fs::remove_file(&_valid_cert);
         let _ = std::fs::remove_file(&key_path);
@@ -297,12 +328,13 @@ mod tests {
     }
 
     /// A missing certificate file is reported as an error (unreadable file), not a
-    /// panic.
+    /// panic. `http2=false` (ALPN-agnostic — the read fails before ALPN runs).
     #[test]
     fn load_acceptor_rejects_missing_file() {
         let result = load_acceptor(
             "/nonexistent/elephc-web/does-not-exist-cert.pem",
             "/nonexistent/elephc-web/does-not-exist-key.pem",
+            false,
         );
         // `TlsAcceptor` is not `Debug`, so match rather than `unwrap_err`.
         match result {
@@ -317,13 +349,14 @@ mod tests {
 
     /// `set_tls_acceptor` then `tls_acceptor` round-trips through the process-wide
     /// `OnceLock`. This is the ONLY test that writes `TLS_ACCEPTOR`, so no other
-    /// test observes an ordering-dependent value.
+    /// test observes an ordering-dependent value. `http2=false` (ALPN-agnostic).
     #[test]
     fn once_lock_accessor_round_trip() {
         let (cert_path, key_path) = write_temp_cert_key();
         let acceptor = load_acceptor(
             cert_path.to_str().unwrap(),
             key_path.to_str().unwrap(),
+            false,
         )
         .expect("valid PEM must load");
         let _ = std::fs::remove_file(&cert_path);
@@ -333,6 +366,38 @@ mod tests {
             tls_acceptor().is_some(),
             "acceptor must be readable after being set"
         );
+    }
+
+    /// The built `ServerConfig`'s ALPN list reflects the `http2` flag: `false`
+    /// advertises `["http/1.1"]` only (the prior behavior, byte-for-byte), and
+    /// `true` advertises `["h2", "http/1.1"]` with h2 first so a capable client
+    /// picks h2 while an h1-only client falls back. Reads the list back through
+    /// `load_acceptor_config` (which exposes the `Arc<ServerConfig>` directly,
+    /// unlike `load_acceptor` which wraps it in a `TlsAcceptor`).
+    #[test]
+    fn load_acceptor_alpn_reflects_http2_flag() {
+        let (cert_path, key_path) = write_temp_cert_key();
+        let cert = cert_path.to_str().unwrap();
+        let key = key_path.to_str().unwrap();
+
+        let config_off = load_acceptor_config(cert, key, false)
+            .expect("http2=false must build a config");
+        assert_eq!(
+            config_off.alpn_protocols,
+            vec![b"http/1.1".to_vec()],
+            "http2=false must advertise http/1.1 only"
+        );
+
+        let config_on = load_acceptor_config(cert, key, true)
+            .expect("http2=true must build a config");
+        assert_eq!(
+            config_on.alpn_protocols,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+            "http2=true must advertise h2 ahead of http/1.1"
+        );
+
+        let _ = std::fs::remove_file(&cert_path);
+        let _ = std::fs::remove_file(&key_path);
     }
 
     /// Compile-time assertion that `MaybeTls` is `Unpin`, so `TokioIo::new` and

@@ -53,10 +53,11 @@ Options:
                          handler before new requests get 503; queued-body memory is
                          bounded by N x --max-body-size. 0 is rejected (default: 16)
   --http2                Opt in to HTTP/2 (h2c prior-knowledge on plaintext; h2
-                         over TLS is a follow-up). REQUIRES --handler-offload
-                         (without offload, h2 multiplexed streams all stall on the
-                         single inline handler). Default off: the server speaks
-                         HTTP/1.1 only (byte-for-byte the h1 path)
+                         over TLS via ALPN when --tls-cert + --tls-key are set).
+                         REQUIRES --handler-offload (without offload, h2
+                         multiplexed streams all stall on the single inline
+                         handler). Default off: the server speaks HTTP/1.1 only
+                         (byte-for-byte the h1 path)
   --http2-max-streams N  Max concurrent h2 streams per connection (default: 8). The
                          per-connection memory bound is N x --max-body-size, so 8
                          caps a single connection at 8 x --max-body-size of buffered
@@ -790,7 +791,7 @@ impl Clone for WorkerKind {
 /// off or configured successfully. Shared by all three run entry points.
 fn install_tls_if_configured(args: &ServerArgs) -> Result<(), i32> {
     if let (Some(cert), Some(key)) = (&args.tls_cert, &args.tls_key) {
-        match crate::tls::load_acceptor(cert, key) {
+        match crate::tls::load_acceptor(cert, key, args.http2) {
             Ok(acceptor) => crate::tls::set_tls_acceptor(acceptor),
             Err(cause) => {
                 eprintln!("error: failed to load TLS certificate/key: {}", cause);
