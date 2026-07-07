@@ -180,10 +180,15 @@ mod tests {
         for name in [
             "abs",
             "acos",
+            "addslashes",
             "boolval",
+            "base64_encode",
+            "bin2hex",
             "count",
+            "ctype_alpha",
             "floatval",
             "gettype",
+            "hex2bin",
             "intval",
             "is_array",
             "is_bool",
@@ -206,7 +211,9 @@ mod tests {
             "log",
             "min",
             "number_format",
+            "rawurlencode",
             "strlen",
+            "str_repeat",
             "strrev",
             "strval",
         ] {
@@ -263,6 +270,14 @@ mod tests {
                 ]
                 .as_slice()
             )
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("ctype_alpha"),
+            Some(["text"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("str_repeat"),
+            Some(["string", "times"].as_slice())
         );
     }
 }

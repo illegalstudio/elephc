@@ -151,9 +151,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "array_slice" => Some(&["array", "offset", "length"]),
         "array_splice" => Some(&["array", "offset", "length", "replacement"]),
         "basename" => Some(&["path", "suffix"]),
-        "addslashes" | "base64_decode" | "base64_encode" | "bin2hex" | "grapheme_strrev"
-        | "hex2bin" | "rawurldecode" | "rawurlencode" | "stripslashes" | "urldecode"
-        | "urlencode" => Some(&["string"]),
+        "grapheme_strrev" => Some(&["string"]),
         "empty" => Some(&["value"]),
         "is_callable" => Some(&["value", "syntax_only", "callable_name"]),
         "buffer_new" => Some(&["length"]),
@@ -182,14 +180,11 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "is_a" | "is_subclass_of" => Some(&["object_or_class", "class", "allow_string"]),
         "chdir" | "mkdir" | "opendir" | "rmdir" | "scandir" => Some(&["directory"]),
         "chmod" => Some(&["filename", "permissions"]),
-        "chr" => Some(&["codepoint"]),
         "closedir" | "readdir" | "rewinddir" => Some(&["dir_handle"]),
         "clearstatcache" => Some(&["clear_realpath_cache", "filename"]),
         "chop" | "ltrim" | "rtrim" | "trim" => Some(&["string", "characters"]),
         "count" => Some(&["value", "mode"]),
         "copy" | "rename" => Some(&["from", "to"]),
-        "crc32" => Some(&["string"]),
-        "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => Some(&["text"]),
         "checkdate" => Some(&["month", "day", "year"]),
         "date" | "gmdate" => Some(&["format", "timestamp"]),
         "date_default_timezone_get" => Some(&[]),
@@ -282,7 +277,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
             Some(&["hour", "minute", "second", "month", "day", "year"])
         }
         "nl2br" => Some(&["string", "use_xhtml"]),
-        "ord" => Some(&["character"]),
         "pathinfo" => Some(&["path", "flags"]),
         "php_uname" => Some(&["mode"]),
         "phpversion" => Some(&[]),
@@ -369,7 +363,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "str_pad" => Some(&["string", "length", "pad_string", "pad_type"]),
         "str_replace" | "str_ireplace" => Some(&["search", "replace", "subject", "count"]),
         "strpos" | "strrpos" => Some(&["haystack", "needle", "offset"]),
-        "str_repeat" => Some(&["string", "times"]),
         "str_split" => Some(&["string", "length"]),
         "substr" => Some(&["string", "offset", "length"]),
         "substr_replace" => Some(&["string", "replace", "offset", "length"]),

@@ -19,6 +19,7 @@ mod arrays;
 mod class_metadata;
 mod filesystem;
 mod formatting;
+mod hooks;
 mod math;
 mod network_env;
 mod process_control;

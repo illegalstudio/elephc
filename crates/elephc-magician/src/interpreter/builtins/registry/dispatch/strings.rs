@@ -19,36 +19,6 @@ pub(in crate::interpreter) fn eval_strings_builtin_with_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
-        "addslashes" | "stripslashes" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_slashes_result(name, *value, values)?
-        }
-        "base64_encode" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_base64_encode_result(*value, values)?
-        }
-        "base64_decode" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_base64_decode_result(*value, values)?
-        }
-        "bin2hex" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_bin2hex_result(*value, values)?
-        }
-        "chr" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_chr_result(*value, values)?
-        }
         "grapheme_strrev" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -58,29 +28,11 @@ pub(in crate::interpreter) fn eval_strings_builtin_with_values(
         "gzcompress" | "gzdeflate" | "gzinflate" | "gzuncompress" => {
             eval_gzip_result(name, evaluated_args, values)?
         }
-        "rawurldecode" | "urldecode" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_url_decode_result(name, *value, values)?
-        }
-        "rawurlencode" | "urlencode" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_url_encode_result(name, *value, values)?
-        }
         "strrev" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
             values.strrev(*value)?
-        }
-        "str_repeat" => {
-            let [value, times] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_str_repeat_result(*value, *times, values)?
         }
         "str_replace" | "str_ireplace" => {
             let [search, replace, subject] = evaluated_args else {
@@ -117,29 +69,11 @@ pub(in crate::interpreter) fn eval_strings_builtin_with_values(
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
-        "crc32" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_crc32_result(*value, values)?
-        }
-        "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_ctype_result(name, *value, values)?
-        }
         "explode" => {
             let [separator, string] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_explode_result(*separator, *string, values)?
-        }
-        "ord" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_ord_result(*value, values)?
         }
         "implode" => {
             let [separator, array] = evaluated_args else {
@@ -206,12 +140,6 @@ pub(in crate::interpreter) fn eval_strings_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_hash_equals_result(*known, *user, values)?
-        }
-        "hex2bin" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_hex2bin_result(*value, values)?
         }
         "html_entity_decode" | "htmlentities" | "htmlspecialchars" => {
             let [value] = evaluated_args else {

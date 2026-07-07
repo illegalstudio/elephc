@@ -1532,7 +1532,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
     }
 
     match name {
-        "addslashes" | "stripslashes" => eval_builtin_slashes(name, args, context, scope, values),
         "array_combine" => eval_builtin_array_combine(args, context, scope, values),
         "array_chunk" => eval_builtin_array_chunk(args, context, scope, values),
         "array_column" => eval_builtin_array_column(args, context, scope, values),
@@ -1565,15 +1564,11 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         }
         "array_slice" => eval_builtin_array_slice(args, context, scope, values),
         "array_unique" => eval_builtin_array_unique(args, context, scope, values),
-        "base64_encode" => eval_builtin_base64_encode(args, context, scope, values),
-        "base64_decode" => eval_builtin_base64_decode(args, context, scope, values),
         "basename" => eval_builtin_basename(args, context, scope, values),
-        "bin2hex" => eval_builtin_bin2hex(args, context, scope, values),
         "chdir" | "mkdir" | "rmdir" => {
             eval_builtin_unary_path_bool(name, args, context, scope, values)
         }
         "chmod" => eval_builtin_chmod(args, context, scope, values),
-        "chr" => eval_builtin_chr(args, context, scope, values),
         "clearstatcache" => eval_builtin_clearstatcache(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
@@ -1606,10 +1601,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "count" => eval_builtin_count(args, context, scope, values),
         "copy" | "link" | "rename" | "symlink" => {
             eval_builtin_binary_path_bool(name, args, context, scope, values)
-        }
-        "crc32" => eval_builtin_crc32(args, context, scope, values),
-        "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => {
-            eval_builtin_ctype(name, args, context, scope, values)
         }
         "checkdate" => eval_builtin_checkdate(args, context, scope, values),
         "date" | "gmdate" => eval_builtin_date_like(name, args, context, scope, values),
@@ -1704,7 +1695,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "hash_final" => eval_builtin_hash_final(args, context, scope, values),
         "hash_init" => eval_builtin_hash_init(args, context, scope, values),
         "hash_update" => eval_builtin_hash_update(args, context, scope, values),
-        "hex2bin" => eval_builtin_hex2bin(args, context, scope, values),
         "html_entity_decode" | "htmlentities" | "htmlspecialchars" => {
             eval_builtin_html_entity(name, args, context, scope, values)
         }
@@ -1730,7 +1720,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "microtime" => eval_builtin_microtime(args, context, scope, values),
         "mktime" | "gmmktime" => eval_builtin_mktime_like(name, args, context, scope, values),
         "nl2br" => eval_builtin_nl2br(args, context, scope, values),
-        "ord" => eval_builtin_ord(args, context, scope, values),
         "opendir" => eval_builtin_opendir(args, context, scope, values),
         "pathinfo" => eval_builtin_pathinfo(args, context, scope, values),
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
@@ -1753,8 +1742,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "rand" | "mt_rand" => eval_builtin_rand(args, context, scope, values),
         "random_int" => eval_builtin_random_int(args, context, scope, values),
         "range" => eval_builtin_range(args, context, scope, values),
-        "rawurldecode" | "urldecode" => eval_builtin_url_decode(name, args, context, scope, values),
-        "rawurlencode" | "urlencode" => eval_builtin_url_encode(name, args, context, scope, values),
         "readfile" => eval_builtin_readfile(args, context, scope, values),
         "readline" => eval_builtin_readline(args, context, scope, values),
         "readlink" => eval_builtin_readlink(args, context, scope, values),
@@ -1862,7 +1849,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "strtotime" => eval_builtin_strtotime(args, context, scope, values),
         "unlink" => eval_builtin_unlink(args, context, scope, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),
-        "str_repeat" => eval_builtin_str_repeat(args, context, scope, values),
         "str_replace" | "str_ireplace" => {
             eval_builtin_str_replace(name, args, context, scope, values)
         }
