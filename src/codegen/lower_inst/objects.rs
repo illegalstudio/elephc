@@ -708,7 +708,7 @@ fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut FunctionConte
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call aligned
             ctx.emitter.instruction("mov rax, 32");                             // request Throwable payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov r10, 0x4548504c00000006");             // materialize the x86_64 object heap kind word
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
             ctx.emitter.instruction("mov r10, QWORD PTR [rip + _spl_logic_exception_class_id]"); // load LogicException's runtime class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object header
@@ -5034,7 +5034,7 @@ fn emit_uninitialized_typed_property_fatal(
             ctx.emitter.instruction("sub rsp, 16");                                // keep the nested heap allocation call 16-byte aligned
             ctx.emitter.instruction("mov rax, 32");                                // request Throwable payload storage
             ctx.emitter.instruction("call __rt_heap_alloc");                       // allocate the Error object payload
-            ctx.emitter.instruction("mov r10, 0x4548504c00000006");              // x86_64 heap-kind word: HE LP magic + kind 6 object
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");               // stamp allocation as a runtime object
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0); // load Error's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                   // store class id at the object header

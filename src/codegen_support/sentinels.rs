@@ -147,6 +147,21 @@ pub(crate) fn emit_tagged_scalar_to_int_null_as_zero(emitter: &mut Emitter) {
     }
 }
 
+
+/// High 32 bits of the x86_64 uniform heap-header kind word (`"ELPH"` in ASCII bytes
+/// `0x45 0x4C 0x50 0x48`). Every x86_64 allocation is stamped with this marker; the
+/// refcount and free helpers ignore pointers whose header does not carry it, so an
+/// emitter that stamps a different value silently opts its objects out of refcounting.
+pub(crate) const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+
+/// Builds the full x86_64 heap-header kind word for `kind`: the heap magic in the high
+/// word and the uniform heap-kind tag in the low byte. Emitters must use this instead of
+/// a hand-typed literal — a transposed magic assembles fine but makes every refcount
+/// operation on the stamped object a silent no-op (issue #482).
+pub(crate) fn x86_64_heap_kind_word(kind: u8) -> u64 {
+    (X86_64_HEAP_MAGIC_HI32 << 32) | kind as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +181,43 @@ mod tests {
             0x7fff_ffff_ffff_fffd_u64 as i64
         );
         assert_eq!(UNINITIALIZED_TYPED_PROPERTY_SENTINEL, i64::MAX - 2);
+    }
+
+    /// Verifies the x86_64 heap kind word carries the canonical magic ("ELPH") in the
+    /// high word and the kind tag in the low byte — guarding against the transposed
+    /// literal that no-ops refcounting (issue #482).
+    #[test]
+    fn test_x86_64_heap_kind_word_layout() {
+        assert_eq!(x86_64_heap_kind_word(6), 0x454C_5048_0000_0006);
+        assert_eq!(x86_64_heap_kind_word(4), 0x454C_5048_0000_0004);
+        assert_ne!(x86_64_heap_kind_word(6) >> 32, 0x4548_504C, "transposed magic");
+    }
+
+    /// Repo lint: no emitter may hand-type the transposed heap magic again — every
+    /// stamped kind word must come from `x86_64_heap_kind_word` (issue #482).
+    #[test]
+    fn test_no_transposed_heap_magic_in_source() {
+        fn scan(dir: &std::path::Path, hits: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).expect("readable src dir") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    scan(&path, hits);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let body = std::fs::read_to_string(&path).expect("readable source");
+                    // Needle built at runtime so this test file never matches itself.
+                    let needle = ["0x4548", "504c"].concat();
+                    if body.to_lowercase().contains(&needle) {
+                        hits.push(path.display().to_string());
+                    }
+                }
+            }
+        }
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut hits = Vec::new();
+        scan(&src, &mut hits);
+        assert!(
+            hits.is_empty(),
+            "transposed x86_64 heap magic found in: {hits:?}"
+        );
     }
 }
