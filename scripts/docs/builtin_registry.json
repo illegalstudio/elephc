@@ -9063,7 +9063,7 @@
       "codegen_function": "lower_in_array",
       "codegen_line": 1786,
       "notes": [
-        "Lowers `in_array()` for indexed arrays with scalar or string payloads."
+        "Lowers `in_array()` for indexed and associative arrays with PHP loose or strict membership."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -9095,7 +9095,7 @@
           "type": "bool"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "bool",
       "variadic": null
     },
     "slug": "in_array",
