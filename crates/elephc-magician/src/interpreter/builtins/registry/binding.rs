@@ -134,21 +134,13 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "array_reduce" => Some(&["array", "callback", "initial"]),
         "array_walk" => Some(&["array", "callback"]),
         "uasort" | "uksort" | "usort" => Some(&["array", "callback"]),
-        "array_flip" | "array_keys" | "array_pop" | "array_product" | "array_shift"
-        | "array_sum" | "array_unique" | "array_rand" | "array_values" | "arsort" | "asort"
-        | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort" | "shuffle" | "sort" => {
-            Some(&["array"])
-        }
+        "array_pop" | "array_shift" | "arsort" | "asort" | "krsort" | "ksort"
+        | "natcasesort" | "natsort" | "rsort" | "shuffle" | "sort" => Some(&["array"]),
         "array_merge" => Some(&["arrays"]),
         "array_diff" | "array_intersect" | "array_diff_key" | "array_intersect_key" => {
             Some(&["array", "arrays"])
         }
         "array_push" | "array_unshift" => Some(&["array", "values"]),
-        "array_key_exists" => Some(&["key", "array"]),
-        "array_pad" => Some(&["array", "length", "value"]),
-        "array_reverse" => Some(&["array", "preserve_keys"]),
-        "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
-        "array_slice" => Some(&["array", "offset", "length"]),
         "array_splice" => Some(&["array", "offset", "length", "replacement"]),
         "basename" => Some(&["path", "suffix"]),
         "empty" => Some(&["value"]),
@@ -181,7 +173,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "chmod" => Some(&["filename", "permissions"]),
         "closedir" | "readdir" | "rewinddir" => Some(&["dir_handle"]),
         "clearstatcache" => Some(&["clear_realpath_cache", "filename"]),
-        "count" => Some(&["value", "mode"]),
         "copy" | "rename" => Some(&["from", "to"]),
         "checkdate" => Some(&["month", "day", "year"]),
         "date" | "gmdate" => Some(&["format", "timestamp"]),
@@ -297,7 +288,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "var_dump" => Some(&["value", "values"]),
         "putenv" => Some(&["assignment"]),
         "rand" | "mt_rand" | "random_int" => Some(&["min", "max"]),
-        "range" => Some(&["start", "end"]),
         "readline" => Some(&["prompt"]),
         "realpath" => Some(&["path"]),
         "stream_resolve_include_path" => Some(&["filename"]),

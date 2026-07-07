@@ -21,12 +21,16 @@ use super::super::super::{
     EvalExpr, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
 };
 use super::super::{
-    eval_builtin_abs, eval_builtin_cast, eval_builtin_nl2br, eval_builtin_str_pad,
-    eval_builtin_str_replace, eval_builtin_str_split, eval_builtin_grapheme_strrev,
-    eval_builtin_hash_equals, eval_builtin_html_entity, eval_builtin_string_case,
-    eval_builtin_string_compare, eval_builtin_string_position, eval_builtin_string_search,
-    eval_builtin_strrev, eval_builtin_strstr, eval_builtin_substr, eval_builtin_substr_replace,
-    eval_builtin_trim_like, eval_builtin_ucwords, eval_builtin_wordwrap,
+    eval_builtin_abs, eval_builtin_array_aggregate, eval_builtin_array_flip,
+    eval_builtin_array_key_exists, eval_builtin_array_pad, eval_builtin_array_projection,
+    eval_builtin_array_rand, eval_builtin_array_reverse, eval_builtin_array_search,
+    eval_builtin_array_slice, eval_builtin_array_unique, eval_builtin_cast,
+    eval_builtin_grapheme_strrev, eval_builtin_hash_equals, eval_builtin_html_entity,
+    eval_builtin_nl2br, eval_builtin_range, eval_builtin_str_pad, eval_builtin_str_replace,
+    eval_builtin_str_split, eval_builtin_string_case, eval_builtin_string_compare,
+    eval_builtin_string_position, eval_builtin_string_search, eval_builtin_strrev,
+    eval_builtin_strstr, eval_builtin_substr, eval_builtin_substr_replace, eval_builtin_trim_like,
+    eval_builtin_ucwords, eval_builtin_wordwrap,
 };
 
 /// Direct expression-level dispatch hooks for migrated builtins.
@@ -34,6 +38,26 @@ use super::super::{
 pub(in crate::interpreter) enum EvalDirectHook {
     /// Dispatches `abs(...)`.
     Abs,
+    /// Dispatches `array_sum(...)` and `array_product(...)`.
+    ArrayAggregate,
+    /// Dispatches `array_flip(...)`.
+    ArrayFlip,
+    /// Dispatches `array_key_exists(...)`.
+    ArrayKeyExists,
+    /// Dispatches `array_pad(...)`.
+    ArrayPad,
+    /// Dispatches `array_keys(...)` and `array_values(...)`.
+    ArrayProjection,
+    /// Dispatches `array_rand(...)`.
+    ArrayRand,
+    /// Dispatches `array_reverse(...)`.
+    ArrayReverse,
+    /// Dispatches `array_search(...)` and `in_array(...)`.
+    ArraySearch,
+    /// Dispatches `array_slice(...)`.
+    ArraySlice,
+    /// Dispatches `array_unique(...)`.
+    ArrayUnique,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
     /// Dispatches `base64_encode(...)`.
@@ -88,6 +112,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Pow,
     /// Dispatches `round(...)`.
     Round,
+    /// Dispatches `range(...)`.
+    Range,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
     Slashes,
     /// Dispatches `sqrt(...)`.
@@ -146,6 +172,16 @@ impl EvalDirectHook {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         match self {
             Self::Abs => eval_builtin_abs(args, context, scope, values),
+            Self::ArrayAggregate => eval_builtin_array_aggregate(name, args, context, scope, values),
+            Self::ArrayFlip => eval_builtin_array_flip(args, context, scope, values),
+            Self::ArrayKeyExists => eval_builtin_array_key_exists(args, context, scope, values),
+            Self::ArrayPad => eval_builtin_array_pad(args, context, scope, values),
+            Self::ArrayProjection => eval_builtin_array_projection(name, args, context, scope, values),
+            Self::ArrayRand => eval_builtin_array_rand(args, context, scope, values),
+            Self::ArrayReverse => eval_builtin_array_reverse(args, context, scope, values),
+            Self::ArraySearch => eval_builtin_array_search(name, args, context, scope, values),
+            Self::ArraySlice => eval_builtin_array_slice(args, context, scope, values),
+            Self::ArrayUnique => eval_builtin_array_unique(args, context, scope, values),
             Self::Base64Decode => eval_builtin_base64_decode(args, context, scope, values),
             Self::Base64Encode => eval_builtin_base64_encode(args, context, scope, values),
             Self::Bin2Hex => eval_builtin_bin2hex(args, context, scope, values),
@@ -173,6 +209,7 @@ impl EvalDirectHook {
             Self::Pi => eval_builtin_pi(args, values),
             Self::Pow => eval_builtin_pow(args, context, scope, values),
             Self::Round => eval_builtin_round(args, context, scope, values),
+            Self::Range => eval_builtin_range(args, context, scope, values),
             Self::Slashes => eval_builtin_slashes(name, args, context, scope, values),
             Self::Sqrt => eval_builtin_sqrt(args, context, scope, values),
             Self::StringCase => eval_builtin_string_case(name, args, context, scope, values),

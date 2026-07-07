@@ -1538,14 +1538,9 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "array_fill" => eval_builtin_array_fill(args, context, scope, values),
         "array_fill_keys" => eval_builtin_array_fill_keys(args, context, scope, values),
         "array_filter" => eval_builtin_array_filter(args, context, scope, values),
-        "array_flip" => eval_builtin_array_flip(args, context, scope, values),
         "array_map" => eval_builtin_array_map(args, context, scope, values),
         "array_reduce" => eval_builtin_array_reduce(args, context, scope, values),
         "array_walk" => eval_builtin_array_walk(args, context, scope, values),
-        "array_keys" | "array_values" => {
-            eval_builtin_array_projection(name, args, context, scope, values)
-        }
-        "array_key_exists" => eval_builtin_array_key_exists(args, context, scope, values),
         "array_diff" | "array_intersect" => {
             eval_builtin_array_value_set(name, args, context, scope, values)
         }
@@ -1553,17 +1548,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_array_key_set(name, args, context, scope, values)
         }
         "array_merge" => eval_builtin_array_merge(args, context, scope, values),
-        "array_product" | "array_sum" => {
-            eval_builtin_array_aggregate(name, args, context, scope, values)
-        }
-        "array_pad" => eval_builtin_array_pad(args, context, scope, values),
-        "array_rand" => eval_builtin_array_rand(args, context, scope, values),
-        "array_reverse" => eval_builtin_array_reverse(args, context, scope, values),
-        "array_search" | "in_array" => {
-            eval_builtin_array_search(name, args, context, scope, values)
-        }
-        "array_slice" => eval_builtin_array_slice(args, context, scope, values),
-        "array_unique" => eval_builtin_array_unique(args, context, scope, values),
         "basename" => eval_builtin_basename(args, context, scope, values),
         "chdir" | "mkdir" | "rmdir" => {
             eval_builtin_unary_path_bool(name, args, context, scope, values)
@@ -1597,7 +1581,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "closedir" | "readdir" | "rewinddir" => {
             eval_builtin_unary_directory(name, args, context, scope, values)
         }
-        "count" => eval_builtin_count(args, context, scope, values),
         "copy" | "link" | "rename" | "symlink" => {
             eval_builtin_binary_path_bool(name, args, context, scope, values)
         }
@@ -1733,7 +1716,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "putenv" => eval_builtin_putenv(args, context, scope, values),
         "rand" | "mt_rand" => eval_builtin_rand(args, context, scope, values),
         "random_int" => eval_builtin_random_int(args, context, scope, values),
-        "range" => eval_builtin_range(args, context, scope, values),
         "readfile" => eval_builtin_readfile(args, context, scope, values),
         "readline" => eval_builtin_readline(args, context, scope, values),
         "readlink" => eval_builtin_readlink(args, context, scope, values),

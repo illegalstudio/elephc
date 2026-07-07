@@ -137,36 +137,6 @@ pub(in crate::interpreter) fn eval_arrays_builtin_with_values(
             ))?;
             eval_user_sort_value_result(name, *array, *callback, context, values)?
         }
-        "array_flip" => {
-            let [array] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_array_flip_result(*array, values)?
-        }
-        "array_pad" => {
-            let [array, length, value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_array_pad_result(*array, *length, *value, values)?
-        }
-        "array_product" | "array_sum" => {
-            let [array] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_array_aggregate_result(name, *array, values)?
-        }
-        "array_keys" | "array_values" => {
-            let [array] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_array_projection_result(name, *array, values)?
-        }
-        "array_key_exists" => {
-            let [key, array] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            values.array_key_exists(*key, *array)?
-        }
         "array_diff" | "array_intersect" => {
             let [left, right] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -185,50 +155,6 @@ pub(in crate::interpreter) fn eval_arrays_builtin_with_values(
             };
             eval_array_merge_result(*left, *right, values)?
         }
-        "array_rand" => {
-            let [array] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_array_rand_result(*array, values)?
-        }
-        "array_reverse" => match evaluated_args {
-            [array] => eval_array_reverse_result(*array, false, values)?,
-            [array, preserve_keys] => {
-                let preserve_keys = values.truthy(*preserve_keys)?;
-                eval_array_reverse_result(*array, preserve_keys, values)?
-            }
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "array_search" | "in_array" => {
-            let [needle, array] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_array_search_result(name, *needle, *array, values)?
-        }
-        "array_slice" => match evaluated_args {
-            [array, offset] => eval_array_slice_result(*array, *offset, None, values)?,
-            [array, offset, length] => {
-                eval_array_slice_result(*array, *offset, Some(*length), values)?
-            }
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "array_unique" => {
-            let [array] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_array_unique_result(*array, values)?
-        }
-        "range" => {
-            let [start, end] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_range_result(*start, *end, values)?
-        }
-        "count" => match evaluated_args {
-            [value] => eval_count_result(*value, None, context, values)?,
-            [value, mode] => eval_count_result(*value, Some(*mode), context, values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
         "iterator_apply" => match evaluated_args {
             [iterator, callback] => {
                 let callback = eval_callable(*callback, context, values)?;

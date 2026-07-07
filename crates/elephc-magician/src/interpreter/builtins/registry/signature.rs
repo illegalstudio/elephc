@@ -76,7 +76,6 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "get_class" | "get_parent_class" => optional(params, 0),
         "is_a" | "is_subclass_of" => optional(params, 2),
 
-        "count" => optional(params, 1),
         "getdate" | "hrtime" => optional(params, 0),
         "header" => optional(params, 1),
         "http_response_code" => optional(params, 0),
@@ -97,16 +96,13 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "hash_final" | "md5" | "sha1" => optional(params, 1),
 
         "array_pop" | "array_shift" => fixed_by_ref(params, &["array"]),
-        "array_reverse" => optional(params, 1),
         "sort" | "rsort" | "shuffle" | "natsort" | "natcasesort" | "asort" | "arsort"
         | "ksort" | "krsort" => fixed_by_ref(params, &["array"]),
-        "in_array" | "array_search" => optional(params, 2),
         "array_push" | "array_unshift" => variadic(params, &["array"]),
         "array_merge" => variadic(params, &[]),
         "array_diff" | "array_intersect" | "array_diff_key" | "array_intersect_key" => {
             variadic(params, &[])
         }
-        "array_slice" => optional(params, 2),
         "array_splice" => optional_by_ref(params, 2, &["array"]),
         "array_map" => variadic(params, &[]),
         "array_filter" => optional(params, 1),
@@ -175,7 +171,6 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("is_a", 2) => Bool(false),
         ("is_subclass_of", 2) => Bool(true),
 
-        ("count", 1) => Int(0),
         ("getdate", 0) => Null,
         ("header", 1) => Bool(true),
         ("header", 2) => Int(0),
@@ -198,9 +193,7 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("hash_init", 1) => Int(0),
         ("hash_init", 2) => String(""),
         ("hash_final" | "md5" | "sha1", 1) => Bool(false),
-        ("array_reverse", 1) => Bool(false),
-        ("in_array" | "array_search", 2) => Bool(false),
-        ("array_slice" | "array_splice", 2) => Null,
+        ("array_splice", 2) => Null,
         ("array_splice", 3) => EmptyArray,
         ("array_filter", 1) => Null,
         ("array_filter", 2) => Int(0),
