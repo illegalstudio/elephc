@@ -339,6 +339,7 @@ pub(crate) fn enter_worker_loop(mode: &'static str) -> ! {
         static_max_file_size: _,
         static_cache_size_bytes: _,
         static_max_age: _,
+        worker_affinity: _,
     } = cfg;
     // T1#3: stamp the worker start instant + web-mode label ONCE so the
     // `/_status` snapshot can report uptime/mode. Idempotent (`get_or_init`);
@@ -1046,6 +1047,7 @@ mod tests {
             static_max_file_size: 10 * 1024 * 1024,
             static_cache_size_bytes: 64 * 1024 * 1024,
             static_max_age: 3600,
+            worker_affinity: false,
         };
         set_worker_config(cfg);
         let peeked = peek_worker_config();

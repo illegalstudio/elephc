@@ -38,6 +38,9 @@ Options:
   --max-body-size BYTES  Max request body in bytes; 0 = unlimited (default: 8388608)
   --max-requests N       Recycle a WORKER PROCESS after N requests; 0 = never (default: 0; worker mode: 1000)
   --max-rss MiB          Recycle a worker whose resident set exceeds this many MiB
+  --worker-affinity      Pin each worker to CPU getpid()%ncpus (round-robin;
+                        Linux: hard pin via sched_setaffinity; macOS: advisory
+                        thread_policy_set tag — no hard pin). Default off
   --reload-grace SECS    Max seconds a worker waits for in-flight requests to finish
                          during a SIGHUP rolling reload before the master force-
                          recycles it (default 10, 0 = wait forever). Drain always
@@ -328,6 +331,15 @@ struct ServerArgs {
     /// `Cache-Control: public, max-age=<secs>` on static responses
     /// (`--static-max-age`, default 3600).
     static_max_age: u32,
+    /// Opt-in `--worker-affinity` (default off). When on, each forked worker
+    /// pins itself to CPU `getpid() % ncpus` (round-robin via consecutive PIDs)
+    /// before entering the serve loop — a best-effort lever that reduces
+    /// scheduler migration and improves per-worker L1/L2 cache warmth. Linux:
+    /// hard pin via `sched_setaffinity`. macOS: advisory `thread_policy_set`
+    /// tag (no hard pin). Off keeps the forked child byte-for-byte the
+    /// original: `spawn_worker` skips the pin call entirely. Threaded into
+    /// `WorkerConfig.worker_affinity`.
+    worker_affinity: bool,
 }
 
 impl ServerArgs {
@@ -392,6 +404,7 @@ impl ServerArgs {
                 .saturating_mul(1024)
                 .saturating_mul(1024),
             static_max_age: self.static_max_age,
+            worker_affinity: self.worker_affinity,
         }
     }
 
@@ -463,6 +476,10 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
     let mut dispatch_backlog: usize = 1024;
     let mut dispatch_backlog_set = false;
     let mut handler_offload = false;
+    // T2#6: `--worker-affinity` opt-in (default off). Pure on/off switch —
+    // no `_set` flag, no value to parse. When on, each forked worker pins
+    // itself to CPU `getpid() % ncpus` before the serve loop.
+    let mut worker_affinity = false;
     let mut max_pending: usize = DEFAULT_MAX_PENDING;
     let mut max_pending_set = false;
     // HTTP/2 opt-in (`--http2`, default off) and its tunables. `http2` is the
@@ -668,6 +685,7 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             }
             "--gzip" => { gzip = true; }
             "--handler-offload" => { handler_offload = true; }
+            "--worker-affinity" => { worker_affinity = true; }
             "--max-pending" => {
                 i += 1;
                 if let Some(v) = args.get(i).and_then(|v| v.parse().ok()) {
@@ -820,6 +838,7 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             static_max_file_size,
             static_cache_size_mib,
             static_max_age,
+            worker_affinity,
         }),
         None => {
             eprintln!("error: --web binary requires --listen host:port (try --help)");
@@ -900,6 +919,14 @@ pub(crate) fn spawn_worker(
         }
         0 => {
             reset_signal_handlers_to_default();
+            // T2#6: worker CPU affinity. Pin this child to CPU getpid()%ncpus
+            // before entering the serve loop (best-effort: reduces scheduler
+            // migration + improves per-worker cache warmth). When
+            // `--worker-affinity` is off, this `if` is short-circuited by the
+            // `false` bool — the child arm is byte-for-byte the original.
+            if cfg.worker_affinity {
+                crate::affinity::pin_worker_cpu();
+            }
             // Master dispatch: keep the child end, close the master end + every
             // inherited sibling master end + the listener fd, and install the child
             // end so the serve loop selects `ConnSource::Master` (no bind).

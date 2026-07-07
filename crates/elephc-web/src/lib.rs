@@ -18,6 +18,7 @@
 //!   across the channel boundary (see `mod offload`), so they are still only ever
 //!   touched by one thread.
 
+mod affinity;
 mod dispatch;
 mod handler;
 mod metrics;

@@ -665,6 +665,17 @@ blocking PHP `handler()` off the I/O thread without letting handlers overlap.
   `--static-dir` is absent (the intercept is a single `if` short-circuited by
   the captured `static_enabled` bool, which is `false` and constant-folds away).
   Same in all three web modes.
+- **Worker CPU affinity** — opt-in `--worker-affinity` pins each worker process
+  to CPU `getpid() % ncpus` (round-robin via consecutive PIDs) before entering
+  the serve loop, reducing scheduler migration and improving per-worker L1/L2
+  cache warmth — a modest effective-concurrency lever under N=1. Linux: hard
+  pin via `sched_setaffinity` (a single-CPU mask). macOS: advisory
+  `thread_policy_set` (`THREAD_AFFINITY_POLICY`) tag hint — macOS does NOT
+  support hard CPU pinning (the tag groups workers onto different
+  clusters/cores as a best-effort hint). Best-effort: a failed pin logs a
+  one-line warning and the worker continues (never killed). Default off; no
+  per-request hot-path cost (the pin runs once at worker startup). Same in all
+  three web modes.
 - **Graceful shutdown** — the master shuts down cleanly on `SIGINT` (Ctrl-C) and
   `SIGTERM`: it forwards termination to the workers, reaps them, and exits `0`. An
   in-flight request may be dropped when shutdown arrives.

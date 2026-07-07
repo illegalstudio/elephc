@@ -4695,3 +4695,23 @@ fn web_static_if_none_match_returns_304() {
     assert!(body.is_empty(), "304 body is empty: {:?}", resp);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Verifies `--worker-affinity` does not break serving: spawns the server with
+/// `--workers 2 --worker-affinity`, issues a GET `/`, and asserts status 200
+/// and body `ok`. The pin runs once in each forked child before the serve loop
+/// (CPU `getpid() % ncpus`); the assertion is purely functional — the actual
+/// CPU pin is not observable over HTTP, so we only verify the worker still
+/// serves correctly after the pin call. The OFF path (no `--worker-affinity`)
+/// is already covered by all the other `web_tests` (they run without the flag).
+#[test]
+fn web_worker_affinity_serves() {
+    let dir = make_test_dir("web_worker_affinity");
+    let bin = compile_web(&dir, "<?php echo \"ok\";", "app");
+    // `spawn_server_with_flags` takes the full flags list (callers pass their
+    // own `--workers`), unlike `spawn_web_with_args` which hardcodes `--workers 1`.
+    let server =
+        spawn_server_with_flags(&bin, &["--workers", "2", "--worker-affinity"]);
+    let resp = http_get(server.addr(), "/");
+    assert!(resp.starts_with("HTTP/1.1 200"), "status 200: {:?}", resp);
+    assert!(resp.ends_with("ok"), "body ok: {:?}", resp);
+}

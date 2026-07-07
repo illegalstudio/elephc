@@ -393,6 +393,16 @@ pub struct WorkerConfig {
     /// `Cache-Control: public, max-age=<secs>` on static responses
     /// (`--static-max-age`, default 3600).
     pub static_max_age: u32,
+    /// T2#6: opt-in `--worker-affinity` (default off). When on, the forked
+    /// worker pins itself to CPU `getpid() % ncpus` (round-robin via
+    /// consecutive PIDs) before entering the serve loop — a best-effort lever
+    /// that reduces scheduler migration and improves per-worker L1/L2 cache
+    /// warmth. Linux: hard pin via `sched_setaffinity`. macOS: advisory
+    /// `thread_policy_set` tag (no hard pin). The pin runs ONCE at worker
+    /// startup in `spawn_worker` (before the serve loop), so this field is
+    /// never read on the request hot path and the OFF default keeps the child
+    /// arm byte-for-byte the original. `bool` keeps `WorkerConfig: Copy`.
+    pub worker_affinity: bool,
 }
 
 /// Minimum response size (bytes) worth gzip-compressing; below this the framing
@@ -615,6 +625,7 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         static_max_file_size: _,
         static_cache_size_bytes: _,
         static_max_age: _,
+        worker_affinity: _,
     } = cfg;
     // T1#3: stamp the worker start instant + web-mode label ONCE so the
     // `/_status` snapshot can report uptime/mode. Idempotent (`get_or_init`);
