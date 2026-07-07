@@ -2,11 +2,11 @@
 
 ## Task
 
-- [ ] Phase 1: introduce a declarative eval-side registry without changing
+- [x] Phase 1: introduce a declarative eval-side registry without changing
   runtime behavior.
-- [ ] Phase 1: migrate a small pilot set of simple builtins into the new
+- [x] Phase 1: migrate a small pilot set of simple builtins into the new
   per-builtin layout and derive metadata from that registry.
-- [ ] Phase 1: update parity tests to query the registry instead of searching
+- [x] Phase 1: update parity tests to query the registry instead of searching
   dispatcher string literals for migrated builtins.
 - [ ] Phase 2: migrate already implemented magician builtins area by area while
   keeping fallback to existing dispatchers until each area is complete.

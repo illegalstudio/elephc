@@ -96,6 +96,10 @@ const EVAL_BY_REF_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["is_callable", "preg
 /// Eval supports variadic debug output before the static backend does.
 const EVAL_VARIADIC_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["var_dump"];
 
+/// Builtins migrated to magician's declarative eval registry during the Phase 1 pilot.
+const EVAL_DECLARATIVE_REGISTRY_BUILTINS: &[&str] =
+    &["abs", "boolval", "count", "strlen", "strrev"];
+
 /// Verifies every static builtin is visible through eval's function lookup.
 #[test]
 fn static_php_visible_builtins_are_visible_to_eval() {
@@ -122,12 +126,14 @@ fn static_php_visible_builtins_have_eval_dispatch_literals() {
         .iter()
         .copied()
         .filter(|name| !STATIC_ONLY_REGISTRY_BUILTINS.contains(name))
+        .filter(|name| !elephc_magician::builtin_metadata::php_visible_builtin_is_registry_declared(name))
         .filter(|name| !direct_dispatch_names.contains(*name))
         .collect::<Vec<_>>();
     let missing_dynamic = elephc::builtin_metadata::php_visible_builtin_names()
         .iter()
         .copied()
         .filter(|name| !STATIC_ONLY_REGISTRY_BUILTINS.contains(name))
+        .filter(|name| !elephc_magician::builtin_metadata::php_visible_builtin_is_registry_declared(name))
         .filter(|name| !dynamic_dispatch_names.contains(*name))
         .collect::<Vec<_>>();
 
@@ -139,6 +145,17 @@ fn static_php_visible_builtins_have_eval_dispatch_literals() {
         missing_dynamic.is_empty(),
         "static builtins missing from eval dynamic dispatcher literals: {missing_dynamic:?}"
     );
+}
+
+/// Verifies Phase 1 migrated builtins are backed by magician's declarative registry.
+#[test]
+fn phase_one_eval_builtins_are_registry_declared() {
+    for name in EVAL_DECLARATIVE_REGISTRY_BUILTINS {
+        assert!(
+            elephc_magician::builtin_metadata::php_visible_builtin_is_registry_declared(name),
+            "{name} should be declared through the eval builtin registry"
+        );
+    }
 }
 
 /// Extracts lowercase PHP-symbol string literals from Rust source snippets.

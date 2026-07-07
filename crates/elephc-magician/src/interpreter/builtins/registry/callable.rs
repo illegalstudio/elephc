@@ -8,7 +8,6 @@
 //! - Helpers are scoped to the eval interpreter and operate on already parsed
 //!   EvalIR call metadata or evaluated runtime-cell handles.
 
-use super::super::super::*;
 use super::*;
 
 /// Evaluates `call_user_func($name, ...$args)` inside a runtime eval fragment.

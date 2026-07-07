@@ -1527,6 +1527,10 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(result) = eval_declared_builtin_direct_call(name, args, context, scope, values)? {
+        return Ok(result);
+    }
+
     match name {
         "abs" => eval_builtin_abs(args, context, scope, values),
         "addslashes" | "stripslashes" => eval_builtin_slashes(name, args, context, scope, values),

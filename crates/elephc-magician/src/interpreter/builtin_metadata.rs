@@ -11,6 +11,7 @@
 //! - Signature shape is the same registry data used by eval named-argument binding.
 
 use super::builtins::{
+    eval_declared_builtin_exists,
     eval_builtin_param_names, eval_builtin_signature_shape, eval_php_visible_builtin_exists,
     eval_php_visible_builtin_function_names,
 };
@@ -39,6 +40,12 @@ pub fn php_visible_builtin_exists(name: &str) -> bool {
 /// Returns the eval interpreter's PHP-visible builtin names.
 pub fn php_visible_builtin_names() -> &'static [&'static str] {
     eval_php_visible_builtin_function_names()
+}
+
+/// Returns whether the eval builtin is backed by the declarative registry.
+pub fn php_visible_builtin_is_registry_declared(name: &str) -> bool {
+    let canonical = php_symbol_key(name);
+    eval_declared_builtin_exists(&canonical)
 }
 
 /// Returns comparison metadata for one eval builtin signature, when named calls are tracked.

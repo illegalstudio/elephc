@@ -8,7 +8,6 @@
 //! - Helpers are scoped to the eval interpreter and operate on already parsed
 //!   EvalIR call metadata or evaluated runtime-cell handles.
 
-use super::super::super::*;
 use super::*;
 
 /// Evaluates a direct PHP-visible builtin call with named or spread arguments.
@@ -120,6 +119,10 @@ fn eval_builtin_default_arg(
 pub(in crate::interpreter) fn eval_builtin_param_names(
     name: &str,
 ) -> Option<&'static [&'static str]> {
+    if let Some(params) = eval_declared_builtin_param_names(name) {
+        return Some(params);
+    }
+
     match name {
         "abs" | "ceil" | "floor" | "sqrt" => Some(&["num"]),
         "array_chunk" => Some(&["array", "length"]),

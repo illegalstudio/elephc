@@ -633,6 +633,7 @@ dependencies = [
  "elephc-crypto",
  "elephc-phar",
  "flate2",
+ "inventory",
  "libc",
  "unicode-segmentation",
 ]

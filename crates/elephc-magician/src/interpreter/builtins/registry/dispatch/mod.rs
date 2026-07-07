@@ -20,6 +20,7 @@ mod strings;
 mod symbols;
 mod time;
 
+use super::eval_declared_builtin_values_call;
 use super::super::super::*;
 
 use arrays::*;
@@ -41,6 +42,10 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if let Some(result) = eval_declared_builtin_values_call(name, evaluated_args, context, values)? {
+        return Ok(Some(result));
+    }
+
     if let Some(result) = eval_arrays_builtin_with_values(name, evaluated_args, context, values)? {
         return Ok(Some(result));
     }

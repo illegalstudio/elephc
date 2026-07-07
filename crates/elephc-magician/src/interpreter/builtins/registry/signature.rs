@@ -12,7 +12,9 @@
 //! - Default values mirror the dispatcher defaults so named calls can skip
 //!   optional parameters without changing positional semantics.
 
-use super::eval_builtin_param_names;
+use super::{
+    eval_builtin_param_names, eval_declared_builtin_default_value, eval_declared_builtin_spec,
+};
 
 /// Comparison-friendly shape for one eval builtin signature.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +52,15 @@ pub(in crate::interpreter) enum EvalBuiltinDefaultValue {
 pub(in crate::interpreter) fn eval_builtin_signature_shape(
     name: &str,
 ) -> Option<EvalBuiltinSignatureShape> {
+    if let Some(spec) = eval_declared_builtin_spec(name) {
+        return Some(EvalBuiltinSignatureShape {
+            required_param_count: spec.required_param_count(),
+            default_param_count: spec.default_param_count(),
+            variadic: spec.variadic,
+            by_ref_params: spec.by_ref_param_names(),
+        });
+    }
+
     let params = eval_builtin_param_names(name)?;
     Some(match name {
         "gzcompress" | "gzdeflate" | "gzinflate" | "gzuncompress" => optional(params, 1),
@@ -151,6 +162,10 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
     name: &str,
     param_index: usize,
 ) -> Option<EvalBuiltinDefaultValue> {
+    if let Some(default_value) = eval_declared_builtin_default_value(name, param_index) {
+        return Some(default_value);
+    }
+
     use EvalBuiltinDefaultValue::*;
 
     Some(match (name, param_index) {

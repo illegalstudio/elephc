@@ -11,10 +11,15 @@
 //!   execution helpers without widening crate-level visibility.
 //! - Runtime value creation and PHP coercions still flow through `RuntimeValueOps`.
 
+#[macro_use]
+mod macros;
+
+mod array;
 mod arrays;
 mod class_metadata;
 mod filesystem;
 mod formatting;
+mod math;
 mod network_env;
 mod process_control;
 mod raw_memory;
@@ -23,9 +28,12 @@ mod regex;
 mod registry;
 mod scalars;
 mod spl_autoload;
+mod spec;
+mod string;
 mod strings;
 mod symbols;
 mod time;
+mod types;
 
 pub(super) use arrays::*;
 pub(super) use class_metadata::*;
