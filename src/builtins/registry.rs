@@ -165,6 +165,8 @@ pub fn function_sig(name: &str) -> Option<FunctionSig> {
     let def = lookup(name)?;
     Some(FunctionSig {
         params: def.params.clone(),
+        param_type_exprs: vec![None; def.params.len()],
+        param_attributes: vec![Vec::new(); def.params.len()],
         defaults: def.defaults.clone(),
         return_type: def.return_type.clone(),
         declared_return: false,

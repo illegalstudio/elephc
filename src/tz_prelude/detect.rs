@@ -153,6 +153,11 @@ fn expr_refs_tz(expr: &Expr) -> bool {
             method,
             args,
         } => method_is_tz(method) || expr_refs_tz(object) || args.iter().any(expr_refs_tz),
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => expr_refs_tz(object) || expr_refs_tz(method) || args.iter().any(expr_refs_tz),
         ExprKind::StaticMethodCall { method, args, .. } => {
             method_is_tz(method) || args.iter().any(expr_refs_tz)
         }
@@ -166,6 +171,7 @@ fn expr_refs_tz(expr: &Expr) -> bool {
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)

@@ -14,7 +14,7 @@ use crate::codegen::{
     emit_box_runtime_payload_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
     runtime_value_tag,
 };
-use crate::codegen::builtins::arrays::call_user_func_array::INVOKER_ARG_REF_CELL_TAG;
+use crate::codegen::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
 use crate::codegen::platform::Arch;
 use crate::codegen::sentinels::TAGGED_SCALAR_ARRAY_VALUE_TYPE;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};

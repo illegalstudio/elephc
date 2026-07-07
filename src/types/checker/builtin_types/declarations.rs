@@ -265,6 +265,7 @@ pub(crate) fn inject_builtin_throwables(
         "ArithmeticError".to_string(),
         FlattenedClass {
             name: "ArithmeticError".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("Error".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -275,6 +276,7 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 

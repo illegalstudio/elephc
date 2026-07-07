@@ -24,6 +24,11 @@ use crate::types::PhpType;
 
 use super::super::Checker;
 
+/// Returns a dummy source span for synthetic reflection AST nodes.
+fn dummy() -> crate::span::Span {
+    crate::span::Span::dummy()
+}
+
 /// Injects the built-in reflection types into `class_map` after verifying
 /// none are already declared. Each type is a dummy shell; runtime population
 /// happens in codegen. Returns an error if any reflection name is already in use.
@@ -69,6 +74,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionAttribute".to_string(),
         FlattenedClass {
             name: "ReflectionAttribute".to_string(),
+            span: dummy(),
             extends: None,
             implements: Vec::new(),
             is_abstract: false,
@@ -536,6 +542,7 @@ fn builtin_reflection_method_invoke_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(mixed_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
             dummy_span,
@@ -567,6 +574,7 @@ fn builtin_reflection_method_invoke_args_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(mixed_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
             dummy_span,
@@ -592,6 +600,7 @@ fn builtin_reflection_method_create_from_method_name_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified("ReflectionMethod"))),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::NewObject {
@@ -626,6 +635,7 @@ fn builtin_reflection_set_accessible_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
         body: Vec::new(),
         span: dummy_span,
         attributes: Vec::new(),
@@ -651,6 +661,7 @@ fn builtin_reflection_function_invoke_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(mixed_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
             dummy_span,
@@ -679,6 +690,7 @@ fn builtin_reflection_function_invoke_args_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(mixed_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
             dummy_span,
@@ -737,6 +749,7 @@ fn builtin_reflection_slot_getter(
         params: Vec::new(),
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(return_type),
         by_ref_return: false,
@@ -770,6 +783,7 @@ fn builtin_reflection_function_constructor_method() -> ClassMethod {
         params: vec![("function".to_string(), Some(TypeExpr::Str), None, false)],
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: None,
         by_ref_return: false,
@@ -785,6 +799,7 @@ fn builtin_reflection_function_constructor_method() -> ClassMethod {
 fn builtin_reflection_function() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionFunction".to_string(),
+        span: dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -831,6 +846,7 @@ fn builtin_reflection_function() -> FlattenedClass {
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
     }
 }
 
@@ -840,6 +856,7 @@ fn builtin_reflection_function() -> FlattenedClass {
 fn builtin_reflection_parameter() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionParameter".to_string(),
+        span: dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -979,6 +996,7 @@ fn builtin_reflection_parameter() -> FlattenedClass {
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
     }
 }
 
@@ -996,6 +1014,7 @@ fn builtin_reflection_parameter_get_default_value_method() -> ClassMethod {
         params: Vec::new(),
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(mixed_type()),
         by_ref_return: false,
@@ -1174,6 +1193,7 @@ fn builtin_reflection_parameter_is_default_value_constant_method() -> ClassMetho
         params: Vec::new(),
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
         by_ref_return: false,
@@ -1205,6 +1225,7 @@ fn builtin_reflection_parameter_get_default_value_constant_name_method() -> Clas
         params: Vec::new(),
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(mixed_type()),
         by_ref_return: false,
@@ -1276,6 +1297,7 @@ fn builtin_reflection_parameter_can_be_passed_by_value_method() -> ClassMethod {
         params: Vec::new(),
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
         by_ref_return: false,
@@ -1300,6 +1322,7 @@ fn builtin_reflection_parameter_can_be_passed_by_value_method() -> ClassMethod {
 fn builtin_reflection_named_type() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionNamedType".to_string(),
+        span: dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -1331,6 +1354,7 @@ fn builtin_reflection_named_type() -> FlattenedClass {
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
     }
 }
 
@@ -1338,6 +1362,7 @@ fn builtin_reflection_named_type() -> FlattenedClass {
 fn builtin_reflection_union_type() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionUnionType".to_string(),
+        span: dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -1371,6 +1396,7 @@ fn builtin_reflection_union_type() -> FlattenedClass {
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
     }
 }
 
@@ -1378,6 +1404,7 @@ fn builtin_reflection_union_type() -> FlattenedClass {
 fn builtin_reflection_intersection_type() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionIntersectionType".to_string(),
+        span: dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -1411,6 +1438,7 @@ fn builtin_reflection_intersection_type() -> FlattenedClass {
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
     }
 }
 
@@ -1439,6 +1467,7 @@ fn builtin_reflection_named_type_to_string_method() -> ClassMethod {
         params: Vec::new(),
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Str),
         by_ref_return: false,
@@ -1530,6 +1559,7 @@ fn builtin_reflection_composite_type_to_string_method(
         params: Vec::new(),
         param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Str),
         by_ref_return: false,
@@ -1584,6 +1614,7 @@ fn reflection_composite_type_append_body(
 fn builtin_reflection_class() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionClass".to_string(),
+        span: dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -2089,6 +2120,7 @@ fn builtin_reflection_class_int_method(method_name: &str, property: &str) -> Cla
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Int),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -2150,6 +2182,7 @@ fn builtin_reflection_class_has_name_method(
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Int),
+        by_ref_return: false,
         body: vec![Stmt::new(StmtKind::Return(Some(contains)), dummy_span)],
         span: dummy_span,
         attributes: Vec::new(),
@@ -2189,6 +2222,7 @@ fn builtin_reflection_class_get_constant_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(mixed_type()),
+        by_ref_return: false,
         body: vec![
             Stmt::new(
                 StmtKind::Assign {
@@ -2267,6 +2301,7 @@ fn builtin_reflection_class_get_static_property_value_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(mixed_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(value_or_default)),
             dummy_span,
@@ -2295,6 +2330,7 @@ fn builtin_reflection_class_set_static_property_value_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
         body: Vec::new(),
         span: dummy_span,
         attributes: Vec::new(),
@@ -2332,6 +2368,7 @@ fn builtin_reflection_class_get_reflection_constant_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(mixed_type()),
+        by_ref_return: false,
         body: vec![
             Stmt::new(
                 StmtKind::Foreach {
@@ -2464,6 +2501,7 @@ fn builtin_reflection_class_implements_interface_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
+        by_ref_return: false,
         body: vec![
             missing_interface_check,
             Stmt::new(
@@ -2596,6 +2634,7 @@ fn builtin_reflection_class_is_subclass_of_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
+        by_ref_return: false,
         body: vec![
             missing_target_check,
             Stmt::new(
@@ -2664,6 +2703,7 @@ fn builtin_reflection_class_is_instance_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::InstanceOf {
@@ -2804,6 +2844,7 @@ fn builtin_reflection_class_array_method(
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(return_type.clone()),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -2871,6 +2912,7 @@ fn builtin_reflection_class_filtered_array_method(
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(return_type.clone()),
+        by_ref_return: false,
         body: vec![
             Stmt::new(
                 StmtKind::If {
@@ -3025,6 +3067,7 @@ fn builtin_reflection_class_get_member_method(
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified(return_class))),
+        by_ref_return: false,
         body: vec![
             Stmt::new(
                 StmtKind::Foreach {
@@ -3071,6 +3114,7 @@ fn builtin_reflection_class_nullable_object_method(
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(nullable_object_type(class_name)),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -3106,6 +3150,7 @@ fn builtin_reflection_class_object_method(
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified(class_name))),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -3137,6 +3182,7 @@ fn builtin_reflection_class_mixed_method(method_name: &str, property: &str) -> C
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(mixed_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -3168,6 +3214,7 @@ fn builtin_reflection_class_bool_method(method_name: &str, property: &str) -> Cl
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -3199,6 +3246,7 @@ fn builtin_reflection_method_get_prototype_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified("ReflectionMethod"))),
+        by_ref_return: false,
         body: vec![
             Stmt::new(
                 StmtKind::If {
@@ -3247,6 +3295,7 @@ fn builtin_reflection_property_is_default_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::Not(Box::new(reflection_this_property(
@@ -3278,6 +3327,7 @@ fn builtin_reflection_constant_false_union_method(method_name: &str) -> ClassMet
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(string_or_bool_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(StmtKind::Return(false_bool()), dummy_span)],
         span: dummy_span,
         attributes: Vec::new(),
@@ -3300,6 +3350,7 @@ fn builtin_reflection_constant_false_bool_method(method_name: &str) -> ClassMeth
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(StmtKind::Return(false_bool()), dummy_span)],
         span: dummy_span,
         attributes: Vec::new(),
@@ -3322,6 +3373,7 @@ fn builtin_reflection_constant_empty_array_method(method_name: &str) -> ClassMet
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(array_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(StmtKind::Return(empty_array()), dummy_span)],
         span: dummy_span,
         attributes: Vec::new(),
@@ -3344,6 +3396,7 @@ fn builtin_reflection_constant_null_mixed_method(method_name: &str) -> ClassMeth
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(mixed_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(StmtKind::Return(null_expr()), dummy_span)],
         span: dummy_span,
         attributes: Vec::new(),
@@ -3376,6 +3429,7 @@ fn builtin_reflection_method_name_predicate_method(
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(StmtKind::Return(Some(comparison)), dummy_span)],
         span: dummy_span,
         attributes: Vec::new(),
@@ -3398,6 +3452,7 @@ fn builtin_reflection_property_has_type_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::BinaryOp {
@@ -3452,6 +3507,7 @@ fn builtin_reflection_property_modifier_mask_method(method_name: &str, mask: i64
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(StmtKind::Return(Some(comparison)), dummy_span)],
         span: dummy_span,
         attributes: Vec::new(),
@@ -3483,6 +3539,7 @@ fn builtin_reflection_property_has_hook_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(StmtKind::Return(Some(has_hook)), dummy_span)],
         span: dummy_span,
         attributes: Vec::new(),
@@ -3515,6 +3572,7 @@ fn builtin_reflection_property_get_hook_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(nullable_object_type("ReflectionMethod")),
+        by_ref_return: false,
         body: vec![
             Stmt::new(
                 StmtKind::If {
@@ -3566,6 +3624,7 @@ fn builtin_reflection_property_get_value_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(mixed_type()),
+        by_ref_return: false,
         body: vec![
             reflection_property_static_get_value_return(dummy_span),
             reflection_property_object_required_guard("getValue", dummy_span),
@@ -3600,6 +3659,7 @@ fn builtin_reflection_property_set_value_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
         body: vec![
             reflection_property_static_value_guard("setValue", dummy_span),
             reflection_property_object_required_guard("setValue", dummy_span),
@@ -3657,6 +3717,7 @@ fn builtin_reflection_property_is_initialized_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
+        by_ref_return: false,
         body: vec![
             static_return,
             reflection_property_object_required_guard("isInitialized", dummy_span),
@@ -3800,6 +3861,7 @@ fn builtin_reflection_property_is_lazy_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
+        by_ref_return: false,
         body: vec![Stmt::new(StmtKind::Return(false_bool()), dummy_span)],
         span: dummy_span,
         attributes: Vec::new(),
@@ -3833,6 +3895,7 @@ fn builtin_reflection_property_skip_lazy_initialization_method() -> ClassMethod 
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
         body: vec![
             Stmt::new(
                 StmtKind::If {
@@ -4074,6 +4137,7 @@ fn builtin_reflection_owner_class(
     methods.push(builtin_reflection_owner_get_attributes_method());
     FlattenedClass {
         name: name.to_string(),
+        span: dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -4162,6 +4226,7 @@ fn builtin_reflection_parameter_count_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Int),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::FunctionCall {
@@ -4214,6 +4279,7 @@ fn builtin_reflection_function_method_is_variadic_method() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(bool_type()),
+        by_ref_return: false,
         body: vec![
             Stmt::new(
                 StmtKind::Assign {

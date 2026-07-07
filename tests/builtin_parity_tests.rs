@@ -60,6 +60,27 @@ const EVAL_ONLY_REFLECTION_BUILTINS: &[&str] = &[
     "get_object_vars",
 ];
 
+/// Static-only registered builtins exist in the compiler before magician/eval has runtime support.
+const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
+    "array_all",
+    "array_any",
+    "array_diff_assoc",
+    "array_find",
+    "array_intersect_assoc",
+    "array_is_list",
+    "array_key_first",
+    "array_key_last",
+    "array_merge_recursive",
+    "array_multisort",
+    "array_replace",
+    "array_replace_recursive",
+    "array_udiff",
+    "array_uintersect",
+    "array_walk_recursive",
+    "serialize",
+    "unserialize",
+];
+
 /// Eval supports these PHP optional parameters before the static backend does.
 const EVAL_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &[
     "array_reverse",
@@ -81,6 +102,7 @@ fn static_php_visible_builtins_are_visible_to_eval() {
     let missing = elephc::builtin_metadata::php_visible_builtin_names()
         .iter()
         .copied()
+        .filter(|name| !STATIC_ONLY_REGISTRY_BUILTINS.contains(name))
         .filter(|name| !elephc_magician::builtin_metadata::php_visible_builtin_exists(name))
         .collect::<Vec<_>>();
 
@@ -99,11 +121,13 @@ fn static_php_visible_builtins_have_eval_dispatch_literals() {
     let missing_direct = elephc::builtin_metadata::php_visible_builtin_names()
         .iter()
         .copied()
+        .filter(|name| !STATIC_ONLY_REGISTRY_BUILTINS.contains(name))
         .filter(|name| !direct_dispatch_names.contains(*name))
         .collect::<Vec<_>>();
     let missing_dynamic = elephc::builtin_metadata::php_visible_builtin_names()
         .iter()
         .copied()
+        .filter(|name| !STATIC_ONLY_REGISTRY_BUILTINS.contains(name))
         .filter(|name| !dynamic_dispatch_names.contains(*name))
         .collect::<Vec<_>>();
 
@@ -176,6 +200,9 @@ fn shared_builtin_signature_shape_matches_static_signatures() {
     let mut mismatched_signatures = Vec::new();
 
     for name in elephc::builtin_metadata::php_visible_builtin_names() {
+        if STATIC_ONLY_REGISTRY_BUILTINS.contains(name) {
+            continue;
+        }
         let Some(static_meta) = elephc::builtin_metadata::builtin_signature_metadata(name) else {
             missing_static_signature.push(*name);
             continue;
@@ -223,6 +250,26 @@ fn shared_builtin_signature_shape_matches_static_signatures() {
         mismatched_signatures.is_empty(),
         "shared builtin signature-shape mismatches: {mismatched_signatures:#?}"
     );
+}
+
+/// Documents compiler-visible builtins whose eval support has not landed yet.
+#[test]
+fn static_only_registry_builtins_remain_documented_until_eval_support_lands() {
+    let static_names = elephc::builtin_metadata::php_visible_builtin_names()
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+
+    for name in STATIC_ONLY_REGISTRY_BUILTINS {
+        assert!(
+            static_names.contains(name),
+            "{name} is no longer compiler-visible; remove it from the static-only allowlist"
+        );
+        assert!(
+            !elephc_magician::builtin_metadata::php_visible_builtin_exists(name),
+            "{name} is now eval-visible; remove it from the static-only allowlist"
+        );
+    }
 }
 
 /// Verifies a documented eval signature extension keeps the static prefix contract.

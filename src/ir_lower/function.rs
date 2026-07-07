@@ -365,6 +365,7 @@ pub(crate) fn lower_eval_aot_function(
         defaults: Vec::new(),
         return_type: return_type.clone(),
         declared_return: false,
+        by_ref_return: false,
         ref_params: Vec::new(),
         declared_params: Vec::new(),
         variadic: None,
@@ -392,6 +393,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
+        &check_result.throw_access_sites,
         constants,
         None,
         return_type,
@@ -436,6 +438,7 @@ pub(crate) fn lower_eval_aot_scope_read_function(
         defaults: Vec::new(),
         return_type: return_type.clone(),
         declared_return: false,
+        by_ref_return: false,
         ref_params: vec![
             false;
             if use_read_params {
@@ -490,6 +493,7 @@ pub(crate) fn lower_eval_aot_scope_read_function(
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
+        &check_result.throw_access_sites,
         constants,
         None,
         return_type,
@@ -840,7 +844,6 @@ fn lower_body_into_function(
         all_global_var_names,
         source_path,
     );
-    ctx.by_ref_return = function_by_ref_return;
     ctx.by_ref_return = function_by_ref_return;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
         ctx.enable_eval_scope_access(scope_param, read_names, write_names, flush_names);

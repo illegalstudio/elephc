@@ -351,6 +351,8 @@ fn extern_decl_signature(decl: &crate::ir::ExternDecl) -> FunctionSig {
             .iter()
             .map(|param| (param.name.clone(), param.php_type.clone()))
             .collect(),
+        param_type_exprs: vec![None; decl.params.len()],
+        param_attributes: vec![Vec::new(); decl.params.len()],
         defaults: vec![None; decl.params.len()],
         return_type: decl.return_php_type.clone(),
         declared_return: true,

@@ -689,7 +689,7 @@ fn emit_reflection_owner_object(
             )?;
         } else if class_name == "ReflectionFunction" {
             let (_, short_name) = reflection_name_parts(reflected_name);
-            emit_reflection_string_property_by_name(ctx, "__short_name", short_name)?;
+            emit_reflection_owner_string_property_by_name(ctx, class_name, "__short_name", short_name)?;
         }
         if class_name == "ReflectionEnum" {
             let case_names = metadata
@@ -1791,7 +1791,7 @@ fn reflection_class_constant_metadata(
         resolve_reflection_enum_case(ctx, &reflected_class, &constant_name)
     {
         return Ok(ReflectionOwnerMetadata {
-            reflected_name: Some(constant_name),
+            reflected_name: Some(constant_name.clone()),
             attr_names: case.attribute_names.clone(),
             attr_args: case.attribute_args.clone(),
             interface_names: Vec::new(),
@@ -6240,6 +6240,7 @@ fn emit_reflection_member_object(
         property_count,
         false,
         &uninitialized_marker_offsets,
+        &[],
     )?;
     let class_info = ctx
         .module
@@ -6423,6 +6424,7 @@ fn emit_reflection_parameter_object(
         property_count,
         false,
         &uninitialized_marker_offsets,
+        &[],
     )?;
     emit_reflection_parameter_properties(ctx, parameter)
 }
@@ -6840,6 +6842,7 @@ fn emit_reflection_union_type_object(
         property_count,
         false,
         &uninitialized_marker_offsets,
+        &[],
     )?;
     emit_reflection_union_type_types_property(ctx, &type_metadata.types)?;
     emit_reflection_owner_bool_property(
@@ -6906,6 +6909,7 @@ fn emit_reflection_intersection_type_object(
         property_count,
         false,
         &uninitialized_marker_offsets,
+        &[],
     )?;
     emit_reflection_intersection_type_types_property(ctx, &type_metadata.types)?;
     emit_reflection_owner_bool_property(ctx, "ReflectionIntersectionType", "__allows_null", false)?;
@@ -6986,6 +6990,7 @@ fn emit_reflection_named_type_object(
         property_count,
         false,
         &uninitialized_marker_offsets,
+        &[],
     )?;
     emit_reflection_string_property(ctx, &type_metadata.name, name_offset, name_offset + 8);
     emit_reflection_owner_bool_property(

@@ -243,17 +243,25 @@ pub(super) fn lower_object_clone_shallow(
             class_name
         )));
     }
-    let (class_id, property_count, allow_dynamic_properties, retained_offsets) = {
+    let (
+        class_id,
+        property_count,
+        allow_dynamic_properties,
+        retained_offsets,
+        owned_reference_property_offsets,
+    ) = {
         let class_info =
             ctx.module.class_infos.get(&class_name).ok_or_else(|| {
                 CodegenIrError::unsupported(format!("unknown class {}", class_name))
             })?;
         let retained_offsets = cloned_property_retain_offsets(class_info);
+        let owned_reference_property_offsets = owned_reference_property_offsets(class_info);
         (
             class_info.class_id,
             class_info.properties.len(),
             class_info.allow_dynamic_properties,
             retained_offsets,
+            owned_reference_property_offsets,
         )
     };
     let result = inst
@@ -262,7 +270,14 @@ pub(super) fn lower_object_clone_shallow(
     let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(source, result_reg)?;
     abi::emit_push_reg(ctx.emitter, result_reg);
-    emit_object_allocation(ctx, class_id, property_count, allow_dynamic_properties, &[])?;
+    emit_object_allocation(
+        ctx,
+        class_id,
+        property_count,
+        allow_dynamic_properties,
+        &[],
+        &owned_reference_property_offsets,
+    )?;
     ctx.store_result_value(result)?;
     let source_reg = abi::secondary_scratch_reg(ctx.emitter);
     let dest_reg = abi::symbol_scratch_reg(ctx.emitter);
@@ -1647,6 +1662,7 @@ fn emit_dynamic_new_without_constructor_mixed_candidate(
         candidate.property_count,
         candidate.allow_dynamic_properties,
         &candidate.uninitialized_marker_offsets,
+        &candidate.owned_reference_property_offsets,
     )?;
     let object_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, object_reg);
@@ -1936,6 +1952,7 @@ fn dynamic_new_without_constructor_candidate(
         property_count: class_info.properties.len(),
         allow_dynamic_properties: class_info.allow_dynamic_properties,
         uninitialized_marker_offsets: uninitialized_property_marker_offsets(class_info),
+        owned_reference_property_offsets: owned_reference_property_offsets(class_info),
         property_defaults,
         constructor_impl: None,
     }))

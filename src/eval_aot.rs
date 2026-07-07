@@ -2355,7 +2355,7 @@ fn collect_stmt_scope_access(stmt: &Stmt, access: &mut EvalScopeAccess) {
         }
         StmtKind::RefAssign { target, source } => {
             access.write(target);
-            access.read(source);
+            collect_expr_scope_access(source, access);
         }
         StmtKind::If {
             condition,

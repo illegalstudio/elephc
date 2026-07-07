@@ -150,6 +150,15 @@ fn expr_refs_listid(expr: &Expr) -> bool {
             method,
             args,
         } => method_is_listid(method) || expr_refs_listid(object) || args.iter().any(expr_refs_listid),
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_refs_listid(object)
+                || expr_refs_listid(method)
+                || args.iter().any(expr_refs_listid)
+        }
         ExprKind::StaticMethodCall { method, args, .. } => {
             method_is_listid(method) || args.iter().any(expr_refs_listid)
         }
@@ -165,6 +174,7 @@ fn expr_refs_listid(expr: &Expr) -> bool {
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)

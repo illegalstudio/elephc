@@ -9242,6 +9242,7 @@ fn expr_contains_eval_call(expr: &Expr) -> bool {
             key.as_ref().is_some_and(|key| expr_contains_eval_call(key))
                 || value.as_ref().is_some_and(|value| expr_contains_eval_call(value))
         }
+        ExprKind::IncludeValue { path, .. } => expr_contains_eval_call(path),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

@@ -27,8 +27,8 @@ use crate::parser::ast::{
     BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
 };
 use crate::types::{
-    is_php_integer_array_key, AttrArgValue, ClassInfo, FunctionSig, InterfaceInfo, PhpType,
-    PropertyHookContract,
+    is_php_integer_array_key, AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, FunctionSig,
+    InterfaceInfo, PhpType, PropertyHookContract,
 };
 
 use super::super::super::context::FunctionContext;
@@ -403,7 +403,7 @@ struct EvalNativeMemberAttributeRegistration {
     class_name: String,
     member_name: String,
     attribute_name: String,
-    attribute_args: Option<Vec<AttrArgValue>>,
+    attribute_args: Option<Vec<AttrArgEntry>>,
 }
 
 /// Native callable default that can be registered with libelephc-magician.
@@ -6801,19 +6801,24 @@ fn collect_eval_native_member_attributes(
     class_name: &str,
     member_name: &str,
     attribute_names: &[String],
-    attribute_args: &[Option<Vec<AttrArgValue>>],
+    attribute_args: &[Option<Vec<AttrArgEntry>>],
     registrations: &mut Vec<EvalNativeMemberAttributeRegistration>,
 ) {
     for (index, attribute_name) in attribute_names.iter().enumerate() {
         let Some(args) = attribute_args.get(index).cloned().flatten() else {
             continue;
         };
+        let attribute_args = if eval_native_member_attribute_args_supported(&args) {
+            Some(args)
+        } else {
+            None
+        };
         registrations.push(EvalNativeMemberAttributeRegistration {
             owner_kind,
             class_name: class_name.to_string(),
             member_name: member_name.to_string(),
             attribute_name: attribute_name.clone(),
-            attribute_args: Some(args),
+            attribute_args,
         });
     }
 }
@@ -9174,7 +9179,7 @@ fn eval_native_member_attribute_record(
             record.push(NATIVE_ATTRIBUTE_ARGS_SUPPORTED);
             eval_native_member_attribute_push_u32(&mut record, args.len());
             for arg in args {
-                eval_native_member_attribute_push_arg(&mut record, arg);
+                eval_native_member_attribute_push_entry(&mut record, arg);
             }
         }
         None => record.push(NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED),
@@ -9182,7 +9187,38 @@ fn eval_native_member_attribute_record(
     record
 }
 
-/// Encodes one attribute argument into a member-attribute registration record.
+/// Returns true when an attribute argument list can be encoded for eval registration.
+fn eval_native_member_attribute_args_supported(args: &[AttrArgEntry]) -> bool {
+    args.iter()
+        .all(|entry| eval_native_member_attribute_value_supported(&entry.value))
+}
+
+/// Returns true when one attribute argument value can be encoded for eval registration.
+fn eval_native_member_attribute_value_supported(value: &AttrArgValue) -> bool {
+    match value {
+        AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(_, _) => false,
+        AttrArgValue::Array(elements) => eval_native_member_attribute_args_supported(elements),
+        AttrArgValue::Null
+        | AttrArgValue::Bool(_)
+        | AttrArgValue::Int(_)
+        | AttrArgValue::Float(_)
+        | AttrArgValue::Str(_) => true,
+    }
+}
+
+/// Encodes one keyed attribute argument entry into a member-attribute registration record.
+fn eval_native_member_attribute_push_entry(record: &mut Vec<u8>, entry: &AttrArgEntry) {
+    match &entry.key {
+        Some(AttrKey::Str(name)) => {
+            record.push(NATIVE_ATTRIBUTE_ARG_NAMED);
+            eval_native_member_attribute_push_string(record, name);
+            eval_native_member_attribute_push_arg(record, &entry.value);
+        }
+        Some(AttrKey::Int(_)) | None => eval_native_member_attribute_push_arg(record, &entry.value),
+    }
+}
+
+/// Encodes one attribute argument value into a member-attribute registration record.
 fn eval_native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &AttrArgValue) {
     match arg {
         AttrArgValue::Null => record.push(NATIVE_ATTRIBUTE_ARG_NULL),
@@ -9202,17 +9238,15 @@ fn eval_native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &AttrArgValu
             record.push(NATIVE_ATTRIBUTE_ARG_STRING);
             eval_native_member_attribute_push_string(record, value);
         }
-        AttrArgValue::Named { name, value } => {
-            record.push(NATIVE_ATTRIBUTE_ARG_NAMED);
-            eval_native_member_attribute_push_string(record, name);
-            eval_native_member_attribute_push_arg(record, value);
-        }
         AttrArgValue::Array(elements) => {
             record.push(NATIVE_ATTRIBUTE_ARG_ARRAY);
             eval_native_member_attribute_push_u32(record, elements.len());
             for element in elements {
-                eval_native_member_attribute_push_arg(record, element);
+                eval_native_member_attribute_push_entry(record, element);
             }
+        }
+        AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(_, _) => {
+            record.push(NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED);
         }
     }
 }

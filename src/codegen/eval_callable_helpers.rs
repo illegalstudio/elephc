@@ -17,17 +17,17 @@ use crate::codegen::abi;
 use crate::codegen::callable_descriptor::{
     self, CallableDescriptorInvocation, CallableDescriptorShape,
 };
+use std::collections::HashSet;
+
 use crate::codegen::callable_dispatch::{
-    self, RuntimeCallableCase, RuntimeCallableSelector, RuntimeInstanceCallableShape,
-    RuntimeInstanceMethodCallableCase, RuntimeStaticMethodCallableCase,
+    self, RuntimeCallableCase, RuntimeCallableSelector, RuntimeStaticMethodCallableCase,
 };
-use crate::codegen::context::DeferredClosure;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::runtime_callable_invoker::RuntimeCallableInvoker;
 use crate::ir::{Function, LocalKind, Module};
-use crate::names::{function_symbol, php_symbol_key};
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, Visibility};
-use crate::span::Span;
+use crate::names::{function_symbol, method_symbol, php_symbol_key, static_method_symbol};
+use crate::parser::ast::Visibility;
 use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
 
 const EVAL_RECEIVER_CAPTURE_PARAM: &str = "__elephc_eval_callable_receiver";
@@ -49,10 +49,44 @@ const AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET: i64 = 16;
 /// Callable descriptors available to eval constructor and method bridges.
 pub(super) struct EvalCallableDescriptorSupport {
     string_cases: Vec<RuntimeCallableCase>,
-    instance_array_cases: Vec<RuntimeInstanceMethodCallableCase>,
+    instance_array_cases: Vec<EvalInstanceMethodCallableCase>,
     static_array_cases: Vec<RuntimeStaticMethodCallableCase>,
-    object_cases: Vec<RuntimeInstanceMethodCallableCase>,
+    object_cases: Vec<EvalInstanceMethodCallableCase>,
     dynamic_descriptor_label: Option<String>,
+}
+
+/// Runtime instance-method callable case emitted specifically for eval bridges.
+#[derive(Clone)]
+struct EvalInstanceMethodCallableCase {
+    class_id: u64,
+    method_name: String,
+    case: RuntimeCallableCase,
+}
+
+/// Receiver-bound callable descriptor shape used by eval bridge metadata.
+#[derive(Clone, Copy)]
+enum EvalInstanceCallableShape {
+    InstanceMethod,
+    ObjectInvoke,
+}
+
+/// Stable label allocator for eval bridge helper bodies emitted outside `FunctionContext`.
+struct EvalCallableEmitState {
+    next_id: usize,
+}
+
+impl EvalCallableEmitState {
+    /// Creates an empty label state for one eval callable-support emission pass.
+    fn new() -> Self {
+        Self { next_id: 0 }
+    }
+
+    /// Returns a unique global/local label for generated eval callable support.
+    fn next_label(&mut self, prefix: &str) -> String {
+        let id = self.next_id;
+        self.next_id += 1;
+        format!("__elephc_eval_{}_{}", prefix, id)
+    }
 }
 
 impl EvalCallableDescriptorSupport {
@@ -148,20 +182,13 @@ pub(super) fn emit_eval_callable_descriptor_support(
             dynamic_descriptor_label: None,
         };
     }
-    let mut legacy_ctx = super::lower_inst::legacy_context_from_eir_module(module);
-    legacy_ctx.functions.retain(|name, _| {
-        module
-            .functions
-            .iter()
-            .any(|function| !function.flags.is_main && function.name == *name)
-    });
-    let string_cases = eval_user_function_callable_cases(&mut legacy_ctx, data);
-    let instance_array_cases = eval_instance_method_callable_cases(module, &mut legacy_ctx, data);
-    let static_array_cases = eval_static_method_callable_cases(module, &mut legacy_ctx, data);
-    let object_cases = eval_invokable_object_callable_cases(module, &mut legacy_ctx, data);
+    let mut state = EvalCallableEmitState::new();
+    let string_cases = eval_user_function_callable_cases(module, emitter, data, &mut state);
+    let instance_array_cases = eval_instance_method_callable_cases(module, emitter, data, &mut state);
+    let static_array_cases = eval_static_method_callable_cases(module, emitter, data, &mut state);
+    let object_cases = eval_invokable_object_callable_cases(module, emitter, data, &mut state);
     let dynamic_descriptor_label = Some(eval_dynamic_callable_descriptor(data));
     emit_eval_dynamic_callable_invoker(module, emitter, data);
-    emit_deferred_callable_support(emitter, data, &mut legacy_ctx);
     EvalCallableDescriptorSupport {
         string_cases,
         instance_array_cases,
@@ -350,20 +377,18 @@ fn emit_x86_64_eval_dynamic_callable_fatal(emitter: &mut Emitter, data: &mut Dat
 
 /// Builds descriptor cases for user functions visible as eval string callables.
 fn eval_user_function_callable_cases(
-    legacy_ctx: &mut crate::codegen::context::Context,
+    module: &Module,
+    emitter: &mut Emitter,
     data: &mut DataSection,
+    state: &mut EvalCallableEmitState,
 ) -> Vec<RuntimeCallableCase> {
-    let mut functions = legacy_ctx
-        .functions
-        .iter()
-        .map(|(name, sig)| (name.clone(), sig.clone()))
-        .collect::<Vec<_>>();
+    let mut functions = eval_user_function_sigs(module);
     functions.sort_by(|left, right| left.0.cmp(&right.0));
     let mut cases = Vec::with_capacity(functions.len());
     for (name, sig) in functions {
         let case_sig = callable_wrapper_sig(&sig);
         let invoker_label =
-            callable_dispatch::ensure_runtime_descriptor_invoker(legacy_ctx, &[], &case_sig);
+            emit_eval_runtime_callable_invoker_inline(emitter, data, state, &case_sig, &[]);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             data,
             &function_symbol(&name),
@@ -373,32 +398,60 @@ fn eval_user_function_callable_cases(
             &[],
             &[],
             CallableDescriptorInvocation::named(CallableDescriptorShape::Function, &name),
-            invoker_label.as_deref(),
+            Some(&invoker_label),
         );
         cases.push(RuntimeCallableCase {
             label: function_symbol(&name),
             descriptor_label,
             php_name: Some(name),
-            sig: case_sig,
-            captures: Vec::new(),
-            has_invoker: invoker_label.is_some(),
-            invoker_label,
         });
     }
     cases
 }
 
+/// Collects user function signatures available to eval string-callable descriptors.
+fn eval_user_function_sigs(module: &Module) -> Vec<(String, FunctionSig)> {
+    let mut functions = module
+        .functions
+        .iter()
+        .filter(|function| {
+            !function.flags.is_main && !function.name.starts_with("_class_propinit_")
+        })
+        .map(|function| {
+            (
+                function.name.clone(),
+                super::lower_inst::function_signature_from_eir(function),
+            )
+        })
+        .collect::<Vec<_>>();
+    for group in super::function_variants::collect_dispatch_groups(module) {
+        if functions.iter().any(|(name, _)| name == &group.name) {
+            continue;
+        }
+        if let Some(function) = super::function_variants::variant_callee_for_group(module, &group.name)
+        {
+            functions.push((
+                group.name.clone(),
+                super::lower_inst::function_signature_from_eir(function),
+            ));
+        }
+    }
+    functions
+}
+
 /// Builds descriptor cases for emitted public instance methods visible to eval.
 fn eval_instance_method_callable_cases(
     module: &Module,
-    legacy_ctx: &mut crate::codegen::context::Context,
+    emitter: &mut Emitter,
     data: &mut DataSection,
-) -> Vec<RuntimeInstanceMethodCallableCase> {
+    state: &mut EvalCallableEmitState,
+) -> Vec<EvalInstanceMethodCallableCase> {
     eval_instance_callable_cases(
         module,
-        legacy_ctx,
+        emitter,
         data,
-        RuntimeInstanceCallableShape::InstanceMethod,
+        state,
+        EvalInstanceCallableShape::InstanceMethod,
         |_| true,
     )
 }
@@ -406,14 +459,16 @@ fn eval_instance_method_callable_cases(
 /// Builds descriptor cases for emitted public `__invoke` methods visible to eval.
 fn eval_invokable_object_callable_cases(
     module: &Module,
-    legacy_ctx: &mut crate::codegen::context::Context,
+    emitter: &mut Emitter,
     data: &mut DataSection,
-) -> Vec<RuntimeInstanceMethodCallableCase> {
+    state: &mut EvalCallableEmitState,
+) -> Vec<EvalInstanceMethodCallableCase> {
     eval_instance_callable_cases(
         module,
-        legacy_ctx,
+        emitter,
         data,
-        RuntimeInstanceCallableShape::ObjectInvoke,
+        state,
+        EvalInstanceCallableShape::ObjectInvoke,
         |method_name| php_symbol_key(method_name) == "__invoke",
     )
 }
@@ -421,15 +476,16 @@ fn eval_invokable_object_callable_cases(
 /// Builds receiver-bound descriptor cases for public emitted instance methods.
 fn eval_instance_callable_cases(
     module: &Module,
-    legacy_ctx: &mut crate::codegen::context::Context,
+    emitter: &mut Emitter,
     data: &mut DataSection,
-    shape: RuntimeInstanceCallableShape,
+    state: &mut EvalCallableEmitState,
+    shape: EvalInstanceCallableShape,
     include_method: impl Fn(&str) -> bool,
-) -> Vec<RuntimeInstanceMethodCallableCase> {
-    let emitted_methods = super::eir_class_method_keys(module);
+) -> Vec<EvalInstanceMethodCallableCase> {
+    let emitted_methods = eval_eir_class_method_keys(module);
     let mut candidates = Vec::new();
     for (class_name, class_info) in &module.class_infos {
-        for method_name in class_info.methods.keys() {
+        for (method_name, sig) in &class_info.methods {
             if !include_method(method_name) {
                 continue;
             }
@@ -446,11 +502,14 @@ fn eval_instance_callable_cases(
                 .get(&method_key)
                 .map(String::as_str)
                 .unwrap_or(class_name);
-            if emitted_methods.contains(&(impl_class.to_string(), method_key, false)) {
+            if emitted_methods.contains(&(impl_class.to_string(), method_key.clone(), false)) {
                 candidates.push((
                     class_name.clone(),
                     class_info.class_id,
                     method_name.clone(),
+                    method_key,
+                    impl_class.to_string(),
+                    sig.clone(),
                 ));
             }
         }
@@ -458,33 +517,40 @@ fn eval_instance_callable_cases(
     candidates.sort_by(|left, right| (&left.0, &left.2).cmp(&(&right.0, &right.2)));
     candidates
         .into_iter()
-        .filter_map(|(class_name, class_id, method_name)| {
-            receiver_bound_instance_method_case(
-                legacy_ctx,
-                data,
-                &class_name,
-                &method_name,
-                shape,
-            )
-            .map(|case| RuntimeInstanceMethodCallableCase {
-                class_id,
-                method_name,
-                case,
-            })
-        })
+        .map(
+            |(class_name, class_id, method_name, method_key, impl_class, sig)| {
+                let case = receiver_bound_instance_method_case(
+                    emitter,
+                    data,
+                    state,
+                    &class_name,
+                    &impl_class,
+                    &method_name,
+                    &method_key,
+                    &sig,
+                    shape,
+                );
+                EvalInstanceMethodCallableCase {
+                    class_id,
+                    method_name,
+                    case,
+                }
+            },
+        )
         .collect()
 }
 
 /// Builds descriptor cases for emitted public static methods visible to eval.
 fn eval_static_method_callable_cases(
     module: &Module,
-    legacy_ctx: &mut crate::codegen::context::Context,
+    emitter: &mut Emitter,
     data: &mut DataSection,
+    state: &mut EvalCallableEmitState,
 ) -> Vec<RuntimeStaticMethodCallableCase> {
-    let emitted_methods = super::eir_class_method_keys(module);
+    let emitted_methods = eval_eir_class_method_keys(module);
     let mut candidates = Vec::new();
     for (class_name, class_info) in &module.class_infos {
-        for method_name in class_info.static_methods.keys() {
+        for (method_name, sig) in &class_info.static_methods {
             if !class_info
                 .static_method_visibilities
                 .get(method_name)
@@ -492,165 +558,165 @@ fn eval_static_method_callable_cases(
             {
                 continue;
             }
-            let method_key = crate::names::php_symbol_key(method_name);
+            let method_key = php_symbol_key(method_name);
             let impl_class = class_info
                 .static_method_impl_classes
                 .get(&method_key)
                 .map(String::as_str)
                 .unwrap_or(class_name);
-            if emitted_methods.contains(&(impl_class.to_string(), method_key, true)) {
-                candidates.push((class_name.clone(), method_name.clone()));
+            if emitted_methods.contains(&(impl_class.to_string(), method_key.clone(), true)) {
+                candidates.push((
+                    class_name.clone(),
+                    method_name.clone(),
+                    method_key,
+                    impl_class.to_string(),
+                    class_info.class_id,
+                    sig.clone(),
+                ));
             }
         }
     }
     candidates.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
     candidates
         .into_iter()
-        .filter_map(|(class_name, method_name)| {
-            callable_dispatch::runtime_static_method_case(
-                legacy_ctx,
-                data,
-                &class_name,
-                &method_name,
-            )
-            .map(|case| RuntimeStaticMethodCallableCase {
-                class_name,
-                method_name,
-                case,
-            })
+        .map(
+            |(class_name, method_name, method_key, impl_class, class_id, sig)| {
+                let wrapper_sig = callable_dispatch::static_method_runtime_wrapper_sig(&sig);
+                let entry_label = emit_eval_static_method_descriptor_entry_wrapper(
+                    emitter,
+                    state,
+                    &impl_class,
+                    &method_key,
+                    &wrapper_sig,
+                    class_id,
+                );
+                let php_name = format!("{}::{}", class_name, method_name);
+                let invoker_label =
+                    emit_eval_runtime_callable_invoker_inline(emitter, data, state, &wrapper_sig, &[]);
+                let descriptor_label =
+                    callable_descriptor::static_descriptor_with_optional_invoker_meta(
+                        data,
+                        &entry_label,
+                        Some(&php_name),
+                        callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
+                        Some(&wrapper_sig),
+                        &[],
+                        &[],
+                        CallableDescriptorInvocation::method(
+                            CallableDescriptorShape::StaticMethod,
+                            Some(class_name.clone()),
+                            method_name.as_str(),
+                        ),
+                        Some(&invoker_label),
+                    );
+                RuntimeStaticMethodCallableCase {
+                    class_name,
+                    method_name,
+                    case: RuntimeCallableCase {
+                        label: entry_label,
+                        descriptor_label,
+                        php_name: Some(php_name),
+                    },
+                }
+            },
+        )
+        .collect()
+}
+
+/// Returns class-method symbols backed by lowered EIR functions.
+fn eval_eir_class_method_keys(module: &Module) -> HashSet<(String, String, bool)> {
+    module
+        .class_methods
+        .iter()
+        .filter_map(|function| {
+            let (class_name, method_name) = function.name.rsplit_once("::")?;
+            Some((
+                class_name.to_string(),
+                php_symbol_key(method_name),
+                function.flags.is_static,
+            ))
         })
         .collect()
 }
 
 /// Builds a receiver-bound descriptor case for one public instance method.
+#[allow(clippy::too_many_arguments)]
 fn receiver_bound_instance_method_case(
-    legacy_ctx: &mut crate::codegen::context::Context,
+    emitter: &mut Emitter,
     data: &mut DataSection,
+    state: &mut EvalCallableEmitState,
     class_name: &str,
+    impl_class: &str,
     method_name: &str,
-    shape: RuntimeInstanceCallableShape,
-) -> Option<RuntimeCallableCase> {
-    let (resolved_method_name, sig) = {
-        let class_info = legacy_ctx.classes.get(class_name)?;
-        let method_key = php_symbol_key(method_name);
-        let (resolved_method_name, sig) = class_info
-            .methods
-            .iter()
-            .find(|(candidate, _)| php_symbol_key(candidate) == method_key)?;
-        if !class_info
-            .method_visibilities
-            .get(resolved_method_name)
-            .is_some_and(|visibility| matches!(visibility, Visibility::Public))
-        {
-            return None;
-        }
-        (resolved_method_name.clone(), sig.clone())
-    };
-
-    let case_sig = callable_wrapper_sig(&sig);
+    method_key: &str,
+    sig: &FunctionSig,
+    shape: EvalInstanceCallableShape,
+) -> RuntimeCallableCase {
+    let case_sig = callable_wrapper_sig(sig);
     let hidden_name = unique_hidden_param(EVAL_RECEIVER_CAPTURE_PARAM, &case_sig);
     let capture_ty = PhpType::Object(class_name.to_string());
     let captures = vec![(hidden_name.clone(), capture_ty.clone(), false)];
-    let hidden_params = vec![(hidden_name.clone(), capture_ty, false)];
-    let wrapper_label = legacy_ctx.next_label("eval_callable_instance_method");
-    let params = case_sig
-        .params
-        .iter()
-        .map(|(name, _)| name.clone())
-        .collect::<Vec<_>>();
-    legacy_ctx.deferred_closures.push(DeferredClosure {
-        label: wrapper_label.clone(),
-        params,
-        body: receiver_bound_instance_method_wrapper_body(
-            &hidden_name,
-            &resolved_method_name,
-            &case_sig,
-        ),
-        sig: case_sig.clone(),
-        captures: captures.clone(),
-        hidden_params: hidden_params.clone(),
-        current_class: Some(class_name.to_string()),
-        needed: true,
-    });
-
+    let entry_label = emit_eval_instance_method_descriptor_entry_wrapper(
+        emitter,
+        state,
+        impl_class,
+        method_key,
+        &case_sig,
+    );
     let invoker_label =
-        callable_dispatch::ensure_runtime_descriptor_invoker(legacy_ctx, &hidden_params, &case_sig);
+        emit_eval_runtime_callable_invoker_inline(emitter, data, state, &case_sig, &captures);
     let (kind, invocation_shape) = match shape {
-        RuntimeInstanceCallableShape::ObjectInvoke => (
+        EvalInstanceCallableShape::ObjectInvoke => (
             callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE,
             CallableDescriptorShape::ObjectInvoke,
         ),
-        RuntimeInstanceCallableShape::InstanceMethod => (
+        EvalInstanceCallableShape::InstanceMethod => (
             callable_descriptor::CALLABLE_DESC_KIND_INSTANCE_METHOD,
             CallableDescriptorShape::InstanceMethod,
         ),
     };
-    let php_name = format!("{}::{}", class_name, resolved_method_name);
+    let php_name = format!("{}::{}", class_name, method_name);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         data,
-        &wrapper_label,
+        &entry_label,
         Some(&php_name),
         kind,
         Some(&case_sig),
         &captures,
-        &hidden_params,
+        &captures,
         CallableDescriptorInvocation::method(
             invocation_shape,
             Some(class_name.to_string()),
-            resolved_method_name,
+            method_name,
         ),
-        invoker_label.as_deref(),
+        Some(&invoker_label),
     );
-    Some(RuntimeCallableCase {
-        label: wrapper_label,
+    RuntimeCallableCase {
+        label: entry_label,
         descriptor_label,
         php_name: Some(php_name),
-        sig: case_sig,
-        captures,
-        has_invoker: invoker_label.is_some(),
-        invoker_label,
-    })
+    }
 }
 
-/// Builds the synthetic wrapper body for a receiver-bound eval callable descriptor.
-fn receiver_bound_instance_method_wrapper_body(
-    receiver_param: &str,
-    method_name: &str,
+/// Emits a descriptor invoker inline and branches around its global entry body.
+fn emit_eval_runtime_callable_invoker_inline(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    state: &mut EvalCallableEmitState,
     sig: &FunctionSig,
-) -> Vec<Stmt> {
-    let last_param_idx = sig.params.len().saturating_sub(1);
-    let args = sig
-        .params
-        .iter()
-        .enumerate()
-        .map(|(idx, (name, _))| {
-            let var = Expr::new(ExprKind::Variable(name.clone()), Span::dummy());
-            if sig.variadic.is_some() && idx == last_param_idx {
-                Expr::new(ExprKind::Spread(Box::new(var)), Span::dummy())
-            } else {
-                var
-            }
-        })
-        .collect();
-    let call = Expr::new(
-        ExprKind::MethodCall {
-            object: Box::new(Expr::new(
-                ExprKind::Variable(receiver_param.to_string()),
-                Span::dummy(),
-            )),
-            method: method_name.to_string(),
-            args,
-        },
-        Span::dummy(),
-    );
-    if sig.return_type == PhpType::Void {
-        vec![
-            Stmt::new(StmtKind::ExprStmt(call), Span::dummy()),
-            Stmt::new(StmtKind::Return(None), Span::dummy()),
-        ]
-    } else {
-        vec![Stmt::new(StmtKind::Return(Some(call)), Span::dummy())]
-    }
+    captures: &[(String, PhpType, bool)],
+) -> String {
+    let label = state.next_label("callable_invoker");
+    let done_label = state.next_label("callable_invoker_done");
+    let invoker = RuntimeCallableInvoker {
+        label: &label,
+        sig,
+        captures,
+    };
+    abi::emit_jump(emitter, &done_label);
+    super::runtime_callable_invoker::emit_runtime_callable_invoker(emitter, data, &invoker);
+    emitter.label(&done_label);
+    label
 }
 
 /// Returns a hidden receiver parameter name that cannot collide with visible parameters.
@@ -668,24 +734,432 @@ fn unique_hidden_param(base: &str, sig: &FunctionSig) -> String {
     }
 }
 
-/// Emits deferred callable support bodies behind one jump.
-fn emit_deferred_callable_support(
+/// Emits an entry wrapper that receives visible args followed by the captured receiver.
+fn emit_eval_instance_method_descriptor_entry_wrapper(
     emitter: &mut Emitter,
-    data: &mut DataSection,
-    legacy_ctx: &mut crate::codegen::context::Context,
-) {
-    if legacy_ctx.deferred_closures.is_empty()
-        && legacy_ctx.deferred_fiber_wrappers.is_empty()
-        && legacy_ctx.deferred_callback_wrappers.is_empty()
-        && legacy_ctx.deferred_extern_callback_trampolines.is_empty()
-        && legacy_ctx.deferred_runtime_callable_invokers.is_empty()
-    {
-        return;
-    }
-    let done_label = legacy_ctx.next_label("eval_callable_support_done");
+    state: &mut EvalCallableEmitState,
+    class_name: &str,
+    method_key: &str,
+    sig: &FunctionSig,
+) -> String {
+    let visible_arg_types = descriptor_visible_arg_types(sig);
+    let wrapper_label = state.next_label("callable_instance_method");
+    let done_label = state.next_label("callable_instance_method_done");
     abi::emit_jump(emitter, &done_label);
-    crate::codegen::emit_deferred_closures(emitter, data, legacy_ctx);
+    emitter.label(&wrapper_label);
+    emit_eval_instance_method_descriptor_entry_wrapper_body(
+        emitter,
+        class_name,
+        method_key,
+        &visible_arg_types,
+    );
     emitter.label(&done_label);
+    wrapper_label
+}
+
+/// Emits an entry wrapper that prepends a concrete called-class id before calling a static method.
+fn emit_eval_static_method_descriptor_entry_wrapper(
+    emitter: &mut Emitter,
+    state: &mut EvalCallableEmitState,
+    impl_class: &str,
+    method_key: &str,
+    sig: &FunctionSig,
+    called_class_id: u64,
+) -> String {
+    let visible_arg_types = descriptor_visible_arg_types(sig);
+    let wrapper_label = state.next_label("static_method_descriptor_entry");
+    let done_label = state.next_label("static_method_descriptor_entry_done");
+    abi::emit_jump(emitter, &done_label);
+    emitter.label(&wrapper_label);
+    emit_eval_static_method_descriptor_entry_wrapper_body(
+        emitter,
+        impl_class,
+        method_key,
+        &visible_arg_types,
+        called_class_id,
+    );
+    emitter.label(&done_label);
+    wrapper_label
+}
+
+/// Returns codegen-representation parameter types for a descriptor entry wrapper.
+fn descriptor_visible_arg_types(sig: &FunctionSig) -> Vec<PhpType> {
+    sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect()
+}
+
+/// Emits a descriptor entry wrapper body by reordering visible args after the receiver.
+fn emit_eval_instance_method_descriptor_entry_wrapper_body(
+    emitter: &mut Emitter,
+    class_name: &str,
+    method_key: &str,
+    visible_arg_types: &[PhpType],
+) {
+    let receiver_ty = descriptor_receiver_type(class_name);
+    let incoming_types = descriptor_entry_incoming_types(visible_arg_types, &receiver_ty);
+    let actual_types = descriptor_entry_actual_types(visible_arg_types, &receiver_ty);
+    let incoming_assignments =
+        abi::build_outgoing_arg_assignments_for_target(emitter.target, &incoming_types, 0);
+    let actual_assignments =
+        abi::build_outgoing_arg_assignments_for_target(emitter.target, &actual_types, 0);
+    let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
+    let (actual_stack_offsets, actual_overflow_bytes) =
+        descriptor_entry_stack_offsets(&actual_assignments);
+    let frame_size = descriptor_entry_frame_size(incoming_types.len());
+
+    abi::emit_frame_prologue(emitter, frame_size);
+    for (idx, (ty, assignment)) in incoming_types
+        .iter()
+        .zip(incoming_assignments.iter())
+        .enumerate()
+    {
+        store_descriptor_entry_incoming_arg(
+            emitter,
+            ty,
+            assignment,
+            descriptor_entry_slot_offset(idx),
+            incoming_stack_offsets[idx],
+        );
+    }
+    if actual_overflow_bytes > 0 {
+        abi::emit_reserve_temporary_stack(emitter, actual_overflow_bytes);
+    }
+    for (idx, (ty, assignment)) in actual_types
+        .iter()
+        .zip(actual_assignments.iter())
+        .enumerate()
+    {
+        let source_idx = if idx == 0 {
+            visible_arg_types.len()
+        } else {
+            idx - 1
+        };
+        load_descriptor_entry_actual_arg(
+            emitter,
+            ty,
+            assignment,
+            descriptor_entry_slot_offset(source_idx),
+            actual_stack_offsets[idx],
+        );
+    }
+    abi::emit_call_label(emitter, &method_symbol(class_name, method_key));
+    if actual_overflow_bytes > 0 {
+        abi::emit_release_temporary_stack(emitter, actual_overflow_bytes);
+    }
+    abi::emit_frame_restore(emitter, frame_size);
+    abi::emit_return(emitter);
+}
+
+/// Emits a static descriptor entry wrapper body by prepending the called-class id.
+fn emit_eval_static_method_descriptor_entry_wrapper_body(
+    emitter: &mut Emitter,
+    impl_class: &str,
+    method_key: &str,
+    visible_arg_types: &[PhpType],
+    called_class_id: u64,
+) {
+    let actual_types = {
+        let mut types = Vec::with_capacity(visible_arg_types.len() + 1);
+        types.push(PhpType::Int);
+        types.extend_from_slice(visible_arg_types);
+        types
+    };
+    let incoming_assignments =
+        abi::build_outgoing_arg_assignments_for_target(emitter.target, visible_arg_types, 0);
+    let actual_assignments =
+        abi::build_outgoing_arg_assignments_for_target(emitter.target, &actual_types, 0);
+    let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
+    let (actual_stack_offsets, actual_overflow_bytes) =
+        descriptor_entry_stack_offsets(&actual_assignments);
+    let frame_size = descriptor_entry_frame_size(visible_arg_types.len());
+
+    abi::emit_frame_prologue(emitter, frame_size);
+    for (idx, (ty, assignment)) in visible_arg_types
+        .iter()
+        .zip(incoming_assignments.iter())
+        .enumerate()
+    {
+        store_descriptor_entry_incoming_arg(
+            emitter,
+            ty,
+            assignment,
+            descriptor_entry_slot_offset(idx),
+            incoming_stack_offsets[idx],
+        );
+    }
+    if actual_overflow_bytes > 0 {
+        abi::emit_reserve_temporary_stack(emitter, actual_overflow_bytes);
+    }
+    for (idx, (ty, assignment)) in actual_types
+        .iter()
+        .zip(actual_assignments.iter())
+        .enumerate()
+    {
+        if idx == 0 {
+            load_descriptor_entry_static_class_id(
+                emitter,
+                called_class_id,
+                assignment,
+                actual_stack_offsets[idx],
+            );
+        } else {
+            load_descriptor_entry_actual_arg(
+                emitter,
+                ty,
+                assignment,
+                descriptor_entry_slot_offset(idx - 1),
+                actual_stack_offsets[idx],
+            );
+        }
+    }
+    abi::emit_call_label(emitter, &static_method_symbol(impl_class, method_key));
+    if actual_overflow_bytes > 0 {
+        abi::emit_release_temporary_stack(emitter, actual_overflow_bytes);
+    }
+    abi::emit_frame_restore(emitter, frame_size);
+    abi::emit_return(emitter);
+}
+
+/// Loads the concrete called-class id into a descriptor wrapper's outgoing ABI slot.
+fn load_descriptor_entry_static_class_id(
+    emitter: &mut Emitter,
+    class_id: u64,
+    assignment: &abi::OutgoingArgAssignment,
+    stack_offset: Option<usize>,
+) {
+    let reg = if assignment.in_register() {
+        abi::int_arg_reg_name(emitter.target, assignment.start_reg)
+    } else {
+        abi::secondary_scratch_reg(emitter)
+    };
+    abi::emit_load_int_immediate(emitter, reg, class_id as i64);
+    if let Some(out_offset) = stack_offset {
+        abi::emit_store_to_sp(emitter, reg, out_offset);
+    }
+}
+
+/// Returns the runtime receiver type threaded through the descriptor entry wrapper.
+fn descriptor_receiver_type(class_name: &str) -> PhpType {
+    PhpType::Object(class_name.to_string())
+}
+
+/// Returns the wrapper incoming argument order: visible args followed by receiver.
+fn descriptor_entry_incoming_types(
+    visible_arg_types: &[PhpType],
+    receiver_ty: &PhpType,
+) -> Vec<PhpType> {
+    let mut types = visible_arg_types.to_vec();
+    types.push(receiver_ty.clone());
+    types
+}
+
+/// Returns the real method ABI argument order: receiver followed by visible args.
+fn descriptor_entry_actual_types(
+    visible_arg_types: &[PhpType],
+    receiver_ty: &PhpType,
+) -> Vec<PhpType> {
+    let mut types = Vec::with_capacity(visible_arg_types.len() + 1);
+    types.push(receiver_ty.clone());
+    types.extend_from_slice(visible_arg_types);
+    types
+}
+
+/// Returns an aligned frame size for descriptor entry wrapper spill slots plus footer.
+fn descriptor_entry_frame_size(slot_count: usize) -> usize {
+    align16((slot_count + 1) * 16)
+}
+
+/// Returns the frame offset for a descriptor entry wrapper spill slot.
+fn descriptor_entry_slot_offset(idx: usize) -> usize {
+    (idx + 1) * 16
+}
+
+/// Returns the local/outgoing byte size used for one descriptor wrapper argument.
+fn descriptor_entry_arg_slot_size(ty: &PhpType) -> usize {
+    match ty.codegen_repr() {
+        PhpType::Void | PhpType::Never => 0,
+        _ => 16,
+    }
+}
+
+/// Returns stack offsets for ABI assignments that overflow their target registers.
+fn descriptor_entry_stack_offsets(
+    assignments: &[abi::OutgoingArgAssignment],
+) -> (Vec<Option<usize>>, usize) {
+    let mut offsets = vec![None; assignments.len()];
+    let mut next_offset = 0usize;
+    for (idx, assignment) in assignments.iter().enumerate() {
+        if assignment.in_register() {
+            continue;
+        }
+        offsets[idx] = Some(next_offset);
+        next_offset += descriptor_entry_arg_slot_size(&assignment.ty);
+    }
+    (offsets, next_offset)
+}
+
+/// Converts a descriptor overflow offset into a caller-stack frame offset.
+fn descriptor_entry_caller_stack_offset(emitter: &Emitter, stack_offset: usize) -> usize {
+    let cursor = abi::IncomingArgCursor::for_target(emitter.target, 0);
+    cursor.caller_stack_offset + stack_offset
+}
+
+/// Returns integer scratch registers that cannot overlap live descriptor argument registers.
+fn descriptor_entry_int_spill_pair(emitter: &Emitter) -> (&'static str, &'static str) {
+    let lo_reg = abi::secondary_scratch_reg(emitter);
+    let hi_reg = match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => abi::tertiary_scratch_reg(emitter),
+        crate::codegen::platform::Arch::X86_64 => "r11",
+    };
+    (lo_reg, hi_reg)
+}
+
+/// Stores one incoming descriptor entry argument into its spill slot.
+fn store_descriptor_entry_incoming_arg(
+    emitter: &mut Emitter,
+    ty: &PhpType,
+    assignment: &abi::OutgoingArgAssignment,
+    offset: usize,
+    stack_offset: Option<usize>,
+) {
+    match ty.codegen_repr() {
+        PhpType::Float => {
+            let reg = if assignment.in_register() {
+                abi::float_arg_reg_name(emitter.target, assignment.start_reg)
+            } else {
+                let caller_offset =
+                    descriptor_entry_caller_stack_offset(emitter, stack_offset.expect("stack offset"));
+                let spill_reg = match emitter.target.arch {
+                    crate::codegen::platform::Arch::AArch64 => "d15",
+                    crate::codegen::platform::Arch::X86_64 => "xmm15",
+                };
+                abi::load_from_caller_stack(emitter, spill_reg, caller_offset);
+                spill_reg
+            };
+            abi::store_at_offset(emitter, reg, offset);
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = if assignment.in_register() {
+                (
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg),
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1),
+                )
+            } else {
+                let caller_offset =
+                    descriptor_entry_caller_stack_offset(emitter, stack_offset.expect("stack offset"));
+                let (ptr_spill_reg, len_spill_reg) = descriptor_entry_int_spill_pair(emitter);
+                abi::load_from_caller_stack(emitter, ptr_spill_reg, caller_offset);
+                abi::load_from_caller_stack(emitter, len_spill_reg, caller_offset + 8);
+                (ptr_spill_reg, len_spill_reg)
+            };
+            abi::store_at_offset(emitter, ptr_reg, offset);
+            abi::store_at_offset(emitter, len_reg, offset - 8);
+        }
+        PhpType::TaggedScalar => {
+            let (payload_reg, tag_reg) = if assignment.in_register() {
+                (
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg),
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1),
+                )
+            } else {
+                let caller_offset =
+                    descriptor_entry_caller_stack_offset(emitter, stack_offset.expect("stack offset"));
+                let (payload_spill_reg, tag_spill_reg) = descriptor_entry_int_spill_pair(emitter);
+                abi::load_from_caller_stack(emitter, payload_spill_reg, caller_offset);
+                abi::load_from_caller_stack(emitter, tag_spill_reg, caller_offset + 8);
+                (payload_spill_reg, tag_spill_reg)
+            };
+            abi::store_at_offset(emitter, payload_reg, offset);
+            abi::store_at_offset(emitter, tag_reg, offset - 8);
+        }
+        PhpType::Void | PhpType::Never => {}
+        _ => {
+            let reg = if assignment.in_register() {
+                abi::int_arg_reg_name(emitter.target, assignment.start_reg)
+            } else {
+                let caller_offset =
+                    descriptor_entry_caller_stack_offset(emitter, stack_offset.expect("stack offset"));
+                let spill_reg = abi::secondary_scratch_reg(emitter);
+                abi::load_from_caller_stack(emitter, spill_reg, caller_offset);
+                spill_reg
+            };
+            abi::store_at_offset(emitter, reg, offset);
+        }
+    }
+}
+
+/// Loads one spilled descriptor entry argument into its real method ABI assignment.
+fn load_descriptor_entry_actual_arg(
+    emitter: &mut Emitter,
+    ty: &PhpType,
+    assignment: &abi::OutgoingArgAssignment,
+    offset: usize,
+    stack_offset: Option<usize>,
+) {
+    match ty.codegen_repr() {
+        PhpType::Float => {
+            let reg = if assignment.in_register() {
+                abi::float_arg_reg_name(emitter.target, assignment.start_reg)
+            } else {
+                match emitter.target.arch {
+                    crate::codegen::platform::Arch::AArch64 => "d15",
+                    crate::codegen::platform::Arch::X86_64 => "xmm15",
+                }
+            };
+            abi::load_at_offset(emitter, reg, offset);
+            if let Some(out_offset) = stack_offset {
+                abi::emit_store_to_sp(emitter, reg, out_offset);
+            }
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = if assignment.in_register() {
+                (
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg),
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1),
+                )
+            } else {
+                descriptor_entry_int_spill_pair(emitter)
+            };
+            abi::load_at_offset(emitter, ptr_reg, offset);
+            abi::load_at_offset(emitter, len_reg, offset - 8);
+            if let Some(out_offset) = stack_offset {
+                abi::emit_store_to_sp(emitter, ptr_reg, out_offset);
+                abi::emit_store_to_sp(emitter, len_reg, out_offset + 8);
+            }
+        }
+        PhpType::TaggedScalar => {
+            let (payload_reg, tag_reg) = if assignment.in_register() {
+                (
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg),
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1),
+                )
+            } else {
+                descriptor_entry_int_spill_pair(emitter)
+            };
+            abi::load_at_offset(emitter, payload_reg, offset);
+            abi::load_at_offset(emitter, tag_reg, offset - 8);
+            if let Some(out_offset) = stack_offset {
+                abi::emit_store_to_sp(emitter, payload_reg, out_offset);
+                abi::emit_store_to_sp(emitter, tag_reg, out_offset + 8);
+            }
+        }
+        PhpType::Void | PhpType::Never => {}
+        _ => {
+            let reg = if assignment.in_register() {
+                abi::int_arg_reg_name(emitter.target, assignment.start_reg)
+            } else {
+                abi::secondary_scratch_reg(emitter)
+            };
+            abi::load_at_offset(emitter, reg, offset);
+            if let Some(out_offset) = stack_offset {
+                abi::emit_store_to_sp(emitter, reg, out_offset);
+            }
+        }
+    }
+}
+
+/// Rounds `value` up to a 16-byte multiple.
+fn align16(value: usize) -> usize {
+    (value + 15) & !15
 }
 
 /// Converts the ARM64 boxed eval argument slot into a callable descriptor pointer.
@@ -956,7 +1430,7 @@ fn emit_x86_64_eval_dynamic_callable_descriptor(
 
 /// Looks up a descriptor by the string callable currently saved on the temp stack.
 fn emit_eval_string_callable_descriptor_lookup(
-    module: &Module,
+    _module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
     support: &EvalCallableDescriptorSupport,
@@ -976,19 +1450,20 @@ fn emit_eval_string_callable_descriptor_lookup(
         len_offset: 8,
         call_reg: result_reg,
     };
-    let mut legacy_ctx = super::lower_inst::legacy_context_from_eir_module(module);
-    for case in support
+    for (index, case) in support
         .string_cases
         .iter()
         .chain(support.static_array_cases.iter().map(|case| &case.case))
+        .enumerate()
     {
-        let next_case = legacy_ctx.next_label("eval_callable_next");
+        let next_case = format!("{}_eval_callable_next_{}", label_prefix, index);
+        let matched_label = format!("{}_eval_callable_match_{}", label_prefix, index);
         callable_dispatch::emit_branch_if_callable_case_mismatch(
             &selector,
             case,
             &next_case,
             emitter,
-            &mut legacy_ctx,
+            &matched_label,
             data,
         );
         abi::emit_jump(emitter, &done_label);
@@ -1155,7 +1630,7 @@ fn emit_eval_invokable_object_descriptor_lookup(
 fn emit_branch_if_instance_callable_array_case_mismatch(
     emitter: &mut Emitter,
     data: &mut DataSection,
-    case: &RuntimeInstanceMethodCallableCase,
+    case: &EvalInstanceMethodCallableCase,
     next_label: &str,
 ) {
     emit_branch_if_stack_tag_mismatch(

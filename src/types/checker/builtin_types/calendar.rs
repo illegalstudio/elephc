@@ -42,6 +42,7 @@ fn cal_method(
         is_final: false,
         has_body: true,
         params,
+        param_attributes: Vec::new(),
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,

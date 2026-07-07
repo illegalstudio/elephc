@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use crate::codegen::abi;
-use crate::codegen::context::{
+use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::codegen::data_section::DataSection;

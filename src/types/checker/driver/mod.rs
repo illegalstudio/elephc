@@ -451,6 +451,7 @@ fn trait_method_reflection_sig(method: &ClassMethod) -> FunctionSig {
         defaults,
         return_type: PhpType::Mixed,
         declared_return: method.return_type.is_some(),
+        by_ref_return: method.by_ref_return,
         ref_params,
         declared_params: method
             .params

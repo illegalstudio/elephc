@@ -27,7 +27,11 @@ pub struct BuiltinSignatureMetadata {
 
 /// Returns the compiler's PHP-visible builtin names.
 pub fn php_visible_builtin_names() -> &'static [&'static str] {
-    crate::types::checker::builtins::supported_builtin_function_names()
+    static NAMES: std::sync::OnceLock<&'static [&'static str]> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        let names = crate::types::checker::builtins::supported_builtin_function_names();
+        Box::leak(names.into_boxed_slice())
+    })
 }
 
 /// Returns comparison metadata for one builtin signature, when the compiler tracks it.
