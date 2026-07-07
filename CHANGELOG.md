@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed name resolution inside named-argument values (issue #495): an imported alias or namespace-relative name nested in a named argument's value — such as `Url` in `new self(url: new Url('/'))` — is now rewritten to its canonical fully-qualified form like positional arguments, instead of failing with "Undefined class: Url". The name resolver's expression walk previously had no `NamedArg` arm, so the value expression escaped rewriting entirely.
 - Removed the legacy direct AST → ASM backend completely. EIR is now the only
   codegen implementation path.
 - `in_array()` now honors its optional third `$strict` argument: omitted/false
