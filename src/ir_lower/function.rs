@@ -1038,6 +1038,9 @@ fn emit_default_return_value(ctx: &mut LoweringContext<'_, '_>) -> crate::ir::Va
                     None,
                 )
                 .expect("const_null produces a value");
+            // A fresh null is non-refcounted: there is no producer reference to
+            // release, so this boxes directly rather than via box_value_as_mixed
+            // (issue #484).
             ctx.emit_value(
                 Op::MixedBox,
                 vec![null_value],

@@ -270,14 +270,7 @@ fn lower_null(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
 /// Lowers a nullsafe expression that is known to short-circuit to PHP null.
 fn lower_boxed_null(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
     let null = lower_null(ctx, expr);
-    ctx.emit_value(
-        Op::MixedBox,
-        vec![null.value],
-        None,
-        PhpType::Mixed,
-        Op::MixedBox.default_effects(),
-        Some(expr.span),
-    )
+    ctx.box_value_as_mixed(null, PhpType::Mixed, Some(expr.span))
 }
 
 /// Lowers a binary operation.
@@ -3826,14 +3819,7 @@ fn lower_named_descriptor_invoker_arg_container(
             }
         }
     }
-    ctx.emit_value(
-        Op::MixedBox,
-        vec![hash.value],
-        None,
-        PhpType::Mixed,
-        Op::MixedBox.default_effects(),
-        Some(span),
-    )
+    ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span))
 }
 
 /// Returns the variable name when this literal argument should be passed by reference.
@@ -4729,14 +4715,7 @@ fn build_bound_closure_binding(
         return None;
     }
     let new_this_value = lower_expr(ctx, &new_this);
-    let boxed_this = ctx.emit_value(
-        Op::MixedBox,
-        vec![new_this_value.value],
-        None,
-        PhpType::Mixed,
-        Op::MixedBox.default_effects(),
-        Some(expr.span),
-    );
+    let boxed_this = ctx.box_value_as_mixed(new_this_value, PhpType::Mixed, Some(expr.span));
     signature.return_type = result_type;
     let bound = StaticCallableBinding::Closure {
         name,
@@ -7035,14 +7014,7 @@ fn coerce_variadic_tail_value(
     if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed {
         return value;
     }
-    ctx.emit_value(
-        Op::MixedBox,
-        vec![value.value],
-        None,
-        PhpType::Mixed,
-        Op::MixedBox.default_effects(),
-        Some(span),
-    )
+    ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
 }
 
 /// Returns true when a call argument uses unpacking syntax.
@@ -9778,14 +9750,7 @@ fn lower_untyped_descriptor_invoker_hash_container(
             }
         }
     }
-    ctx.emit_value(
-        Op::MixedBox,
-        vec![hash.value],
-        None,
-        PhpType::Mixed,
-        Op::MixedBox.default_effects(),
-        Some(span),
-    )
+    ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span))
 }
 
 /// Copies an indexed spread source into a descriptor-invoker hash with numeric keys.
@@ -9902,14 +9867,7 @@ fn coerce_descriptor_invoker_mixed_value(
     if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed {
         return value;
     }
-    ctx.emit_value(
-        Op::MixedBox,
-        vec![value.value],
-        None,
-        PhpType::Mixed,
-        Op::MixedBox.default_effects(),
-        Some(span),
-    )
+    ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
 }
 
 /// Returns the result storage type for an indirect callable with no static signature.
@@ -13469,14 +13427,7 @@ fn lower_nullsafe_method_call(
     ctx.builder.position_at_end(null_block);
     let null_value = lower_null(ctx, expr);
     let null_value = if result_type.codegen_repr() == PhpType::Mixed {
-        ctx.emit_value(
-            Op::MixedBox,
-            vec![null_value.value],
-            None,
-            result_type.clone(),
-            Op::MixedBox.default_effects(),
-            Some(expr.span),
-        )
+        ctx.box_value_as_mixed(null_value, result_type.clone(), Some(expr.span))
     } else {
         null_value
     };
@@ -14496,6 +14447,8 @@ fn lower_yield_from_array(
             Some(span),
         )
         .expect("const_null produces a value");
+    // A fresh null is non-refcounted: there is no producer reference to release,
+    // so this boxes directly rather than via box_value_as_mixed (issue #484).
     ctx.emit_value(
         Op::MixedBox,
         vec![null_value],
@@ -14765,14 +14718,7 @@ fn coerce_value_for_temp(
         return value;
     }
     match target_ty {
-        PhpType::Mixed => ctx.emit_value(
-            Op::MixedBox,
-            vec![value.value],
-            None,
-            PhpType::Mixed,
-            Op::MixedBox.default_effects(),
-            Some(span),
-        ),
+        PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
         PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
             coerce_to_int_at_span(ctx, value, Some(span))
         }

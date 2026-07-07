@@ -1170,14 +1170,7 @@ fn coerce_typed_assign_value(
         return value;
     }
     match target_ty {
-        PhpType::Mixed => ctx.emit_value(
-            Op::MixedBox,
-            vec![value.value],
-            None,
-            PhpType::Mixed,
-            Op::MixedBox.default_effects(),
-            Some(span),
-        ),
+        PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
         _ => value,
     }
 }
@@ -1369,14 +1362,7 @@ fn initialize_foreach_mixed_local_if_needed(
     ctx.declare_local(name, PhpType::Mixed);
     ctx.set_local_type(name, PhpType::Mixed);
     let null = emit_null_value(ctx, Some(span));
-    let boxed = ctx.emit_value(
-        Op::MixedBox,
-        vec![null.value],
-        None,
-        PhpType::Mixed,
-        Op::MixedBox.default_effects(),
-        Some(span),
-    );
+    let boxed = ctx.box_value_as_mixed(null, PhpType::Mixed, Some(span));
     ctx.store_foreach_initializer_local_only(name, boxed, PhpType::Mixed, Some(span));
 }
 
@@ -3189,14 +3175,7 @@ fn coerce_to_return_type(
             coerce_return_scalar_source(ctx, value, span, coerce_to_tagged_scalar)
         }
         IrType::Heap(_) if ctx.return_php_type.codegen_repr() == PhpType::Mixed => {
-            ctx.emit_value(
-                Op::MixedBox,
-                vec![value.value],
-                None,
-                ctx.return_php_type.clone(),
-                Op::MixedBox.default_effects(),
-                span,
-            )
+            ctx.box_value_as_mixed(value, ctx.return_php_type.clone(), span)
         }
         IrType::Heap(_) => ctx.emit_value(
             Op::RuntimeCall,

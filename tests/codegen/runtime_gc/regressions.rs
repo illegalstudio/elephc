@@ -2138,3 +2138,55 @@ echo $left . "|" . $right;
         out.stderr
     );
 }
+
+/// Regression for #484: boxing an owned object into a Mixed cell (a `?Class` return
+/// coerces through `mixed_box`) retains the payload in the runtime, so the lowering must
+/// release the producer's own reference. Before the fix `function g(): ?P { return new
+/// P(); }` leaked one `P` per call even though the boxed cell itself was freed on rebind.
+#[test]
+fn test_regression_mixed_boxed_object_return_releases_producer() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class P { public int $v = 7; }
+function g(): ?P { return new P(); }
+$acc = 0;
+for ($n = 0; $n < 50; $n++) {
+    $c = g();
+    $acc += $c->v;
+}
+echo $acc;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "350");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the boxed objects to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for #484 (array flavour): boxing an owned array into a Mixed cell retains
+/// it in the runtime; the producer's reference must be released or the array leaks once
+/// per boxing (e.g. a `?array`-returning function building a fresh literal).
+#[test]
+fn test_regression_mixed_boxed_array_return_releases_producer() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function pair(int $n): ?array { return [$n, $n + 1]; }
+$acc = 0;
+for ($n = 0; $n < 50; $n++) {
+    $p = pair($n);
+    $acc += $p[1];
+}
+echo $acc;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1275");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the boxed arrays to be released, got: {}",
+        out.stderr
+    );
+}

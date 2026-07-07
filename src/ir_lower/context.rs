@@ -2026,6 +2026,33 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
     }
 
+    /// Boxes a value into a Mixed cell and releases the producer's reference when the
+    /// operand is an owning temporary. `__rt_mixed_from_value` retains refcounted payloads
+    /// (objects, arrays, hashes, callables, nested cells) and persists strings, so the
+    /// boxed cell always carries its own reference or copy; keeping the producer's
+    /// reference too leaked one payload per boxing (issue #484). Borrowed operands (e.g.
+    /// a loaded local) are left untouched — the box's retain is their +1.
+    pub(crate) fn box_value_as_mixed(
+        &mut self,
+        value: LoweredValue,
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let release_source = self.value_is_owning_temporary(value);
+        let boxed = self.emit_value(
+            Op::MixedBox,
+            vec![value.value],
+            None,
+            php_type,
+            Op::MixedBox.default_effects(),
+            span,
+        );
+        if release_source {
+            crate::ir_lower::ownership::release_if_owned(self, value, span);
+        }
+        boxed
+    }
+
     /// Emits a value-producing opcode with computed storage and ownership metadata.
     pub(crate) fn emit_value(
         &mut self,
