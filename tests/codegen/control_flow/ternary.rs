@@ -30,6 +30,22 @@ fn test_ternary_int() {
     assert_eq!(out, "7");
 }
 
+/// Regression test for gettype() on a ternary-produced nullable int: the
+/// merge temp is an inline tagged scalar (`null|int`), which the gettype()
+/// emitter previously unboxed as a boxed Mixed cell and crashed.
+#[test]
+fn test_ternary_int_null_gettype() {
+    let out = compile_and_run(
+        r#"<?php
+$v = ($argc == 1) ? 1 : null;
+echo gettype($v), "|";
+$w = ($argc == 99) ? 1 : null;
+echo gettype($w);
+"#,
+    );
+    assert_eq!(out, "integer|NULL");
+}
+
 /// Tests ternary with mixed types when array_pop returns null on empty array.
 #[test]
 fn test_ternary_mixed_types_str_vs_int() {
