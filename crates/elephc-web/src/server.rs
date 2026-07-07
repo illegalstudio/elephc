@@ -38,6 +38,10 @@ Options:
   --max-body-size BYTES  Max request body in bytes; 0 = unlimited (default: 8388608)
   --max-requests N       Recycle a WORKER PROCESS after N requests; 0 = never (default: 0; worker mode: 1000)
   --max-rss MiB          Recycle a worker whose resident set exceeds this many MiB
+  --reload-grace SECS    Max seconds a worker waits for in-flight requests to finish
+                         during a SIGHUP rolling reload before the master force-
+                         recycles it (default 10, 0 = wait forever). Drain always
+                         happens on SIGUSR1; this only bounds the wait
   --max-requests-per-connection N
                          Close a keep-alive CONNECTION after N responses (sends
                          \"Connection: close\" so the client reconnects and the
@@ -95,6 +99,12 @@ pub(crate) const MAX_FAST_DEATHS: u32 = 10;
 /// shut workers down cleanly. Async-signal-safe: the handler only stores to it.
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
+/// Set by the SIGHUP handler so the master supervision loop performs a rolling
+/// zero-downtime worker reload (SIGUSR1 one worker at a time, drain + respawn).
+/// Async-signal-safe: the handler only stores to it. Distinct from `SHUTDOWN` so
+/// the hard-shutdown path (SIGINT/SIGTERM) is byte-for-byte unchanged.
+static RELOAD: AtomicBool = AtomicBool::new(false);
+
 /// Returns whether a shutdown (SIGINT/SIGTERM) has been requested. Read by both
 /// `supervise` (kernel) and `dispatch::master_loop` (master) so the two loops
 /// share one shutdown flag.
@@ -102,14 +112,38 @@ pub(crate) fn shutdown_requested() -> bool {
     SHUTDOWN.load(Ordering::SeqCst)
 }
 
+/// Returns whether a SIGHUP rolling reload has been requested. Read by both
+/// `supervise` (kernel) and `dispatch::master_loop` (master) so the two loops
+/// share one reload flag. Distinct from `shutdown_requested` so the hard-
+/// shutdown path stays unchanged.
+pub(crate) fn reload_requested() -> bool {
+    RELOAD.load(Ordering::SeqCst)
+}
+
+/// Clears the SIGHUP reload flag after a rolling reload completes. Called by both
+/// `supervise` and `dispatch::master_loop` once the rolling restart finishes so a
+/// subsequent SIGHUP can re-arm it.
+pub(crate) fn clear_reload() {
+    RELOAD.store(false, Ordering::SeqCst);
+}
+
 /// Async-signal-safe SIGINT/SIGTERM handler: records the shutdown request only.
 extern "C" fn handle_shutdown_signal(_sig: libc::c_int) {
     SHUTDOWN.store(true, Ordering::SeqCst);
 }
 
-/// Installs `handle_shutdown_signal` for SIGINT and SIGTERM WITHOUT `SA_RESTART`,
-/// so a signal interrupts the master's blocking `waitpid` (returns EINTR) instead
-/// of silently restarting it.
+/// Async-signal-safe SIGHUP handler: records the reload request only. SIGHUP is
+/// installed WITHOUT `SA_RESTART` so a blocking `waitpid` in `supervise` returns
+/// EINTR and the loop re-checks `RELOAD`. Does NOT interact with `SHUTDOWN`.
+extern "C" fn handle_reload_signal(_sig: libc::c_int) {
+    RELOAD.store(true, Ordering::SeqCst);
+}
+
+/// Installs `handle_shutdown_signal` for SIGINT/SIGTERM and `handle_reload_signal`
+/// for SIGHUP, all WITHOUT `SA_RESTART`, so a signal interrupts the master's
+/// blocking `waitpid` (returns EINTR) instead of silently restarting it. SIGHUP
+/// is installed here so the master catches it; workers reset SIGHUP to DFL in
+/// `reset_signal_handlers_to_default` so a forwarded signal never reaches them.
 fn install_signal_handlers() {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
@@ -118,16 +152,24 @@ fn install_signal_handlers() {
         sa.sa_flags = 0; // no SA_RESTART: waitpid returns EINTR on signal
         libc::sigaction(libc::SIGINT, &sa, std::ptr::null_mut());
         libc::sigaction(libc::SIGTERM, &sa, std::ptr::null_mut());
+        // SIGHUP → rolling reload (distinct from the hard-shutdown path above).
+        sa.sa_sigaction = handle_reload_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        libc::sigaction(libc::SIGHUP, &sa, std::ptr::null_mut());
     }
 }
 
-/// Restores the default disposition for SIGINT/SIGTERM (and SIGCHLD). Each forked
-/// worker calls this so it does NOT inherit the master's catch-and-flag handler —
-/// otherwise a worker would catch the master's forwarded SIGTERM and never
-/// terminate, hanging the master's reap. With SIG_DFL a forwarded SIGTERM
+/// Restores the default disposition for SIGINT/SIGTERM (and SIGCHLD/SIGHUP). Each
+/// forked worker calls this so it does NOT inherit the master's catch-and-flag
+/// handlers — otherwise a worker would catch the master's forwarded SIGTERM and
+/// never terminate, hanging the master's reap. With SIG_DFL a forwarded SIGTERM
 /// terminates the worker. SIGCHLD is reset too so a master-mode worker respawned
 /// after `dispatch::install_sigchld_handler` does not inherit the master's SIGCHLD
-/// handler (the worker has no children; a no-op in kernel mode).
+/// handler (the worker has no children; a no-op in kernel mode). SIGHUP is reset
+/// to DFL so a worker does NOT inherit the master's SIGHUP handler (a forwarded
+/// SIGHUP must not reach a worker; the master drives the rolling reload itself via
+/// SIGUSR1). SIGUSR1 is NOT reset here — the worker installs its own SIGUSR1
+/// graceful-drain handler AFTER this reset runs (in `worker::serve` /
+/// `worker_mode::enter_worker_loop`), so the worker's handler is not clobbered.
 fn reset_signal_handlers_to_default() {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
@@ -137,6 +179,7 @@ fn reset_signal_handlers_to_default() {
         libc::sigaction(libc::SIGINT, &sa, std::ptr::null_mut());
         libc::sigaction(libc::SIGTERM, &sa, std::ptr::null_mut());
         libc::sigaction(libc::SIGCHLD, &sa, std::ptr::null_mut());
+        libc::sigaction(libc::SIGHUP, &sa, std::ptr::null_mut());
     }
 }
 
@@ -158,6 +201,12 @@ const DEFAULT_HTTP2_MAX_STREAMS: u32 = 8;
 /// Default `--http2-max-header-size` in BYTES (GAP-B): the HPACK header-bomb clamp.
 /// 64 KiB is generous for JWT+cookies+tracing, far below h2's 16 MiB default.
 const DEFAULT_HTTP2_MAX_HEADER_SIZE: u32 = 64 * 1024;
+
+/// Default `--reload-grace` in seconds: the max a worker waits for in-flight
+/// requests to finish during a SIGHUP-triggered graceful drain before the master
+/// force-recycles it. `10` is on by default — the flag only changes the timeout,
+/// not whether drain happens (SIGUSR1 always drains). `0` = wait forever.
+const DEFAULT_RELOAD_GRACE_SECS: u32 = 10;
 
 /// Parsed server configuration from the binary's own argv.
 struct ServerArgs {
@@ -222,6 +271,12 @@ struct ServerArgs {
     /// a fresh worker — bounding memory growth over time. Applies to all three web
     /// modes. Measurement is gated to at most once per 64 accepts.
     max_rss_mib: u64,
+    /// Graceful-drain timeout in seconds for SIGHUP rolling reload (`--reload-grace`,
+    /// default 10). Bounds how long a SIGUSR1'd worker waits for in-flight requests
+    /// to finish before the master force-recycles it. `0` = wait forever. Drain
+    /// always happens on SIGUSR1 regardless of this value; the flag only sets the
+    /// timeout. Threaded into `WorkerConfig.reload_grace_secs`.
+    reload_grace_secs: u32,
 }
 
 impl ServerArgs {
@@ -258,6 +313,7 @@ impl ServerArgs {
             },
             h2_stream_budget,
             max_rss_bytes: self.max_rss_mib.saturating_mul(1024).saturating_mul(1024),
+            reload_grace_secs: self.reload_grace_secs,
         }
     }
 
@@ -347,6 +403,12 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
     // here and converted to bytes once in `worker_config()` so the per-accept
     // check compares bytes without redoing the unit math.
     let mut max_rss_mib: u64 = 0;
+    // `--reload-grace SECS` bounds the SIGHUP graceful-drain wait per worker
+    // (default 10, 0 = wait forever). Parsed like the other numeric flags; a
+    // missing/non-numeric value is a usage error (exit 2). Always threaded into
+    // `WorkerConfig` because drain always happens on SIGUSR1 — the flag only
+    // sets the timeout, not whether drain occurs.
+    let mut reload_grace_secs: u32 = DEFAULT_RELOAD_GRACE_SECS;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -391,6 +453,21 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
                     None => {
                         eprintln!(
                             "error: --max-rss requires a non-negative integer MiB value (try --help)"
+                        );
+                        return ParsedArgs::Exit(2);
+                    }
+                }
+            }
+            "--reload-grace" => {
+                // `--reload-grace SECS` (default 10, 0 = wait forever). A missing
+                // or non-numeric value is a usage error (exit 2). Drain always
+                // happens on SIGUSR1; this only bounds the wait.
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u32>().ok()) {
+                    Some(v) => reload_grace_secs = v,
+                    None => {
+                        eprintln!(
+                            "error: --reload-grace requires a non-negative integer SECS value (try --help)"
                         );
                         return ParsedArgs::Exit(2);
                     }
@@ -523,6 +600,7 @@ fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> Parse
             http2_max_streams,
             http2_max_header_size,
             max_rss_mib,
+            reload_grace_secs,
         }),
         None => {
             eprintln!("error: --web binary requires --listen host:port (try --help)");
@@ -705,6 +783,73 @@ fn supervise(
     loop {
         if SHUTDOWN.load(Ordering::SeqCst) {
             break;
+        }
+        // SIGHUP rolling reload: SIGUSR1 one worker at a time, wait for it to
+        // drain in-flight requests and exit cleanly, respawn a fresh worker, then
+        // move to the next. At most one worker is down at any moment (N-1 always
+        // serve). Zero-downtime complement to the hard SIGINT/SIGTERM shutdown.
+        if RELOAD.load(Ordering::SeqCst) {
+            let snapshot: Vec<libc::pid_t> = children.iter().map(|(p, _, _)| *p).collect();
+            let mut replaced = 0usize;
+            for pid in &snapshot {
+                if SHUTDOWN.load(Ordering::SeqCst) {
+                    break;
+                }
+                // Graceful drain signal → the worker stops accepting, drains
+                // in-flight, exits 0. Bound the wait by reload_grace_secs + a
+                // small buffer; an idle worker parked in tokio accept may not
+                // wake on the signal (tokio's park is EINTR-safe and retries),
+                // so the master force-recycles it with SIGTERM on timeout.
+                unsafe { libc::kill(*pid, libc::SIGUSR1); }
+                let deadline = Instant::now()
+                    + Duration::from_secs(cfg.reload_grace_secs as u64)
+                    + Duration::from_secs(5);
+                let exited = loop {
+                    if SHUTDOWN.load(Ordering::SeqCst) {
+                        break true; // honor shutdown mid-roll
+                    }
+                    let mut st = 0;
+                    // SAFETY: WNOHANG reaps *pid without blocking; 0 = still alive.
+                    let r = unsafe { libc::waitpid(*pid, &mut st, libc::WNOHANG) };
+                    if r == *pid {
+                        break true;
+                    }
+                    if Instant::now() >= deadline {
+                        break false;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                };
+                if !exited {
+                    // Force-recycle: SIGTERM the straggler and reap it. This is
+                    // the last-resort path for an idle worker that never woke to
+                    // drain (no in-flight requests to cut anyway).
+                    unsafe { libc::kill(*pid, libc::SIGTERM); }
+                    let mut st = 0;
+                    // SAFETY: blocking reap of the just-signaled worker.
+                    unsafe { libc::waitpid(*pid, &mut st, 0); }
+                }
+                // Close its boot-pipe read fd (match the reap path) + remove it.
+                if let Some(pos) = children.iter().position(|(c, _, _)| c == pid) {
+                    if let Some(rd) = children[pos].1 {
+                        // SAFETY: the read end is owned by the master; close(2) is safe.
+                        unsafe { libc::close(rd); }
+                    }
+                    children.remove(pos);
+                }
+                // Respawn a fresh worker in its place.
+                let (new_pid, new_rd, _) = spawn_worker(listen, kind.clone(), cfg, false, &[]);
+                children.push((new_pid, new_rd, Instant::now()));
+                replaced += 1;
+                // Brief warm-up so the new worker is accepting before the next is
+                // SIGUSR1'd, keeping the pool at N-1 minimum.
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            RELOAD.store(false, Ordering::SeqCst);
+            eprintln!(
+                "elephc-web: SIGHUP rolling reload complete ({} workers replaced)",
+                replaced
+            );
+            continue;
         }
         let mut status = 0;
         let pid = unsafe { libc::waitpid(-1, &mut status, 0) };

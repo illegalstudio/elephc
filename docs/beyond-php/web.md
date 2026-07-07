@@ -40,6 +40,7 @@ The produced binary accepts these arguments at runtime:
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes; `0` means unlimited. A request whose body exceeds the cap gets `413 Payload Too Large` and the PHP handler never runs. |
 | `--max-requests N` | No | `0` (never) | Recycle each **worker process** after serving N requests (the master respawns it), bounding memory growth in long-running servers. Do not confuse with `--max-requests-per-connection`. |
 | `--max-rss MiB` | No | `0` (off) | Recycle a worker whose resident set size exceeds this many MiB; the worker self-measures RSS and exits cleanly so the master respawns a fresh worker (bounding memory growth over time, complementing `--max-requests`). `0` = off (the default, byte-for-byte the original behavior). Measurement is gated to at most once per 64 accepts so it never lands on every hot-path iteration. Same in all three web modes. |
+| `--reload-grace SECS` | No | `10` | Max seconds a worker waits for in-flight requests to finish during a SIGHUP rolling reload before the master force-recycles it; `0` = wait forever. Drain always happens on SIGUSR1 regardless of this value — the flag only bounds the wait. Same in all three web modes. See [SIGHUP rolling reload](#sighup-rolling-reload). |
 | `--max-requests-per-connection N` | No | `0` (opt-in) | Close a keep-alive **connection** after N responses by sending `Connection: close`, so the client reconnects and `SO_REUSEPORT` re-picks a worker (see [Keep-alive and load distribution](#keep-alive-and-load-distribution-across-workers)); `0` = unlimited (off by default; no behavior change from before this flag existed). Same default in all three web modes. |
 | `--idle-timeout SECS` | No | `0` (opt-in) | Close a keep-alive connection that stays idle (no new request) for more than SECS seconds, so the client reconnects; `0` = never (off by default; no behavior change from before this flag existed). Same default in all three web modes. |
 | `--access-log` | No | off | Log one line per request to stderr (`<ip> "<method> <path>" <status> <ms>`). |
@@ -620,6 +621,17 @@ blocking PHP `handler()` off the I/O thread without letting handlers overlap.
 
 ## Robustness
 
+- **SIGHUP rolling reload** — sending `SIGHUP` to the master process triggers a
+  zero-downtime rolling worker reload: the master sends `SIGUSR1` to one worker at
+  a time, that worker stops accepting new connections, drains its in-flight
+  requests, exits cleanly (`0`), and the master respawns a fresh worker in its
+  place before moving to the next. At most one worker is down at any moment, so
+  N-1 workers always serve. `--reload-grace SECS` (default 10) bounds how long a
+  worker waits for in-flight requests to finish before the master force-recycles
+  it; `0` = wait forever. Drain always happens on `SIGUSR1` regardless of the
+  flag — the flag only sets the timeout. Works in all three web modes and both
+  dispatch backends (`kernel` and `master`). `SIGINT`/`SIGTERM` stay hard-kill
+  (unchanged) — see [Graceful shutdown](#graceful-shutdown) below.
 - **Graceful shutdown** — the master shuts down cleanly on `SIGINT` (Ctrl-C) and
   `SIGTERM`: it forwards termination to the workers, reaps them, and exits `0`. An
   in-flight request may be dropped when shutdown arrives.

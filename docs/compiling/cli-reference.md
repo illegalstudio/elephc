@@ -57,6 +57,7 @@ arguments (not elephc compiler flags):
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes (`0` = unlimited); oversized bodies get `413`. |
 | `--max-requests N` | No | `0` (classic) / `1000` (worker) | Recycle each worker process after N requests (bounds memory growth). Worker mode defaults to 1000. |
 | `--max-rss MiB` | No | `0` (off) | Recycle a worker whose resident set exceeds this many MiB; `0` = off (the default). Measurement is gated to at most once per 64 accepts. Same in all three web modes. |
+| `--reload-grace SECS` | No | `10` | Max seconds a worker waits for in-flight requests to finish during a SIGHUP rolling reload before the master force-recycles it; `0` = wait forever. Drain always happens on SIGUSR1; the flag only bounds the wait. Same in all three web modes. See [SIGHUP rolling reload](../beyond-php/web.md#sighup-rolling-reload). |
 | `--max-requests-per-connection N` | No | `0` (opt-in) | Close a keep-alive connection after N responses (sends `Connection: close`) so the client reconnects and the kernel re-picks a worker; `0` = unlimited (off by default; no behavior change unless set). Same default in all three web modes. |
 | `--idle-timeout SECS` | No | `0` (opt-in) | Close a keep-alive connection idle (no new request) for more than SECS seconds; `0` = never (off by default; no behavior change unless set). Same default in all three web modes. |
 | `--worker-gc-interval N` | No | `0` (classic) / `1` (worker) | Run the cycle collector every N requests (`0` = never, `1` = every request). Worker-mode only. |

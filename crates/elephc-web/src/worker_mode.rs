@@ -51,7 +51,7 @@ use std::convert::Infallible;
 use std::ffi::{c_char, CString};
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use http_body_util::{BodyExt, Full, Limited};
@@ -65,7 +65,8 @@ use crate::offload::{self, RequestJob, ResponseParts};
 use crate::request_state;
 use crate::worker::{
     conn_builder, filter_h2_connection_headers, drive_connection, reuseport_listener,
-    should_close_connection, ConnSource, NextConn, WorkerConfig,
+    should_close_connection, ActiveConnGuard, ConnSource, NextConn, WorkerConfig,
+    wait_for_drain_forever,
 };
 
 // Runtime cycle collector provided by the compiled program's runtime. Called
@@ -149,6 +150,15 @@ static mut WORKER_CONFIG: Option<WorkerConfig> = None;
 /// and by the `--worker-gc-interval` cycle-collector cadence. Process-local
 /// (each forked worker has its own copy starting at 0).
 static SERVED: AtomicUsize = AtomicUsize::new(0);
+
+/// Set by the worker's SIGUSR1 graceful-drain handler so the accept loop stops
+/// accepting and the worker drains in-flight connections before exiting cleanly
+/// (exit 0). The master sends SIGUSR1 during a SIGHUP rolling reload. Distinct
+/// from SIGTERM (which stays DFL = hard kill, unchanged). Process-local (each
+/// forked worker has its own copy). Mirrors `worker::WORKER_DRAINING` — each
+/// module owns its own static so the active module's accept loop reads the right
+/// one. Async-signal-safe: the handler only stores.
+static WORKER_DRAINING: AtomicBool = AtomicBool::new(false);
 
 /// Per-request handler time limit in seconds (`0` = none), read by `run_handler`
 /// to arm a `SIGALRM` watchdog around the blocking handler call. Mirrors
@@ -265,6 +275,31 @@ fn install_exec_timeout_handler() {
     }
 }
 
+/// Async-signal-safe SIGUSR1 graceful-drain handler: records that this worker
+/// should stop accepting and drain in-flight connections before exiting. Only
+/// stores to this module's `WORKER_DRAINING`; the accept loop reads it at the top
+/// of each iteration. Mirrors `worker::handle_drain_signal` — each module owns its
+/// own static so the active module's accept loop reads the right one. Only one of
+/// the two handlers is installed per worker (a worker is either classic or worker
+/// mode, never both).
+extern "C" fn handle_drain_signal(_sig: libc::c_int) {
+    WORKER_DRAINING.store(true, Ordering::SeqCst);
+}
+
+/// Installs the SIGUSR1 graceful-drain handler in this worker. Called at the top
+/// of `enter_worker_loop`, AFTER `server::reset_signal_handlers_to_default` has
+/// run in the forked child (so the handler is not clobbered by the reset). The
+/// worker's SIGTERM stays DFL (hard kill, unchanged) — only SIGUSR1 is caught.
+fn install_drain_signal_handler() {
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = handle_drain_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        libc::sigemptyset(&mut sa.sa_mask);
+        sa.sa_flags = 0; // no SA_RESTART
+        libc::sigaction(libc::SIGUSR1, &sa, std::ptr::null_mut());
+    }
+}
+
 /// Entry point of the worker loop, reached from `elephc_web_worker_register`.
 /// Consumes the worker config, builds the SO_REUSEPORT listener and a tokio
 /// current-thread runtime + LocalSet, then loops: accept → parse → set_request
@@ -289,7 +324,15 @@ pub(crate) fn enter_worker_loop() -> ! {
         h2,
         h2_stream_budget,
         max_rss_bytes,
+        reload_grace_secs,
     } = cfg;
+    // Install the SIGUSR1 graceful-drain handler. This runs AFTER
+    // `server::reset_signal_handlers_to_default` (called in the forked child
+    // before boot), so the handler is not clobbered. SIGTERM stays DFL (hard
+    // kill, unchanged) — only SIGUSR1 is caught, setting this module's
+    // `WORKER_DRAINING` so the accept loop breaks and the worker drains in-flight
+    // before exiting 0 (the master respawns a fresh worker on SIGHUP).
+    install_drain_signal_handler();
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
         install_exec_timeout_handler();
@@ -376,7 +419,18 @@ pub(crate) fn enter_worker_loop() -> ! {
         let http = conn_builder(h2);
         // GAP-A: per-connection h2 stream budget, enforced via a goaway cell.
         let h2_budget_on = h2.http2 && h2_stream_budget > 0;
+        // Active-connection counter for graceful drain (mirrors `worker::serve`):
+        // incremented before each connection task starts and decremented by
+        // `ActiveConnGuard::drop` when it ends. Allocated unconditionally so the
+        // drain wait can observe in-flight tasks regardless of `--reload-grace`.
+        let active_conns: Rc<AtomicUsize> = Rc::new(AtomicUsize::new(0));
         loop {
+            // SIGHUP rolling reload graceful drain: SIGUSR1 set WORKER_DRAINING;
+            // stop accepting new connections so the worker can drain in-flight
+            // ones and exit 0 (the master respawns a fresh worker).
+            if WORKER_DRAINING.load(Ordering::Relaxed) {
+                break;
+            }
             // --max-requests recycling. In master mode this runs BEFORE `next()`
             // sends READY (cap-before-READY), so a capped worker exits without being
             // handed one more connection.
@@ -644,16 +698,49 @@ pub(crate) fn enter_worker_loop() -> ! {
             // time and only sends the next READY once this connection's
             // `serve_connection` completes.
             if conn_source.is_serial() {
+                active_conns.fetch_add(1, Ordering::Relaxed);
+                let _g = ActiveConnGuard::new(active_conns.clone());
                 drive_connection(
                     stream, peer, acceptor, http, service, watchdog_activity, idle,
                     goaway_for_driver, access_log,
                 )
                 .await;
             } else {
-                tokio::task::spawn_local(drive_connection(
-                    stream, peer, acceptor, http, service, watchdog_activity, idle,
-                    goaway_for_driver, access_log,
-                ));
+                active_conns.fetch_add(1, Ordering::Relaxed);
+                let active = active_conns.clone();
+                tokio::task::spawn_local(async move {
+                    let _g = ActiveConnGuard::new(active);
+                    drive_connection(
+                        stream, peer, acceptor, http, service, watchdog_activity, idle,
+                        goaway_for_driver, access_log,
+                    )
+                    .await;
+                });
+            }
+        }
+        // SIGHUP graceful drain: the accept loop broke because SIGUSR1 set
+        // WORKER_DRAINING. Wait for in-flight connection tasks to finish before
+        // letting the runtime drop (which would cut them). Bounded by
+        // `--reload-grace` (0 = wait forever). On timeout, log and force-exit
+        // (cutting in-flight — same as a hard recycle, last resort). The non-
+        // draining break paths (max_requests / max_rss recycle, master EOF) skip
+        // this block entirely — their `WORKER_DRAINING` is false. Mirrors
+        // `worker::serve`.
+        if WORKER_DRAINING.load(Ordering::Relaxed) {
+            let grace = Duration::from_secs(reload_grace_secs as u64);
+            let drained = if reload_grace_secs == 0 {
+                wait_for_drain_forever(active_conns.clone()).await;
+                true
+            } else {
+                tokio::time::timeout(grace, wait_for_drain_forever(active_conns.clone()))
+                    .await
+                    .is_ok()
+            };
+            if !drained {
+                eprintln!(
+                    "elephc-web: worker grace drain timed out ({} in-flight), force-exiting",
+                    active_conns.load(Ordering::Relaxed)
+                );
             }
         }
     });
@@ -788,6 +875,7 @@ mod tests {
             },
             h2_stream_budget: 0,
             max_rss_bytes: 0,
+            reload_grace_secs: 10,
         };
         set_worker_config(cfg);
         let peeked = peek_worker_config();

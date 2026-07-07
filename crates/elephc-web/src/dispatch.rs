@@ -33,7 +33,7 @@ use std::mem::size_of;
 use std::os::fd::{AsRawFd, RawFd};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::server::{classify_crash, spawn_worker, WorkerKind, MAX_FAST_DEATHS};
 use crate::worker::WorkerConfig;
@@ -710,6 +710,108 @@ pub(crate) fn master_loop(
     loop {
         if crate::server::shutdown_requested() {
             break;
+        }
+        // SIGHUP rolling reload (mirrors `server::supervise`): SIGUSR1 one worker
+        // at a time, wait for `reap_and_respawn` to reap+respawn it (the worker
+        // drains in-flight then exits 0), then SIGUSR1 the next. At most one
+        // worker is down at any moment (N-1 always serve). Bound the wait by
+        // reload_grace_secs + a buffer; an idle worker parked in tokio accept may
+        // not wake on SIGUSR1 (tokio's park is EINTR-safe and retries), so the
+        // master force-recycles it with SIGTERM on timeout.
+        if crate::server::reload_requested() {
+            // Snapshot the live workers (slot index + pid) so the iteration is
+            // stable across in-place respawns.
+            let snapshot: Vec<(usize, libc::pid_t)> = slots
+                .iter()
+                .enumerate()
+                .filter_map(|(i, w)| w.as_ref().map(|x| (i, x.pid)))
+                .collect();
+            let mut replaced = 0usize;
+            for (slot, pid) in snapshot {
+                if crate::server::shutdown_requested() {
+                    break;
+                }
+                // Graceful drain signal → the worker stops accepting, drains, exits 0.
+                // SAFETY: signaling a tracked worker pid.
+                unsafe { libc::kill(pid, libc::SIGUSR1); }
+                let deadline = Instant::now()
+                    + Duration::from_secs(cfg.reload_grace_secs as u64)
+                    + Duration::from_secs(5);
+                let mut reaped = false;
+                while Instant::now() < deadline {
+                    if crate::server::shutdown_requested() {
+                        reaped = true; // honor shutdown mid-roll
+                        break;
+                    }
+                    // Try a nonblocking reap; reap_and_respawn reaps ALL zombies.
+                    let mut st = 0;
+                    // SAFETY: WNOHANG reap sweep; 0 = nothing to reap right now.
+                    let r = unsafe { libc::waitpid(-1, &mut st, libc::WNOHANG) };
+                    if r > 0 {
+                        MASTER_SIGCHLD.store(true, Ordering::SeqCst);
+                    }
+                    if MASTER_SIGCHLD.swap(false, Ordering::SeqCst) {
+                        reap_and_respawn(
+                            &mut slots,
+                            &mut ready,
+                            &backlog,
+                            listen,
+                            &kind,
+                            cfg,
+                            listener_fd,
+                            &mut fast_deaths,
+                            &mut give_up,
+                        );
+                        if give_up {
+                            break;
+                        }
+                    }
+                    // Has this slot been respawned (new pid)? Then the draining
+                    // worker was reaped + replaced.
+                    let now_pid = slots[slot].as_ref().map(|w| w.pid);
+                    if now_pid.is_some() && now_pid != Some(pid) {
+                        reaped = true;
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                if !reaped {
+                    // Force-recycle: SIGTERM the straggler and let the reap sweep
+                    // clean it up + respawn it (last resort for an idle worker).
+                    // SAFETY: signaling a tracked worker pid.
+                    unsafe { libc::kill(pid, libc::SIGTERM); }
+                    let mut st = 0;
+                    // SAFETY: reap the just-signaled worker (blocking).
+                    unsafe { libc::waitpid(pid, &mut st, 0); }
+                    // Reap+respawn it in place.
+                    MASTER_SIGCHLD.store(true, Ordering::SeqCst);
+                    if MASTER_SIGCHLD.swap(false, Ordering::SeqCst) {
+                        reap_and_respawn(
+                            &mut slots,
+                            &mut ready,
+                            &backlog,
+                            listen,
+                            &kind,
+                            cfg,
+                            listener_fd,
+                            &mut fast_deaths,
+                            &mut give_up,
+                        );
+                    }
+                }
+                replaced += 1;
+                // Brief warm-up so the new worker is accepting before the next.
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            crate::server::clear_reload();
+            eprintln!(
+                "elephc-web: SIGHUP rolling reload complete ({} workers replaced)",
+                replaced
+            );
+            if give_up {
+                break;
+            }
+            continue;
         }
         if MASTER_SIGCHLD.swap(false, Ordering::SeqCst) {
             reap_and_respawn(
