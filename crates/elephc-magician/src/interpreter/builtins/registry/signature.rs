@@ -79,7 +79,7 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "header" => optional(params, 1),
         "http_response_code" => optional(params, 0),
         "is_callable" => optional_by_ref(params, 1, &["callable_name"]),
-        "php_uname" | "readline" | "umask" | "exit" | "die" => optional(params, 0),
+        "php_uname" | "readline" | "exit" | "die" => optional(params, 0),
 
         "explode" => optional(params, 2),
         "implode" => optional(params, 1),
@@ -109,11 +109,9 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "print_r" => optional(params, 1),
         "var_dump" => variadic(params, &[]),
 
-        "touch" => optional(params, 1),
         "fopen" | "fseek" | "fputcsv" => optional(params, 2),
         "flock" => optional_by_ref(params, 2, &["would_block"]),
         "fgetcsv" => optional(params, 1),
-        "clearstatcache" => optional(params, 0),
         "stream_get_contents" => optional(params, 1),
         "stream_copy_to_stream" => optional(params, 2),
         "stream_socket_accept" => optional_by_ref(params, 1, &["peer_name"]),
@@ -168,7 +166,7 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("is_callable", 1) => Bool(false),
         ("is_callable", 2) => Null,
         ("php_uname", 0) => String("a"),
-        ("readline" | "umask", 0) => Null,
+        ("readline", 0) => Null,
         ("exit" | "die", 0) => Int(0),
 
         ("explode", 2) => Int(i64::MAX),
@@ -187,7 +185,6 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
 
         ("print_r", 1) => Bool(false),
 
-        ("touch", 1 | 2) => Null,
         ("fopen", 2) => Bool(false),
         ("fopen", 3) => Null,
         ("flock", 2) => Null,
@@ -196,8 +193,6 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("fgetcsv", 2) => String(","),
         ("fputcsv", 2) => String(","),
         ("fputcsv", 3) => String("\""),
-        ("clearstatcache", 0) => Bool(false),
-        ("clearstatcache", 1) => String(""),
         ("stream_get_contents", 1) => Null,
         ("stream_get_contents", 2) => Int(-1),
         ("stream_copy_to_stream", 2) => Null,

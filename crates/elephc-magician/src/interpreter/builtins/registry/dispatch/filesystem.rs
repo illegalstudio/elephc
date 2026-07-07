@@ -19,41 +19,11 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
-        "chdir" | "mkdir" | "rmdir" => {
-            let [path] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_unary_path_bool_result(name, *path, context, values)?
-        }
-        "chmod" => {
-            let [filename, permissions] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_chmod_result(*filename, *permissions, context, values)?
-        }
-        "chown" | "chgrp" | "lchown" | "lchgrp" => {
-            let [filename, principal] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_chown_like_result(name, *filename, *principal, context, values)?
-        }
         "closedir" | "readdir" | "rewinddir" => {
             let [dir_handle] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_unary_directory_result(name, *dir_handle, context, values)?
-        }
-        "clearstatcache" => {
-            if evaluated_args.len() > 2 {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            values.null()?
-        }
-        "copy" | "link" | "rename" | "symlink" => {
-            let [from, to] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_binary_path_bool_result(name, *from, *to, context, values)?
         }
         "fclose"
         | "fgetc"
@@ -173,12 +143,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             }
             let prompt = evaluated_args.first().copied();
             eval_readline_result(prompt, values)?
-        }
-        "scandir" => {
-            let [directory] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_scandir_result(*directory, values)?
         }
         "opendir" => {
             let [directory] = evaluated_args else {
@@ -450,12 +414,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             )?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
-        "tempnam" => {
-            let [directory, prefix] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_tempnam_result(*directory, *prefix, values)?
-        }
         "tmpfile" => {
             if !evaluated_args.is_empty() {
                 return Err(EvalStatus::RuntimeFatal);
@@ -467,27 +425,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_vfprintf_result(*stream, *format, *array, context, values)?
-        }
-        "touch" => match evaluated_args {
-            [filename] => eval_touch_result(*filename, None, None, context, values)?,
-            [filename, mtime] => {
-                eval_touch_result(*filename, Some(*mtime), None, context, values)?
-            }
-            [filename, mtime, atime] => {
-                eval_touch_result(*filename, Some(*mtime), Some(*atime), context, values)?
-            }
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "umask" => match evaluated_args {
-            [] => eval_umask_result(None, values)?,
-            [mask] => eval_umask_result(Some(*mask), values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "unlink" => {
-            let [filename] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_unlink_result(*filename, context, values)?
         }
         _ => return Ok(None),
     };

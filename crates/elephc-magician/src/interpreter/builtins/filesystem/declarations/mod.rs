@@ -6,13 +6,19 @@
 //! - `crate::interpreter::builtins::hooks` for migrated filesystem dispatch.
 //!
 //! Key details:
-//! - This covers simple path/query helpers; stream, stat, mutating, and
-//!   by-reference filesystem calls stay on the legacy path.
+//! - This covers simple path/query/content and non-by-ref mutation helpers;
+//!   stream and by-reference filesystem calls stay on the legacy path.
 
 use super::super::super::*;
 use super::*;
 
 mod basename;
+mod chdir;
+mod chgrp;
+mod chmod;
+mod chown;
+mod clearstatcache;
+mod copy;
 mod dirname;
 mod disk_free_space;
 mod disk_total_space;
@@ -39,17 +45,29 @@ mod is_link;
 mod is_readable;
 mod is_writable;
 mod is_writeable;
+mod lchgrp;
+mod lchown;
+mod link;
 mod linkinfo;
 mod lstat;
+mod mkdir;
 mod pathinfo;
 mod readfile;
 mod readlink;
 mod realpath;
 mod realpath_cache_get;
 mod realpath_cache_size;
+mod rename;
+mod rmdir;
+mod scandir;
 mod stat;
 mod stream_resolve_include_path;
+mod symlink;
 mod sys_get_temp_dir;
+mod tempnam;
+mod touch;
+mod umask;
+mod unlink;
 
 /// Dispatches direct expression-level calls for declaratively migrated filesystem builtins.
 pub(in crate::interpreter) fn eval_builtin_filesystem_call(
@@ -61,6 +79,17 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "basename" => eval_builtin_basename(args, context, scope, values),
+        "chdir" | "mkdir" | "rmdir" => {
+            eval_builtin_unary_path_bool(name, args, context, scope, values)
+        }
+        "chmod" => eval_builtin_chmod(args, context, scope, values),
+        "chown" | "chgrp" | "lchown" | "lchgrp" => {
+            eval_builtin_chown_like(name, args, context, scope, values)
+        }
+        "clearstatcache" => eval_builtin_clearstatcache(args, context, scope, values),
+        "copy" | "link" | "rename" | "symlink" => {
+            eval_builtin_binary_path_bool(name, args, context, scope, values)
+        }
         "dirname" => eval_builtin_dirname(args, context, scope, values),
         "disk_free_space" | "disk_total_space" => {
             eval_builtin_disk_space(name, args, context, scope, values)
@@ -86,11 +115,16 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call(
         "realpath" => eval_builtin_realpath(args, context, scope, values),
         "realpath_cache_get" => eval_builtin_realpath_cache_get(args, values),
         "realpath_cache_size" => eval_builtin_realpath_cache_size(args, values),
+        "scandir" => eval_builtin_scandir(args, context, scope, values),
         "stat" | "lstat" => eval_builtin_stat_array(name, args, context, scope, values),
         "stream_resolve_include_path" => {
             eval_builtin_stream_resolve_include_path(args, context, scope, values)
         }
         "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
+        "tempnam" => eval_builtin_tempnam(args, context, scope, values),
+        "touch" => eval_builtin_touch(args, context, scope, values),
+        "umask" => eval_builtin_umask(args, context, scope, values),
+        "unlink" => eval_builtin_unlink(args, context, scope, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -106,6 +140,31 @@ pub(in crate::interpreter) fn eval_filesystem_values_result(
         "basename" => match evaluated_args {
             [path] => eval_basename_result(*path, None, values),
             [path, suffix] => eval_basename_result(*path, Some(*suffix), values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "chdir" | "mkdir" | "rmdir" => match evaluated_args {
+            [path] => eval_unary_path_bool_result(name, *path, context, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "chmod" => match evaluated_args {
+            [filename, permissions] => eval_chmod_result(*filename, *permissions, context, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "chown" | "chgrp" | "lchown" | "lchgrp" => match evaluated_args {
+            [filename, principal] => {
+                eval_chown_like_result(name, *filename, *principal, context, values)
+            }
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "clearstatcache" => {
+            if evaluated_args.len() > 2 {
+                Err(EvalStatus::RuntimeFatal)
+            } else {
+                values.null()
+            }
+        }
+        "copy" | "link" | "rename" | "symlink" => match evaluated_args {
+            [from, to] => eval_binary_path_bool_result(name, *from, *to, context, values),
             _ => Err(EvalStatus::RuntimeFatal),
         },
         "dirname" => match evaluated_args {
@@ -191,6 +250,10 @@ pub(in crate::interpreter) fn eval_filesystem_values_result(
             [] => eval_realpath_cache_size_result(values),
             _ => Err(EvalStatus::RuntimeFatal),
         },
+        "scandir" => match evaluated_args {
+            [directory] => eval_scandir_result(*directory, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
         "stat" | "lstat" => match evaluated_args {
             [filename] => eval_stat_array_result(name, *filename, context, values),
             _ => Err(EvalStatus::RuntimeFatal),
@@ -201,6 +264,27 @@ pub(in crate::interpreter) fn eval_filesystem_values_result(
         },
         "sys_get_temp_dir" => match evaluated_args {
             [] => eval_sys_get_temp_dir_result(values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "tempnam" => match evaluated_args {
+            [directory, prefix] => eval_tempnam_result(*directory, *prefix, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "touch" => match evaluated_args {
+            [filename] => eval_touch_result(*filename, None, None, context, values),
+            [filename, mtime] => eval_touch_result(*filename, Some(*mtime), None, context, values),
+            [filename, mtime, atime] => {
+                eval_touch_result(*filename, Some(*mtime), Some(*atime), context, values)
+            }
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "umask" => match evaluated_args {
+            [] => eval_umask_result(None, values),
+            [mask] => eval_umask_result(Some(*mask), values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "unlink" => match evaluated_args {
+            [filename] => eval_unlink_result(*filename, context, values),
             _ => Err(EvalStatus::RuntimeFatal),
         },
         _ => Err(EvalStatus::RuntimeFatal),

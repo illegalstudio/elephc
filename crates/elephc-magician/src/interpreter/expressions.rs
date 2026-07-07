@@ -1548,11 +1548,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_array_key_set(name, args, context, scope, values)
         }
         "array_merge" => eval_builtin_array_merge(args, context, scope, values),
-        "chdir" | "mkdir" | "rmdir" => {
-            eval_builtin_unary_path_bool(name, args, context, scope, values)
-        }
-        "chmod" => eval_builtin_chmod(args, context, scope, values),
-        "clearstatcache" => eval_builtin_clearstatcache(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
         "class_alias" => eval_builtin_class_alias(args, context, scope, values),
@@ -1579,9 +1574,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "is_a" | "is_subclass_of" => eval_builtin_is_a_relation(name, args, context, scope, values),
         "closedir" | "readdir" | "rewinddir" => {
             eval_builtin_unary_directory(name, args, context, scope, values)
-        }
-        "copy" | "link" | "rename" | "symlink" => {
-            eval_builtin_binary_path_bool(name, args, context, scope, values)
         }
         "define" => eval_builtin_define(args, context, scope, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
@@ -1641,9 +1633,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_hash_one_shot(name, args, context, scope, values)
         }
         "header" => eval_builtin_header(args, context, scope, values),
-        "chown" | "chgrp" | "lchown" | "lchgrp" => {
-            eval_builtin_chown_like(name, args, context, scope, values)
-        }
         "hash_algos" => eval_builtin_hash_algos(args, values),
         "hash_copy" => eval_builtin_hash_copy(args, context, scope, values),
         "hash_final" => eval_builtin_hash_final(args, context, scope, values),
@@ -1673,7 +1662,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "rand" | "mt_rand" => eval_builtin_rand(args, context, scope, values),
         "random_int" => eval_builtin_random_int(args, context, scope, values),
         "readline" => eval_builtin_readline(args, context, scope, values),
-        "scandir" => eval_builtin_scandir(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
         "spl_autoload_register" | "spl_autoload_unregister" => {
             eval_builtin_spl_autoload_bool(name, args, context, scope, values)
@@ -1693,8 +1681,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         }
         "sscanf" => eval_builtin_sscanf(args, context, scope, values),
         "sprintf" | "printf" => eval_builtin_sprintf_like(name, args, context, scope, values),
-        "tempnam" => eval_builtin_tempnam(args, context, scope, values),
-        "touch" => eval_builtin_touch(args, context, scope, values),
         "tmpfile" => eval_builtin_tmpfile(args, context, values),
         "stream_is_local" | "stream_supports_lock" => {
             eval_builtin_stream_bool_predicate(name, args, context, scope, values)
@@ -1765,10 +1751,8 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_stream_set_buffer_like(name, args, context, scope, values)
         }
         "stream_set_timeout" => eval_builtin_stream_set_timeout(args, context, scope, values),
-        "unlink" => eval_builtin_unlink(args, context, scope, values),
         "long2ip" => eval_builtin_long2ip(args, context, scope, values),
         "unset" => eval_builtin_unset(args, context, scope, values),
-        "umask" => eval_builtin_umask(args, context, scope, values),
         "var_dump" => eval_builtin_var_dump(args, context, scope, values),
         "vfprintf" => eval_builtin_vfprintf(args, context, scope, values),
         "vsprintf" | "vprintf" => eval_builtin_vsprintf_like(name, args, context, scope, values),

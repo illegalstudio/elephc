@@ -8222,6 +8222,10 @@ eval('file_put_contents("eval-mod.txt", "x");
 echo chmod(filename: "eval-mod.txt", permissions: 384) ? "chmod" : "bad"; echo ":";
 echo (fileperms("eval-mod.txt") & 511) === 384 ? "mode" : "bad"; echo ":";
 echo chmod("eval-missing-mod.txt", 384) ? "bad" : "chmod-false"; echo ":";
+echo chown("eval-missing-owner.txt", 1000) ? "bad" : "chown-false"; echo ":";
+echo chgrp("eval-missing-group.txt", 1000) ? "bad" : "chgrp-false"; echo ":";
+echo lchown("eval-missing-link.txt", 1000) ? "bad" : "lchown-false"; echo ":";
+echo lchgrp("eval-missing-link.txt", 1000) ? "bad" : "lchgrp-false"; echo ":";
 $tmp = tempnam(directory: ".", prefix: "evm");
 echo file_exists($tmp) && str_starts_with(basename($tmp), "evm") ? "tempnam" : "bad"; echo ":";
 unlink($tmp);
@@ -8233,17 +8237,21 @@ $probe = umask();
 $restore = umask($before);
 echo $probe === 18 && $restore === 18 ? "probe" : "bad"; echo ":";
 echo call_user_func("chmod", "eval-mod.txt", 420) ? "callchmod" : "bad"; echo ":";
+echo call_user_func("chown", "eval-missing-call-owner.txt", 1000) ? "bad" : "callchown-false"; echo ":";
+echo call_user_func_array("chgrp", ["filename" => "eval-missing-call-group.txt", "group" => 1000]) ? "bad" : "callchgrp-false"; echo ":";
 $call_tmp = call_user_func_array("tempnam", ["directory" => ".", "prefix" => "evc"]);
 echo file_exists($call_tmp) && str_starts_with(basename($call_tmp), "evc") ? "calltempnam" : "bad"; echo ":";
 unlink($call_tmp);
 echo unlink("eval-mod.txt") ? "cleanup" : "bad"; echo ":";
-echo function_exists("chmod"); echo function_exists("tempnam"); echo function_exists("umask");
+echo function_exists("chmod"); echo function_exists("chown"); echo function_exists("chgrp");
+echo function_exists("lchown"); echo function_exists("lchgrp"); echo function_exists("tempnam");
+echo function_exists("umask");
 ');
 "#,
     );
     assert_eq!(
         out,
-        "chmod:mode:chmod-false:tempnam:umask:probe:callchmod:calltempnam:cleanup:111"
+        "chmod:mode:chmod-false:chown-false:chgrp-false:lchown-false:lchgrp-false:tempnam:umask:probe:callchmod:callchown-false:callchgrp-false:calltempnam:cleanup:1111111"
     );
 }
 

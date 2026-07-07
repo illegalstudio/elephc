@@ -200,6 +200,12 @@ mod tests {
             "base64_encode",
             "bin2hex",
             "checkdate",
+            "chdir",
+            "chgrp",
+            "chmod",
+            "chown",
+            "clearstatcache",
+            "copy",
             "count",
             "ctype_alpha",
             "date",
@@ -265,12 +271,16 @@ mod tests {
             "json_last_error",
             "json_last_error_msg",
             "json_validate",
+            "lchgrp",
+            "lchown",
+            "link",
             "linkinfo",
             "localtime",
             "log",
             "lstat",
             "microtime",
             "min",
+            "mkdir",
             "mktime",
             "nl2br",
             "number_format",
@@ -287,6 +297,9 @@ mod tests {
             "realpath",
             "realpath_cache_get",
             "realpath_cache_size",
+            "rename",
+            "rmdir",
+            "scandir",
             "sleep",
             "stat",
             "stream_resolve_include_path",
@@ -298,10 +311,15 @@ mod tests {
             "strrev",
             "strtotime",
             "substr",
+            "symlink",
             "sys_get_temp_dir",
+            "tempnam",
             "time",
+            "touch",
             "trim",
             "strval",
+            "umask",
+            "unlink",
             "usleep",
             "wordwrap",
         ] {
@@ -543,6 +561,54 @@ mod tests {
         assert_eq!(
             eval_declared_builtin_param_names("stat"),
             Some(["filename"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("chdir"),
+            Some(["directory"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("chmod"),
+            Some(["filename", "permissions"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("chown"),
+            Some(["filename", "user"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("chgrp"),
+            Some(["filename", "group"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("clearstatcache", 0),
+            Some(EvalBuiltinDefaultValue::Bool(false))
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("clearstatcache", 1),
+            Some(EvalBuiltinDefaultValue::String(""))
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("link"),
+            Some(["target", "link"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("rename"),
+            Some(["from", "to"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("scandir"),
+            Some(["directory"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("tempnam"),
+            Some(["directory", "prefix"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("touch", 1),
+            Some(EvalBuiltinDefaultValue::Null)
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("umask", 0),
+            Some(EvalBuiltinDefaultValue::Null)
         );
     }
 }
