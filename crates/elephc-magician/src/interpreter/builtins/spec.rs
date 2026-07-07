@@ -13,10 +13,14 @@
 //! - Hook enums keep calls monomorphized over `RuntimeValueOps`.
 
 use super::super::{
-    eval_builtin_count, eval_builtin_strlen, eval_count_result, ElephcEvalContext, ElephcEvalScope,
-    EvalExpr, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
+    eval_builtin_count, eval_builtin_gettype, eval_builtin_strlen, eval_builtin_type_predicate,
+    eval_count_result, ElephcEvalContext, ElephcEvalScope, EvalExpr, EvalStatus,
+    RuntimeCellHandle, RuntimeValueOps,
 };
-use super::{eval_builtin_abs, eval_builtin_cast, eval_builtin_strrev, eval_cast_result};
+use super::{
+    eval_builtin_abs, eval_builtin_cast, eval_builtin_strrev, eval_cast_result,
+    eval_gettype_result, eval_type_predicate_result,
+};
 pub(in crate::interpreter) use super::registry::EvalBuiltinDefaultValue;
 
 /// Broad domain used to group eval builtin home files.
@@ -48,14 +52,18 @@ pub(in crate::interpreter) struct EvalParamSpec {
 pub(in crate::interpreter) enum EvalDirectHook {
     /// Dispatches `abs(...)`.
     Abs,
-    /// Dispatches `boolval(...)`.
-    Boolval,
+    /// Dispatches scalar cast builtins.
+    Cast,
     /// Dispatches `count(...)`.
     Count,
+    /// Dispatches `gettype(...)`.
+    Gettype,
     /// Dispatches `strlen(...)`.
     Strlen,
     /// Dispatches `strrev(...)`.
     Strrev,
+    /// Dispatches scalar and container type predicates.
+    TypePredicate,
 }
 
 /// Evaluated-argument dispatch hooks for migrated builtins.
@@ -63,14 +71,18 @@ pub(in crate::interpreter) enum EvalDirectHook {
 pub(in crate::interpreter) enum EvalValuesHook {
     /// Dispatches `abs(...)`.
     Abs,
-    /// Dispatches `boolval(...)`.
-    Boolval,
+    /// Dispatches scalar cast builtins.
+    Cast,
     /// Dispatches `count(...)`.
     Count,
+    /// Dispatches `gettype(...)`.
+    Gettype,
     /// Dispatches `strlen(...)`.
     Strlen,
     /// Dispatches `strrev(...)`.
     Strrev,
+    /// Dispatches scalar and container type predicates.
+    TypePredicate,
 }
 
 /// Static declaration for one PHP-visible eval builtin.
@@ -146,10 +158,12 @@ impl EvalDirectHook {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         match self {
             Self::Abs => eval_builtin_abs(args, context, scope, values),
-            Self::Boolval => eval_builtin_cast(name, args, context, scope, values),
+            Self::Cast => eval_builtin_cast(name, args, context, scope, values),
             Self::Count => eval_builtin_count(args, context, scope, values),
+            Self::Gettype => eval_builtin_gettype(args, context, scope, values),
             Self::Strlen => eval_builtin_strlen(args, context, scope, values),
             Self::Strrev => eval_builtin_strrev(args, context, scope, values),
+            Self::TypePredicate => eval_builtin_type_predicate(name, args, context, scope, values),
         }
     }
 }
@@ -170,7 +184,7 @@ impl EvalValuesHook {
                 };
                 values.abs(*value)
             }
-            Self::Boolval => {
+            Self::Cast => {
                 let [value] = evaluated_args else {
                     return Err(EvalStatus::RuntimeFatal);
                 };
@@ -181,6 +195,12 @@ impl EvalValuesHook {
                 [value, mode] => eval_count_result(*value, Some(*mode), context, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::Gettype => {
+                let [value] = evaluated_args else {
+                    return Err(EvalStatus::RuntimeFatal);
+                };
+                eval_gettype_result(*value, values)
+            }
             Self::Strlen => {
                 let [value] = evaluated_args else {
                     return Err(EvalStatus::RuntimeFatal);
@@ -194,6 +214,12 @@ impl EvalValuesHook {
                     return Err(EvalStatus::RuntimeFatal);
                 };
                 values.strrev(*value)
+            }
+            Self::TypePredicate => {
+                let [value] = evaluated_args else {
+                    return Err(EvalStatus::RuntimeFatal);
+                };
+                eval_type_predicate_result(name, *value, context, values)
             }
         }
     }

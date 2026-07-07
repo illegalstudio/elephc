@@ -1611,9 +1611,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_unary_directory(name, args, context, scope, values)
         }
         "chop" => eval_builtin_trim_like(name, args, context, scope, values),
-        "boolval" | "floatval" | "intval" | "strval" => {
-            eval_builtin_cast(name, args, context, scope, values)
-        }
         "count" => eval_builtin_count(args, context, scope, values),
         "copy" | "link" | "rename" | "symlink" => {
             eval_builtin_binary_path_bool(name, args, context, scope, values)
@@ -1699,7 +1696,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         }
         "getcwd" => eval_builtin_getcwd(args, values),
         "getenv" => eval_builtin_getenv(args, context, scope, values),
-        "gettype" => eval_builtin_gettype(args, context, scope, values),
         "glob" => eval_builtin_glob(args, context, scope, values),
         "grapheme_strrev" => eval_builtin_grapheme_strrev(args, context, scope, values),
         "gzcompress" | "gzdeflate" | "gzinflate" | "gzuncompress" => {
@@ -1733,12 +1729,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         | "is_writeable" => eval_builtin_file_probe(name, args, context, scope, values),
         "hrtime" => eval_builtin_hrtime(args, context, scope, values),
         "http_response_code" => eval_builtin_http_response_code(args, context, scope, values),
-        "is_array" | "is_bool" | "is_double" | "is_finite" | "is_float" | "is_infinite"
-        | "is_int" | "is_integer" | "is_iterable" | "is_long" | "is_nan" | "is_null"
-        | "is_numeric" | "is_object" | "is_real" | "is_resource" | "is_scalar"
-        | "is_string" => {
-            eval_builtin_type_predicate(name, args, context, scope, values)
-        }
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
         "json_decode" => eval_builtin_json_decode(args, context, scope, values),
         "json_encode" => eval_builtin_json_encode(args, context, scope, values),

@@ -15,7 +15,7 @@ use super::super::super::*;
 pub(in crate::interpreter) fn eval_scalars_builtin_with_values(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
+    _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
@@ -78,33 +78,12 @@ pub(in crate::interpreter) fn eval_scalars_builtin_with_values(
             };
             eval_settype_value_result(*value, *type_name, values)?
         }
-        "boolval" | "floatval" | "intval" | "strval" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_cast_result(name, *value, context, values)?
-        }
         "max" | "min" => eval_min_max_result(name, evaluated_args, values)?,
-        "gettype" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_gettype_result(*value, values)?
-        }
         "intdiv" => {
             let [left, right] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_intdiv_result(*left, *right, values)?
-        }
-        "is_array" | "is_bool" | "is_double" | "is_finite" | "is_float" | "is_infinite"
-        | "is_int" | "is_integer" | "is_iterable" | "is_long" | "is_nan" | "is_null"
-        | "is_numeric" | "is_object" | "is_real" | "is_resource" | "is_scalar"
-        | "is_string" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_type_predicate_result(name, *value, context, values)?
         }
         _ => return Ok(None),
     };

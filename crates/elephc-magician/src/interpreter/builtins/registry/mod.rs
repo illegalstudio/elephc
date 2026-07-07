@@ -165,10 +165,38 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call(
 mod tests {
     use super::*;
 
-    /// Verifies all Phase 1 pilot builtins are present in the declarative registry.
+    /// Verifies migrated builtins are present in the declarative registry.
     #[test]
-    fn declared_builtin_registry_exposes_phase_one_pilots() {
-        for name in ["abs", "boolval", "count", "strlen", "strrev"] {
+    fn declared_builtin_registry_exposes_migrated_builtins() {
+        for name in [
+            "abs",
+            "boolval",
+            "count",
+            "floatval",
+            "gettype",
+            "intval",
+            "is_array",
+            "is_bool",
+            "is_double",
+            "is_finite",
+            "is_float",
+            "is_infinite",
+            "is_int",
+            "is_integer",
+            "is_iterable",
+            "is_long",
+            "is_nan",
+            "is_null",
+            "is_numeric",
+            "is_object",
+            "is_real",
+            "is_resource",
+            "is_scalar",
+            "is_string",
+            "strlen",
+            "strrev",
+            "strval",
+        ] {
             assert!(
                 eval_declared_builtin_exists(name),
                 "{name} should be registered declaratively"
@@ -176,9 +204,9 @@ mod tests {
         }
     }
 
-    /// Verifies pilot builtin metadata is derived from declarative specs.
+    /// Verifies migrated builtin metadata is derived from declarative specs.
     #[test]
-    fn declared_builtin_registry_derives_phase_one_metadata() {
+    fn declared_builtin_registry_derives_migrated_metadata() {
         assert_eq!(
             eval_declared_builtin_param_names("count"),
             Some(["value", "mode"].as_slice())
@@ -190,6 +218,14 @@ mod tests {
         assert_eq!(
             eval_declared_builtin_param_names("strlen"),
             Some(["string"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("is_finite"),
+            Some(["num"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("is_object"),
+            Some(["value"].as_slice())
         );
     }
 }

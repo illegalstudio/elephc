@@ -158,14 +158,10 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "addslashes" | "base64_decode" | "base64_encode" | "bin2hex" | "grapheme_strrev"
         | "hex2bin" | "rawurldecode" | "rawurlencode" | "stripslashes" | "urldecode"
         | "urlencode" => Some(&["string"]),
-        "boolval" | "empty" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool"
-        | "is_double" | "is_float" | "is_int" | "is_integer" | "is_iterable" | "is_long"
-        | "is_null" | "is_numeric" | "is_object" | "is_real" | "is_resource" | "is_string"
-        | "is_scalar" | "strval" => Some(&["value"]),
+        "empty" => Some(&["value"]),
         "is_callable" => Some(&["value", "syntax_only", "callable_name"]),
         "buffer_new" => Some(&["length"]),
         "buffer_len" | "buffer_free" => Some(&["buffer"]),
-        "is_finite" | "is_infinite" | "is_nan" => Some(&["num"]),
         "settype" => Some(&["var", "type"]),
         "get_called_class" => Some(&[]),
         "get_class" => Some(&["object"]),

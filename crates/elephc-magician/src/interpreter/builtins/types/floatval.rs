@@ -1,5 +1,5 @@
 //! Purpose:
-//! Declarative eval registry entry for `boolval`.
+//! Declarative eval registry entry for `floatval`.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::types`.
@@ -8,7 +8,7 @@
 //! - Runtime behavior stays delegated to the existing scalar-cast hook.
 
 eval_builtin! {
-    name: "boolval",
+    name: "floatval",
     area: Types,
     params: [value],
     direct: Cast,
