@@ -53,6 +53,7 @@ mod trait_exists;
 mod unset;
 
 pub(in crate::interpreter) use dispatch::{eval_builtin_symbols_call, eval_symbols_values_result};
+pub(in crate::interpreter) use class_implements::eval_class_relation_result;
 pub(in crate::interpreter) use function_exists::eval_function_probe_exists;
 pub(in crate::interpreter) use get_class::eval_get_class_result;
 pub(in crate::interpreter) use get_parent_class::eval_get_parent_class_result;
