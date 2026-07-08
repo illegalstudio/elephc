@@ -37,12 +37,14 @@ use super::super::{
     eval_is_string_result,
     eval_grapheme_strrev_result, eval_gzip_result, eval_hash_equals_result,
     eval_hash_one_shot_result, eval_hex2bin_result, eval_html_entity_result,
-    eval_json_values_result, eval_log2_result, eval_log10_result, eval_log_result,
-    eval_max_result, eval_min_result, eval_mt_rand_values_result,
-    eval_network_env_values_result, eval_nl2br_result, eval_pi_result, eval_pow_result,
-    eval_rad2deg_result, eval_rand_values_result, eval_random_int_values_result,
-    eval_range_result, eval_regex_values_result, eval_round_result, eval_settype_values_result,
-    eval_sin_result, eval_sinh_result, eval_slashes_result, eval_sqrt_result,
+    eval_json_decode_values_result, eval_json_encode_values_result, eval_json_last_error_msg_result,
+    eval_json_last_error_result, eval_json_validate_values_result, eval_log2_result,
+    eval_log10_result, eval_log_result, eval_max_result, eval_min_result,
+    eval_mt_rand_values_result, eval_network_env_values_result, eval_nl2br_result,
+    eval_pi_result, eval_pow_result, eval_rad2deg_result, eval_rand_values_result,
+    eval_random_int_values_result, eval_range_result, eval_regex_values_result, eval_round_result,
+    eval_settype_values_result, eval_sin_result, eval_sinh_result, eval_slashes_result,
+    eval_sqrt_result,
     eval_str_pad_result, eval_str_replace_result, eval_str_repeat_result,
     eval_str_split_result, eval_stream_bool_predicate_result, eval_stream_introspection_result,
     eval_string_case_result, eval_string_compare_result, eval_string_position_result,
@@ -199,8 +201,16 @@ pub(in crate::interpreter) enum EvalValuesHook {
     HtmlEntity,
     /// Dispatches `intdiv(...)`.
     Intdiv,
-    /// Dispatches JSON builtins.
-    Json,
+    /// Dispatches `json_decode(...)`.
+    JsonDecode,
+    /// Dispatches `json_encode(...)`.
+    JsonEncode,
+    /// Dispatches `json_last_error()`.
+    JsonLastError,
+    /// Dispatches `json_last_error_msg()`.
+    JsonLastErrorMsg,
+    /// Dispatches `json_validate(...)`.
+    JsonValidate,
     /// Dispatches `log(...)`.
     Log,
     /// Dispatches `log2(...)`.
@@ -413,7 +423,21 @@ impl EvalValuesHook {
                 eval_html_entity_result(name, value, values)
             }),
             Self::Intdiv => two_args(evaluated_args, values, eval_intdiv_result),
-            Self::Json => eval_json_values_result(name, evaluated_args, context, values),
+            Self::JsonDecode => eval_json_decode_values_result(evaluated_args, context, values),
+            Self::JsonEncode => eval_json_encode_values_result(evaluated_args, context, values),
+            Self::JsonLastError => {
+                if !evaluated_args.is_empty() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                eval_json_last_error_result(context, values)
+            }
+            Self::JsonLastErrorMsg => {
+                if !evaluated_args.is_empty() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                eval_json_last_error_msg_result(context, values)
+            }
+            Self::JsonValidate => eval_json_validate_values_result(evaluated_args, context, values),
             Self::Log => match evaluated_args {
                 [num] => eval_log_result(*num, None, values),
                 [num, base] => eval_log_result(*num, Some(*base), values),

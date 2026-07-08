@@ -38,10 +38,11 @@ use super::super::{
     eval_builtin_is_real, eval_builtin_is_resource, eval_builtin_is_scalar,
     eval_builtin_is_string, eval_builtin_log, eval_builtin_log2, eval_builtin_log10,
     eval_builtin_grapheme_strrev, eval_builtin_hash_equals, eval_builtin_html_entity,
-    eval_builtin_json_call, eval_builtin_max, eval_builtin_min, eval_builtin_mt_rand,
-    eval_builtin_network_env_call, eval_builtin_nl2br, eval_builtin_pi, eval_builtin_pow,
-    eval_builtin_rad2deg, eval_builtin_rand, eval_builtin_random_int, eval_builtin_range,
-    eval_builtin_round,
+    eval_builtin_json_decode, eval_builtin_json_encode, eval_builtin_json_last_error,
+    eval_builtin_json_last_error_msg, eval_builtin_json_validate, eval_builtin_max,
+    eval_builtin_min, eval_builtin_mt_rand, eval_builtin_network_env_call, eval_builtin_nl2br,
+    eval_builtin_pi, eval_builtin_pow, eval_builtin_rad2deg, eval_builtin_rand,
+    eval_builtin_random_int, eval_builtin_range, eval_builtin_round,
     eval_builtin_raw_memory_call, eval_builtin_regex_call, eval_builtin_sin, eval_builtin_sinh,
     eval_builtin_str_pad, eval_builtin_str_replace, eval_builtin_str_split,
     eval_builtin_stream_bool_predicate, eval_builtin_stream_introspection,
@@ -192,8 +193,16 @@ pub(in crate::interpreter) enum EvalDirectHook {
     HtmlEntity,
     /// Dispatches `intdiv(...)`.
     Intdiv,
-    /// Dispatches JSON builtins.
-    Json,
+    /// Dispatches `json_decode(...)`.
+    JsonDecode,
+    /// Dispatches `json_encode(...)`.
+    JsonEncode,
+    /// Dispatches `json_last_error()`.
+    JsonLastError,
+    /// Dispatches `json_last_error_msg()`.
+    JsonLastErrorMsg,
+    /// Dispatches `json_validate(...)`.
+    JsonValidate,
     /// Dispatches `log(...)`.
     Log,
     /// Dispatches `log2(...)`.
@@ -379,7 +388,11 @@ impl EvalDirectHook {
             Self::Hex2Bin => eval_builtin_hex2bin(args, context, scope, values),
             Self::HtmlEntity => eval_builtin_html_entity(name, args, context, scope, values),
             Self::Intdiv => eval_builtin_intdiv(args, context, scope, values),
-            Self::Json => eval_builtin_json_call(name, args, context, scope, values),
+            Self::JsonDecode => eval_builtin_json_decode(args, context, scope, values),
+            Self::JsonEncode => eval_builtin_json_encode(args, context, scope, values),
+            Self::JsonLastError => eval_builtin_json_last_error(args, context, values),
+            Self::JsonLastErrorMsg => eval_builtin_json_last_error_msg(args, context, values),
+            Self::JsonValidate => eval_builtin_json_validate(args, context, scope, values),
             Self::Log => eval_builtin_log(args, context, scope, values),
             Self::Log2 => eval_builtin_log2(args, context, scope, values),
             Self::Log10 => eval_builtin_log10(args, context, scope, values),

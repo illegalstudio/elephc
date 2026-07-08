@@ -23,7 +23,6 @@ mod debug_output;
 mod dynamic_functions;
 mod expressions;
 mod include_exec;
-mod json;
 mod libc_shims;
 mod reflection;
 mod return_type_compat;
@@ -47,7 +46,6 @@ use crate::eval_ir::{
     EvalParameterType, EvalParameterTypeVariant, EvalProgram, EvalStmt, EvalSwitchCase, EvalTrait,
     EvalTraitAdaptation, EvalUnaryOp, EvalVisibility,
 };
-use crate::json_validate::{self, JsonParseError, JsonParseErrorKind, JsonValue};
 #[cfg(test)]
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
@@ -68,7 +66,6 @@ use debug_output::*;
 use dynamic_functions::*;
 use expressions::*;
 use include_exec::*;
-use json::*;
 use libc_shims::*;
 use reflection::*;
 use return_type_compat::*;
