@@ -97,7 +97,6 @@ pub(crate) fn method_by_ref_params(name: &str) -> Option<Vec<(String, bool)>> {
 
 /// Returns true when any constructor parameter or property is by-ref, so a
 /// `new` expression can bind one of its arguments by reference.
-#[cfg_attr(not(test), allow(dead_code))] // consumed by targeted invalidation (in progress)
 pub(crate) fn any_ctor_by_ref() -> bool {
     ACTIVE_BY_REF_SIGNATURES.with(|slot| {
         slot.borrow()
@@ -108,7 +107,6 @@ pub(crate) fn any_ctor_by_ref() -> bool {
 
 /// Returns true when `name` is a user-declared function (by-ref arguments to
 /// user callees may be retained past the call, unlike builtin arguments).
-#[cfg_attr(not(test), allow(dead_code))] // consumed by targeted invalidation (in progress)
 pub(crate) fn is_user_function(name: &str) -> bool {
     ACTIVE_BY_REF_SIGNATURES.with(|slot| {
         slot.borrow()
