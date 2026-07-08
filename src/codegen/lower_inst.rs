@@ -6707,23 +6707,43 @@ fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
     Ok(())
 }
 
-/// Lowers a releasing global store: RELEASES the previous refcounted value held
-/// in the global symbol, then stores the new (already-acquired) value into it.
-/// Emitted only for authentic `$g = expr` assignments whose operand ir_lower has
-/// acquired (mirroring `store_static_local`). The emitted order is acquire (in
-/// ir_lower) → preserve the new value → release(old) → store(new): acquiring the
-/// new value before releasing the old keeps the refcount ≥ 1 across the release,
-/// so `$g = $g` self-assignment is safe without an explicit old==new guard, and
-/// `$g = [$g]` is safe because the new array already owns its element's reference.
+/// Lowers a releasing global store for an authentic `$g = expr` assignment whose
+/// operand ir_lower has already acquired (mirroring `store_static_local`). The
+/// store is a plain overwrite of the global symbol — the per-request `__rt_web_reset`
+/// releases the previous occupant between requests, so an inline release here is not
+/// emitted (matching the static-local store shape).
+///
+/// Ordinary (non-superglobal) globals are `Mixed`-typed (see `global_alias_type`),
+/// and the load path (`eir_read_global_*` → `__rt_mixed_unbox`) expects a boxed
+/// `Mixed` cell pointer in the slot. A concrete stored value (e.g. the int `7` from
+/// `$g = 7`) MUST therefore be boxed into the `Mixed` cell representation before the
+/// store, exactly as `lower_store_global` does — otherwise the slot holds the raw
+/// scalar and the next `__rt_mixed_unbox` dereferences it as a pointer (SIGSEGV at
+/// the scalar value, e.g. `0x7`). Superglobals keep their native array storage type
+/// and are stored unboxed, matching `lower_store_global`.
 fn lower_store_global_releasing(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data = expect_global_name(inst)?;
     let name = ctx.global_name_data(data)?.to_string();
     let symbol = ir_global_symbol(&name);
     let value = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(value)?;
-    ctx.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
-    record_user_global_symbol(ctx, &name, &symbol, &ty);
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &ty, true);
+    let store_ty = if crate::superglobals::is_superglobal(&name) {
+        ty.codegen_repr()
+    } else {
+        let source_ty = ty.codegen_repr();
+        if source_ty != PhpType::Mixed {
+            if ctx.value_ownership(value)? == Ownership::Owned {
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
+            } else {
+                emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+            }
+        }
+        PhpType::Mixed
+    };
+    ctx.data
+        .add_comm(symbol.clone(), store_ty.codegen_repr().stack_size().max(8));
+    record_user_global_symbol(ctx, &name, &symbol, &store_ty);
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &store_ty, true);
     Ok(())
 }
 
