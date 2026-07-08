@@ -36,6 +36,7 @@ mod pdo_prelude;
 mod pipeline;
 mod resolver;
 mod runtime_cache;
+mod debug_info;
 mod source_map;
 mod span;
 mod string_bytes;

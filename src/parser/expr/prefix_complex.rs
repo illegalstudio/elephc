@@ -671,6 +671,7 @@ pub(super) fn parse_named_expr(
             ))
         } else {
             let args = parse_args(tokens, pos, span)?;
+            let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
             Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
         }
     } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
@@ -685,6 +686,7 @@ pub(super) fn parse_named_expr(
                     // dynamic-dispatch path, exactly like the variable-receiver form `$c::$m()`.
                     *pos += 1; // consume '('
                     let dynamic_args = parse_args(tokens, pos, span)?;
+                    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                     crate::parser::expr::pratt::reject_named_args_in_dynamic_call(
                         &dynamic_args,
                         span,
@@ -754,6 +756,7 @@ pub(super) fn parse_named_expr(
                 ))
             } else {
                 let args = parse_args(tokens, pos, span)?;
+                let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                 Ok(Expr::new(
                     ExprKind::StaticMethodCall {
                         receiver: StaticReceiver::Named(name),
@@ -821,6 +824,7 @@ pub(super) fn parse_new_object(
         }
         *pos += 1;
         let args = parse_args(tokens, pos, span)?;
+        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
         return Ok(Expr::new(
             ExprKind::NewScopedObject { receiver, args },
             span,
@@ -844,6 +848,7 @@ pub(super) fn parse_new_object(
         }
         *pos += 1;
         let args = parse_args(tokens, pos, span)?;
+        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
         return Ok(Expr::new(
             ExprKind::NewDynamic {
                 name_expr: Box::new(Expr::new(ExprKind::Variable(var_name), span)),
@@ -860,6 +865,7 @@ pub(super) fn parse_new_object(
     }
     *pos += 1;
     let args = parse_args(tokens, pos, span)?;
+    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
     Ok(Expr::new(ExprKind::NewObject { class_name, args }, span))
 }
 

@@ -194,4 +194,8 @@ pub struct FunctionFlags {
     pub is_static: bool,
     /// `true` when the function/closure returns by reference (`function &f()` / `fn &()`).
     pub by_ref_return: bool,
+    /// `true` for compiler-generated bodies that have no user-written PHP source:
+    /// property-default init thunks and builtin class methods (Reflection, SPL,
+    /// DateTime) lowered into the module. Consumed by source-map emission.
+    pub is_synthetic: bool,
 }

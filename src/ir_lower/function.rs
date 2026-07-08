@@ -341,6 +341,7 @@ pub(crate) fn lower_property_init_thunk(
     let function_name = format!("_class_propinit_{}", class_info.class_id);
     let this_type = PhpType::Object(class_name.to_string());
     let mut function = Function::new(function_name.clone(), IrType::Void, PhpType::Void);
+    function.flags.is_synthetic = true;
     function.params.push(FunctionParam {
         name: "this".to_string(),
         ir_type: value_ir_type(&this_type),

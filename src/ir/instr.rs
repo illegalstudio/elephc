@@ -45,6 +45,30 @@ pub struct Instruction {
     pub result_ownership: Ownership,
     pub effects: Effects,
     pub span: Option<Span>,
+    /// Optimization-pass provenance: set when a pass rewrote this instruction
+    /// (const-fold) or moved it (LICM), so source maps can explain assembly
+    /// that no longer matches the source shape. `None` for instructions
+    /// lowered directly from the AST. A one-byte enum rather than a string:
+    /// `Instruction` sits in the recursive lowering paths' stack frames, and
+    /// growing it measurably shrinks the headroom before test threads overflow.
+    pub origin: Option<PassOrigin>,
+}
+
+/// Optimization pass recorded as an instruction's provenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassOrigin {
+    ConstFold,
+    Licm,
+}
+
+impl PassOrigin {
+    /// Returns the lower-case spelling used by source maps and the EIR printer.
+    pub fn name(self) -> &'static str {
+        match self {
+            PassOrigin::ConstFold => "const_fold",
+            PassOrigin::Licm => "licm",
+        }
+    }
 }
 
 impl Instruction {
@@ -70,6 +94,7 @@ impl Instruction {
             result_ownership,
             effects,
             span,
+            origin: None,
         }
     }
 
@@ -715,5 +740,18 @@ impl Op {
             EnsureOwned => "ensure_owned",
             Nop => "nop",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `Instruction` is built by value inside the recursive AST->EIR lowering
+    /// paths, so its size feeds every lowering stack frame. Growing it past
+    /// main's 112 bytes shrank the headroom enough that 2 MiB test threads
+    /// overflowed on linux-aarch64. Keep provenance and future metadata inside
+    /// the existing padding.
+    #[test]
+    fn instruction_stays_112_bytes() {
+        assert!(std::mem::size_of::<super::Instruction>() <= 112);
     }
 }

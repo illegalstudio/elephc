@@ -15,7 +15,7 @@ pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 
 /// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--with-CRATE] <source.php>";
+pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--debug-info] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--with-CRATE] <source.php>";
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
@@ -31,6 +31,7 @@ pub(crate) struct CliConfig {
     pub(crate) check_only: bool,
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
+    pub(crate) emit_debug_info: bool,
     pub(crate) regalloc_linear: bool,
     pub(crate) ir_opt: bool,
     pub(crate) target: Target,
@@ -63,6 +64,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut check_only = false;
     let mut emit_timings = false;
     let mut emit_source_map = false;
+    let mut emit_debug_info = false;
     let mut filename_arg = None;
     let mut target = Target::detect_host();
     let mut extra_link_libs: Vec<String> = Vec::new();
@@ -120,6 +122,8 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             emit_timings = true;
         } else if arg == "--source-map" {
             emit_source_map = true;
+        } else if arg == "--debug-info" {
+            emit_debug_info = true;
         } else if let Some(value) = arg.strip_prefix("--null-repr=") {
             null_repr = parse_null_repr(value);
         } else if let Some(value) = arg.strip_prefix("--regalloc=") {
@@ -223,6 +227,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         check_only,
         emit_timings,
         emit_source_map,
+        emit_debug_info,
         regalloc_linear,
         ir_opt,
         target,

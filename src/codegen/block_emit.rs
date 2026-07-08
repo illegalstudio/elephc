@@ -11,6 +11,8 @@
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
 
+use std::fmt::Write as _;
+
 use crate::codegen::abi;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -162,16 +164,20 @@ fn emit_user_function(
     data: &mut DataSection,
     regalloc_linear: bool,
 ) -> Result<()> {
+    let entry_label = user_function_entry_symbol(function);
+    let synthetic = function.flags.is_synthetic || is_property_init_thunk(function);
+    emit_fn_marker(emitter, &function.name, &entry_label, synthetic);
     if function.flags.is_generator {
-        let entry_label = user_function_entry_symbol(function);
-        return emit_generator_function(
+        emit_generator_function(
             module,
             function,
             &entry_label,
             emitter,
             data,
             regalloc_linear,
-        );
+        )?;
+        emit_endfn_marker(emitter, &function.name);
+        return Ok(());
     }
     let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
     let epilogue_label = user_function_epilogue_symbol(function);
@@ -186,10 +192,10 @@ fn emit_user_function(
         false,
         Some(epilogue_label),
     );
-    let entry_label = user_function_entry_symbol(function);
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
+    emit_endfn_marker(ctx.emitter, &function.name);
     Ok(())
 }
 
@@ -251,15 +257,18 @@ fn emit_class_method(
     regalloc_linear: bool,
 ) -> Result<()> {
     let entry_label = class_method_entry_symbol(function)?;
+    emit_fn_marker(emitter, &function.name, &entry_label, function.flags.is_synthetic);
     if function.flags.is_generator {
-        return emit_generator_function(
+        emit_generator_function(
             module,
             function,
             &entry_label,
             emitter,
             data,
             regalloc_linear,
-        );
+        )?;
+        emit_endfn_marker(emitter, &function.name);
+        return Ok(());
     }
     let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
     let epilogue_label = format!("{}_epilogue", entry_label);
@@ -277,6 +286,7 @@ fn emit_class_method(
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
+    emit_endfn_marker(ctx.emitter, &function.name);
     Ok(())
 }
 
@@ -748,6 +758,12 @@ fn emit_main_function(
     regalloc_linear: bool,
     web: bool,
 ) -> Result<()> {
+    let entry_symbol = if web {
+        frame::WEB_HANDLER_SYMBOL
+    } else {
+        emitter.entry_symbol()
+    };
+    emit_fn_marker(emitter, &function.name, entry_symbol, false);
     let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
     let mut ctx = FunctionContext::new(
         module, function, emitter, data, layout, true, gc_stats, heap_debug, None,
@@ -771,6 +787,7 @@ fn emit_main_function(
             frame::emit_main_epilogue(&mut ctx);
         }
     }
+    emit_endfn_marker(ctx.emitter, &function.name);
     if web {
         frame::emit_web_entry_stub(&mut ctx);
     }
@@ -1109,6 +1126,7 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
 /// Emits one EIR basic block.
 fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
+    ctx.emitter.comment(&format!("@block name={}", block.name));
     ctx.emitter
         .label(&ctx.block_label(&block.name, block.id.as_raw()));
     for inst_id in &block.instructions {
@@ -1122,6 +1140,8 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
 }
 
 /// Emits the source-map marker for an EIR instruction when it carries a real PHP span.
+/// The marker carries the EIR opcode spelling so v2 maps can label mappings at
+/// expression granularity.
 fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
     let Some(inst) = ctx.function.instruction(inst_id) else {
         return Err(CodegenIrError::missing_entry(
@@ -1133,8 +1153,33 @@ fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst_id: InstId
         return Ok(());
     };
     if span.line > 0 {
-        ctx.emitter
-            .comment(&format!("@src line={} col={}", span.line, span.col));
+        let mut marker = format!("@src line={} col={}", span.line, span.col);
+        if span.has_extent() {
+            let _ = write!(marker, " end={}:{}", span.end_line, span.end_col);
+        }
+        let _ = write!(marker, " op={}", inst.op.name());
+        if let Some(origin) = inst.origin {
+            let _ = write!(marker, " origin={}", origin.name());
+        }
+        ctx.emitter.comment(&marker);
     }
     Ok(())
+}
+
+/// Emits the source-map marker opening a function region. `name` is the PHP-level
+/// function/method name and `symbol` the assembly entry label; the map generator
+/// pairs it with the matching `@endfn` to derive the function's assembly range.
+/// `synthetic` marks compiler-generated bodies with no user-written PHP source.
+fn emit_fn_marker(emitter: &mut Emitter, name: &str, symbol: &str, synthetic: bool) {
+    let mut marker = format!("@fn name={} symbol={}", name, symbol);
+    if synthetic {
+        marker.push_str(" synthetic=1");
+    }
+    emitter.comment(&marker);
+}
+
+/// Emits the source-map marker closing the function region opened by
+/// `emit_fn_marker()`.
+fn emit_endfn_marker(emitter: &mut Emitter, name: &str) {
+    emitter.comment(&format!("@endfn name={}", name));
 }
