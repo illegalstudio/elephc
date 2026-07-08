@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::filesystem`.
 //!
 //! Key details:
-//! - Runtime dispatch is declared here and delegated through the stream context helper.
+//! - Current eval behavior validates arity/evaluation and returns the default context resource.
 
 eval_builtin! {
     name: "stream_context_set_default",
@@ -17,21 +17,28 @@ eval_builtin! {
 
 use super::super::super::*;
 
-/// Dispatches direct eval calls for the `stream_context_set_default` filesystem builtin through the area dispatcher.
+/// Evaluates `stream_context_set_default($options)`.
 pub(in crate::interpreter) fn eval_stream_context_set_default_declared_call(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::direct_dispatch::eval_builtin_filesystem_call_impl("stream_context_set_default", args, context, scope, values)
+    let [options] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    eval_expr(options, context, scope, values)?;
+    super::stream_context_get_default::eval_stream_context_get_default_result(context, values)
 }
 
-/// Dispatches evaluated-argument calls for the `stream_context_set_default` filesystem builtin through the area dispatcher.
+/// Returns the default context after validating already evaluated arguments.
 pub(in crate::interpreter) fn eval_stream_context_set_default_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::values_dispatch::eval_filesystem_values_result_impl("stream_context_set_default", evaluated_args, context, values)
+    let [_options] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    super::stream_context_get_default::eval_stream_context_get_default_result(context, values)
 }

@@ -171,25 +171,6 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call_impl(
             eval_builtin_stream_bucket_make_writeable(args, context, scope, values)
         }
         "stream_bucket_new" => eval_builtin_stream_bucket_new(args, context, scope, values),
-        "stream_context_create" => eval_builtin_stream_context_create(args, context, scope, values),
-        "stream_context_get_default" => {
-            eval_builtin_stream_context_get_default(args, context, scope, values)
-        }
-        "stream_context_get_options" => {
-            eval_builtin_stream_context_get_options(args, context, scope, values)
-        }
-        "stream_context_get_params" => {
-            eval_builtin_stream_context_get_params(args, context, scope, values)
-        }
-        "stream_context_set_default" => {
-            eval_builtin_stream_context_set_default(args, context, scope, values)
-        }
-        "stream_context_set_option" => {
-            eval_builtin_stream_context_set_option(args, context, scope, values)
-        }
-        "stream_context_set_params" => {
-            eval_builtin_stream_context_set_params(args, context, scope, values)
-        }
         "stream_filter_append" | "stream_filter_prepend" => {
             eval_builtin_stream_filter_attach(name, args, context, scope, values)
         }
