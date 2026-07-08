@@ -147,10 +147,16 @@ pub(super) fn propagate_foreach_stmt(
     span: crate::span::Span,
     env: ConstantEnv,
 ) -> (Stmt, ConstantEnv) {
-    let mut loop_env = safe_foreach_env(&env, &array, key_var.as_deref(), &value_var, &body);
+    let loop_env = safe_foreach_env(&env, &array, key_var.as_deref(), &value_var, value_by_ref, &body);
     if value_by_ref {
-        if let ExprKind::Variable(array_name) = &array.kind {
-            loop_env.remove(array_name);
+        // Writes through the by-ref value var mutate the array without a
+        // visible local write — including after the loop, through the value
+        // var's lingering alias to the last element — so the array root must
+        // never carry a fact again. The value var itself needs no mark: its
+        // own value facts stay accurate. (`safe_foreach_env` already removed
+        // the root's current fact from the loop environment.)
+        if let Some(root) = lvalue_root(&array) {
+            super::mark_reference_volatile(root);
         }
     }
     let array = propagate_expr(array, &env);
@@ -181,10 +187,10 @@ pub(super) fn propagate_switch_stmt(
     env: ConstantEnv,
 ) -> (Stmt, ConstantEnv) {
     let subject = propagate_expr(subject, &env);
-    let base_env = if expr_effect(&subject).has_side_effects {
-        HashMap::new()
-    } else {
-        env
+    let base_env = {
+        let mut base_env = env;
+        expr_invalidation(&subject).apply(&mut base_env);
+        base_env
     };
     let cases: Vec<_> = cases
         .into_iter()
@@ -272,10 +278,10 @@ pub(super) fn propagate_if_stmt(
     env: ConstantEnv,
 ) -> (Stmt, ConstantEnv) {
     let condition = propagate_expr(condition, &env);
-    let base_env = if expr_effect(&condition).has_side_effects {
-        HashMap::new()
-    } else {
-        env
+    let base_env = {
+        let mut base_env = env;
+        expr_invalidation(&condition).apply(&mut base_env);
+        base_env
     };
 
     let (then_body, then_env) = propagate_block(then_body, base_env.clone());
@@ -283,10 +289,10 @@ pub(super) fn propagate_if_stmt(
     let mut elseif_envs = Vec::new();
     for (condition, body) in elseif_clauses {
         let condition = propagate_expr(condition, &base_env);
-        let branch_env = if expr_effect(&condition).has_side_effects {
-            HashMap::new()
-        } else {
-            base_env.clone()
+        let branch_env = {
+            let mut branch_env = base_env.clone();
+            expr_invalidation(&condition).apply(&mut branch_env);
+            branch_env
         };
         let (body, env_after_body) = propagate_block(body, branch_env);
         if matches!(block_terminal_effect(&body), TerminalEffect::FallsThrough) {
