@@ -87,7 +87,7 @@ pub(in crate::interpreter) fn eval_is_callable_with_values(
 }
 
 /// Evaluates positional `is_callable()` arguments inside an eval fragment.
-pub(super) fn eval_builtin_is_callable(
+pub(in crate::interpreter) fn eval_builtin_is_callable(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
@@ -125,7 +125,7 @@ pub(super) fn eval_builtin_is_callable(
 }
 
 /// Returns whether one runtime value is callable from the current eval scope.
-pub(super) fn eval_is_callable_value(
+pub(in crate::interpreter) fn eval_is_callable_value(
     value: RuntimeCellHandle,
     lexical_scope: Option<&ElephcEvalScope>,
     context: &ElephcEvalContext,
@@ -263,12 +263,10 @@ fn eval_callable_probe_exists(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     match callback {
-        EvaluatedCallable::Named { name, .. } => {
-            Ok(context.has_closure(name) || eval_function_probe_exists(context, name))
-        }
-        EvaluatedCallable::BoundClosure { name, .. } => {
-            Ok(context.has_closure(name) || eval_function_probe_exists(context, name))
-        }
+        EvaluatedCallable::Named { name, .. } => Ok(context.has_closure(name)
+            || super::function_exists::eval_function_probe_exists(context, name)),
+        EvaluatedCallable::BoundClosure { name, .. } => Ok(context.has_closure(name)
+            || super::function_exists::eval_function_probe_exists(context, name)),
         EvaluatedCallable::InvokableObject { object } => {
             eval_object_method_callable_probe(*object, "__invoke", context, values)
         }

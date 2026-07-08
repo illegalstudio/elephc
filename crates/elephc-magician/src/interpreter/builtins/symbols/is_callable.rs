@@ -24,17 +24,17 @@ eval_builtin! {
 
 use super::super::super::*;
 
-/// Dispatches direct eval calls for the `is_callable` symbol builtin through the area dispatcher.
+/// Evaluates direct `is_callable(...)` calls inside an eval fragment.
 pub(in crate::interpreter) fn eval_is_callable_declared_call(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::function_probe::eval_builtin_function_probe("is_callable", args, context, scope, values)
+    super::callable_probe::eval_builtin_is_callable(args, context, scope, values)
 }
 
-/// Dispatches evaluated-argument calls for the `is_callable` symbol builtin through the area dispatcher.
+/// Evaluates materialized `is_callable(...)` arguments.
 pub(in crate::interpreter) fn eval_is_callable_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
     context: &mut ElephcEvalContext,

@@ -235,10 +235,7 @@ pub fn execute_context_is_callable(
     callback: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let result = eval_function_probe_result("is_callable", callback, context, values)?;
-    let callable = values.truthy(result)?;
-    values.release(result)?;
-    Ok(callable)
+    eval_is_callable_value(callback, None, context, values)
 }
 
 /// Constructs a class declared in the shared eval context with prepared positional arguments.
