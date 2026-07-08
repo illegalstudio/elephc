@@ -106,6 +106,7 @@ pub(super) fn parse_expr_bp(
                 if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                     *pos += 1; // consume '('
                     let dynamic_args = crate::parser::expr::parse_args(tokens, pos, span)?;
+                    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                     reject_named_args_in_dynamic_call(&dynamic_args, span)?;
                     let mut call_args =
                         vec![Expr::new(ExprKind::ArrayLiteral(vec![lhs, member]), span)];
@@ -143,6 +144,7 @@ pub(super) fn parse_expr_bp(
                             *pos += 1; // consume '('
                             let dynamic_args =
                                 crate::parser::expr::parse_args(tokens, pos, arrow_span)?;
+                            let arrow_span = crate::parser::expr::span_through_prev_token(tokens, *pos, arrow_span);
                             reject_named_args_in_dynamic_call(&dynamic_args, arrow_span)?;
                             let mut call_args = vec![Expr::new(
                                 ExprKind::ArrayLiteral(vec![lhs, property]),
@@ -194,6 +196,7 @@ pub(super) fn parse_expr_bp(
                         );
                     } else {
                         let args = parse_args(tokens, pos, arrow_span)?;
+                        let arrow_span = crate::parser::expr::span_through_prev_token(tokens, *pos, arrow_span);
                         lhs = Expr::new(
                             if nullsafe {
                                 ExprKind::NullsafeMethodCall {
@@ -241,6 +244,7 @@ pub(super) fn parse_expr_bp(
                     let call_span = tokens[*pos].1;
                     *pos += 1;
                     let args = parse_args(tokens, pos, call_span)?;
+                    let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
                     lhs = Expr::new(
                         ExprKind::ExprCall {
                             callee: Box::new(lhs),
@@ -330,6 +334,9 @@ pub(super) fn parse_expr_bp(
             let span = tokens[*pos].1;
             *pos += 1;
             let rhs = parse_expr_bp(tokens, pos, r_bp)?;
+            // Widen only the END so the span covers through the value expression;
+            // the start stays on the operator token, keeping diagnostics anchored.
+            let span = span.merge(rhs.span);
             if is_non_local_assignment_target(&lhs) {
                 let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
 
@@ -436,6 +443,9 @@ pub(super) fn parse_expr_bp(
         let span = tokens[*pos].1;
         *pos += 1;
         let rhs = parse_expr_bp(tokens, pos, r_bp)?;
+        // Widen only the END through the right operand; the start stays on the
+        // operator token, keeping diagnostics anchored.
+        let span = span.merge(rhs.span);
         if op == BinOp::NullCoalesce {
             lhs = Expr::new(
                 ExprKind::NullCoalesce {
