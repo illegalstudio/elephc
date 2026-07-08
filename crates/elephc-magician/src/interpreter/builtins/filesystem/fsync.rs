@@ -16,6 +16,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use super::*;
 
 /// Dispatches direct eval calls for the `fsync` filesystem builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_fsync_declared_call(
@@ -24,7 +25,7 @@ pub(in crate::interpreter) fn eval_fsync_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::direct_dispatch::eval_builtin_filesystem_call_impl("fsync", args, context, scope, values)
+    eval_builtin_stream_sync("fsync", args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `fsync` filesystem builtin through the area dispatcher.
@@ -33,5 +34,39 @@ pub(in crate::interpreter) fn eval_fsync_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::values_dispatch::eval_filesystem_values_result_impl("fsync", evaluated_args, context, values)
+    match evaluated_args {
+        [stream] => eval_stream_sync_result("fsync", *stream, context, values),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Evaluates PHP `fsync($stream)` or `fdatasync($stream)` over one eval expression.
+pub(in crate::interpreter) fn eval_builtin_stream_sync(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [stream] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let stream = eval_expr(stream, context, scope, values)?;
+    eval_stream_sync_result(name, stream, context, values)
+}
+
+/// Synchronizes one materialized stream resource to storage.
+pub(in crate::interpreter) fn eval_stream_sync_result(
+    name: &str,
+    stream: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let id = eval_stream_resource_id(stream, values)?;
+    let ok = match name {
+        "fsync" => context.stream_resources_mut().sync_all(id),
+        "fdatasync" => context.stream_resources_mut().sync_data(id),
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    values.bool_value(ok)
 }

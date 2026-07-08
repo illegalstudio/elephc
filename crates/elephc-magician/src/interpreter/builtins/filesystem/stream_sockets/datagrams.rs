@@ -35,7 +35,7 @@ pub(in crate::interpreter) fn eval_stream_socket_sendto_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_fwrite_result(stream, data, context, values)
+    super::super::fwrite::eval_fwrite_result(stream, data, context, values)
 }
 
 /// Evaluates `stream_socket_recvfrom()` over full eval call metadata.
@@ -69,7 +69,7 @@ pub(in crate::interpreter) fn eval_stream_socket_recvfrom_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_fread_result(stream, length, context, values)
+    super::super::fread::eval_fread_result(stream, length, context, values)
 }
 
 /// Reads bytes from a connected socket stream and returns the tracked remote endpoint name.
@@ -81,6 +81,6 @@ pub(in crate::interpreter) fn eval_stream_socket_recvfrom_with_address_result(
 ) -> Result<(RuntimeCellHandle, Option<String>), EvalStatus> {
     let id = eval_socket_resource_id(stream, values)?;
     let address = context.stream_resources().socket_name(id, true);
-    let result = eval_fread_result(stream, length, context, values)?;
+    let result = super::super::fread::eval_fread_result(stream, length, context, values)?;
     Ok((result, address))
 }

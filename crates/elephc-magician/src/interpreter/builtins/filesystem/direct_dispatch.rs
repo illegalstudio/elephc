@@ -161,18 +161,10 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call_impl(
     match name {
         "basename" => super::basename::eval_basename_declared_call(args, context, scope, values),
         "fgetcsv" => eval_builtin_fgetcsv(args, context, scope, values),
-        "fclose" | "fgetc" | "fgets" | "feof" | "fflush" | "fpassthru" | "fsync"
-        | "fdatasync" | "ftell" | "rewind" | "fstat" | "stream_get_meta_data" => {
-            eval_builtin_unary_stream(name, args, context, scope, values)
-        }
         "fnmatch" => eval_builtin_fnmatch(args, context, scope, values),
         "fprintf" => eval_builtin_fprintf(args, context, scope, values),
         "fputcsv" => eval_builtin_fputcsv(args, context, scope, values),
-        "fread" => eval_builtin_fread(args, context, scope, values),
         "fscanf" => eval_builtin_fscanf(args, context, scope, values),
-        "fseek" => eval_builtin_fseek(args, context, scope, values),
-        "ftruncate" => eval_builtin_ftruncate(args, context, scope, values),
-        "fwrite" => eval_builtin_fwrite(args, context, scope, values),
         "readline" => eval_builtin_readline(args, context, scope, values),
         "realpath_cache_get" => eval_builtin_realpath_cache_get(args, values),
         "realpath_cache_size" => eval_builtin_realpath_cache_size(args, values),
@@ -202,7 +194,6 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call_impl(
         "stream_context_set_params" => {
             eval_builtin_stream_context_set_params(args, context, scope, values)
         }
-        "stream_copy_to_stream" => eval_builtin_stream_copy_to_stream(args, context, scope, values),
         "stream_filter_append" | "stream_filter_prepend" => {
             eval_builtin_stream_filter_attach(name, args, context, scope, values)
         }
@@ -210,8 +201,6 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call_impl(
             eval_builtin_stream_filter_register(args, context, scope, values)
         }
         "stream_filter_remove" => eval_builtin_stream_filter_remove(args, context, scope, values),
-        "stream_get_contents" => eval_builtin_stream_get_contents(args, context, scope, values),
-        "stream_get_line" => eval_builtin_stream_get_line(args, context, scope, values),
         "stream_isatty" => eval_builtin_stream_isatty(args, context, scope, values),
         "stream_set_blocking" => eval_builtin_stream_set_blocking(args, context, scope, values),
         "stream_set_chunk_size" | "stream_set_read_buffer" | "stream_set_write_buffer" => {

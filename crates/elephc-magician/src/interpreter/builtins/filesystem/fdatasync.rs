@@ -24,7 +24,7 @@ pub(in crate::interpreter) fn eval_fdatasync_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::direct_dispatch::eval_builtin_filesystem_call_impl("fdatasync", args, context, scope, values)
+    super::fsync::eval_builtin_stream_sync("fdatasync", args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `fdatasync` filesystem builtin through the area dispatcher.
@@ -33,5 +33,8 @@ pub(in crate::interpreter) fn eval_fdatasync_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::values_dispatch::eval_filesystem_values_result_impl("fdatasync", evaluated_args, context, values)
+    match evaluated_args {
+        [stream] => super::fsync::eval_stream_sync_result("fdatasync", *stream, context, values),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
