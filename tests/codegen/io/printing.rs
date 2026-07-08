@@ -327,6 +327,50 @@ fn test_print_r_return_length() {
     assert_eq!(out, "23");
 }
 
+/// Verifies `print_r($value, $flag)` with a runtime-truthy flag selects return
+/// mode at runtime: nothing is echoed by print_r and the rendered string is
+/// returned (as a boxed Mixed value, since the static type is `string|bool`).
+#[test]
+fn test_print_r_return_runtime_flag_true() {
+    let out = compile_and_run(
+        r#"<?php
+$flag = $argc > 0;
+$r = print_r("hi", $flag);
+echo "|";
+echo $r;
+"#,
+    );
+    assert_eq!(out, "|hi");
+}
+
+/// Verifies `print_r($value, $flag)` with a runtime-falsy flag keeps echo mode:
+/// the value is printed and the call returns boolean true.
+#[test]
+fn test_print_r_return_runtime_flag_false() {
+    let out = compile_and_run(
+        r#"<?php
+$flag = $argc > 5;
+$r = print_r("hi", $flag);
+echo "|";
+var_dump($r);
+"#,
+    );
+    assert_eq!(out, "hi|bool(true)\n");
+}
+
+/// Verifies the runtime-flag return mode captures a full array body through the
+/// recursive walker writes, exactly like the literal `true` fast path.
+#[test]
+fn test_print_r_return_runtime_flag_array() {
+    let out = compile_and_run(
+        r#"<?php
+$flag = $argc > 0;
+echo print_r([1, 2], $flag);
+"#,
+    );
+    assert_eq!(out, "Array\n(\n    [0] => 1\n    [1] => 2\n)\n");
+}
+
 /// Verifies `print_r($value, true)` clamps the capture at the 64 KiB buffer size
 /// instead of overflowing into adjacent runtime data. PHP would return all 70000
 /// bytes; elephc truncates at 65536 (documented safety cap of the fixed buffer).

@@ -7,10 +7,12 @@
 //!
 //! Key details:
 //! - `check` refines the return type from the literal `$return` flag:
-//!   `print_r($v, true)` returns `Str` (the rendered output), while `print_r($v)` /
-//!   `print_r($v, false)` echo and return `Bool` (true). `returns: Mixed` is only the
-//!   declaration fallback; the EIR-side return typing lives in
-//!   `crate::ir_lower::expr::print_r_builtin_return_type_for_args` and must stay aligned.
+//!   `print_r($v, true)` returns `Str` (the rendered output), `print_r($v)` /
+//!   `print_r($v, false)` echo and return `Bool` (true), and a runtime flag returns
+//!   `Mixed` (`string|bool`, boxed). The EIR-side return typing lives in
+//!   `crate::ir_lower::expr::print_r_builtin_return_type_for_args` and the codegen
+//!   dispatch in `debug::lower_print_r` follows the same result type — the three
+//!   must stay aligned.
 //! - `lower` is a thin wrapper over `debug::lower_print_r` in the EIR backend.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
@@ -32,15 +34,19 @@ builtin! {
     php_manual: "function.print-r",
 }
 
-/// Refines `print_r`'s return type from the literal `$return` flag: a literal `true`
-/// selects return mode (`Str`); anything else keeps PHP's echo mode (`Bool`, always true).
+/// Refines `print_r`'s return type from the `$return` flag: a literal `true` selects
+/// return mode (`Str`), a literal `false` (or an omitted flag) keeps PHP's echo mode
+/// (`Bool`, always true), and a runtime flag yields boxed `Mixed` (`string|bool`)
+/// because the mode is only selected at run time.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    if let Some(flag) = cx.args.get(1) {
-        if matches!(flag.kind, ExprKind::BoolLiteral(true)) {
-            return Ok(PhpType::Str);
-        }
+    match cx.args.get(1) {
+        Some(flag) => match &flag.kind {
+            ExprKind::BoolLiteral(true) => Ok(PhpType::Str),
+            ExprKind::BoolLiteral(false) => Ok(PhpType::Bool),
+            _ => Ok(PhpType::Mixed),
+        },
+        None => Ok(PhpType::Bool),
     }
-    Ok(PhpType::Bool)
 }
 
 /// Lowers a `print_r` call by dispatching to the shared debug emitter.

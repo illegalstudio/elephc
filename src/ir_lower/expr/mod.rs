@@ -5895,9 +5895,10 @@ fn microtime_builtin_return_type_for_args(args: &[Expr]) -> Option<PhpType> {
 ///
 /// `print_r($v, true)` returns a `Str` (the rendered output); `print_r($v)` /
 /// `print_r($v, false)` echoes and returns `Bool` (true). A non-literal flag returns
-/// `None` so the result type falls back to the `Mixed` declared in `call_return_type`.
-/// This must match the checker (`src/types/checker/builtins/io/debug.rs`) and the EIR
-/// backend dispatch in `lower_print_r`.
+/// `None` so the result type falls back to the `Mixed` declared in `call_return_type`
+/// (`string|bool`, boxed — the mode is selected at run time). This must match the
+/// checker hook (`src/builtins/io/print_r.rs`) and the EIR backend dispatch in
+/// `lower_print_r`, which switches on this result type.
 fn print_r_builtin_return_type_for_args(args: &[Expr]) -> Option<PhpType> {
     match args.get(1) {
         Some(arg) => match &arg.kind {
