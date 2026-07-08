@@ -36,6 +36,7 @@ macro_rules! eval_builtin {
                 ],
                 variadic: None,
                 by_ref_params: &[$(eval_builtin!(@name_str $by_ref)),*],
+                required_param_count: None,
                 direct: Some($crate::interpreter::builtins::spec::EvalDirectHook::$direct),
                 values: Some($crate::interpreter::builtins::spec::EvalValuesHook::$values),
             }
@@ -66,6 +67,38 @@ macro_rules! eval_builtin {
                 ],
                 variadic: Some(eval_builtin!(@name_str $variadic)),
                 by_ref_params: &[],
+                required_param_count: None,
+                direct: Some($crate::interpreter::builtins::spec::EvalDirectHook::$direct),
+                values: Some($crate::interpreter::builtins::spec::EvalValuesHook::$values),
+            }
+        }
+    };
+
+    (
+        name: $name:literal,
+        area: $area:ident,
+        params: [$($param:ident $(= $default:expr)?),* $(,)?],
+        required: $required:expr,
+        direct: $direct:ident,
+        values: $values:ident $(,)?
+    ) => {
+        inventory::submit! {
+            $crate::interpreter::builtins::spec::EvalBuiltinSpec {
+                name: $name,
+                area: $crate::interpreter::builtins::spec::EvalArea::$area,
+                param_names: &[$(eval_builtin!(@name_str $param)),*],
+                params: &[
+                    $(
+                        $crate::interpreter::builtins::spec::EvalParamSpec {
+                            name: eval_builtin!(@name_str $param),
+                            default: eval_builtin!(@default $($default)?),
+                            by_ref: false,
+                        },
+                    )*
+                ],
+                variadic: None,
+                by_ref_params: &[],
+                required_param_count: Some($required),
                 direct: Some($crate::interpreter::builtins::spec::EvalDirectHook::$direct),
                 values: Some($crate::interpreter::builtins::spec::EvalValuesHook::$values),
             }
@@ -95,6 +128,7 @@ macro_rules! eval_builtin {
                 ],
                 variadic: None,
                 by_ref_params: &[],
+                required_param_count: None,
                 direct: Some($crate::interpreter::builtins::spec::EvalDirectHook::$direct),
                 values: Some($crate::interpreter::builtins::spec::EvalValuesHook::$values),
             }

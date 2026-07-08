@@ -12,16 +12,16 @@
 use super::super::super::{
     eval_builtin_base64_decode, eval_builtin_base64_encode, eval_builtin_bin2hex,
     eval_builtin_ceil, eval_builtin_chr, eval_builtin_clamp, eval_builtin_count,
-    eval_builtin_crc32, eval_builtin_ctype, eval_builtin_float_binary, eval_builtin_float_pair,
-    eval_builtin_float_unary, eval_builtin_floor, eval_builtin_gettype, eval_builtin_gzip,
-    eval_builtin_hash_algos, eval_builtin_hash_copy, eval_builtin_hash_final,
+    eval_builtin_crc32, eval_builtin_ctype, eval_builtin_explode, eval_builtin_float_binary,
+    eval_builtin_float_pair, eval_builtin_float_unary, eval_builtin_floor, eval_builtin_gettype,
+    eval_builtin_gzip, eval_builtin_hash_algos, eval_builtin_hash_copy, eval_builtin_hash_final,
     eval_builtin_hash_init, eval_builtin_hash_one_shot, eval_builtin_hash_update,
-    eval_builtin_hex2bin, eval_builtin_intdiv, eval_builtin_log, eval_builtin_min_max,
-    eval_builtin_number_format, eval_builtin_ord, eval_builtin_pi, eval_builtin_pow,
-    eval_builtin_round, eval_builtin_slashes, eval_builtin_sqrt, eval_builtin_str_repeat,
-    eval_builtin_strlen, eval_builtin_type_predicate, eval_builtin_url_decode,
-    eval_builtin_url_encode, ElephcEvalContext, ElephcEvalScope, EvalExpr, EvalStatus,
-    RuntimeCellHandle, RuntimeValueOps,
+    eval_builtin_hex2bin, eval_builtin_implode, eval_builtin_intdiv, eval_builtin_log,
+    eval_builtin_min_max, eval_builtin_number_format, eval_builtin_ord, eval_builtin_pi,
+    eval_builtin_pow, eval_builtin_round, eval_builtin_slashes, eval_builtin_sqrt,
+    eval_builtin_str_repeat, eval_builtin_strlen, eval_builtin_type_predicate,
+    eval_builtin_url_decode, eval_builtin_url_encode, ElephcEvalContext, ElephcEvalScope,
+    EvalExpr, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
 };
 use super::super::{
     eval_builtin_abs, eval_builtin_array_aggregate, eval_builtin_array_flip,
@@ -145,6 +145,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     StringPosition,
     /// Dispatches string search predicate builtins.
     StringSearch,
+    /// Dispatches `explode(...)` and `implode(...)`.
+    StringSplitJoin,
     /// Dispatches stream boolean predicate builtins.
     StreamBoolPredicate,
     /// Dispatches stream introspection list builtins.
@@ -256,6 +258,11 @@ impl EvalDirectHook {
                 eval_builtin_string_position(name, args, context, scope, values)
             }
             Self::StringSearch => eval_builtin_string_search(name, args, context, scope, values),
+            Self::StringSplitJoin => match name {
+                "explode" => eval_builtin_explode(args, context, scope, values),
+                "implode" => eval_builtin_implode(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::StreamBoolPredicate => {
                 eval_builtin_stream_bool_predicate(name, args, context, scope, values)
             }

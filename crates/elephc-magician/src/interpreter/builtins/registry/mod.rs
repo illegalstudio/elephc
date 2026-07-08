@@ -105,6 +105,13 @@ fn validate_declared_builtin_spec(spec: &EvalBuiltinSpec) {
             spec.name
         );
     }
+    if let Some(required_param_count) = spec.required_param_count {
+        assert!(
+            required_param_count <= spec.params.len(),
+            "eval builtin {} has a required parameter count larger than its parameter list",
+            spec.name
+        );
+    }
     let _ = spec.area();
 }
 
@@ -215,6 +222,7 @@ mod tests {
             "dirname",
             "disk_free_space",
             "disk_total_space",
+            "explode",
             "file",
             "file_exists",
             "file_get_contents",
@@ -267,6 +275,7 @@ mod tests {
             "hex2bin",
             "htmlspecialchars",
             "hrtime",
+            "implode",
             "intval",
             "is_array",
             "is_bool",
@@ -764,6 +773,26 @@ mod tests {
         assert_eq!(
             eval_declared_builtin_param_names("stream_get_filters"),
             Some([].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("explode"),
+            Some(["separator", "string", "limit"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("explode", 2),
+            Some(EvalBuiltinDefaultValue::Int(i64::MAX))
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("implode"),
+            Some(["separator", "array"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("implode", 0),
+            Some(EvalBuiltinDefaultValue::Null)
+        );
+        assert_eq!(
+            eval_builtin_signature_shape("implode").map(|shape| shape.required_param_count),
+            Some(1)
         );
         assert_eq!(
             eval_declared_builtin_param_names("gzcompress"),

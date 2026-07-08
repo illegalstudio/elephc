@@ -14,7 +14,6 @@ mod filesystem;
 mod formatting;
 mod network_env;
 mod scalars;
-mod strings;
 mod symbols;
 mod time;
 
@@ -27,7 +26,6 @@ use filesystem::*;
 use formatting::*;
 use network_env::*;
 use scalars::*;
-use strings::*;
 use symbols::*;
 use time::*;
 
@@ -58,9 +56,6 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
     if let Some(result) =
         eval_raw_memory_builtin_with_values(name, evaluated_args, context, values)?
     {
-        return Ok(Some(result));
-    }
-    if let Some(result) = eval_strings_builtin_with_values(name, evaluated_args, context, values)? {
         return Ok(Some(result));
     }
     if let Some(result) = eval_scalars_builtin_with_values(name, evaluated_args, context, values)? {

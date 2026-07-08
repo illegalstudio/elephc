@@ -36,9 +36,6 @@ const EVAL_DYNAMIC_DISPATCH_SOURCES: &[&str] = &[
         "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/scalars.rs"
     ),
     include_str!(
-        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/strings.rs"
-    ),
-    include_str!(
         "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/symbols.rs"
     ),
     include_str!(
@@ -142,6 +139,7 @@ const EVAL_DECLARATIVE_REGISTRY_BUILTINS: &[&str] = &[
     "dirname",
     "disk_free_space",
     "disk_total_space",
+    "explode",
     "exp",
     "fdiv",
     "file",
@@ -201,6 +199,7 @@ const EVAL_DECLARATIVE_REGISTRY_BUILTINS: &[&str] = &[
     "htmlspecialchars",
     "hrtime",
     "hypot",
+    "implode",
     "intdiv",
     "intval",
     "is_array",

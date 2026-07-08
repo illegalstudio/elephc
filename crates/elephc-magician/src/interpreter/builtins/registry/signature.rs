@@ -79,8 +79,6 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "is_callable" => optional_by_ref(params, 1, &["callable_name"]),
         "php_uname" | "readline" | "exit" | "die" => optional(params, 0),
 
-        "explode" => optional(params, 2),
-        "implode" => optional(params, 1),
         "sprintf" | "printf" | "sscanf" => variadic(params, &[]),
         "fprintf" | "fscanf" => variadic(params, &[]),
 
@@ -157,9 +155,6 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("php_uname", 0) => String("a"),
         ("readline", 0) => Null,
         ("exit" | "die", 0) => Int(0),
-
-        ("explode", 2) => Int(i64::MAX),
-        ("implode", 0) => Null,
 
         ("array_splice", 2) => Null,
         ("array_splice", 3) => EmptyArray,

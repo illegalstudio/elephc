@@ -33,6 +33,7 @@ use super::super::{
     eval_url_decode_result, eval_url_encode_result, eval_wordwrap_result,
 };
 use super::hash::{eval_hash_algos_values, eval_hash_context_values};
+use super::string_split_join::eval_string_split_join_values;
 
 /// Evaluated-argument dispatch hooks for migrated builtins.
 #[derive(Clone, Copy)]
@@ -141,6 +142,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StringPosition,
     /// Dispatches string search predicate builtins.
     StringSearch,
+    /// Dispatches `explode(...)` and `implode(...)`.
+    StringSplitJoin,
     /// Dispatches stream boolean predicate builtins.
     StreamBoolPredicate,
     /// Dispatches stream introspection list builtins.
@@ -327,6 +330,7 @@ impl EvalValuesHook {
             Self::StringSearch => two_args(evaluated_args, values, |haystack, needle, values| {
                 eval_string_search_result(name, haystack, needle, values)
             }),
+            Self::StringSplitJoin => eval_string_split_join_values(name, evaluated_args, values),
             Self::StreamBoolPredicate => one_arg(evaluated_args, values, |stream, values| {
                 eval_stream_bool_predicate_result(name, stream, values)
             }),

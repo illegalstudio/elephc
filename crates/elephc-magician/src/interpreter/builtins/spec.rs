@@ -63,6 +63,8 @@ pub(in crate::interpreter) struct EvalBuiltinSpec {
     pub(in crate::interpreter) variadic: Option<&'static str>,
     /// Parameter names that must bind by reference.
     pub(in crate::interpreter) by_ref_params: &'static [&'static str],
+    /// Explicit required parameter count for non-trailing default shapes.
+    pub(in crate::interpreter) required_param_count: Option<usize>,
     /// Direct expression-level dispatch hook.
     pub(in crate::interpreter) direct: Option<EvalDirectHook>,
     /// Evaluated-argument dispatch hook.
@@ -77,6 +79,9 @@ impl EvalBuiltinSpec {
 
     /// Returns the number of required leading parameters.
     pub(in crate::interpreter) fn required_param_count(&self) -> usize {
+        if let Some(required_param_count) = self.required_param_count {
+            return required_param_count;
+        }
         self.params
             .iter()
             .take_while(|param| param.default.is_none())

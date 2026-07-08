@@ -10,6 +10,7 @@
 
 mod direct;
 mod hash;
+mod string_split_join;
 mod values;
 
 pub(in crate::interpreter) use direct::EvalDirectHook;

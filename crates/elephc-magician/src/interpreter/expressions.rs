@@ -1580,7 +1580,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_process_command(name, args, context, scope, values)
         }
         "eval" => eval_nested_eval(args, context, scope, values),
-        "explode" => eval_builtin_explode(args, context, scope, values),
         "fgetcsv" => eval_builtin_fgetcsv(args, context, scope, values),
         "fopen" => eval_builtin_fopen(args, context, scope, values),
         "fputcsv" => eval_builtin_fputcsv(args, context, scope, values),
@@ -1608,7 +1607,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         }
         "getenv" => eval_builtin_getenv(args, context, scope, values),
         "header" => eval_builtin_header(args, context, scope, values),
-        "implode" => eval_builtin_implode(args, context, scope, values),
         "inet_ntop" => eval_builtin_inet_ntop(args, context, scope, values),
         "inet_pton" => eval_builtin_inet_pton(args, context, scope, values),
         "iterator_apply" => eval_builtin_iterator_apply(args, context, scope, values),
