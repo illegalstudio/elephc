@@ -24,14 +24,14 @@ pub(in crate::interpreter) fn eval_spl_autoload_functions_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_builtin_symbols_call_impl("spl_autoload_functions", args, context, scope, values)
+    super::super::eval_builtin_spl_autoload_functions(args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `spl_autoload_functions` symbol builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_spl_autoload_functions_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
+    _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_symbols_values_result_impl("spl_autoload_functions", evaluated_args, context, values)
+    super::super::eval_spl_autoload_functions_result(evaluated_args, values)
 }

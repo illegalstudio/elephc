@@ -24,7 +24,7 @@ pub(in crate::interpreter) fn eval_property_exists_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_builtin_symbols_call_impl("property_exists", args, context, scope, values)
+    super::super::eval_builtin_member_exists("property_exists", args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `property_exists` symbol builtin through the area dispatcher.
@@ -33,5 +33,5 @@ pub(in crate::interpreter) fn eval_property_exists_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_symbols_values_result_impl("property_exists", evaluated_args, context, values)
+    super::super::eval_member_exists_result("property_exists", evaluated_args, context, values)
 }

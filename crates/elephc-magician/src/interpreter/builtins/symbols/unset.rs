@@ -25,14 +25,14 @@ pub(in crate::interpreter) fn eval_unset_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_builtin_symbols_call_impl("unset", args, context, scope, values)
+    super::language_constructs::eval_builtin_unset(args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `unset` symbol builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_unset_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
+    _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_symbols_values_result_impl("unset", evaluated_args, context, values)
+    super::language_constructs::eval_unset_result(evaluated_args, values)
 }

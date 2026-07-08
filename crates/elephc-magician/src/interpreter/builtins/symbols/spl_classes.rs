@@ -21,20 +21,20 @@ use super::super::super::*;
 /// Dispatches direct eval calls for the `spl_classes` symbol builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_spl_classes_declared_call(
     args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
+    _context: &mut ElephcEvalContext,
+    _scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_builtin_symbols_call_impl("spl_classes", args, context, scope, values)
+    super::spl_classes::eval_builtin_spl_classes(args, values)
 }
 
 /// Dispatches evaluated-argument calls for the `spl_classes` symbol builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_spl_classes_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
+    _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_symbols_values_result_impl("spl_classes", evaluated_args, context, values)
+    if evaluated_args.is_empty() { super::spl_classes::eval_spl_classes_result(values) } else { Err(EvalStatus::RuntimeFatal) }
 }
 
 /// Evaluates PHP `spl_classes()` with no arguments.

@@ -26,7 +26,7 @@ pub(in crate::interpreter) fn eval_get_parent_class_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_builtin_symbols_call_impl("get_parent_class", args, context, scope, values)
+    super::super::eval_builtin_get_parent_class(args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `get_parent_class` symbol builtin through the area dispatcher.
@@ -35,5 +35,5 @@ pub(in crate::interpreter) fn eval_get_parent_class_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_symbols_values_result_impl("get_parent_class", evaluated_args, context, values)
+    match evaluated_args { [] => super::super::eval_get_parent_class_no_arg_result(context, values), [object_or_class] => super::super::eval_get_parent_class_result(*object_or_class, context, values), _ => Err(EvalStatus::RuntimeFatal), }
 }

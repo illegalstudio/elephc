@@ -24,14 +24,14 @@ pub(in crate::interpreter) fn eval_empty_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_builtin_symbols_call_impl("empty", args, context, scope, values)
+    super::language_constructs::eval_builtin_empty(args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `empty` symbol builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_empty_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
+    _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_symbols_values_result_impl("empty", evaluated_args, context, values)
+    super::language_constructs::eval_empty_result(evaluated_args, values)
 }

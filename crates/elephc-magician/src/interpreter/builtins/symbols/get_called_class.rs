@@ -21,10 +21,10 @@ use super::super::super::*;
 pub(in crate::interpreter) fn eval_get_called_class_declared_call(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
+    _scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_builtin_symbols_call_impl("get_called_class", args, context, scope, values)
+    super::super::eval_builtin_get_called_class(args, context, values)
 }
 
 /// Dispatches evaluated-argument calls for the `get_called_class` symbol builtin through the area dispatcher.
@@ -33,5 +33,5 @@ pub(in crate::interpreter) fn eval_get_called_class_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_symbols_values_result_impl("get_called_class", evaluated_args, context, values)
+    if evaluated_args.is_empty() { super::super::eval_get_called_class_result(context, values) } else { Err(EvalStatus::RuntimeFatal) }
 }

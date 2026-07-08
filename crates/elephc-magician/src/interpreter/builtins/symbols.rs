@@ -58,9 +58,7 @@ mod trait_exists;
 mod unset;
 
 pub(in crate::interpreter) use callable_probe::*;
-pub(in crate::interpreter) use class_names::*;
 pub(in crate::interpreter) use class_relations::*;
 pub(in crate::interpreter) use dispatch::{eval_builtin_symbols_call, eval_symbols_values_result};
 pub(in crate::interpreter) use function_probe::*;
-pub(in crate::interpreter) use language_constructs::*;
 use super::*;

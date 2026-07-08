@@ -24,7 +24,7 @@ pub(in crate::interpreter) fn eval_method_exists_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_builtin_symbols_call_impl("method_exists", args, context, scope, values)
+    super::super::eval_builtin_member_exists("method_exists", args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `method_exists` symbol builtin through the area dispatcher.
@@ -33,5 +33,5 @@ pub(in crate::interpreter) fn eval_method_exists_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::dispatch::eval_symbols_values_result_impl("method_exists", evaluated_args, context, values)
+    super::super::eval_member_exists_result("method_exists", evaluated_args, context, values)
 }
