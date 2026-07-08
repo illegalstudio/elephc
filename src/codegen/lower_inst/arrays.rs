@@ -319,7 +319,7 @@ fn lower_load_array_elem_ref_cell_x86_64(
     } else {
         ctx.emitter.instruction(&format!("shl {}, 3", idx_reg));                // scale the offset by the 8-byte element slot width
     }
-    ctx.emitter.instruction(&format!("add {}, {}, {}", idx_reg, array_reg, idx_reg)); // compute the element address within the array payload
+    ctx.emitter.instruction(&format!("add {}, {}", idx_reg, array_reg));        // compute the element address within the array payload
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the null fallback after computing the element address
     ctx.emitter.label(&null_label);
     abi::emit_load_int_immediate(ctx.emitter, idx_reg, 0);                      // materialize a null cell pointer for invalid indices
