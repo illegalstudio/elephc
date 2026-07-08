@@ -1,22 +1,22 @@
 ---
 title: "preg_match()"
-description: "Lowers `preg_match(pattern, subject)` through the shared regex runtime helper."
+description: "Performs a regular expression match."
 sidebar:
-  order: 294
+  order: 315
 ---
 
 ## preg_match()
 
 ```php
-function preg_match(string $pattern, string $subject, array $matches): int
+function preg_match(string $pattern, string $subject, array $matches = []): int
 ```
 
-Lowers `preg_match(pattern, subject)` through the shared regex runtime helper.
+Performs a regular expression match.
 
 **Parameters**:
 - `$pattern` (`string`)
 - `$subject` (`string`)
-- `$matches` (`array`), passed by reference, optional
+- `$matches` (`array`), passed by reference, default `[]`, optional
 
 **Returns**: `int`
 

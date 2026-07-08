@@ -1,22 +1,21 @@
 ---
 title: "array_column()"
-description: "Lowers `array_column()` by dispatching to the helper matching row value ownership."
+description: "Returns the values from a single column of an array of arrays."
 sidebar:
-  order: 2
+  order: 4
 ---
 
 ## array_column()
 
 ```php
-function array_column(array $array, string $column_key, string $index_key): array
+function array_column(array $array, string $column_key): array
 ```
 
-Lowers `array_column()` by dispatching to the helper matching row value ownership.
+Returns the values from a single column of an array of arrays.
 
 **Parameters**:
 - `$array` (`array`)
 - `$column_key` (`string`)
-- `$index_key` (`string`)
 
 **Returns**: `array`
 

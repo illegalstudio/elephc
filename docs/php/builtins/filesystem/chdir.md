@@ -1,8 +1,8 @@
 ---
 title: "chdir()"
-description: "Lowers `chdir(path)` through the target-aware runtime helper."
+description: "Changes the current directory."
 sidebar:
-  order: 82
+  order: 99
 ---
 
 ## chdir()
@@ -11,7 +11,7 @@ sidebar:
 function chdir(string $directory): bool
 ```
 
-Lowers `chdir(path)` through the target-aware runtime helper.
+Changes the current directory.
 
 **Parameters**:
 - `$directory` (`string`)

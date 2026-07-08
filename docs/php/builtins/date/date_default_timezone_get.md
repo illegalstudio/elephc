@@ -1,8 +1,8 @@
 ---
 title: "date_default_timezone_get()"
-description: "Lowers `date_default_timezone_get()` through the shared runtime helper."
+description: "Gets the default timezone."
 sidebar:
-  order: 70
+  order: 87
 ---
 
 ## date_default_timezone_get()
@@ -11,7 +11,7 @@ sidebar:
 function date_default_timezone_get(): string
 ```
 
-Lowers `date_default_timezone_get()` through the shared runtime helper.
+Gets the default timezone.
 
 **Parameters**: none.
 

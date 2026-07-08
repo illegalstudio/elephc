@@ -1,8 +1,8 @@
 ---
 title: "fread()"
-description: "Lowers `fread(stream, length)` using the shared runtime file-read helper."
+description: "Binary-safe file read."
 sidebar:
-  order: 152
+  order: 169
 ---
 
 ## fread()
@@ -11,7 +11,7 @@ sidebar:
 function fread(resource $stream, int $length): string
 ```
 
-Lowers `fread(stream, length)` using the shared runtime file-read helper.
+Binary-safe file read.
 
 **Parameters**:
 - `$stream` (`resource`)

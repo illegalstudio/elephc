@@ -2,15 +2,15 @@
 title: "is_resource() — internals"
 description: "Compiler internals for is_resource(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 410
+  order: 428
 ---
 
 ## `is_resource()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/types.rs`:400](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/types.rs#L400) (`lower_is_resource`)
+- **Signature**: [`src/builtins/types/is_resource.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_resource.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:400](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L400) (`lower_is_resource`)
 - **Function symbol**: `lower_is_resource()`
 
 
@@ -35,4 +35,3 @@ function is_resource(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_resource()`](../../../php/builtins/type/is_resource.md)
-

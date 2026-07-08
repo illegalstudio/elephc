@@ -18,14 +18,17 @@ use crate::ir::{
 use crate::ir_lower::context::{FinallyFrame, LoopCleanup, LoopFrame, LoweredValue, LoweringContext};
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
-    coerce_to_int_at_span, lower_callable_array_for_assignment, lower_closure_for_assignment, lower_expr,
+    array_access_element_result_type, coerce_to_int_at_span, lower_callable_array_for_assignment,
+    lower_array_literal_with_expected_type, lower_closure_for_assignment, lower_expr,
     static_callable_binding_for_expr, string_op_uses_scratch_storage,
     type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
-use crate::parser::ast::{CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::parser::ast::{
+    is_compound_assignment_self_read, CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
+};
 use crate::span::Span;
-use crate::types::PhpType;
+use crate::types::{PhpType, ThrowAccessKind};
 
 /// Lowers one AST statement into the current EIR insertion block.
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
@@ -212,6 +215,18 @@ fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) {
 
 /// Lowers a plain PHP local assignment.
 fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
+    // PHP allows compound assignment on an undefined variable (`$x += 1`),
+    // treating the undefined variable as null/0 with a warning. The type
+    // checker injects the variable as `Void` and emits a warning. At the
+    // lowering level, we must initialize the local slot to null/0 before
+    // the compound read so the runtime does not read garbage from the stack.
+    if is_compound_assignment_self_read(value, name, span) && !ctx.has_local_slot(name) {
+        let null_value = ctx.builder.emit_const_null();
+        let null_lowered = LoweredValue { value: null_value, ir_type: IrType::I64 };
+        ctx.store_local(name, null_lowered, PhpType::Void, Some(span));
+        ctx.mark_local_initialized(name);
+    }
+
     // A by-reference `Closure::bind(fn &() => $this->prop, $obj, $obj)` assigned to a variable is
     // tracked as a static callable, like a closure literal, so a later `$b()` lowers to a direct
     // call that carries the property's reference-cell pointer instead of boxing it.
@@ -225,7 +240,11 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
         .as_ref()
         .map(|assignment| assignment.value)
         .or_else(|| lower_closure_for_assignment(ctx, name, value))
-        .or_else(|| bound_closure.then(|| crate::ir_lower::expr::lower_bound_closure_for_assignment(ctx, value)).flatten())
+        .or_else(|| {
+            bound_closure
+                .then(|| crate::ir_lower::expr::lower_bound_closure_for_assignment(ctx, value))
+                .flatten()
+        })
         .unwrap_or_else(|| lower_expr(ctx, value));
     let (lowered, php_type) = contextualize_array_assignment(ctx, name, value, lowered, span);
     ctx.store_local(name, lowered, php_type, Some(span));
@@ -239,12 +258,24 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
         .map(|assignment| assignment.target)
         .or(static_callable)
         .or(callable_result);
-    if let Some(target) = static_callable {
-        ctx.bind_static_callable_local(name, target);
+    if !closure_captures_local(value, name) {
+        if let Some(target) = static_callable {
+            ctx.bind_static_callable_local(name, target);
+        }
     }
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);
     }
+}
+
+/// Returns whether a closure literal captures the local being assigned.
+fn closure_captures_local(value: &Expr, name: &str) -> bool {
+    matches!(
+        &value.kind,
+        ExprKind::Closure { captures, capture_refs, .. }
+            if captures.iter().any(|capture| capture == name)
+                || capture_refs.iter().any(|capture| capture == name)
+    )
 }
 
 /// Converts indexed array literals to hash storage when checker facts require an assoc local.
@@ -617,14 +648,36 @@ fn lower_array_assign(
     let mut index_value = lower_expr(ctx, index);
     let mut value_value = lower_expr(ctx, value);
     let op = array_set_op(array_value.ir_type);
+    // A literal string index always means a hash key, so promote the destination
+    // to associative storage like PHP. A boxed Mixed/Union index may hold either
+    // an integer or a string key (foreach loop keys are always Mixed in EIR via
+    // `Op::IterCurrentKey`), so it goes through `Op::ArraySetMixedKey`, whose
+    // runtime helper keeps integer keys on indexed storage (preserving indexed
+    // consumers like `implode`) and promotes only string keys to a hash. This
+    // stops a `foreach($arr as $k=>$v) $dst[$k]=$v` rebuild from collapsing a
+    // string key onto int 0. A foreach key over a concretely-indexed array is
+    // known to be int-valued, so it is left on the coerce path to avoid
+    // needlessly dispatching.
     if op == Op::ArraySet && index_value.ir_type == IrType::Str {
         lower_string_key_array_promotion(ctx, array, array_value, index_value, value_value, span);
+        return;
+    }
+    if op == Op::ArraySet
+        && index_is_boxed_mixed_key(index_value.ir_type)
+        && !index_is_foreach_int_key(ctx, index)
+    {
+        lower_mixed_key_array_set(ctx, array, array_value, index_value, value_value, span);
         return;
     }
     if op == Op::ArraySet {
         index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
         let array_ty = ctx.builder.value_php_type(array_value.value);
         value_value = coerce_indexed_array_set_value(ctx, &array_ty, value_value, Some(value.span));
+    }
+    if op == Op::BufferSet {
+        index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+        let buffer_ty = ctx.builder.value_php_type(array_value.value);
+        value_value = coerce_buffer_set_value(ctx, &buffer_ty, value_value, Some(value.span));
     }
     if op == Op::ArraySet {
         let (array_value, updated_ty, needs_storeback) =
@@ -644,6 +697,27 @@ fn lower_array_assign(
     ctx.emit_void(op, vec![array_value.value, index_value.value, value_value.value], None, op.default_effects(), Some(span));
     release_persisted_string_operand(ctx, index_value, span);
     release_persisted_string_operand(ctx, value_value, span);
+}
+
+/// Coerces a buffer element write value into the scalar storage accepted by `BufferSet`.
+fn coerce_buffer_set_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    buffer_ty: &PhpType,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> LoweredValue {
+    let coerced = match buffer_ty.codegen_repr() {
+        PhpType::Buffer(elem_ty) => match elem_ty.codegen_repr() {
+            PhpType::Float => coerce_to_float(ctx, value, span),
+            PhpType::Int | PhpType::Bool => coerce_to_int(ctx, value, span),
+            _ => value,
+        },
+        _ => value,
+    };
+    if coerced.value != value.value && ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    }
+    coerced
 }
 
 /// Promotes an indexed local array to a Mixed-valued associative array for string-key writes.
@@ -676,6 +750,34 @@ fn lower_string_key_array_promotion(
     release_persisted_string_operand(ctx, index, span);
     release_persisted_string_operand(ctx, value, span);
     ctx.store_mutated_local(array, hash, assoc_ty, Some(span));
+}
+
+/// Writes `value` into the indexed local `array` under a boxed Mixed/Union key.
+///
+/// The destination stays statically `Array(Mixed)` (so indexed consumers such as
+/// `implode` keep routing to the indexed path) while `Op::ArraySetMixedKey`
+/// dispatches the key tag at runtime: integer keys stay on indexed storage and
+/// string keys promote the destination to a hash. This is the Mixed-key analogue
+/// of `lower_string_key_array_promotion`, which unconditionally promotes because
+/// a literal string key is always a hash key.
+fn lower_mixed_key_array_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    index: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+) {
+    let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let result = ctx.emit_value(
+        Op::ArraySetMixedKey,
+        vec![array_value.value, index.value, value.value],
+        None,
+        mixed_array_ty.clone(),
+        Op::ArraySetMixedKey.default_effects(),
+        Some(span),
+    );
+    ctx.store_mutated_local(array, result, mixed_array_ty, Some(span));
 }
 
 /// Returns the associative type produced by a string-key write to an indexed array.
@@ -979,9 +1081,23 @@ fn lower_foreach(
     body: &[Stmt],
 ) {
     let source = lower_expr(ctx, array);
-    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    let source_php_ty = ctx.builder.value_php_type(source.value);
+    let source_ty = source_php_ty.codegen_repr();
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
     let value_needs_null_init = !ctx.local_slots.contains_key(value_var);
+    // A foreach over a concretely-indexed array (`Array` of a non-Mixed element
+    // type) always yields integer keys, even though `Op::IterCurrentKey` lowers
+    // the key as Mixed. Tag the key local so a `$dst[$key] = ...` write coerces
+    // the int-valued Mixed key to int instead of promoting the destination to a
+    // hash. Generic `Array(Mixed)`, `AssocArray`, `Mixed`, and `Union` sources
+    // may carry string keys and are left untagged so the write promotes.
+    if let Some(key_var) = key_var {
+        if let PhpType::Array(elem_ty) = &source_php_ty {
+            if !matches!(elem_ty.as_ref(), PhpType::Mixed) {
+                ctx.mark_foreach_int_key(key_var);
+            }
+        }
+    }
     let iterator = ctx.emit_value(
         Op::IterStart,
         vec![source.value],
@@ -1219,9 +1335,15 @@ fn lower_dynamic_switch_dispatch(
     default_block: BlockId,
 ) {
     let subject_is_str = subject.ir_type == IrType::Str;
-    // Non-string subjects are coerced to an integer once and reused by the ICmp path.
-    let int_subject =
-        if subject_is_str { None } else { Some(coerce_to_int(ctx, subject, None)) };
+    let subject_is_mixed = matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Mixed));
+    // Non-string, non-Mixed subjects are coerced to an integer once and reused by the ICmp path.
+    // Mixed subjects must use loose equality for every case because the runtime tag may be
+    // float, string, bool, etc. — coercing to int would truncate a float (issue #397).
+    let int_subject = if subject_is_str || subject_is_mixed {
+        None
+    } else {
+        Some(coerce_to_int(ctx, subject, None))
+    };
     for ((case_exprs, _), case_block) in cases.iter().zip(blocks) {
         for case_expr in case_exprs {
             let case_value = lower_expr(ctx, case_expr);
@@ -1229,7 +1351,9 @@ fn lower_dynamic_switch_dispatch(
             // collapses every case to `0 == 0`, and coercing a float to int would
             // truncate the subject (so `switch (1.5) { case 1.5; }` would wrongly
             // match `case 1`). The cheap ICmp fast path stays for integer-like pairs.
+            // Mixed subjects must always use loose equality (tag-aware comparison).
             let use_loose_eq = subject_is_str
+                || subject_is_mixed
                 || case_value.ir_type == IrType::Str
                 || float_loose_eq_pair(subject.ir_type, case_value.ir_type);
             let matched = if use_loose_eq {
@@ -1699,7 +1823,7 @@ fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, sp
         return;
     }
     let value = if let Some(value_expr) = value_expr {
-        lower_expr(ctx, value_expr)
+        lower_return_expr(ctx, value_expr)
     } else {
         emit_null_value(ctx, Some(span))
     };
@@ -1708,6 +1832,16 @@ fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, sp
     let value = acquire_returned_this(ctx, value_expr, value, span);
     let value = persist_scratch_return_string(ctx, value, span);
     terminate_return(ctx, Some(value.value));
+}
+
+/// Lowers a return expression with contextual array-literal element storage when available.
+fn lower_return_expr(ctx: &mut LoweringContext<'_, '_>, value_expr: &Expr) -> LoweredValue {
+    if matches!(value_expr.kind, ExprKind::ArrayLiteral(_)) {
+        if let PhpType::Array(elem_ty) = ctx.return_php_type.codegen_repr() {
+            return lower_array_literal_with_expected_type(ctx, value_expr, *elem_ty);
+        }
+    }
+    lower_expr(ctx, value_expr)
 }
 
 /// Acquires the receiver when a method does `return $this`.
@@ -1817,6 +1951,76 @@ fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId)
     }
     emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
     ctx.builder.terminate(Terminator::Throw { value });
+}
+
+/// Lowers a statically-decided access violation as a catchable `Error` throw.
+///
+/// Builds a synthetic `new Error($message)` expression at `span`, lowers it to an
+/// EIR object value, then terminates the current block with a throw. Mirrors PHP,
+/// which raises these conditions as catchable `Error` exceptions instead of fatal
+/// compile-time rejections. Used in statement positions where no value is needed.
+pub(crate) fn lower_throw_access_error(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: Span,
+) {
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let error_expr = Expr::new(
+        ExprKind::NewObject {
+            class_name: crate::names::Name::unqualified("Error"),
+            args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
+        },
+        span,
+    );
+    let error_value = crate::ir_lower::expr::lower_expr(ctx, &error_expr);
+    terminate_throw(ctx, error_value.value);
+}
+
+/// Lowers a statically-decided access violation as a catchable `Error` throw in
+/// expression position and returns a placeholder null value.
+///
+/// Builds a synthetic `new Error($message)` expression at `span`, lowers it to an
+/// EIR object value, emits `Op::ThrowException`, then returns a null placeholder so
+/// the surrounding expression lowering keeps producing well-formed EIR after the
+/// (unreachable) throw.
+pub(crate) fn lower_throw_access_error_expr(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: Span,
+) -> LoweredValue {
+    let error_expr = Expr::new(
+        ExprKind::NewObject {
+            class_name: crate::names::Name::unqualified("Error"),
+            args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
+        },
+        span,
+    );
+    let error_value = crate::ir_lower::expr::lower_expr(ctx, &error_expr);
+    ctx.emit_void(
+        Op::ThrowException,
+        vec![error_value.value],
+        None,
+        Op::ThrowException.default_effects(),
+        Some(span),
+    );
+    LoweredValue {
+        value: ctx
+            .builder
+            .emit_with_effects(
+                Op::ConstNull,
+                Vec::new(),
+                None,
+                IrType::I64,
+                PhpType::Void,
+                Ownership::NonHeap,
+                Op::ConstNull.default_effects(),
+                Some(span),
+            )
+            .expect("const_null produces a value"),
+        ir_type: IrType::I64,
+    }
 }
 
 /// Returns how many inner loop cleanups a multi-level branch skips.
@@ -1936,10 +2140,20 @@ fn list_unpack_get_op(source_type: IrType) -> Op {
 }
 
 /// Returns the PHP type assigned to each simple list-unpack destination.
+///
+/// Indexed-array reads use `Op::ArrayGet`, whose runtime OOB fallback produces a
+/// null in the result shape (tagged scalar or sentinel). To preserve that null
+/// for `??` and `IsNull`, the destination type is widened the same way as a
+/// direct array index read (see `array_access_element_result_type`). Without
+/// this widening an `Array(Int)` element would lower to `PhpType::Int`, whose
+/// null fallback is the in-band `NULL_SENTINEL` i64, and `$b ?? 'n'` would see
+/// a non-null integer instead of null for missing keys (#337).
 fn list_unpack_item_type(ctx: &LoweringContext<'_, '_>, source: crate::ir::ValueId) -> PhpType {
     let item_type = match ctx.builder.value_php_type(source).codegen_repr() {
-        PhpType::Array(elem_ty) => *elem_ty,
-        PhpType::AssocArray { value, .. } => *value,
+        PhpType::Array(elem_ty) => array_access_element_result_type(elem_ty.codegen_repr()),
+        PhpType::AssocArray { value, .. } => {
+            array_access_element_result_type(value.codegen_repr())
+        }
         _ => PhpType::Mixed,
     };
     normalize_materialized_element_type(item_type)
@@ -1995,9 +2209,29 @@ fn lower_property_assign(
     value: &Expr,
     span: Span,
 ) {
+    // A statically-decided readonly-property write outside the declaring
+    // constructor raises a catchable `Error` in PHP rather than a compile-time
+    // error, but the object and RHS expressions must still be evaluated first.
+    let throw_access_message = ctx.throw_access_sites.get(&span).and_then(|info| {
+        if let ThrowAccessKind::ReadonlyProperty { class_name, property } = &info.kind {
+            Some(format!("Cannot modify readonly property {}::${}", class_name, property))
+        } else {
+            None
+        }
+    });
     let object = lower_expr(ctx, object);
     let value_expr = value;
     let lowered_value = lower_expr(ctx, value_expr);
+    if let Some(message) = throw_access_message {
+        if ctx.value_is_owning_temporary(object) {
+            crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+        }
+        if ctx.value_is_owning_temporary(lowered_value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, lowered_value, Some(span));
+        }
+        lower_throw_access_error(ctx, &message, span);
+        return;
+    }
     let value = contextualize_property_array_assignment(
         ctx,
         object.value,
@@ -2479,6 +2713,11 @@ fn property_store_keeps_independent_ref(property_ty: &PhpType, value_ty: &PhpTyp
     if matches!((&property_ty, &value_ty), (PhpType::Mixed, PhpType::Mixed)) {
         return false;
     }
+    if matches!(value_ty, PhpType::Mixed | PhpType::Union(_))
+        && matches!(property_ty, PhpType::Int | PhpType::Bool | PhpType::Float)
+    {
+        return true;
+    }
     if matches!(property_ty, PhpType::Str) {
         return true;
     }
@@ -2561,6 +2800,30 @@ fn array_set_op(ir_type: IrType) -> Op {
     }
 }
 
+/// Returns true when a lowered index value is a boxed `Mixed`/`Union` cell that
+/// may hold either an integer or a string array key (e.g. a foreach loop key,
+/// which `Op::IterCurrentKey` always produces as Mixed). Such writes go through
+/// `Op::ArraySetMixedKey` so the key tag is dispatched at runtime instead of
+/// coercing it to int (which would collapse a string key onto int 0).
+fn index_is_boxed_mixed_key(ir_type: IrType) -> bool {
+    matches!(
+        ir_type,
+        IrType::Heap(crate::ir::IrHeapKind::Mixed)
+            | IrType::Heap(crate::ir::IrHeapKind::Union)
+    )
+}
+
+/// Returns true when the index expression is a foreach loop key known to hold an
+/// integer at runtime (its source was a concretely-indexed array), so the
+/// destination write can keep the indexed `ArraySet` path with int coercion
+/// instead of promoting to a hash. See `LoweringContext::mark_foreach_int_key`.
+fn index_is_foreach_int_key(ctx: &LoweringContext<'_, '_>, index: &Expr) -> bool {
+    if let ExprKind::Variable(name) = &index.kind {
+        return ctx.is_foreach_int_key(name);
+    }
+    false
+}
+
 /// Extracts an integer switch case value from literal cases.
 fn int_case_value(expr: &Expr) -> Option<i64> {
     match &expr.kind {
@@ -2623,10 +2886,12 @@ fn coerce_to_return_type(
         return value;
     }
     match ctx.return_type {
-        IrType::I64 => coerce_to_int(ctx, value, span),
-        IrType::F64 => coerce_to_float(ctx, value, span),
-        IrType::Str => coerce_to_string(ctx, value, span),
-        IrType::TaggedScalar => coerce_to_tagged_scalar(ctx, value, span),
+        IrType::I64 => coerce_return_scalar_source(ctx, value, span, coerce_to_int),
+        IrType::F64 => coerce_return_scalar_source(ctx, value, span, coerce_to_float),
+        IrType::Str => coerce_return_scalar_source(ctx, value, span, coerce_to_string),
+        IrType::TaggedScalar => {
+            coerce_return_scalar_source(ctx, value, span, coerce_to_tagged_scalar)
+        }
         IrType::Heap(_) if ctx.return_php_type.codegen_repr() == PhpType::Mixed => {
             ctx.emit_value(
                 Op::MixedBox,
@@ -2647,6 +2912,20 @@ fn coerce_to_return_type(
         ),
         IrType::Void => value,
     }
+}
+
+/// Coerces a return value and releases the old owning temporary when replaced.
+fn coerce_return_scalar_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+    coerce: fn(&mut LoweringContext<'_, '_>, LoweredValue, Option<Span>) -> LoweredValue,
+) -> LoweredValue {
+    let coerced = coerce(ctx, value, span);
+    if coerced.value != value.value && ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    }
+    coerced
 }
 
 /// Coerces an integer-or-null value into the two-word tagged-scalar return shape.

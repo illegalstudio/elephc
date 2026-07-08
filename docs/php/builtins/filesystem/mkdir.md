@@ -1,23 +1,20 @@
 ---
 title: "mkdir()"
-description: "Lowers `mkdir(path)` through the target-aware runtime helper."
+description: "Makes a directory."
 sidebar:
-  order: 117
+  order: 134
 ---
 
 ## mkdir()
 
 ```php
-function mkdir(string $directory, int $permissions, bool $recursive, bool $context): bool
+function mkdir(string $directory): bool
 ```
 
-Lowers `mkdir(path)` through the target-aware runtime helper.
+Makes a directory.
 
 **Parameters**:
 - `$directory` (`string`)
-- `$permissions` (`int`)
-- `$recursive` (`bool`)
-- `$context` (`bool`)
 
 **Returns**: `bool`
 

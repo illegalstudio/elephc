@@ -1,8 +1,8 @@
 ---
 title: "ctype_space()"
-description: "Lowers `ctype_space(string)` by checking every byte against PHP's ASCII whitespace set."
+description: "Checks if all characters in the string are whitespace characters."
 sidebar:
-  order: 392
+  order: 413
 ---
 
 ## ctype_space()
@@ -11,7 +11,7 @@ sidebar:
 function ctype_space(string $text): bool
 ```
 
-Lowers `ctype_space(string)` by checking every byte against PHP's ASCII whitespace set.
+Checks if all characters in the string are whitespace characters.
 
 **Parameters**:
 - `$text` (`string`)

@@ -1,8 +1,8 @@
 ---
 title: "array_combine()"
-description: "Lowers `array_combine()` through the legacy hash-building runtime helpers."
+description: "Creates an array by using one array for keys and another for values."
 sidebar:
-  order: 3
+  order: 5
 ---
 
 ## array_combine()
@@ -11,7 +11,7 @@ sidebar:
 function array_combine(array $keys, array $values): array
 ```
 
-Lowers `array_combine()` through the legacy hash-building runtime helpers.
+Creates an array by using one array for keys and another for values.
 
 **Parameters**:
 - `$keys` (`array`)

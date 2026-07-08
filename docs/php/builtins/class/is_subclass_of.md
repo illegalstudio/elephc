@@ -1,22 +1,22 @@
 ---
 title: "is_subclass_of()"
-description: "is_subclass_of() — class builtin supported by Elephc."
+description: "Checks if the object has a given class as one of its parents or implements it."
 sidebar:
-  order: 66
+  order: 83
 ---
 
 ## is_subclass_of()
 
 ```php
-function is_subclass_of(mixed $object_or_class, string $class, bool $allow_string): bool
+function is_subclass_of(mixed $object_or_class, string $class, bool $allow_string = true): bool
 ```
 
-`is_subclass_of()` is a class builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Checks if the object has a given class as one of its parents or implements it.
 
 **Parameters**:
 - `$object_or_class` (`mixed`)
 - `$class` (`string`)
-- `$allow_string` (`bool`), optional
+- `$allow_string` (`bool`), default `true`, optional
 
 **Returns**: `bool`
 
@@ -27,4 +27,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `is_subclass_of` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/is_subclass_of.md).
 

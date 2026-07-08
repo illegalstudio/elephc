@@ -1,22 +1,20 @@
 ---
 title: "array_keys()"
-description: "Lowers `array_keys()` for indexed arrays and associative arrays."
+description: "Returns all the keys of an array."
 sidebar:
-  order: 13
+  order: 21
 ---
 
 ## array_keys()
 
 ```php
-function array_keys(array $array, string $filter_value, bool $strict): array
+function array_keys(array $array): array
 ```
 
-Lowers `array_keys()` for indexed arrays and associative arrays.
+Returns all the keys of an array.
 
 **Parameters**:
 - `$array` (`array`)
-- `$filter_value` (`string`)
-- `$strict` (`bool`)
 
 **Returns**: `array`
 

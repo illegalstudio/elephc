@@ -1,21 +1,21 @@
 ---
 title: "lchgrp()"
-description: "Lowers `lchgrp(path, group)` for integer GIDs and string group names without following symlinks."
+description: "Changes group ownership of a symlink."
 sidebar:
-  order: 112
+  order: 129
 ---
 
 ## lchgrp()
 
 ```php
-function lchgrp(string $filename, int $group): bool
+function lchgrp(string $filename, string $group): bool
 ```
 
-Lowers `lchgrp(path, group)` for integer GIDs and string group names without following symlinks.
+Changes group ownership of a symlink.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$group` (`int`)
+- `$group` (`string`)
 
 **Returns**: `bool`
 

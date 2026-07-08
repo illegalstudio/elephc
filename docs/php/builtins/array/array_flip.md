@@ -1,22 +1,22 @@
 ---
 title: "array_flip()"
-description: "Lowers `array_flip()` through the legacy hash-building runtime helpers."
+description: "Exchanges all keys with their associated values in an array."
 sidebar:
-  order: 9
+  order: 13
 ---
 
 ## array_flip()
 
 ```php
-function array_flip(array $array): float
+function array_flip(array $array): array
 ```
 
-Lowers `array_flip()` through the legacy hash-building runtime helpers.
+Exchanges all keys with their associated values in an array.
 
 **Parameters**:
 - `$array` (`array`)
 
-**Returns**: `float`
+**Returns**: `array`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "gettype()"
-description: "Lowers `gettype(value)` for statically concrete PHP types."
+description: "Returns the type of a variable as a string."
 sidebar:
-  order: 396
+  order: 417
 ---
 
 ## gettype()
@@ -11,7 +11,7 @@ sidebar:
 function gettype(mixed $value): string
 ```
 
-Lowers `gettype(value)` for statically concrete PHP types.
+Returns the type of a variable as a string.
 
 **Parameters**:
 - `$value` (`mixed`)

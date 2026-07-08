@@ -1,22 +1,22 @@
 ---
 title: "array_product()"
-description: "Lowers `array_product()` over supported indexed-array payloads."
+description: "Calculate the product of values in an array."
 sidebar:
-  order: 18
+  order: 28
 ---
 
 ## array_product()
 
 ```php
-function array_product(array $array): float
+function array_product(array $array): int
 ```
 
-Lowers `array_product()` over supported indexed-array payloads.
+Calculate the product of values in an array.
 
 **Parameters**:
 - `$array` (`array`)
 
-**Returns**: `float`
+**Returns**: `int`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

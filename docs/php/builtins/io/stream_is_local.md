@@ -1,8 +1,8 @@
 ---
 title: "stream_is_local()"
-description: "Lowers `stream_is_local(stream)` as a true predicate after evaluating its argument."
+description: "Checks if a stream is a local stream."
 sidebar:
-  order: 190
+  order: 207
 ---
 
 ## stream_is_local()
@@ -11,7 +11,7 @@ sidebar:
 function stream_is_local(resource $stream): bool
 ```
 
-Lowers `stream_is_local(stream)` as a true predicate after evaluating its argument.
+Checks if a stream is a local stream.
 
 **Parameters**:
 - `$stream` (`resource`)

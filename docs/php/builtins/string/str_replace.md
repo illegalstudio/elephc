@@ -1,25 +1,25 @@
 ---
 title: "str_replace()"
-description: "Lowers `str_replace()`/`str_ireplace()` with three string operands."
+description: "Replaces all occurrences of a search string with a replacement string."
 sidebar:
-  order: 365
+  order: 386
 ---
 
 ## str_replace()
 
 ```php
-function str_replace(string $search, string $replace, string $subject, int $count): mixed
+function str_replace(string $search, string $replace, string $subject, int $count = null): string
 ```
 
-Lowers `str_replace()`/`str_ireplace()` with three string operands.
+Replaces all occurrences of a search string with a replacement string.
 
 **Parameters**:
 - `$search` (`string`)
 - `$replace` (`string`)
 - `$subject` (`string`)
-- `$count` (`int`), passed by reference, optional
+- `$count` (`int`), default `null`, optional
 
-**Returns**: `mixed`
+**Returns**: `string`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

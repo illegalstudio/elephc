@@ -1,22 +1,22 @@
 ---
 title: "stream_get_contents()"
-description: "Lowers `stream_get_contents(stream, length?, offset?)` to `string|false`."
+description: "Reads remainder of a stream into a string."
 sidebar:
-  order: 184
+  order: 201
 ---
 
 ## stream_get_contents()
 
 ```php
-function stream_get_contents(resource $stream, int $length, int $offset): mixed
+function stream_get_contents(resource $stream, int $length = null, int $offset = -1): mixed
 ```
 
-Lowers `stream_get_contents(stream, length?, offset?)` to `string|false`.
+Reads remainder of a stream into a string.
 
 **Parameters**:
 - `$stream` (`resource`)
-- `$length` (`int`), optional
-- `$offset` (`int`), optional
+- `$length` (`int`), default `null`, optional
+- `$offset` (`int`), default `-1`, optional
 
 **Returns**: `mixed`
 

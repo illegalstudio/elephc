@@ -49,6 +49,21 @@ echo "ok";
     assert_eq!(out, "ok");
 }
 
+/// Verifies a named class can be instantiated without constructor parentheses.
+#[test]
+fn test_class_instantiation_without_constructor_parentheses() {
+    let out = compile_and_run(
+        r#"<?php
+class B {
+    public string $tag = "ok";
+}
+$b = new B;
+echo $b->tag;
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies that assigning an object to a second variable shares the same instance.
 /// Both variables reference the same heap object, so mutating via one is visible via the other.
 #[test]
@@ -71,6 +86,22 @@ echo gettype($obj) . "|" . gettype($obj2) . "|" . gettype($bad);
 "#,
     );
     assert_eq!(out, "object|object|NULL");
+}
+
+/// Verifies a class-string variable can be instantiated without constructor parentheses.
+#[test]
+fn test_class_dynamic_instantiation_without_constructor_parentheses() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicBox {
+    public int $n = 7;
+}
+$cls = "DynamicBox";
+$o = new $cls;
+echo $o->n;
+"#,
+    );
+    assert_eq!(out, "7");
 }
 
 /// Verifies compiled PHP output for class dynamic instantiation runs property defaults.

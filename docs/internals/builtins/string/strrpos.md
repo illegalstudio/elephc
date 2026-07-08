@@ -2,15 +2,15 @@
 title: "strrpos() — internals"
 description: "Compiler internals for strrpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 377
+  order: 395
 ---
 
 ## `strrpos()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L700) (`lower_string_position`)
+- **Signature**: [`src/builtins/string/strrpos.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strrpos.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L700) (`lower_string_position`)
 - **Function symbol**: `lower_string_position()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function strrpos(string $haystack, string $needle, int $offset): mixed
+function strrpos(string $haystack, string $needle, int $offset = 0): mixed
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function strrpos(string $haystack, string $needle, int $offset): mixed
 ## Cross-references
 
 - [User reference for `strrpos()`](../../../php/builtins/string/strrpos.md)
-

@@ -2,17 +2,21 @@
 title: "sin() — internals"
 description: "Compiler internals for sin(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 249
+  order: 266
 ---
 
 ## `sin()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/math/sin.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/sin.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/libm.rs`:22](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/libm.rs#L22) (`lower_unary_libm`)
+- **Function symbol**: `lower_unary_libm()`
 
+
+### Lowering notes
+
+- Lowers a one-argument libm builtin such as `sin()`, `cos()`, or `exp()`.
 
 ## Runtime helpers
 
@@ -31,4 +35,3 @@ function sin(float $num): float
 ## Cross-references
 
 - [User reference for `sin()`](../../../php/builtins/math/sin.md)
-

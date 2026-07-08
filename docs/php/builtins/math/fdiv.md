@@ -1,8 +1,8 @@
 ---
 title: "fdiv()"
-description: "Lowers `fdiv()` for concrete integer-like and floating operands."
+description: "Divides two numbers, according to IEEE 754."
 sidebar:
-  order: 229
+  order: 246
 ---
 
 ## fdiv()
@@ -11,7 +11,7 @@ sidebar:
 function fdiv(float $num1, float $num2): float
 ```
 
-Lowers `fdiv()` for concrete integer-like and floating operands.
+Divides two numbers, according to IEEE 754.
 
 **Parameters**:
 - `$num1` (`float`)

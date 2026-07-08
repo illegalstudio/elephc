@@ -1,21 +1,21 @@
 ---
 title: "chown()"
-description: "Lowers `chown(path, owner)` for integer UIDs and string user names."
+description: "Changes file owner."
 sidebar:
-  order: 85
+  order: 102
 ---
 
 ## chown()
 
 ```php
-function chown(string $filename, int $user): bool
+function chown(string $filename, string $user): bool
 ```
 
-Lowers `chown(path, owner)` for integer UIDs and string user names.
+Changes file owner.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$user` (`int`)
+- `$user` (`string`)
 
 **Returns**: `bool`
 

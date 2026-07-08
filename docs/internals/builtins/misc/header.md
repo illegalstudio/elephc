@@ -2,15 +2,15 @@
 title: "header() — internals"
 description: "Compiler internals for header(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 263
+  order: 275
 ---
 
 ## `header()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:289](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L289) (`lower_header`)
+- **Signature**: [`src/builtins/system/header.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/header.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:289](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L289) (`lower_header`)
 - **Function symbol**: `lower_header()`
 
 
@@ -31,7 +31,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function header(mixed $header, mixed $replace, mixed $response_code): void
+function header(string $header, bool $replace = true, int $response_code = 0): void
 ```
 
 ## What the type checker enforces
@@ -41,4 +41,3 @@ function header(mixed $header, mixed $replace, mixed $response_code): void
 ## Cross-references
 
 - [User reference for `header()`](../../../php/builtins/misc/header.md)
-

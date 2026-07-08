@@ -395,6 +395,7 @@ fn parse_variable(
             Token::LParen => {
                 *pos += 1;
                 let args = parse_args(tokens, pos, span)?;
+                let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                 return Ok(Expr::new(ExprKind::ClosureCall { var: name, args }, span));
             }
             _ => {}
@@ -437,6 +438,7 @@ fn parse_group_or_cast(
         let call_span = tokens[*pos].1;
         *pos += 1;
         let args = parse_args(tokens, pos, call_span)?;
+        let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
         return Ok(Expr::new(
             ExprKind::ExprCall {
                 callee: Box::new(inner),

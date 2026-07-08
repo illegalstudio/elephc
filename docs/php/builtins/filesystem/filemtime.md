@@ -1,8 +1,8 @@
 ---
 title: "filemtime()"
-description: "Lowers `filemtime(path)` through the target-aware runtime stat helper."
+description: "Gets file modification time."
 sidebar:
-  order: 96
+  order: 113
 ---
 
 ## filemtime()
@@ -11,7 +11,7 @@ sidebar:
 function filemtime(string $filename): int
 ```
 
-Lowers `filemtime(path)` through the target-aware runtime stat helper.
+Gets file modification time.
 
 **Parameters**:
 - `$filename` (`string`)

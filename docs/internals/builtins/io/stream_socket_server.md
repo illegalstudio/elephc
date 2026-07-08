@@ -2,15 +2,15 @@
 title: "stream_socket_server() — internals"
 description: "Compiler internals for stream_socket_server(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 206
+  order: 223
 ---
 
 ## `stream_socket_server()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2155](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2155) (`lower_stream_socket_server`)
+- **Signature**: [`src/builtins/io/stream_socket_server.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_server.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2374](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2374) (`lower_stream_socket_server`)
 - **Function symbol**: `lower_stream_socket_server()`
 
 
@@ -26,15 +26,13 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function stream_socket_server(string $address, int $error_code, int $error_message): mixed
+function stream_socket_server(string $address): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
-- **By-reference parameters**: `$error_code`, `$error_message`.
+- **Arity**: takes exactly 1 argument.
 
 ## Cross-references
 
 - [User reference for `stream_socket_server()`](../../../php/builtins/io/stream_socket_server.md)
-

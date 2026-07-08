@@ -1,21 +1,20 @@
 ---
 title: "glob()"
-description: "Lowers `glob(pattern)` through the target-aware runtime glob expansion helper."
+description: "Finds pathnames matching a pattern."
 sidebar:
-  order: 104
+  order: 121
 ---
 
 ## glob()
 
 ```php
-function glob(string $pattern, int $flags): array
+function glob(string $pattern): array
 ```
 
-Lowers `glob(pattern)` through the target-aware runtime glob expansion helper.
+Finds pathnames matching a pattern.
 
 **Parameters**:
 - `$pattern` (`string`)
-- `$flags` (`int`)
 
 **Returns**: `array`
 

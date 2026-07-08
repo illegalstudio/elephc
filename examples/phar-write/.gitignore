@@ -2,3 +2,7 @@
 *.o
 main
 *.phar
+*.tar
+*.tar.gz
+*.tar.bz2
+*.pubkey

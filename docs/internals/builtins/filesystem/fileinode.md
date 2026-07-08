@@ -2,15 +2,15 @@
 title: "fileinode() — internals"
 description: "Compiler internals for fileinode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 95
+  order: 112
 ---
 
 ## `fileinode()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4865](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4865) (`lower_fileinode`)
+- **Signature**: [`src/builtins/io/fileinode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fileinode.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5508](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5508) (`lower_fileinode`)
 - **Function symbol**: `lower_fileinode()`
 
 
@@ -39,4 +39,3 @@ function fileinode(string $filename): mixed
 ## Cross-references
 
 - [User reference for `fileinode()`](../../../php/builtins/filesystem/fileinode.md)
-

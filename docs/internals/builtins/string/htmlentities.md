@@ -2,15 +2,15 @@
 title: "htmlentities() — internals"
 description: "Compiler internals for htmlentities(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 343
+  order: 361
 ---
 
 ## `htmlentities()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
+- **Signature**: [`src/builtins/string/htmlentities.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/htmlentities.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
 - **Function symbol**: `lower_unary_string_runtime()`
 
 
@@ -27,14 +27,13 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function htmlentities(string $string, int $flags, string $encoding, bool $double_encode): string
+function htmlentities(string $string): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 4 arguments.
+- **Arity**: takes exactly 1 argument.
 
 ## Cross-references
 
 - [User reference for `htmlentities()`](../../../php/builtins/string/htmlentities.md)
-

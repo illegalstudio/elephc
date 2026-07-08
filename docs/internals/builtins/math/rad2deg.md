@@ -2,15 +2,15 @@
 title: "rad2deg() — internals"
 description: "Compiler internals for rad2deg(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 245
+  order: 262
 ---
 
 ## `rad2deg()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/libm.rs`:83](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/libm.rs#L83) (`lower_rad2deg`)
+- **Signature**: [`src/builtins/math/rad2deg.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/rad2deg.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/libm.rs`:83](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/libm.rs#L83) (`lower_rad2deg`)
 - **Function symbol**: `lower_rad2deg()`
 
 
@@ -35,4 +35,3 @@ function rad2deg(float $num): float
 ## Cross-references
 
 - [User reference for `rad2deg()`](../../../php/builtins/math/rad2deg.md)
-

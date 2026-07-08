@@ -1,8 +1,8 @@
 ---
 title: "str_repeat()"
-description: "Lowers `str_repeat(string, times)` through the shared runtime helper."
+description: "Repeats a string a given number of times."
 sidebar:
-  order: 364
+  order: 385
 ---
 
 ## str_repeat()
@@ -11,7 +11,7 @@ sidebar:
 function str_repeat(string $string, int $times): string
 ```
 
-Lowers `str_repeat(string, times)` through the shared runtime helper.
+Repeats a string a given number of times.
 
 **Parameters**:
 - `$string` (`string`)

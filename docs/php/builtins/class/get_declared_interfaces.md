@@ -1,8 +1,8 @@
 ---
 title: "get_declared_interfaces()"
-description: "get_declared_interfaces() — class builtin supported by Elephc."
+description: "Returns an array of all declared interfaces."
 sidebar:
-  order: 61
+  order: 78
 ---
 
 ## get_declared_interfaces()
@@ -11,7 +11,7 @@ sidebar:
 function get_declared_interfaces(): array
 ```
 
-`get_declared_interfaces()` is a class builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Returns an array of all declared interfaces.
 
 **Parameters**: none.
 
@@ -24,4 +24,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `get_declared_interfaces` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/get_declared_interfaces.md).
 

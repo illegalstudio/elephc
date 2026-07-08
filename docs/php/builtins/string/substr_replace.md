@@ -1,23 +1,23 @@
 ---
 title: "substr_replace()"
-description: "Lowers `substr_replace(string, replacement, start, length?)`."
+description: "Replaces text within a portion of a string."
 sidebar:
-  order: 379
+  order: 400
 ---
 
 ## substr_replace()
 
 ```php
-function substr_replace(string $string, string $replace, int $offset, int $length): string
+function substr_replace(string $string, string $replace, int $offset, int $length = null): string
 ```
 
-Lowers `substr_replace(string, replacement, start, length?)`.
+Replaces text within a portion of a string.
 
 **Parameters**:
 - `$string` (`string`)
 - `$replace` (`string`)
 - `$offset` (`int`)
-- `$length` (`int`), optional
+- `$length` (`int`), default `null`, optional
 
 **Returns**: `string`
 

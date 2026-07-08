@@ -1,8 +1,8 @@
 ---
 title: "array_intersect_key()"
-description: "Lowers `array_intersect_key()` for two associative arrays by keeping shared first-operand keys."
+description: "Computes the intersection of arrays using keys for comparison."
 sidebar:
-  order: 11
+  order: 16
 ---
 
 ## array_intersect_key()
@@ -11,7 +11,7 @@ sidebar:
 function array_intersect_key(array $array, ...$arrays): array
 ```
 
-Lowers `array_intersect_key()` for two associative arrays by keeping shared first-operand keys.
+Computes the intersection of arrays using keys for comparison.
 
 **Parameters**:
 - `$array` (`array`)

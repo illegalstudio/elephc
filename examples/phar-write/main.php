@@ -62,3 +62,29 @@ $scan = new Phar("oop.phar");
 echo "oop scanned count: " . $scan->count() . "\n";
 $oop->delete("array-access.txt");
 echo "oop delete removed array-access entry: " . (isset($oop["array-access.txt"]) ? "no\n" : "yes\n");
+
+// Per-file metadata persists into the archive on each entry's PharFileInfo and
+// round-trips across a fresh Phar object (and the PHP interpreter).
+$oop["hello.txt"]->setMetadata(["author" => "elephc", "lines" => 1]);
+$reopened = new Phar("oop.phar");
+$fileMeta = $reopened["hello.txt"]->getMetadata();
+echo "per-file metadata author: " . $fileMeta["author"] . "\n";
+
+// A native PHAR can be re-signed; getSignature() reports the algorithm and digest.
+$oop->setSignatureAlgorithm(Phar::SHA256);
+$sig = $oop->getSignature();
+echo "signature type: " . $sig["hash_type"] . "\n";
+
+// Tar and zip phars can be signed too: the signature lives in a .phar/signature.bin
+// control entry (rather than a trailer), and is verifiable by the PHP interpreter.
+$tar = new PharData("bundle.tar");
+$tar->addFromString("doc.txt", "bundled document\n");
+$tar->setSignatureAlgorithm(Phar::SHA1);
+$tarSig = $tar->getSignature();
+echo "tar signature type: " . $tarSig["hash_type"] . "\n";
+
+// PharData supports whole-archive compression: compress() writes a sibling
+// .tar.gz and returns a fresh PharData that reads back transparently.
+$gz = $tar->compress(Phar::GZ);
+echo "compressed bundle entry count: " . $gz->count() . "\n";
+echo "compressed bundle reads back: " . $gz["doc.txt"]->getContent();

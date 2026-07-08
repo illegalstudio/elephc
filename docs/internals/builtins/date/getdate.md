@@ -2,15 +2,15 @@
 title: "getdate() — internals"
 description: "Compiler internals for getdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 72
+  order: 89
 ---
 
 ## `getdate()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:183](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L183) (`lower_getdate`)
+- **Signature**: [`src/builtins/system/getdate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/getdate.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:183](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L183) (`lower_getdate`)
 - **Function symbol**: `lower_getdate()`
 
 
@@ -31,7 +31,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function getdate(int $timestamp): array
+function getdate(int $timestamp = null): array
 ```
 
 ## What the type checker enforces
@@ -41,4 +41,3 @@ function getdate(int $timestamp): array
 ## Cross-references
 
 - [User reference for `getdate()`](../../../php/builtins/date/getdate.md)
-

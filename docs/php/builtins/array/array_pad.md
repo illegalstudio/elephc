@@ -1,8 +1,8 @@
 ---
 title: "array_pad()"
-description: "Lowers `array_pad()` by copying an indexed array and filling missing slots."
+description: "Pads an array to the specified length with a value."
 sidebar:
-  order: 16
+  order: 26
 ---
 
 ## array_pad()
@@ -11,7 +11,7 @@ sidebar:
 function array_pad(array $array, int $length, mixed $value): array
 ```
 
-Lowers `array_pad()` by copying an indexed array and filling missing slots.
+Pads an array to the specified length with a value.
 
 **Parameters**:
 - `$array` (`array`)

@@ -30,7 +30,7 @@ fn check_image(src: &str) -> Result<(), String> {
     let defines: HashSet<String> = HashSet::new();
     let ast = elephc::conditional::apply(ast, &defines);
     let ast = elephc::autoload::collect_aliases(ast);
-    let ast = elephc::image_prelude::inject_if_used(ast);
+    let ast = elephc::image_prelude::inject_if_used(ast, false);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
     types::check(&ast).map_err(|e| e.message.clone())?;

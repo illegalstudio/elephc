@@ -1,8 +1,8 @@
 ---
 title: "abs()"
-description: "Lowers `abs()` for concrete integer-like and floating operands."
+description: "Absolute value."
 sidebar:
-  order: 218
+  order: 235
 ---
 
 ## abs()
@@ -11,7 +11,7 @@ sidebar:
 function abs(int $num): mixed
 ```
 
-Lowers `abs()` for concrete integer-like and floating operands.
+Absolute value.
 
 **Parameters**:
 - `$num` (`int`)

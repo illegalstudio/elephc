@@ -1,8 +1,8 @@
 ---
 title: "array_map()"
-description: "Lowers `array_map()` through the callback runtime helper matching the callback result type."
+description: "Applies a callback to the elements of an array."
 sidebar:
-  order: 14
+  order: 22
 ---
 
 ## array_map()
@@ -11,7 +11,7 @@ sidebar:
 function array_map(callable $callback, array $array, ...$arrays): array
 ```
 
-Lowers `array_map()` through the callback runtime helper matching the callback result type.
+Applies a callback to the elements of an array.
 
 **Parameters**:
 - `$callback` (`callable`)

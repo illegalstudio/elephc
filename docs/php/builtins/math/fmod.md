@@ -1,8 +1,8 @@
 ---
 title: "fmod()"
-description: "Lowers `fmod()` for concrete integer-like and floating operands."
+description: "Returns the floating point remainder of the division of the arguments."
 sidebar:
-  order: 231
+  order: 248
 ---
 
 ## fmod()
@@ -11,7 +11,7 @@ sidebar:
 function fmod(float $num1, float $num2): float
 ```
 
-Lowers `fmod()` for concrete integer-like and floating operands.
+Returns the floating point remainder of the division of the arguments.
 
 **Parameters**:
 - `$num1` (`float`)

@@ -1,8 +1,8 @@
 ---
 title: "array_merge()"
-description: "Lowers `array_merge()` for two compatible indexed arrays with 8-byte payload slots."
+description: "Merges the elements of two arrays."
 sidebar:
-  order: 15
+  order: 23
 ---
 
 ## array_merge()
@@ -11,7 +11,7 @@ sidebar:
 function array_merge(...$arrays): array
 ```
 
-Lowers `array_merge()` for two compatible indexed arrays with 8-byte payload slots.
+Merges the elements of two arrays.
 
 **Parameters**:
 - `...$arrays` — variadic: collects excess arguments into `$arrays`.

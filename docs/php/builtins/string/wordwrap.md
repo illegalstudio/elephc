@@ -1,23 +1,23 @@
 ---
 title: "wordwrap()"
-description: "Lowers `wordwrap(string, width?, break?, cut?)` through the shared runtime helper."
+description: "Wraps a string to a given number of characters."
 sidebar:
-  order: 387
+  order: 408
 ---
 
 ## wordwrap()
 
 ```php
-function wordwrap(string $string, int $width, string $break, bool $cut_long_words): string
+function wordwrap(string $string, int $width = 75, string $break = '\n', bool $cut_long_words = false): string
 ```
 
-Lowers `wordwrap(string, width?, break?, cut?)` through the shared runtime helper.
+Wraps a string to a given number of characters.
 
 **Parameters**:
 - `$string` (`string`)
-- `$width` (`int`), optional
-- `$break` (`string`), optional
-- `$cut_long_words` (`bool`), optional
+- `$width` (`int`), default `75`, optional
+- `$break` (`string`), default `'\n'`, optional
+- `$cut_long_words` (`bool`), default `false`, optional
 
 **Returns**: `string`
 

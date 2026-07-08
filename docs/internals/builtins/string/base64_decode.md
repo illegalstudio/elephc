@@ -2,15 +2,15 @@
 title: "base64_decode() — internals"
 description: "Compiler internals for base64_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 321
+  order: 339
 ---
 
 ## `base64_decode()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
+- **Signature**: [`src/builtins/string/base64_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/base64_decode.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
 - **Function symbol**: `lower_unary_string_runtime()`
 
 
@@ -27,14 +27,13 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function base64_decode(string $string, bool $strict): string
+function base64_decode(string $string): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes exactly 1 argument.
 
 ## Cross-references
 
 - [User reference for `base64_decode()`](../../../php/builtins/string/base64_decode.md)
-

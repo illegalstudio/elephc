@@ -1,8 +1,8 @@
 ---
 title: "ptr_read32()"
-description: "Lowers `ptr_read32(pointer)` by reading one unsigned 32-bit word through a checked pointer."
+description: "Reads one unsigned 32-bit word through a raw pointer and returns it as an integer."
 sidebar:
-  order: 274
+  order: 291
 ---
 
 ## ptr_read32()
@@ -11,7 +11,7 @@ sidebar:
 function ptr_read32(pointer $pointer): int
 ```
 
-Lowers `ptr_read32(pointer)` by reading one unsigned 32-bit word through a checked pointer.
+Reads one unsigned 32-bit word through a raw pointer and returns it as an integer.
 
 **Parameters**:
 - `$pointer` (`pointer`)

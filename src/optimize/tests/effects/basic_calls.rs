@@ -27,7 +27,8 @@ fn test_effect_analysis_recognizes_pure_builtin_calls() {
     assert!(!expr_is_observable(&expr));
 }
 
-/// Verifies that property accesses (`.`) are pure while array accesses (`[]`)
+/// Verifies that property accesses (`.`) are pure (no side effects) but may
+/// throw (uninitialized typed property guard), while array accesses (`[]`)
 /// are observable and may throw (e.g., undefined index).
 #[test]
 fn test_effect_analysis_treats_property_reads_as_pure_and_array_reads_as_observable() {
@@ -47,7 +48,7 @@ fn test_effect_analysis_treats_property_reads_as_pure_and_array_reads_as_observa
     );
 
     assert!(!expr_has_side_effects(&property));
-    assert!(!expr_effect(&property).may_throw);
+    assert!(expr_effect(&property).may_throw);
     assert!(expr_has_side_effects(&array));
     assert!(expr_effect(&array).may_throw);
     assert!(expr_is_observable(&array));

@@ -2,15 +2,15 @@
 title: "spl_autoload_unregister() — internals"
 description: "Compiler internals for spl_autoload_unregister(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 310
+  order: 328
 ---
 
 ## `spl_autoload_unregister()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:134](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L134) (`lower_spl_autoload_bool`)
+- **Signature**: [`src/builtins/spl/spl_autoload_unregister.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_autoload_unregister.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/spl.rs`:135](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/spl.rs#L135) (`lower_spl_autoload_bool`)
 - **Function symbol**: `lower_spl_autoload_bool()`
 
 
@@ -35,4 +35,3 @@ function spl_autoload_unregister(callable $callback): bool
 ## Cross-references
 
 - [User reference for `spl_autoload_unregister()`](../../../php/builtins/spl/spl_autoload_unregister.md)
-

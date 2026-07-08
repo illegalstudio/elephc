@@ -1,8 +1,8 @@
 ---
 title: "array_diff_key()"
-description: "Lowers `array_diff_key()` for two associative arrays by filtering first-operand keys."
+description: "Computes the difference of arrays using keys for comparison."
 sidebar:
-  order: 5
+  order: 8
 ---
 
 ## array_diff_key()
@@ -11,7 +11,7 @@ sidebar:
 function array_diff_key(array $array, ...$arrays): array
 ```
 
-Lowers `array_diff_key()` for two associative arrays by filtering first-operand keys.
+Computes the difference of arrays using keys for comparison.
 
 **Parameters**:
 - `$array` (`array`)

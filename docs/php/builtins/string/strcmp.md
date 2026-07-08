@@ -1,8 +1,8 @@
 ---
 title: "strcmp()"
-description: "Lowers a two-argument string builtin that directly delegates to a runtime helper."
+description: "Binary safe string comparison. Returns negative, zero, or positive."
 sidebar:
-  order: 369
+  order: 390
 ---
 
 ## strcmp()
@@ -11,7 +11,7 @@ sidebar:
 function strcmp(string $string1, string $string2): int
 ```
 
-Lowers a two-argument string builtin that directly delegates to a runtime helper.
+Binary safe string comparison. Returns negative, zero, or positive.
 
 **Parameters**:
 - `$string1` (`string`)

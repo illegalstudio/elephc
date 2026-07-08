@@ -2,15 +2,15 @@
 title: "json_validate() — internals"
 description: "Compiler internals for json_validate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 217
+  order: 234
 ---
 
 ## `json_validate()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/json.rs`:95](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/json.rs#L95) (`lower_json_validate`)
+- **Signature**: [`src/builtins/system/json_validate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/json_validate.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/json.rs`:95](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/json.rs#L95) (`lower_json_validate`)
 - **Function symbol**: `lower_json_validate()`
 
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function json_validate(string $json, int $depth, int $flags): bool
+function json_validate(string $json, int $depth = 512, int $flags = 0): bool
 ```
 
 ## What the type checker enforces
@@ -36,4 +36,3 @@ function json_validate(string $json, int $depth, int $flags): bool
 ## Cross-references
 
 - [User reference for `json_validate()`](../../../php/builtins/json/json_validate.md)
-

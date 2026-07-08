@@ -1,8 +1,8 @@
 ---
 title: "stat()"
-description: "Lowers `stat(path)` and boxes the runtime stat array or PHP false result."
+description: "Gives information about a file."
 sidebar:
-  order: 128
+  order: 145
 ---
 
 ## stat()
@@ -11,7 +11,7 @@ sidebar:
 function stat(string $filename): mixed
 ```
 
-Lowers `stat(path)` and boxes the runtime stat array or PHP false result.
+Gives information about a file.
 
 **Parameters**:
 - `$filename` (`string`)

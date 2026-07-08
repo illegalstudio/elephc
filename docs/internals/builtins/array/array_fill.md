@@ -2,15 +2,15 @@
 title: "array_fill() — internals"
 description: "Compiler internals for array_fill(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 6
+  order: 9
 ---
 
 ## `array_fill()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:115](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L115) (`lower_array_fill`)
+- **Signature**: [`src/builtins/array/array_fill.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_fill.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:116](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L116) (`lower_array_fill`)
 - **Function symbol**: `lower_array_fill()`
 
 
@@ -35,4 +35,3 @@ function array_fill(int $start_index, int $count, mixed $value): array
 ## Cross-references
 
 - [User reference for `array_fill()`](../../../php/builtins/array/array_fill.md)
-

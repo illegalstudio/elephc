@@ -1,23 +1,22 @@
 ---
 title: "hash_file()"
-description: "Lowers `hash_file(algo, filename, binary?)` by reading bytes then hashing them."
+description: "Generates a hash value using the contents of a given file."
 sidebar:
-  order: 167
+  order: 184
 ---
 
 ## hash_file()
 
 ```php
-function hash_file(string $algo, string $filename, bool $binary = false, array $options = []): mixed
+function hash_file(string $algo, string $filename, bool $binary = false): mixed
 ```
 
-Lowers `hash_file(algo, filename, binary?)` by reading bytes then hashing them.
+Generates a hash value using the contents of a given file.
 
 **Parameters**:
 - `$algo` (`string`)
 - `$filename` (`string`)
 - `$binary` (`bool`), default `false`, optional
-- `$options` (`array`), default `[]`, optional
 
 **Returns**: `mixed`
 

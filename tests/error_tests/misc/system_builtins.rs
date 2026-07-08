@@ -180,6 +180,51 @@ fn test_error_mktime_wrong_args() {
     );
 }
 
+/// Verifies that `gmmktime()` rejects more than six arguments, mirroring `mktime()`.
+#[test]
+fn test_error_gmmktime_wrong_args() {
+    expect_error(
+        "<?php gmmktime(1, 2, 3, 4, 5, 6, 7);",
+        "gmmktime() takes exactly 6 arguments",
+    );
+}
+
+/// Verifies that `getdate()` rejects a second argument (it accepts at most one).
+#[test]
+fn test_error_getdate_wrong_args() {
+    expect_error(
+        "<?php getdate(1, 2);",
+        "getdate() takes at most 1 argument",
+    );
+}
+
+/// Verifies that `localtime()` rejects a third argument (it accepts at most two).
+#[test]
+fn test_error_localtime_wrong_args() {
+    expect_error(
+        "<?php localtime(1, true, 3);",
+        "localtime() takes at most 2 arguments",
+    );
+}
+
+/// Verifies that `date_default_timezone_get()` rejects any argument.
+#[test]
+fn test_error_date_default_timezone_get_wrong_args() {
+    expect_error(
+        "<?php date_default_timezone_get(\"x\");",
+        "date_default_timezone_get() takes no arguments",
+    );
+}
+
+/// Verifies that `date_default_timezone_set()` requires exactly one argument.
+#[test]
+fn test_error_date_default_timezone_set_wrong_args() {
+    expect_error(
+        "<?php date_default_timezone_set();",
+        "date_default_timezone_set() takes exactly 1 argument",
+    );
+}
+
 /// Verifies that `strtotime()` with no arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_strtotime_no_args() {
@@ -401,5 +446,26 @@ fn test_include_path_with_undefined_const_errors() {
         err.message.contains("UNDEFINED"),
         "message should reference the undefined constant: {}",
         err.message
+    );
+}
+
+/// serialize() requires exactly one argument.
+#[test]
+fn test_error_serialize_wrong_args() {
+    expect_error("<?php serialize();", "serialize() takes exactly 1 argument");
+}
+
+/// unserialize() accepts one or two arguments.
+#[test]
+fn test_error_unserialize_wrong_args() {
+    expect_error("<?php unserialize();", "unserialize() takes 1 or 2 arguments");
+}
+
+/// unserialize()'s data argument must be string-compatible.
+#[test]
+fn test_error_unserialize_non_string_data() {
+    expect_error(
+        "<?php unserialize([1, 2]);",
+        "unserialize() data argument must be string-compatible",
     );
 }

@@ -1,21 +1,20 @@
 ---
 title: "rsort()"
-description: "Lowers `rsort()` for indexed integer arrays by mutating the source array in place."
+description: "Sorts an array in descending order."
 sidebar:
-  order: 41
+  order: 58
 ---
 
 ## rsort()
 
 ```php
-function rsort(array $array, int $flags): bool
+function rsort(array $array): bool
 ```
 
-Lowers `rsort()` for indexed integer arrays by mutating the source array in place.
+Sorts an array in descending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`)
 
 **Returns**: `bool`
 

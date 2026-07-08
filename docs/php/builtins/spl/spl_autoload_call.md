@@ -1,8 +1,8 @@
 ---
 title: "spl_autoload_call()"
-description: "Lowers no-op autoload calls by preserving arg effects and returning PHP null if used."
+description: "Try all registered __autoload() functions to load the requested class."
 sidebar:
-  order: 303
+  order: 324
 ---
 
 ## spl_autoload_call()
@@ -11,7 +11,7 @@ sidebar:
 function spl_autoload_call(string $class): void
 ```
 
-Lowers no-op autoload calls by preserving arg effects and returning PHP null if used.
+Try all registered __autoload() functions to load the requested class.
 
 **Parameters**:
 - `$class` (`string`)

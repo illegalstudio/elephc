@@ -1,8 +1,8 @@
 ---
 title: "sqrt()"
-description: "Lowers `sqrt()` for concrete integer-like and floating operands."
+description: "Returns the square root of a number."
 sidebar:
-  order: 251
+  order: 268
 ---
 
 ## sqrt()
@@ -11,7 +11,7 @@ sidebar:
 function sqrt(float $num): float
 ```
 
-Lowers `sqrt()` for concrete integer-like and floating operands.
+Returns the square root of a number.
 
 **Parameters**:
 - `$num` (`float`)

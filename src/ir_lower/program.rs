@@ -66,6 +66,7 @@ fn populate_metadata(module: &mut Module, program: &Program, check_result: &Chec
     module.extern_class_infos = check_result.extern_classes.clone();
     module.packed_class_infos = check_result.packed_classes.clone();
     module.packed_layouts.names = sorted_keys(&check_result.packed_classes);
+    module.extern_globals = check_result.extern_globals.clone();
     module.callable_param_sigs = check_result.callable_param_sigs.clone();
     module.extern_decls = check_result
         .extern_functions
@@ -205,8 +206,10 @@ fn builtin_call_name<'a>(module: &'a Module, inst: &crate::ir::Instruction) -> O
 fn string_callback_operand_index(name: &str) -> Option<usize> {
     match crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "array_map" => Some(0),
-        "array_filter" | "array_reduce" | "array_walk" | "usort" | "uksort" | "uasort"
-        | "iterator_apply" | "preg_replace_callback" => Some(1),
+        "array_filter" | "array_reduce" | "array_walk" | "array_walk_recursive" | "usort"
+        | "uksort" | "uasort" | "iterator_apply" | "preg_replace_callback" | "array_find"
+        | "array_any" | "array_all" => Some(1),
+        "array_udiff" | "array_uintersect" => Some(2),
         _ => None,
     }
 }
@@ -223,7 +226,24 @@ fn is_regex_builtin_name(name: &str) -> bool {
 fn is_phar_archive_builtin_name(name: &str) -> bool {
     matches!(
         crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
-        "__elephc_phar_list_entries" | "file_get_contents" | "file_put_contents" | "fopen"
+        "__elephc_phar_list_entries"
+            | "__elephc_phar_get_metadata"
+            | "__elephc_phar_get_stub"
+            | "__elephc_phar_set_metadata"
+            | "__elephc_phar_set_stub"
+            | "__elephc_phar_get_file_metadata"
+            | "__elephc_phar_set_file_metadata"
+            | "__elephc_phar_gzip_archive"
+            | "__elephc_phar_bzip2_archive"
+            | "__elephc_phar_decompress_archive"
+            | "__elephc_phar_sign_openssl"
+            | "__elephc_phar_sign_hash"
+            | "__elephc_phar_set_zip_password"
+            | "__elephc_phar_get_signature_hash"
+            | "__elephc_phar_get_signature_type"
+            | "file_get_contents"
+            | "file_put_contents"
+            | "fopen"
     )
 }
 
@@ -651,6 +671,7 @@ fn lower_builtin_reflection_class_methods(
     let Some(class_info) = check_result.classes.get(class_name) else {
         return;
     };
+    let before = module.class_methods.len();
     for method in &class_info.method_decls {
         if !method.has_body {
             continue;
@@ -684,6 +705,9 @@ fn lower_builtin_reflection_class_methods(
             fiber_return_sigs,
         );
     }
+    for method in module.class_methods.iter_mut().skip(before) {
+        method.flags.is_synthetic = true;
+    }
 }
 
 /// Lowers the small builtin SPL method slice currently consumed by the EIR backend.
@@ -708,6 +732,9 @@ fn lower_referenced_builtin_spl_methods(
         let before = module.class_methods.len();
         for (class_name, method_key) in methods {
             lower_builtin_spl_method(&class_name, &method_key, module, check_result, constants, fiber_return_sigs);
+        }
+        for method in module.class_methods.iter_mut().skip(before) {
+            method.flags.is_synthetic = true;
         }
         if module.class_methods.len() == before {
             break;
@@ -782,20 +809,41 @@ fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, String)> {
                     else {
                         continue;
                     };
-                    let PhpType::Object(class_name) = receiver_ty else {
-                        continue;
-                    };
-                    let normalized = class_name.trim_start_matches('\\');
                     let Some(method_name) = string_data_name(module, inst) else {
                         continue;
                     };
                     let method_key = php_method_key(method_name);
-                    push_supported_builtin_spl_method_for_receiver(
-                        &mut methods,
-                        module,
-                        normalized,
-                        &method_key,
-                    );
+                    match receiver_ty {
+                        PhpType::Object(class_name) => {
+                            let normalized = class_name.trim_start_matches('\\');
+                            push_supported_builtin_spl_method_for_receiver(
+                                &mut methods,
+                                module,
+                                normalized,
+                                &method_key,
+                            );
+                        }
+                        // A Mixed/Union receiver dispatches at runtime over every class whose
+                        // flattened method set contains this name (mirrors `mixed_method_candidates`
+                        // in the EIR backend). Register the builtin SPL implementation behind each
+                        // candidate so its vtable slot is emitted; otherwise the runtime class-id
+                        // dispatch jumps through a null vtable slot and segfaults. This covers
+                        // method calls on a `mixed` value and on foreach values from object
+                        // iterators (e.g. DirectoryIterator), which the EIR lowers as Mixed locals.
+                        PhpType::Mixed | PhpType::Union(_) => {
+                            for (candidate_class, class_info) in &module.class_infos {
+                                if class_info.methods.contains_key(&method_key) {
+                                    push_supported_builtin_spl_method_for_receiver(
+                                        &mut methods,
+                                        module,
+                                        candidate_class,
+                                        &method_key,
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             }
@@ -1508,12 +1556,21 @@ fn is_supported_builtin_spl_method(class_name: &str, method_key: &str) -> bool {
                 | "count"
                 | "compressfiles"
                 | "decompressfiles"
+                | "compress"
+                | "decompress"
+                | "setsignaturealgorithm"
+                | "getsignature"
+                | "setzippassword"
                 | "delete"
         ),
         "PharFileInfo" => matches!(
             method_key,
             "__construct"
                 | "getcontent"
+                | "setmetadata"
+                | "getmetadata"
+                | "hasmetadata"
+                | "delmetadata"
                 | "__tostring"
                 | "getpath"
                 | "getfilename"

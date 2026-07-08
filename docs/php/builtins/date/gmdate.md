@@ -1,21 +1,21 @@
 ---
 title: "gmdate()"
-description: "Lowers `gmdate(format[, timestamp])`: the UTC counterpart of `date()`."
+description: "Formats a GMT/UTC date and time."
 sidebar:
-  order: 73
+  order: 90
 ---
 
 ## gmdate()
 
 ```php
-function gmdate(string $format, int $timestamp): string
+function gmdate(string $format, int $timestamp = null): string
 ```
 
-Lowers `gmdate(format[, timestamp])`: the UTC counterpart of `date()`.
+Formats a GMT/UTC date and time.
 
 **Parameters**:
 - `$format` (`string`)
-- `$timestamp` (`int`), optional
+- `$timestamp` (`int`), default `null`, optional
 
 **Returns**: `string`
 

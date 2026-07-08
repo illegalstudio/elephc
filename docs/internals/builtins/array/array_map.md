@@ -2,15 +2,15 @@
 title: "array_map() — internals"
 description: "Compiler internals for array_map(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 14
+  order: 22
 ---
 
 ## `array_map()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:312](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L312) (`lower_array_map`)
+- **Signature**: [`src/builtins/array/array_map.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_map.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:326](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L326) (`lower_array_map`)
 - **Function symbol**: `lower_array_map()`
 
 
@@ -36,4 +36,3 @@ function array_map(callable $callback, array $array, ...$arrays): array
 ## Cross-references
 
 - [User reference for `array_map()`](../../../php/builtins/array/array_map.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "atan2()"
-description: "Lowers `atan2()` using the C ABI argument order `y, x`."
+description: "Returns the arc tangent of two variables."
 sidebar:
-  order: 222
+  order: 239
 ---
 
 ## atan2()
@@ -11,7 +11,7 @@ sidebar:
 function atan2(float $y, float $x): float
 ```
 
-Lowers `atan2()` using the C ABI argument order `y, x`.
+Returns the arc tangent of two variables.
 
 **Parameters**:
 - `$y` (`float`)

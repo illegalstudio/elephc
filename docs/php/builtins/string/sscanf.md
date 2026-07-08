@@ -1,8 +1,8 @@
 ---
 title: "sscanf()"
-description: "Lowers `sscanf(string, format)` into the shared scanner helper."
+description: "Parses a string according to a format."
 sidebar:
-  order: 359
+  order: 380
 ---
 
 ## sscanf()
@@ -11,7 +11,7 @@ sidebar:
 function sscanf(string $string, string $format, ...$vars): array
 ```
 
-Lowers `sscanf(string, format)` into the shared scanner helper.
+Parses a string according to a format.
 
 **Parameters**:
 - `$string` (`string`)

@@ -1,8 +1,8 @@
 ---
 title: "tmpfile()"
-description: "Lowers `tmpfile()` and boxes the anonymous stream descriptor or PHP false."
+description: "Creates a temporary file."
 sidebar:
-  order: 132
+  order: 149
 ---
 
 ## tmpfile()
@@ -11,7 +11,7 @@ sidebar:
 function tmpfile(): mixed
 ```
 
-Lowers `tmpfile()` and boxes the anonymous stream descriptor or PHP false.
+Creates a temporary file.
 
 **Parameters**: none.
 

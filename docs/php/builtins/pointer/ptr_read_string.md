@@ -1,8 +1,8 @@
 ---
 title: "ptr_read_string()"
-description: "Lowers `ptr_read_string(pointer, length)` by copying raw bytes into an owned PHP string."
+description: "Copies raw bytes from a pointer into a PHP string of the given length."
 sidebar:
-  order: 276
+  order: 293
 ---
 
 ## ptr_read_string()
@@ -11,7 +11,7 @@ sidebar:
 function ptr_read_string(pointer $pointer, int $length): string
 ```
 
-Lowers `ptr_read_string(pointer, length)` by copying raw bytes into an owned PHP string.
+Copies raw bytes from a pointer into a PHP string of the given length.
 
 **Parameters**:
 - `$pointer` (`pointer`)

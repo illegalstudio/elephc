@@ -1,8 +1,8 @@
 ---
 title: "ptr_set()"
-description: "Lowers `ptr_set(pointer, value)` by writing one machine word through a checked pointer."
+description: "Writes one machine word through a raw pointer."
 sidebar:
-  order: 277
+  order: 294
 ---
 
 ## ptr_set()
@@ -11,7 +11,7 @@ sidebar:
 function ptr_set(pointer $pointer, mixed $value): void
 ```
 
-Lowers `ptr_set(pointer, value)` by writing one machine word through a checked pointer.
+Writes one machine word through a raw pointer.
 
 **Parameters**:
 - `$pointer` (`pointer`)

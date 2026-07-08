@@ -1,8 +1,8 @@
 ---
 title: "realpath_cache_get()"
-description: "Lowers `realpath_cache_get()` to elephc's empty realpath-cache view."
+description: "Returns realpath cache entries."
 sidebar:
-  order: 123
+  order: 140
 ---
 
 ## realpath_cache_get()
@@ -11,7 +11,7 @@ sidebar:
 function realpath_cache_get(): array
 ```
 
-Lowers `realpath_cache_get()` to elephc's empty realpath-cache view.
+Returns realpath cache entries.
 
 **Parameters**: none.
 

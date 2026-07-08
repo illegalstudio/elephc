@@ -1,23 +1,23 @@
 ---
 title: "stream_socket_sendto()"
-description: "Lowers `stream_socket_sendto(socket, data, flags?, address?)` and boxes `int|false`."
+description: "Sends a message to a socket, whether it is connected or not."
 sidebar:
-  order: 205
+  order: 222
 ---
 
 ## stream_socket_sendto()
 
 ```php
-function stream_socket_sendto(resource $socket, string $data, int $flags, string $address): mixed
+function stream_socket_sendto(resource $socket, string $data, int $flags = 0, string $address = ''): mixed
 ```
 
-Lowers `stream_socket_sendto(socket, data, flags?, address?)` and boxes `int|false`.
+Sends a message to a socket, whether it is connected or not.
 
 **Parameters**:
 - `$socket` (`resource`)
 - `$data` (`string`)
-- `$flags` (`int`), optional
-- `$address` (`string`), optional
+- `$flags` (`int`), default `0`, optional
+- `$address` (`string`), default `''`, optional
 
 **Returns**: `mixed`
 

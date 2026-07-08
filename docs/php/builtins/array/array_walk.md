@@ -1,22 +1,21 @@
 ---
 title: "array_walk()"
-description: "Lowers `array_walk()` through the callback-driven runtime helper."
+description: "Applies a user function to every member of an array."
 sidebar:
-  order: 31
+  order: 45
 ---
 
 ## array_walk()
 
 ```php
-function array_walk(array $array, callable $callback, mixed $arg): void
+function array_walk(array $array, callable $callback): void
 ```
 
-Lowers `array_walk()` through the callback-driven runtime helper.
+Applies a user function to every member of an array.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
 - `$callback` (`callable`)
-- `$arg` (`mixed`)
 
 **Returns**: `void`
 

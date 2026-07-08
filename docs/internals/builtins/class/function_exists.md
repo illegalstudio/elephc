@@ -2,15 +2,15 @@
 title: "function_exists() — internals"
 description: "Compiler internals for function_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 58
+  order: 75
 ---
 
 ## `function_exists()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:759](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L759) (`lower_function_exists`)
+- **Signature**: [`src/builtins/callables/function_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/function_exists.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:276](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L276) (`lower_function_exists`)
 - **Function symbol**: `lower_function_exists()`
 
 
@@ -40,4 +40,3 @@ function function_exists(string $function): bool
 ## Cross-references
 
 - [User reference for `function_exists()`](../../../php/builtins/class/function_exists.md)
-

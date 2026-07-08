@@ -2,15 +2,15 @@
 title: "fpassthru() — internals"
 description: "Compiler internals for fpassthru(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 149
+  order: 166
 ---
 
 ## `fpassthru()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2806](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2806) (`lower_fpassthru`)
+- **Signature**: [`src/builtins/io/fpassthru.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fpassthru.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3027](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3027) (`lower_fpassthru`)
 - **Function symbol**: `lower_fpassthru()`
 
 
@@ -37,4 +37,3 @@ function fpassthru(resource $stream): int
 ## Cross-references
 
 - [User reference for `fpassthru()`](../../../php/builtins/io/fpassthru.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "tempnam()"
-description: "Lowers `tempnam(directory, prefix)` through the target-aware runtime helper."
+description: "Creates a file with a unique filename."
 sidebar:
-  order: 131
+  order: 148
 ---
 
 ## tempnam()
@@ -11,7 +11,7 @@ sidebar:
 function tempnam(string $directory, string $prefix): string
 ```
 
-Lowers `tempnam(directory, prefix)` through the target-aware runtime helper.
+Creates a file with a unique filename.
 
 **Parameters**:
 - `$directory` (`string`)

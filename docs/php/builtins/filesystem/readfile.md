@@ -1,22 +1,20 @@
 ---
 title: "readfile()"
-description: "Lowers `readfile(path)` and boxes the runtime byte-count-or-false result."
+description: "Outputs a file."
 sidebar:
-  order: 120
+  order: 137
 ---
 
 ## readfile()
 
 ```php
-function readfile(string $filename, bool $use_include_path, mixed $context): mixed
+function readfile(string $filename): mixed
 ```
 
-Lowers `readfile(path)` and boxes the runtime byte-count-or-false result.
+Outputs a file.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$use_include_path` (`bool`)
-- `$context` (`mixed`)
 
 **Returns**: `mixed`
 

@@ -2,15 +2,15 @@
 title: "hash_algos() — internals"
 description: "Compiler internals for hash_algos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 334
+  order: 352
 ---
 
 ## `hash_algos()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:254](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L254) (`lower_hash_algos`)
+- **Signature**: [`src/builtins/string/hash_algos.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_algos.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:254](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L254) (`lower_hash_algos`)
 - **Function symbol**: `lower_hash_algos()`
 
 
@@ -37,4 +37,3 @@ function hash_algos(): array
 ## Cross-references
 
 - [User reference for `hash_algos()`](../../../php/builtins/string/hash_algos.md)
-

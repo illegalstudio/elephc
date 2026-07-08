@@ -1,8 +1,8 @@
 ---
 title: "deg2rad()"
-description: "Lowers `deg2rad()` by multiplying with `PI / 180`."
+description: "Converts a degree value to radians."
 sidebar:
-  order: 227
+  order: 244
 ---
 
 ## deg2rad()
@@ -11,7 +11,7 @@ sidebar:
 function deg2rad(float $num): float
 ```
 
-Lowers `deg2rad()` by multiplying with `PI / 180`.
+Converts a degree value to radians.
 
 **Parameters**:
 - `$num` (`float`)

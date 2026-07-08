@@ -106,6 +106,10 @@ This pass is still intentionally local and conservative. Today it focuses on:
 - recognizing scalar locals introduced by destructuring fixed scalar array literals with `list(...)` / `[...] = [...]`
 - preserving untouched scalar locals across simple loops when a conservative local write analysis can prove the loop only mutates other variables, including simple nested `switch`, `try/catch/finally`, `foreach`, other simple nested loop statements, local array writes like `$items[] = $i` / `$items[0] = $i`, local property writes like `$box->last = $i` / `$box->items[] = $i`, and targeted invalidations like `unset($tmp)`, while also retaining stable scalar values introduced by `for` init clauses
 - local loop path summaries for known `while(false)`, `do...while(false)`, `while(true)` / `for(;;)` break exits, and branch-local loop exits that agree on scalar values
+- array-literal facts for heap-backed locals: a local assigned an all-scalar indexed/associative array literal (up to 64 entries) carries the literal as a fact, `$a[<const>]` reads fold through the same helper as inline literal access, `list(...) = $a` unpacks element facts, and `$b = $a` copies the fact because PHP array assignment is a COW value-semantics snapshot
+- targeted invalidation grounded in the memory model: a statement or expression removes only the locals it can actually write. Known local writes and `unset($var)` stay exact; `unset($a[0])` kills only `$a`; array reads kill nothing; a call kills its by-ref argument roots (user function/method signatures come from a program pre-scan, builtin signatures from the registry) plus, at top level only, everything when the callee can write `global` storage (tracked transitively by the callable-effects fixed point). Callback-invoking builtins (`call_user_func`, `usort`, `array_walk`, ...) treat their arguments like an unknown callee's
+- a reference-volatility ledger backing those targeted rules: every reference-exposure point (`$t = &$s` and its lvalue roots, by-ref `foreach` array roots, by-ref closure captures, `global`/`static` declarations, by-ref arguments to user callees, `ptr($x)` address-taking, request superglobals) marks the name so it never carries a fact again
+- never substituting a constant into a by-ref argument position, which must stay an lvalue
 - re-running constant folding on expressions after substitutions are made
 - propagating into nested bodies conservatively without trying to solve full data-flow across loops or general path-sensitive CFGs
 
@@ -411,12 +415,11 @@ value escapes" path calls.
 The current optimizer is still intentionally local. It does not yet implement:
 
 - full fixed-point/basic-block constant propagation across arbitrary loops and general path merges
-- richer memory-model-aware propagation across heap-backed locals and broader aliasing situations
+- object/property facts, nested-array facts, and per-class constructor effect summaries beyond the current array-literal facts and unioned by-ref signatures
 - exact exception-type reachability, nested rethrow modeling, and less conservative `finally` invalidation beyond the current path-aware `try` heuristics
 - broader guard reasoning for range facts and multi-variable relationships beyond the current boolean, scalar, loose-comparison, and safe relational-complement facts
 - broader control-flow normalization beyond the current local AST shell rewrites
 - backend-specific peephole cleanup
-- runtime dead stripping
 - elimination of the `adrp/add/stur` instruction triple at the FCC assignment site when the wrapper is stubbed (the stub address still gets loaded and stored even though both are dead)
 
 Those remain roadmap items for later optimization work.

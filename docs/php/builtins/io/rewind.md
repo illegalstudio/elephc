@@ -1,8 +1,8 @@
 ---
 title: "rewind()"
-description: "Lowers `rewind(stream)` as `lseek(fd, 0, SEEK_SET)` and clears EOF state on success."
+description: "Rewind the position of a file pointer."
 sidebar:
-  order: 170
+  order: 187
 ---
 
 ## rewind()
@@ -11,7 +11,7 @@ sidebar:
 function rewind(resource $stream): bool
 ```
 
-Lowers `rewind(stream)` as `lseek(fd, 0, SEEK_SET)` and clears EOF state on success.
+Rewind the position of a file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)

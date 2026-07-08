@@ -1,22 +1,22 @@
 ---
 title: "strpos()"
-description: "Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed."
+description: "Finds the numeric position of the first occurrence of a substring."
 sidebar:
-  order: 372
+  order: 393
 ---
 
 ## strpos()
 
 ```php
-function strpos(string $haystack, string $needle, int $offset): mixed
+function strpos(string $haystack, string $needle, int $offset = 0): mixed
 ```
 
-Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed.
+Finds the numeric position of the first occurrence of a substring.
 
 **Parameters**:
 - `$haystack` (`string`)
 - `$needle` (`string`)
-- `$offset` (`int`), optional
+- `$offset` (`int`), default `0`, optional
 
 **Returns**: `mixed`
 

@@ -2,15 +2,15 @@
 title: "strrev() — internals"
 description: "Compiler internals for strrev(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 376
+  order: 394
 ---
 
 ## `strrev()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
+- **Signature**: [`src/builtins/string/strrev.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strrev.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
 - **Function symbol**: `lower_unary_string_runtime()`
 
 
@@ -37,4 +37,3 @@ function strrev(string $string): string
 ## Cross-references
 
 - [User reference for `strrev()`](../../../php/builtins/string/strrev.md)
-

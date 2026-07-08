@@ -1,24 +1,22 @@
 ---
 title: "preg_replace()"
-description: "Lowers `preg_replace(pattern, replacement, subject)` through the regex replacement helper."
+description: "Performs a regular expression search and replace."
 sidebar:
-  order: 296
+  order: 317
 ---
 
 ## preg_replace()
 
 ```php
-function preg_replace(string $pattern, string $replacement, string $subject, int $limit = -1, int $count = null): string
+function preg_replace(string $pattern, string $replacement, string $subject): string
 ```
 
-Lowers `preg_replace(pattern, replacement, subject)` through the regex replacement helper.
+Performs a regular expression search and replace.
 
 **Parameters**:
 - `$pattern` (`string`)
 - `$replacement` (`string`)
 - `$subject` (`string`)
-- `$limit` (`int`), default `-1`, optional
-- `$count` (`int`), passed by reference, default `null`, optional
 
 **Returns**: `string`
 

@@ -1,8 +1,8 @@
 ---
 title: "fscanf()"
-description: "Lowers `fscanf(stream, format)` through `__rt_fgets` and `__rt_sscanf`."
+description: "Parses input from a file according to a format."
 sidebar:
-  order: 153
+  order: 170
 ---
 
 ## fscanf()
@@ -11,7 +11,7 @@ sidebar:
 function fscanf(resource $stream, string $format, ...$vars): array
 ```
 
-Lowers `fscanf(stream, format)` through `__rt_fgets` and `__rt_sscanf`.
+Parses input from a file according to a format.
 
 **Parameters**:
 - `$stream` (`resource`)

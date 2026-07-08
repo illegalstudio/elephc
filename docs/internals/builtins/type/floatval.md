@@ -2,15 +2,15 @@
 title: "floatval() — internals"
 description: "Compiler internals for floatval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 396
+  order: 414
 ---
 
 ## `floatval()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1034](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1034) (`lower_floatval`)
+- **Signature**: [`src/builtins/types/floatval.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/floatval.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:556](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L556) (`lower_floatval`)
 - **Function symbol**: `lower_floatval()`
 
 
@@ -36,4 +36,3 @@ function floatval(mixed $value): float
 ## Cross-references
 
 - [User reference for `floatval()`](../../../php/builtins/type/floatval.md)
-

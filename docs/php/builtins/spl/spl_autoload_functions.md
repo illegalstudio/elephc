@@ -1,8 +1,8 @@
 ---
 title: "spl_autoload_functions()"
-description: "Lowers `spl_autoload_functions()` to an indexed array of AOT rule placeholders."
+description: "Return all registered __autoload() functions."
 sidebar:
-  order: 305
+  order: 326
 ---
 
 ## spl_autoload_functions()
@@ -11,7 +11,7 @@ sidebar:
 function spl_autoload_functions(): array
 ```
 
-Lowers `spl_autoload_functions()` to an indexed array of AOT rule placeholders.
+Return all registered __autoload() functions.
 
 **Parameters**: none.
 

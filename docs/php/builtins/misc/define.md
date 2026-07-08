@@ -2,13 +2,13 @@
 title: "define()"
 description: "Defines a named constant at runtime."
 sidebar:
-  order: 257
+  order: 272
 ---
 
 ## define()
 
 ```php
-function define(string $constant_name, mixed $value, bool $case_insensitive): bool
+function define(string $constant_name, mixed $value): bool
 ```
 
 Defines a named constant at runtime.
@@ -16,7 +16,6 @@ Defines a named constant at runtime.
 **Parameters**:
 - `$constant_name` (`string`)
 - `$value` (`mixed`)
-- `$case_insensitive` (`bool`)
 
 **Returns**: `bool`
 

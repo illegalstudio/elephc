@@ -10,3 +10,6 @@ echo "b / a = " . intval($b / $a) . "\n";
 echo "b % a = " . ($b % $a) . "\n";
 echo "2 + 3 * 4 = " . (2 + 3 * 4) . "\n";
 echo "(2 + 3) * 4 = " . ((2 + 3) * 4) . "\n";
+
+$overflow = PHP_INT_MAX + $argc;
+echo "overflow type = " . gettype($overflow) . "\n";

@@ -1,8 +1,8 @@
 ---
 title: "stream_get_wrappers()"
-description: "Lowers `stream_get_wrappers()` to the static built-in wrapper list."
+description: "Retrieves list of registered streams."
 sidebar:
-  order: 189
+  order: 206
 ---
 
 ## stream_get_wrappers()
@@ -11,7 +11,7 @@ sidebar:
 function stream_get_wrappers(): array
 ```
 
-Lowers `stream_get_wrappers()` to the static built-in wrapper list.
+Retrieves list of registered streams.
 
 **Parameters**: none.
 

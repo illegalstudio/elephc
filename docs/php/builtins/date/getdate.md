@@ -1,20 +1,20 @@
 ---
 title: "getdate()"
-description: "Lowers `getdate([$timestamp])` through the shared decomposition runtime helper."
+description: "Returns date/time information."
 sidebar:
-  order: 72
+  order: 89
 ---
 
 ## getdate()
 
 ```php
-function getdate(int $timestamp): array
+function getdate(int $timestamp = null): array
 ```
 
-Lowers `getdate([$timestamp])` through the shared decomposition runtime helper.
+Returns date/time information.
 
 **Parameters**:
-- `$timestamp` (`int`), optional
+- `$timestamp` (`int`), default `null`, optional
 
 **Returns**: `array`
 

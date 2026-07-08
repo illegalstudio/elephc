@@ -1,8 +1,8 @@
 ---
 title: "fileatime()"
-description: "Lowers `fileatime(path)` and boxes the runtime integer-or-false result."
+description: "Gets last access time of file."
 sidebar:
-  order: 92
+  order: 109
 ---
 
 ## fileatime()
@@ -11,7 +11,7 @@ sidebar:
 function fileatime(string $filename): mixed
 ```
 
-Lowers `fileatime(path)` and boxes the runtime integer-or-false result.
+Gets last access time of file.
 
 **Parameters**:
 - `$filename` (`string`)

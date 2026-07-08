@@ -1,23 +1,22 @@
 ---
 title: "array_splice()"
-description: "Lowers `array_splice()` by mutating an indexed source array and returning removed elements."
+description: "Removes a portion of the array and replaces it with something else."
 sidebar:
-  order: 26
+  order: 38
 ---
 
 ## array_splice()
 
 ```php
-function array_splice(array $array, int $offset, int $length, array $replacement): array
+function array_splice(array $array, int $offset, int $length = null): array
 ```
 
-Lowers `array_splice()` by mutating an indexed source array and returning removed elements.
+Removes a portion of the array and replaces it with something else.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
 - `$offset` (`int`)
-- `$length` (`int`), optional
-- `$replacement` (`array`)
+- `$length` (`int`), default `null`, optional
 
 **Returns**: `array`
 

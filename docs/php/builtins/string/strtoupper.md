@@ -1,8 +1,8 @@
 ---
 title: "strtoupper()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Converts a string to uppercase."
 sidebar:
-  order: 377
+  order: 398
 ---
 
 ## strtoupper()
@@ -11,7 +11,7 @@ sidebar:
 function strtoupper(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Converts a string to uppercase.
 
 **Parameters**:
 - `$string` (`string`)

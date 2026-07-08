@@ -1,8 +1,8 @@
 ---
 title: "ptr_offset()"
-description: "Lowers `ptr_offset(pointer, offset)` by adding a byte offset to a raw address."
+description: "Returns a new pointer offset from the given pointer by the given byte count."
 sidebar:
-  order: 272
+  order: 289
 ---
 
 ## ptr_offset()
@@ -11,7 +11,7 @@ sidebar:
 function ptr_offset(pointer $pointer, int $offset): mixed
 ```
 
-Lowers `ptr_offset(pointer, offset)` by adding a byte offset to a raw address.
+Returns a new pointer offset from the given pointer by the given byte count.
 
 **Parameters**:
 - `$pointer` (`pointer`)

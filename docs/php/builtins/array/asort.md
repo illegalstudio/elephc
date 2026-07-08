@@ -1,21 +1,20 @@
 ---
 title: "asort()"
-description: "Lowers `asort()` for indexed integer arrays through the value-sort runtime wrapper."
+description: "Sorts an array and maintains index association."
 sidebar:
-  order: 33
+  order: 48
 ---
 
 ## asort()
 
 ```php
-function asort(array $array, int $flags): bool
+function asort(array $array): bool
 ```
 
-Lowers `asort()` for indexed integer arrays through the value-sort runtime wrapper.
+Sorts an array and maintains index association.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`)
 
 **Returns**: `bool`
 

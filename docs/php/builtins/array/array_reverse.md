@@ -1,21 +1,20 @@
 ---
 title: "array_reverse()"
-description: "Lowers `array_reverse()` for indexed arrays with 8-byte payload slots."
+description: "Returns an array with the elements in reverse order."
 sidebar:
-  order: 22
+  order: 34
 ---
 
 ## array_reverse()
 
 ```php
-function array_reverse(array $array, bool $preserve_keys): array
+function array_reverse(array $array): array
 ```
 
-Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
+Returns an array with the elements in reverse order.
 
 **Parameters**:
 - `$array` (`array`)
-- `$preserve_keys` (`bool`)
 
 **Returns**: `array`
 

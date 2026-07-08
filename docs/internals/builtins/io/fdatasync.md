@@ -2,15 +2,15 @@
 title: "fdatasync() — internals"
 description: "Compiler internals for fdatasync(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 138
+  order: 155
 ---
 
 ## `fdatasync()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3083](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3083) (`lower_fdatasync`)
+- **Signature**: [`src/builtins/io/fdatasync.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fdatasync.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3304](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3304) (`lower_fdatasync`)
 - **Function symbol**: `lower_fdatasync()`
 
 
@@ -36,4 +36,3 @@ function fdatasync(resource $stream): bool
 ## Cross-references
 
 - [User reference for `fdatasync()`](../../../php/builtins/io/fdatasync.md)
-

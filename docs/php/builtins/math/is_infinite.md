@@ -1,8 +1,8 @@
 ---
 title: "is_infinite()"
-description: "Lowers `is_infinite()` by comparing the normalized float against +/- infinity."
+description: "Checks whether a float is infinite."
 sidebar:
-  order: 235
+  order: 252
 ---
 
 ## is_infinite()
@@ -11,7 +11,7 @@ sidebar:
 function is_infinite(float $num): bool
 ```
 
-Lowers `is_infinite()` by comparing the normalized float against +/- infinity.
+Checks whether a float is infinite.
 
 **Parameters**:
 - `$num` (`float`)

@@ -2,15 +2,15 @@
 title: "stream_context_get_options() — internals"
 description: "Compiler internals for stream_context_get_options(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 176
+  order: 193
 ---
 
 ## `stream_context_get_options()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1139](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1139) (`lower_stream_context_get_options`)
+- **Signature**: [`src/builtins/io/stream_context_get_options.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_get_options.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1252](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1252) (`lower_stream_context_get_options`)
 - **Function symbol**: `lower_stream_context_get_options()`
 
 
@@ -27,7 +27,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function stream_context_get_options(resource $stream_or_context): array
+function stream_context_get_options(resource $context): array
 ```
 
 ## What the type checker enforces
@@ -37,4 +37,3 @@ function stream_context_get_options(resource $stream_or_context): array
 ## Cross-references
 
 - [User reference for `stream_context_get_options()`](../../../php/builtins/io/stream_context_get_options.md)
-

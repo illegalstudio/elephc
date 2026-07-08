@@ -2,15 +2,15 @@
 title: "iterator_apply() — internals"
 description: "Compiler internals for iterator_apply(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 302
+  order: 320
 ---
 
 ## `iterator_apply()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:289](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L289) (`lower_iterator_apply`)
+- **Signature**: [`src/builtins/spl/iterator_apply.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/iterator_apply.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/spl.rs`:290](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/spl.rs#L290) (`lower_iterator_apply`)
 - **Function symbol**: `lower_iterator_apply()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function iterator_apply(traversable $iterator, callable $callback, array $args): int
+function iterator_apply(traversable $iterator, callable $callback, array $args = null): int
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function iterator_apply(traversable $iterator, callable $callback, array $args):
 ## Cross-references
 
 - [User reference for `iterator_apply()`](../../../php/builtins/spl/iterator_apply.md)
-

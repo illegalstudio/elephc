@@ -1,8 +1,8 @@
 ---
 title: "tanh()"
-description: "tanh() — math builtin supported by Elephc."
+description: "Returns the hyperbolic tangent of a number."
 sidebar:
-  order: 253
+  order: 270
 ---
 
 ## tanh()
@@ -11,7 +11,7 @@ sidebar:
 function tanh(float $num): float
 ```
 
-`tanh()` is a math builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Returns the hyperbolic tangent of a number.
 
 **Parameters**:
 - `$num` (`float`)
@@ -25,4 +25,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `tanh` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/tanh.md).
 

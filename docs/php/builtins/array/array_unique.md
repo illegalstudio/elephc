@@ -1,21 +1,20 @@
 ---
 title: "array_unique()"
-description: "Lowers `array_unique()` for indexed arrays with 8-byte payload slots."
+description: "Removes duplicate values from an array."
 sidebar:
-  order: 28
+  order: 42
 ---
 
 ## array_unique()
 
 ```php
-function array_unique(array $array, int $flags): array
+function array_unique(array $array): array
 ```
 
-Lowers `array_unique()` for indexed arrays with 8-byte payload slots.
+Removes duplicate values from an array.
 
 **Parameters**:
 - `$array` (`array`)
-- `$flags` (`int`)
 
 **Returns**: `array`
 

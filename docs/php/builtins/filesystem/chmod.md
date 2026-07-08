@@ -1,8 +1,8 @@
 ---
 title: "chmod()"
-description: "Lowers `chmod(path, mode)` through the target-aware runtime helper."
+description: "Changes file mode."
 sidebar:
-  order: 84
+  order: 101
 ---
 
 ## chmod()
@@ -11,7 +11,7 @@ sidebar:
 function chmod(string $filename, int $permissions): bool
 ```
 
-Lowers `chmod(path, mode)` through the target-aware runtime helper.
+Changes file mode.
 
 **Parameters**:
 - `$filename` (`string`)

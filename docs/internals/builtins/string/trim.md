@@ -2,15 +2,15 @@
 title: "trim() — internals"
 description: "Compiler internals for trim(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 383
+  order: 401
 ---
 
 ## `trim()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:112](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L112) (`lower_trim_like`)
+- **Signature**: [`src/builtins/string/trim.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/trim.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:112](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L112) (`lower_trim_like`)
 - **Function symbol**: `lower_trim_like()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function trim(string $string, string $characters): string
+function trim(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function trim(string $string, string $characters): string
 ## Cross-references
 
 - [User reference for `trim()`](../../../php/builtins/string/trim.md)
-

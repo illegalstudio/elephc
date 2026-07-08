@@ -1,8 +1,8 @@
 ---
 title: "getprotobyname()"
-description: "Lowers `getprotobyname(protocol)` and boxes a missing entry as PHP `false`."
+description: "Gets the protocol number associated with the given protocol name."
 sidebar:
-  order: 163
+  order: 180
 ---
 
 ## getprotobyname()
@@ -11,7 +11,7 @@ sidebar:
 function getprotobyname(string $protocol): mixed
 ```
 
-Lowers `getprotobyname(protocol)` and boxes a missing entry as PHP `false`.
+Gets the protocol number associated with the given protocol name.
 
 **Parameters**:
 - `$protocol` (`string`)

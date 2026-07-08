@@ -1,8 +1,8 @@
 ---
 title: "fsync()"
-description: "Lowers `fsync(stream)` through the shared fd sync runtime helper."
+description: "Synchronizes changes to the file (including meta-data)."
 sidebar:
-  order: 156
+  order: 173
 ---
 
 ## fsync()
@@ -11,7 +11,7 @@ sidebar:
 function fsync(resource $stream): bool
 ```
 
-Lowers `fsync(stream)` through the shared fd sync runtime helper.
+Synchronizes changes to the file (including meta-data).
 
 **Parameters**:
 - `$stream` (`resource`)

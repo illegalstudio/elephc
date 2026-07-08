@@ -1,8 +1,8 @@
 ---
 title: "filesize()"
-description: "Lowers `filesize(path)` through the target-aware runtime stat helper."
+description: "Gets file size."
 sidebar:
-  order: 99
+  order: 116
 ---
 
 ## filesize()
@@ -11,7 +11,7 @@ sidebar:
 function filesize(string $filename): int
 ```
 
-Lowers `filesize(path)` through the target-aware runtime stat helper.
+Gets file size.
 
 **Parameters**:
 - `$filename` (`string`)

@@ -1,8 +1,8 @@
 ---
 title: "natcasesort()"
-description: "Lowers `natcasesort()` for indexed integer arrays through the case-insensitive wrapper."
+description: "Sorts an array using a case-insensitive natural order algorithm."
 sidebar:
-  order: 38
+  order: 55
 ---
 
 ## natcasesort()
@@ -11,7 +11,7 @@ sidebar:
 function natcasesort(array $array): bool
 ```
 
-Lowers `natcasesort()` for indexed integer arrays through the case-insensitive wrapper.
+Sorts an array using a case-insensitive natural order algorithm.
 
 **Parameters**:
 - `$array` (`array`), passed by reference

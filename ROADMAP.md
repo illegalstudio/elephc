@@ -575,7 +575,7 @@ PHP-visible surface, not the internal commits.
 - [x] Phase 47 — runtime-built `phar://` write streams for `fopen()`: non-literal `fopen($path, $mode)` now publishes the PHAR URL writer bridge alongside the dynamic reader bridge. `__rt_fopen_maybe_phar` still routes `r*` modes to `__rt_phar_read_entry`, but `w`/`a`/`c`/`x` modes now tail-call `__rt_phar_write_open_url`, which persists the full runtime URL with `__rt_str_persist` so `fclose()` can finalize through `elephc_phar_put_url`. Dynamic stream writes therefore preserve sibling entries in native PHAR archives just like literal streams and dynamic `file_put_contents()` writes. Test: `test_fopen_dynamic_phar_write_preserves_existing_entries`. Follow-up phases cover compressed-entry controls and concurrent PHAR write streams; private-key signing remains deferred. ARM64 + x86_64 (both Docker-verified)
 - [x] Phase 48 — tar/zip `phar://` writes: the `elephc-phar` bridge now preserves the archive family for existing native PHAR, tar, and ZIP containers, and missing `.tar` / `.zip` archive paths are created in that family instead of native PHAR. Literal write splitting recognizes `.phar/`, `.tar/`, and `.zip/` boundaries; runtime-built URLs use the same suffix-aware split. ZIP output preserves stored/deflated entries, tar output is POSIX ustar, and native PHAR gzip/bzip2 entries keep their compression when replaced. Tests: `writes_tar_entries`, `writes_zip_entries`, `writes_preserve_gzip_native_phar_entries`, `writes_preserve_bzip2_native_phar_entries`, `test_file_put_contents_phar_tar_archive_runtime_readback`, `test_file_put_contents_phar_zip_archive_runtime_readback`. Follow-up phases cover compression controls and concurrent PHAR write streams; private-key signing remains deferred. ARM64 + x86_64 (both Docker-verified)
 - [x] Phase 49 — concurrent `phar://` write streams: write-mode `fopen()` now publishes buffered `elephc-phar` stream entrypoints, so literal and runtime-built PHAR URLs receive real synthetic descriptors in the `0x50000000..0x50000020` range instead of sharing one global `0x50000000` stream. `fwrite()` and `fclose()` dispatch that whole range, and the bridge owns per-descriptor payload/target state until finalization; the old assembly single-stream writer remains as an unlinked-bridge fallback. Tests: `concurrent_phar_write_streams_preserve_distinct_entries`, `test_fopen_concurrent_phar_write_streams_preserve_entries`. Deferred: private-key signing. ARM64 + x86_64 (both Docker-verified)
-- [x] Phase 50 — `Phar` / `PharData` OOP baseline: the checker now injects builtin `Phar`, `PharData`, and `PharFileInfo` classes with PHP-facing format/compression/signature constants, constructors that store the archive path, object-local mixed metadata/string stub state, archive-scanned plus object-local entry iteration state, `addFromString()`, `delete()`, `compressFiles()`, `decompressFiles()`, path helpers, entry `getContent()`, and ArrayAccess methods (`offsetGet`, `offsetSet`, `offsetExists`, `offsetUnset`) lowered as synthetic PHP bodies over the existing `phar://` `file_get_contents()` / `file_put_contents()` / `unlink()` runtime paths plus the elephc-phar compression/listing bridge. This gives `$phar->addFromString("entry", "data")`, `$phar->delete("entry")`, `setMetadata()` / `getMetadata()` / `hasMetadata()` / `delMetadata()` for strings, arrays, ints, and null, `setStub()` / `getStub()`, native-PHAR `Phar::GZ` / `Phar::BZ2` / `Phar::NONE` compression control, ZIP `Phar::GZ` / `Phar::NONE` compression control, `$phar["entry"]->getContent()` reads through `PharFileInfo`, `foreach ($phar as $name => $info)` for entries scanned from existing native PHAR/tar/ZIP archives and entries written through that object, `isset($phar["entry"])`, and `unset($phar["entry"])` coverage for native PHAR plus tar/ZIP containers without new target-specific assembly. Tests: `test_phar_oop_array_access_read_write`, `test_phar_oop_add_from_string_writes_entries`, `test_phar_oop_metadata_stub_and_path_helpers`, `test_phar_oop_iteration_tracks_written_entries`, `test_phar_oop_iteration_scans_existing_archives`, `test_phar_oop_array_access_unset_deletes_entry`, `test_phar_oop_delete_method_removes_entries`, `test_phar_oop_compress_and_decompress_files`. Deferred: persisted metadata/stub serialization, tar compression controls, and private-key signing.
+- [x] Phase 50 — `Phar` / `PharData` OOP baseline: the checker now injects builtin `Phar`, `PharData`, and `PharFileInfo` classes with PHP-facing format/compression/signature constants, constructors that store the archive path, object-local mixed metadata/string stub state, archive-scanned plus object-local entry iteration state, `addFromString()`, `delete()`, `compressFiles()`, `decompressFiles()`, path helpers, entry `getContent()`, and ArrayAccess methods (`offsetGet`, `offsetSet`, `offsetExists`, `offsetUnset`) lowered as synthetic PHP bodies over the existing `phar://` `file_get_contents()` / `file_put_contents()` / `unlink()` runtime paths plus the elephc-phar compression/listing bridge. This gives `$phar->addFromString("entry", "data")`, `$phar->delete("entry")`, `setMetadata()` / `getMetadata()` / `hasMetadata()` / `delMetadata()` for strings, arrays, ints, and null, `setStub()` / `getStub()`, native-PHAR `Phar::GZ` / `Phar::BZ2` / `Phar::NONE` compression control, ZIP `Phar::GZ` / `Phar::NONE` compression control, `$phar["entry"]->getContent()` reads through `PharFileInfo`, `foreach ($phar as $name => $info)` for entries scanned from existing native PHAR/tar/ZIP archives and entries written through that object, `isset($phar["entry"])`, and `unset($phar["entry"])` coverage for native PHAR plus tar/ZIP containers without new target-specific assembly. Tests: `test_phar_oop_array_access_read_write`, `test_phar_oop_add_from_string_writes_entries`, `test_phar_oop_metadata_stub_and_path_helpers`, `test_phar_oop_iteration_tracks_written_entries`, `test_phar_oop_iteration_scans_existing_archives`, `test_phar_oop_array_access_unset_deletes_entry`, `test_phar_oop_delete_method_removes_entries`, `test_phar_oop_compress_and_decompress_files`. Persisted metadata/stub serialization landed in a later change; tar archive-wide compression controls and private-key signing remain deferred.
 
 ### Streams — remaining work (subsystem considered *partially complete*; merged as-is)
 
@@ -610,18 +610,61 @@ none are needed for typical stream usage.
   rewrites and OpenSSL/private-key signing.
 - [x] **`phar://` tar/zip variants** — native PHAR, tar-based PHAR, and
   zip-based PHAR containers are readable and writable through literal and
-  runtime PHAR URLs. ZIP64, encrypted ZIP entries, and ZIP data descriptors
-  remain deferred.
+  runtime PHAR URLs. ZIP entries written with a streaming data descriptor
+  (general-purpose flag bit 3) are read via the authoritative
+  central-directory sizes. ZIP64 archives (over 65535 entries, or sizes/offsets
+  over 4 GiB) are read and written — verified interchangeable with PHP and
+  Python. Traditional-PKWARE (ZipCrypto) encrypted ZIP entries are read and
+  written with a password set via the `Phar`/`PharData::setZipPassword()` compiler
+  extension (when set, zip entries — the stub included — are encrypted on write and
+  decrypted on read; the `.phar/signature.bin` entry stays in the clear). ZipCrypto
+  is cryptographically weak and kept only for compatibility with legacy archives.
 - [x] **`Phar` / `PharData` OOP API** — a baseline constructor/constants,
   `addFromString()`, `delete()`, native-PHAR `compressFiles()` /
   `decompressFiles()` (native PHAR plus ZIP `Phar::GZ` / `Phar::NONE`),
-  object-local mixed metadata/string stub accessors, path helpers, `PharFileInfo`
+  path helpers, `PharFileInfo`
   `getContent()`, archive-scanned and object-local entry iteration, and
   ArrayAccess read/write/isset surface is implemented (Phase 50). `offsetUnset()`
-  deletes archive entries through the PHAR-aware `unlink()` path. The closed
-  scope is the baseline OOP archive surface; persisted metadata/stub
-  serialization, tar compression controls, and OpenSSL/private-key signing remain
-  future work.
+  deletes archive entries through the PHAR-aware `unlink()` path.
+- [x] **`Phar` persisted global metadata and stub** — `setMetadata()` /
+  `getMetadata()` / `hasMetadata()` / `delMetadata()` and `setStub()` / `getStub()`
+  persist into the archive file and round-trip across fresh objects and processes
+  (and the PHP interpreter) for native PHAR (manifest field + byte-prefix stub),
+  tar (`.phar/.metadata.bin` + `.phar/stub.php`), and zip (EOCD comment +
+  `.phar/stub.php`); reserved `.phar/*` control entries are hidden from listings.
+  Backed by new public `serialize()` / `unserialize()` builtins (scalar + nested
+  array subset, byte-for-byte PHP-compatible).
+- [x] **`serialize()` / `unserialize()` objects + references** — objects serialize as
+  `O:<len>:"<Class>":<count>:{...}` with PHP's exact public/protected/private key
+  mangling, honour the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods,
+  and emit `r:<index>;` back-references for repeated objects (PHP's global value counter);
+  `unserialize()` rebuilds shared objects as one instance (`===` identity preserved).
+  Byte-for-byte PHP-compatible; 3-target verified. Deferred: cyclic references inside an
+  object's own properties resolve to `null` on read, and the deprecated `Serializable`
+  (`C:`) interface is unsupported.
+- [x] **`PharData` whole-archive (tar) compression** — `compress(Phar::GZ)` /
+  `compress(Phar::BZ2)` write a sibling `.tar.gz` / `.tar.bz2` and return a fresh
+  `PharData`; `decompress()` writes the plain `.tar` back. Compressed archives are read
+  transparently (the bridge detects the gzip/bzip2 wrapper) and are interchangeable with
+  the PHP interpreter. Per-entry native/zip compression stays on `compressFiles()`.
+- [x] **`Phar` signatures incl. OpenSSL (RSA)** — `setSignatureAlgorithm()` /
+  `getSignature()` across native PHAR, tar, and zip phars. Hash algorithms
+  (MD5/SHA1/SHA256/SHA512) and `setSignatureAlgorithm(Phar::OPENSSL, $privateKey)`
+  (RSA-SHA1, PEM PKCS#1/PKCS#8 key via the pure-Rust `rsa` crate). Native PHARs use the
+  `digest/sig ++ flag ++ "GBMB"` trailer; tar and zip phars use a `.phar/signature.bin`
+  control entry (`LE32(flag) ++ LE32(len) ++ signature`) appended last, with the
+  signature computed over the data records (tar) or local entries + central directory +
+  comment (zip), matching php-src. `getSignature()` returns `['hash' => <uppercase hex>,
+  'hash_type' => ...]`. The PHP interpreter verifies elephc-written signatures across all
+  three families (OpenSSL against the matching `.pubkey`).
+- [x] **`PharFileInfo` persisted per-file metadata** — `setMetadata()` /
+  `getMetadata()` / `hasMetadata()` / `delMetadata()` on the `PharFileInfo` objects
+  returned by ArrayAccess persist per-entry metadata into the archive file and
+  round-trip across fresh objects and the PHP interpreter for native PHAR (per-entry
+  manifest field), tar (`.phar/.metadata/<entry>/.metadata.bin` side entry), and zip
+  (per-entry central-directory file comment). Same `serialize()` scalar + array
+  subset as global metadata; verified byte-compatible by reading elephc-written
+  archives back with the PHP interpreter (including nested entry paths).
 - [x] **TLS `ciphers` / `security_level`** — accepted without error but *not
   honored*: rustls has no OpenSSL-cipher-string equivalent and selects TLS
   1.2/1.3 automatically. Honest no-op by design (upstream limitation), not a
@@ -713,9 +756,9 @@ imposed. See `docs/internals/the-ir.md`.
 - [x] Register-pressure mitigations: caller-saved reuse for non-call-crossing intervals; better spill heuristic. The linear-scan allocator now classifies each live interval as call-free (never crosses a clobber point — an instruction/terminator whose lowering emits a call or touches a caller-saved register, per the safe-by-default allowlist in `src/ir_passes/clobber.rs`) and assigns call-free intervals from caller-saved pools that need no prologue save/restore (`x12`–`x15`/`d16`–`d23` on aarch64, `rsi`/`rdi`/`r8`/`r9`/`xmm2`–`xmm7` on x86_64), falling back to callee-saved (`x21`–`x28`/`d8`–`d14`/`rbx`) for cross-call values. This notably unlocks register allocation for x86_64 floats (no callee-saved XMM) and integers (callee pool is only `rbx`). The spill heuristic is now use-weighted: under pressure the rarely-used, furthest-reaching interval is evicted first, keeping hot values in registers
 
 Expected outcome: EIR is the default and only active implementation backend in
-v0.24.x. The legacy AST backend is frozen behind `--ast-backend` for diagnostics
-and removal work only, and ≥15% performance improvement on compute benchmarks
-after Phase 06 by end of v0.24.x.
+v0.24.x. The legacy AST backend is frozen for diagnostics and removal work only,
+and ≥15% performance improvement on compute benchmarks after Phase 06 by end of
+v0.24.x.
 
 ## v0.25.x — EIR optimization passes and Image support
 
@@ -868,32 +911,55 @@ tested, diagnostic-emitting gaps.
   for the procedural PHP layer, and `program_uses_image` now detects the `cairo_`
   prefix so pure-procedural programs pull in the prelude
 
+### Array builtin parity (key/list helpers, associative set-ops, recursive merge/walk)
+
+Well-bounded PHP-visible array builtins implemented on the EIR backend. All
+target-aware (ARM64 + x86_64), with codegen and error tests; the shared `__rt_*`
+runtime helpers are reused and driven through EIR lowering.
+
+- [x] `array_key_first()` / `array_key_last()` (PHP 7.3) — first/last key in insertion order, boxed as `Mixed`, `null` for empty arrays
+- [x] `array_is_list()` (PHP 8.1) — sequential `0..n-1` key check (indexed arrays are lists by construction; associative arrays walk the insertion-order chain)
+- [x] `array_replace()` / `array_replace_recursive()` — right-wins key merge over associative arrays (recursive variant merges when both values at a key are associative arrays)
+- [x] `array_diff_assoc()` / `array_intersect_assoc()` — key + string-cast-value comparison via the unified `__rt_assoc_diff_intersect` helper
+- [x] `array_merge_recursive()` — integer-key renumbering, string-key collisions recurse (both arrays) or combine into a list (scalars)
+- [x] `array_walk_recursive()` — invokes the callback on each non-array leaf, recursing through nested indexed/associative arrays
+- [x] `array_find()` / `array_any()` / `array_all()` (PHP 8.4) — predicate callbacks; find returns the first match or `null`, any/all return booleans
+- [x] `array_udiff()` / `array_uintersect()` — difference/intersection with a user comparator (`$cmp($a, $b) === 0`)
+- [x] `array_multisort()` — sort the first indexed array ascending (stable) and reorder a second array in tandem, both by reference (two scalar-element arrays; flags/descending/multi-key are follow-ups)
+- [x] Scalar indexed-array inputs for the hash-based functions converted to integer-keyed hashes via `__rt_array_to_hash`; result key/value widen to `Mixed` for heterogeneous inputs so `foreach` dispatches keys correctly. Callback/comparator builtins reuse the EIR descriptor-callback machinery (string, function, and non-capturing closure callbacks). Hash-based functions accept associative arrays and scalar-element indexed arrays; string/heap-element indexed inputs and the callback/sort element-type limits are documented in `docs/php/arrays.md`
+
 ## v0.26.x — Performance closure, legacy cleanup, and 0.x stabilization
 
 Optimization work should now be driven by benchmarks, generated assembly size,
 and 0.x validation rather than by speculative pass work.
 
-- [x] Generators reimplemented on stackful coroutines (issue #329) — a generator body is compiled by the normal EIR backend and runs on its own coroutine stack (reusing the Fiber runtime), replacing the v1 state-machine lowering on the EIR path. `Generator::throw()` now raises the exception at the suspended `yield`, so a `try`/`catch` inside the generator body handles it and resumes instead of always terminating the generator and propagating to the caller; in-generator method calls, arbitrary control flow, and `try`/`finally` around `yield` work like ordinary functions. `yield from` over generators delegates through `__rt_gen_delegate` (forwarding sent values and returning the inner `getReturn()`) and over arrays desugars into an iterator loop; `send()`/`getReturn()`/closure captures preserved; Generator GC frees the coroutine stack and boxed key/value/return cells. The frozen legacy AST backend keeps its own `GeneratorFrame` state machine.
-- [ ] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling
-- [ ] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes
-- [ ] Resource scope-cleanup — auto-free tag-9 resource handles that leave scope without their explicit close (today an unclosed `fopen()` leaks its fd and an unfinalized `hash_init()` context leaks its heap state until process exit; `functions/cleanup.rs` skips `Resource`s by design). Prerequisites: a resource-kind subtype in the Mixed cell so the cleanup pass can pick the right destructor (fd → `close()`, HashContext → `elephc_crypto_free`, …), and aliasing safety (resources have no refcount; `$b = $a` would double-free under naive scope-free). Includes wiring the currently-uncalled `elephc_crypto_free` (`_elephc_crypto_free_fn` slot + publish entry + a `__rt_hash_ctx_free` helper) and nulling the Mixed payload in `hash_final` so finalized contexts are skipped — which also defuses the double-final UB documented in `src/codegen/runtime/strings/hash_context.rs`
+- [x] Generators reimplemented on stackful coroutines (issue #329) — a generator body is compiled by the normal EIR backend and runs on its own coroutine stack (reusing the Fiber runtime), replacing the v1 state-machine lowering on the EIR path. `Generator::throw()` now raises the exception at the suspended `yield`, so a `try`/`catch` inside the generator body handles it and resumes instead of always terminating the generator and propagating to the caller; in-generator method calls, arbitrary control flow, and `try`/`finally` around `yield` work like ordinary functions. `yield from` over generators delegates through `__rt_gen_delegate` (forwarding sent values and returning the inner `getReturn()`) and over arrays desugars into an iterator loop; `send()`/`getReturn()`/closure captures preserved; Generator GC frees the coroutine stack and boxed key/value/return cells.
+- [x] Closure rebinding — `Closure::bind()`, `bindTo()`, and `Closure::call()` rebind a closure to a new receiver; a top-level closure that captures `$this` now binds it correctly instead of losing the receiver, and a by-reference `Closure::bind` stored in a variable and called later is tracked as a static callable so the call carries the bound cell directly (`__rt_closure_bind`) rather than going through the generic descriptor invoker
+- [x] New magic methods `__callStatic`, `__isset`, and `__unset` — a static call to an undeclared method dispatches to `__callStatic`; `isset()`/`empty()` on an undeclared property route through `__isset` (and only read `__get` when `__isset` is truthy, so an unset virtual property is empty without ever being read); and `unset($obj->prop)` on a virtual property calls `__unset`
+- [x] Reflection over functions — `ReflectionFunction` (name and parameter counts), `getParameters()`, `ReflectionParameter`, `ReflectionParameter::getType()`, and `ReflectionNamedType`; attribute arguments are exposed in reflection metadata, including float, positional-array, named-argument and associative-array values, references to global and class constants, and enum-case references
+- [x] References to object properties — `$x = &$obj->prop` aliases the property with write-through in both directions, and a by-reference function/method return can be captured with `$x = &f()` (including `string`- and `float`-typed properties); lowered via the `LoadPropRefCell` / `BindRefCellPtr` IR ops. Reassigning an array reference to a non-empty literal of a different type boxes the literal's elements to match the property's element type
+- [x] Enum case `->name` property (issue #330) — every enum case, pure or backed, exposes the read-only `name` string holding the case identifier (`E::A->name` is `"A"`), matching PHP's `UnitEnum::$name`; backed cases keep `->value`, `$this->name` is readable inside enum methods, and access works through direct case access, an aliasing variable, `cases()`, and string interpolation
+- [x] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling (`elephc-source-map` version 2: function ranges with entry symbols, in-function labels, opcode-tagged instruction mappings; schema contract in `docs/compiling/source-maps.md`)
+- [x] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes — locals holding all-scalar array literals carry a COW-snapshot fact (`$a[<const>]` folds, `list()` unpacks, `$b = $a` copies), and side-effecting statements now invalidate only the locals they can write: known writes and complex `unset` targets stay exact, calls kill their by-ref argument roots (user signatures pre-scanned, builtin signatures from the registry, callback-invoking builtins treated as unknown callees) plus top-level facts only when the callee transitively writes `global` storage, all backed by a reference-volatility ledger covering `&`-aliases, by-ref captures/foreach/args, `global`/`static` bindings, and superglobals
+- [x] Resource scope-cleanup — auto-free tag-9 resource handles that leave scope without their explicit close (today an unclosed `fopen()` leaks its fd and an unfinalized `hash_init()` context leaks its heap state until process exit; `functions/cleanup.rs` skips `Resource`s by design). Prerequisites: a resource-kind subtype in the Mixed cell so the cleanup pass can pick the right destructor (fd → `close()`, HashContext → `elephc_crypto_free`, …), and aliasing safety (resources have no refcount; `$b = $a` would double-free under naive scope-free). Includes wiring the currently-uncalled `elephc_crypto_free` (`_elephc_crypto_free_fn` slot + publish entry + a `__rt_hash_ctx_free` helper) as the single HashContext destructor and making `hash_final` finalize a *clone* (leaving the original owned by its Mixed box) so a finalized context that later leaves scope is freed exactly once — closing the double-final/use-after-free hole documented in `src/codegen/runtime/strings/hash_context.rs`. `popen` pipes (kind 3 → `__rt_pclose`) and `opendir` streams (kind 4 → `__rt_closedir`) are released the same way, and an explicit `fclose`/`pclose`/`closedir` stamps a `-1` sentinel into the box so a descriptor (whose fd number may be reused) is never closed twice
 - [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling (feeds the EIR effects table)
 - [ ] Guard reasoning v2 for dead-code elimination — broader range reasoning and multi-variable facts beyond current strict-scalar, boolean, loose-comparison, and safe relational-complement guards
 - [ ] Exception-aware DCE v2 — exact thrown-type / handler reachability, nested try rethrow modeling, and less conservative finally-path invalidation
 - [ ] Control-flow normalization v2 — broader canonicalization of nested block/control shells before CFG-aware optimization passes
 - [ ] Composite conditional include function variants — extend include-graph exclusivity from one direct `if` / `elseif` / `else` chain to nested/composed conditional paths where declarations are pairwise exclusive only after combining multiple branch decisions
 - [ ] Switch-aware conditional include function variants — extend include-graph exclusivity beyond `if` / `elseif` / `else` to `switch` cases once fall-through, `break`, and terminating case bodies are modeled precisely; revisit `match` only if include-like statement lowering ever appears inside match arms
-- [ ] Runtime routine dead stripping — include or link only runtime helpers reachable from the generated program instead of carrying the whole target runtime slice
+- [x] Runtime routine dead stripping — include or link only runtime helpers reachable from the generated program instead of carrying the whole target runtime slice
+- [x] Statically-known catchable `Error` conditions (issue #383) — private/protected method access from an inaccessible scope and readonly property writes outside the declaring constructor raise a catchable `Error` at runtime instead of being rejected at compile time, matching PHP
 - [ ] Tail-call optimization — direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding)
 - [ ] Performance within 2x of C -O0 on compute benchmarks
-- [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before deleting the frozen legacy backend
+- [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before release
 - [ ] Real-world CLI tools compiled as validation
-- [ ] Audit remaining references to `--ast-backend` and legacy AST emitters so docs, help text, and release notes present them as frozen diagnostic-only fallback before removal
-- [ ] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
-- [ ] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
-- [ ] Rename `src/codegen_ir/` to `src/codegen/`
-- [ ] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
-- [ ] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
+- [x] Audit remaining references to `--ast-backend` and legacy AST emitters so docs, help text, and release notes no longer present a selectable fallback
+- [x] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
+- [x] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
+- [x] Rename `src/codegen_ir/` to `src/codegen/`
+- [x] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
+- [x] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [ ] Installation / packaging documentation for the supported host platforms
 
@@ -952,9 +1018,9 @@ statics, and static class properties all reset between requests). Run it with
 
 ## v0.28.x — PHP extension bridge (experimental)
 
-- [ ] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
+- [x] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
 - [ ] Link against PHP extension `.so` / `.dylib` shared libraries
-- [ ] Bridge for string, int, float, bool, array types
+- [x] Bridge for string, int, float, bool, array types
 - [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
 - [ ] `--ext` flag to specify extension libraries at compile time
 - [ ] Documentation: how to bridge a PHP extension

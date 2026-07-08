@@ -1,21 +1,20 @@
 ---
 title: "fgets()"
-description: "Lowers `fgets(stream)` through the shared line-read runtime helper."
+description: "Gets line from file pointer."
 sidebar:
-  order: 143
+  order: 160
 ---
 
 ## fgets()
 
 ```php
-function fgets(resource $stream, int $length): mixed
+function fgets(resource $stream): mixed
 ```
 
-Lowers `fgets(stream)` through the shared line-read runtime helper.
+Gets line from file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)
-- `$length` (`int`)
 
 **Returns**: `mixed`
 

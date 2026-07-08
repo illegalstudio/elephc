@@ -1,22 +1,22 @@
 ---
 title: "array_sum()"
-description: "Lowers `array_sum()` over supported indexed-array payloads."
+description: "Calculate the sum of values in an array."
 sidebar:
-  order: 27
+  order: 39
 ---
 
 ## array_sum()
 
 ```php
-function array_sum(array $array): float
+function array_sum(array $array): int
 ```
 
-Lowers `array_sum()` over supported indexed-array payloads.
+Calculate the sum of values in an array.
 
 **Parameters**:
 - `$array` (`array`)
 
-**Returns**: `float`
+**Returns**: `int`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

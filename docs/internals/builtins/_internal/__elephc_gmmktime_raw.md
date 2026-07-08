@@ -2,15 +2,15 @@
 title: "__elephc_gmmktime_raw() — internals"
 description: "Compiler internals for __elephc_gmmktime_raw(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 254
+  order: 432
 ---
 
 ## `__elephc_gmmktime_raw()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:151](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L151) (`lower_gmmktime`)
+- **Signature**: [`src/builtins/system/__elephc_gmmktime_raw.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_gmmktime_raw.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:151](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L151) (`lower_gmmktime`)
 - **Function symbol**: `lower_gmmktime()`
 
 
@@ -39,4 +39,3 @@ function __elephc_gmmktime_raw(int $hour, int $minute, int $second, int $month, 
 ## Cross-references
 
 - _No user-facing reference — this is a compiler internal helper._
-

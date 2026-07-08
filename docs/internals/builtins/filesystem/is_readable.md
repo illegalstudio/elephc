@@ -2,15 +2,15 @@
 title: "is_readable() — internals"
 description: "Compiler internals for is_readable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 109
+  order: 126
 ---
 
 ## `is_readable()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4965](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4965) (`lower_is_readable`)
+- **Signature**: [`src/builtins/io/is_readable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_readable.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5608](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5608) (`lower_is_readable`)
 - **Function symbol**: `lower_is_readable()`
 
 
@@ -38,4 +38,3 @@ function is_readable(string $filename): bool
 ## Cross-references
 
 - [User reference for `is_readable()`](../../../php/builtins/filesystem/is_readable.md)
-

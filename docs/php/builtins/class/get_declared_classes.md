@@ -1,8 +1,8 @@
 ---
 title: "get_declared_classes()"
-description: "get_declared_classes() — class builtin supported by Elephc."
+description: "Returns an array of the names of the defined classes."
 sidebar:
-  order: 60
+  order: 77
 ---
 
 ## get_declared_classes()
@@ -11,7 +11,7 @@ sidebar:
 function get_declared_classes(): array
 ```
 
-`get_declared_classes()` is a class builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Returns an array of the names of the defined classes.
 
 **Parameters**: none.
 
@@ -24,4 +24,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `get_declared_classes` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/get_declared_classes.md).
 

@@ -1,8 +1,8 @@
 ---
 title: "grapheme_strrev()"
-description: "Lowers `grapheme_strrev()` and boxes its `string|false` result as `Mixed`."
+description: "Reverses a string by grapheme cluster, returning false on failure."
 sidebar:
-  order: 325
+  order: 346
 ---
 
 ## grapheme_strrev()
@@ -11,7 +11,7 @@ sidebar:
 function grapheme_strrev(string $string): mixed
 ```
 
-Lowers `grapheme_strrev()` and boxes its `string|false` result as `Mixed`.
+Reverses a string by grapheme cluster, returning false on failure.
 
 **Parameters**:
 - `$string` (`string`)

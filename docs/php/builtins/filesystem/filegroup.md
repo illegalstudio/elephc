@@ -1,8 +1,8 @@
 ---
 title: "filegroup()"
-description: "Lowers `filegroup(path)` and boxes the runtime integer-or-false result."
+description: "Gets file group."
 sidebar:
-  order: 94
+  order: 111
 ---
 
 ## filegroup()
@@ -11,7 +11,7 @@ sidebar:
 function filegroup(string $filename): mixed
 ```
 
-Lowers `filegroup(path)` and boxes the runtime integer-or-false result.
+Gets file group.
 
 **Parameters**:
 - `$filename` (`string`)

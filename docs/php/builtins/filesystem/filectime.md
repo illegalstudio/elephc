@@ -1,8 +1,8 @@
 ---
 title: "filectime()"
-description: "Lowers `filectime(path)` and boxes the runtime integer-or-false result."
+description: "Gets inode change time of file."
 sidebar:
-  order: 93
+  order: 110
 ---
 
 ## filectime()
@@ -11,7 +11,7 @@ sidebar:
 function filectime(string $filename): mixed
 ```
 
-Lowers `filectime(path)` and boxes the runtime integer-or-false result.
+Gets inode change time of file.
 
 **Parameters**:
 - `$filename` (`string`)

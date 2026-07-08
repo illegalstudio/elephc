@@ -1,8 +1,8 @@
 ---
 title: "uksort()"
-description: "Lowers `uksort()` through the legacy user-sort helper for static comparators."
+description: "Sorts an array by keys using a user-defined comparison function."
 sidebar:
-  order: 45
+  order: 62
 ---
 
 ## uksort()
@@ -11,7 +11,7 @@ sidebar:
 function uksort(array $array, callable $callback): bool
 ```
 
-Lowers `uksort()` through the legacy user-sort helper for static comparators.
+Sorts an array by keys using a user-defined comparison function.
 
 **Parameters**:
 - `$array` (`array`), passed by reference

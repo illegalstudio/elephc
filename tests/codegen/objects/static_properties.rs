@@ -310,3 +310,102 @@ echo Labels::$name;
     );
     assert_eq!(out, "abc");
 }
+
+/// Tests post-increment `A::$x++` on a static property (regression for #372).
+#[test]
+fn test_static_property_post_increment() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public static $x = 0; }
+A::$x++;
+echo A::$x;
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Tests pre-increment `++A::$x` on a static property (regression for #372).
+#[test]
+fn test_static_property_pre_increment() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public static $x = 0; }
+++A::$x;
+echo A::$x;
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Tests post-decrement and pre-decrement `--A::$x` / `A::$x--` on a static property.
+#[test]
+fn test_static_property_decrement() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public static $x = 5; }
+A::$x--;
+echo A::$x;
+echo "\n";
+--A::$x;
+echo A::$x;
+"#,
+    );
+    assert_eq!(out, "4\n3");
+}
+
+/// Tests `self::$x++` and `++self::$x` inside a static method.
+#[test]
+fn test_static_property_self_increment_in_method() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    public static $x = 0;
+    public static function inc(): void {
+        self::$x++;
+        ++self::$x;
+    }
+}
+A::inc();
+echo A::$x;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Tests `static::$x++` and `++static::$x` inside a static method use late-static storage.
+#[test]
+fn test_static_property_static_increment_in_method() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    public static $x = 0;
+    public static function inc(): void {
+        static::$x++;
+        ++static::$x;
+    }
+}
+A::inc();
+echo A::$x;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Tests `parent::$x++` and `++parent::$x` inside a child static method.
+#[test]
+fn test_static_property_parent_increment_in_method() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public static $x = 0; }
+class B extends A {
+    public static function inc(): void {
+        parent::$x++;
+        ++parent::$x;
+    }
+}
+B::inc();
+echo A::$x;
+"#,
+    );
+    assert_eq!(out, "2");
+}

@@ -1,8 +1,8 @@
 ---
 title: "fileowner()"
-description: "Lowers `fileowner(path)` and boxes the runtime integer-or-false result."
+description: "Gets file owner."
 sidebar:
-  order: 97
+  order: 114
 ---
 
 ## fileowner()
@@ -11,7 +11,7 @@ sidebar:
 function fileowner(string $filename): mixed
 ```
 
-Lowers `fileowner(path)` and boxes the runtime integer-or-false result.
+Gets file owner.
 
 **Parameters**:
 - `$filename` (`string`)

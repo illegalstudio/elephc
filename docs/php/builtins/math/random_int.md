@@ -1,8 +1,8 @@
 ---
 title: "random_int()"
-description: "Lowers `random_int()` over an inclusive integer range."
+description: "Get a cryptographically secure, uniformly selected integer."
 sidebar:
-  order: 247
+  order: 264
 ---
 
 ## random_int()
@@ -11,7 +11,7 @@ sidebar:
 function random_int(int $min, int $max): int
 ```
 
-Lowers `random_int()` over an inclusive integer range.
+Get a cryptographically secure, uniformly selected integer.
 
 **Parameters**:
 - `$min` (`int`)

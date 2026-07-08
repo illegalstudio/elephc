@@ -85,22 +85,66 @@ entry in a SHA1-signed PHAR archive while preserving existing entries.
 `file_put_contents()` and write-mode `fopen()` also accept runtime-built
 `phar://` URLs. Native PHAR, tar-based PHAR, and zip-based PHAR containers are
 writable; ZIP writes preserve stored/deflated entries and compression controls
-can rewrite ZIP entries between stored and deflated forms. `Phar` and
-`PharData` expose a
+can rewrite ZIP entries between stored and deflated forms. ZIP entries written
+with a streaming data descriptor are read transparently, and ZIP64 archives
+(over 65535 entries, or sizes/offsets over 4 GiB) are both read and written.
+Traditional-PKWARE (ZipCrypto) encrypted ZIP entries can be read and written
+after calling the `setZipPassword(string $password)` compiler extension on a
+`Phar`/`PharData` object: once a password is set, encrypted entries are decrypted
+on read and zip entries are encrypted on write (the stub is encrypted too; the
+`.phar/signature.bin` entry stays in the clear). ZipCrypto is cryptographically
+weak — it is kept for compatibility with legacy archives, not as a real
+confidentiality mechanism. `Phar` and `PharData` expose a
 baseline OOP surface with constructors, format/compression/signature constants,
 `addFromString()`, `delete()`, `compressFiles()`, `decompressFiles()`,
 mixed metadata/string stub accessors, path helpers, and ArrayAccess read/write/isset
 over the same `phar://` paths. ArrayAccess reads return `PharFileInfo` objects
-with `getContent()` for payload reads. `foreach` over a `Phar` / `PharData`
+with `getContent()` for payload reads and
+`setMetadata()`/`getMetadata()`/`hasMetadata()`/`delMetadata()` for per-file
+metadata. `foreach` over a `Phar` / `PharData`
 object visits entries scanned from the archive at construction time plus entries
 written through that object, yielding `entryName => PharFileInfo`.
 `unlink("phar://archive/entry")` and `unset($phar["entry"])` remove entries
 while preserving sibling entries. Native PHAR compression controls support
 `Phar::GZ`, `Phar::BZ2`, and `Phar::NONE`; ZIP compression controls support
-`Phar::GZ` and `Phar::NONE`. Current limits: metadata values and stub strings
-are stored on the archive object and are not serialized into the archive file;
-tar compression controls and key/private-key signing variants are not
-implemented.
+`Phar::GZ` and `Phar::NONE`.
+
+`setMetadata()`/`getMetadata()`/`hasMetadata()`/`delMetadata()` and
+`setStub()`/`getStub()` **persist into the archive file** for all three families,
+so the global metadata and stub round-trip across fresh `Phar`/`PharData` objects
+and across processes (and are interchangeable with the PHP interpreter). Metadata
+is stored PHP-`serialize()`d — in the manifest metadata field for native PHAR, in a
+`.phar/.metadata.bin` entry for tar, and in the ZIP archive comment for zip; the stub
+is stored as the byte prefix for native PHAR and as a `.phar/stub.php` entry for
+tar/zip. `setStub()` requires the stub to contain `__HALT_COMPILER();` (matching PHP).
+The reserved `.phar/*` control entries are hidden from the entry listing and iteration.
+
+Per-file metadata persists the same way through the `PharFileInfo` returned by
+ArrayAccess: `$phar["entry"]->setMetadata(...)`, `getMetadata()`, `hasMetadata()`,
+and `delMetadata()` round-trip across fresh objects and the PHP interpreter. It is
+stored in the per-entry manifest field for native PHAR, in a
+`.phar/.metadata/<entry>/.metadata.bin` side entry for tar, and in the per-entry ZIP
+central-directory file comment for zip.
+
+Whole-archive compression is supported on tar-based `PharData`: `compress(Phar::GZ)`
+and `compress(Phar::BZ2)` write a sibling `.tar.gz` / `.tar.bz2` and return a fresh
+`PharData` for it, while `decompress()` writes the plain `.tar` back; the compressed
+archives are read transparently (and are interchangeable with the PHP interpreter).
+Per-entry compression for native PHAR / zip stays on `compressFiles()` /
+`decompressFiles()`.
+
+Signatures are supported through `setSignatureAlgorithm()` / `getSignature()` across
+native PHAR, tar, and zip phars. `setSignatureAlgorithm(Phar::MD5|Phar::SHA1|Phar::SHA256|Phar::SHA512)`
+applies a hash signature, and `setSignatureAlgorithm(Phar::OPENSSL, $privateKey)` signs
+with RSA-SHA1 using a PEM private key (PKCS#1 or PKCS#8). Native PHARs store the signature
+in their trailer; tar and zip phars store it in a `.phar/signature.bin` control entry. The
+resulting signature is verifiable by the PHP interpreter (for OpenSSL, place the matching
+public key in `<archive>.pubkey`). `getSignature()` returns `['hash' => <uppercase hex>,
+'hash_type' => 'MD5'|'SHA-1'|'SHA-256'|'SHA-512'|'OpenSSL']`.
+
+Metadata persistence covers the same scalar+array subset as
+[`serialize()`/`unserialize()`](system-and-io.md#serialization); object metadata is not
+serialized.
 
 `file_get_contents($url)` recognizes runtime `http://`, `https://`, `ftp://`,
 and `ftps://` strings before falling back to `phar://`/filesystem handling.

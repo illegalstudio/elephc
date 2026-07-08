@@ -2,15 +2,15 @@
 title: "gzinflate() — internals"
 description: "Compiler internals for gzinflate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 331
+  order: 349
 ---
 
 ## `gzinflate()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:436](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L436) (`lower_gzinflate`)
+- **Signature**: [`src/builtins/string/gzinflate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/gzinflate.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:436](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L436) (`lower_gzinflate`)
 - **Function symbol**: `lower_gzinflate()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function gzinflate(string $data, int $max_length): string
+function gzinflate(string $data, int $max_length = 0): mixed
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function gzinflate(string $data, int $max_length): string
 ## Cross-references
 
 - [User reference for `gzinflate()`](../../../php/builtins/string/gzinflate.md)
-

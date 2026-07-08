@@ -1,8 +1,8 @@
 ---
 title: "hash_update()"
-description: "Lowers `hash_update(context, data)` through the incremental hash runtime helper."
+description: "Pumps data into an active incremental hashing context."
 sidebar:
-  order: 337
+  order: 358
 ---
 
 ## hash_update()
@@ -11,7 +11,7 @@ sidebar:
 function hash_update(resource $context, string $data): bool
 ```
 
-Lowers `hash_update(context, data)` through the incremental hash runtime helper.
+Pumps data into an active incremental hashing context.
 
 **Parameters**:
 - `$context` (`resource`)

@@ -137,7 +137,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 |---|---|---|---|
 | `__rt_strcopy` | Copy string into concat buffer | `x1`/`x2` | `x1`/`x2` |
 | `__rt_str_to_number` | Parse a PHP numeric string for loose comparison and numeric-string casts | `x1`/`x2` | numeric payload + success flag |
-| `__rt_str_to_int` | Parse a PHP numeric-string prefix (via `__rt_str_to_number`) and truncate toward zero like PHP `(int)` casts | `x1`/`x2` | `x0` (integer) |
+| `__rt_str_looks_like_int_for_coercion` | Validate PHP coercive int-parameter numeric strings while rejecting libc-only `strtod` forms such as `0x`, `INF`, and `NAN` | `x1`/`x2` | `x0` (0 or 1) |
+| `__rt_str_to_int` | Parse a PHP numeric-string prefix with integer/float forms and truncate toward zero like PHP `(int)` casts | `x1`/`x2` | `x0` (integer) |
 | `__rt_str_loose_eq` | Compare two strings using PHP loose-comparison numeric-string rules before falling back to bytes | two strings | `x0` (0 or 1) |
 | `__rt_strtolower` | Lowercase conversion | `x1`/`x2` | `x1`/`x2` |
 | `__rt_strtoupper` | Uppercase conversion | `x1`/`x2` | `x1`/`x2` |
@@ -184,6 +185,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_hash` | Hash with algorithm | algo + data | `x1`/`x2` |
 | `__rt_hash_init` / `__rt_hash_update` / `__rt_hash_final` | Incremental hash-context API backing `hash_init()` and friends | context + data | context / `x1`/`x2` |
 | `__rt_hash_copy` | Clone an incremental hash context | context | context |
+| `__rt_hash_ctx_free` | Free a HashContext via `elephc_crypto_free`; the sole destructor, called by `__rt_mixed_free_deep` when a Mixed(tag=9, kind=2) cell is released at scope exit (`hash_final` no longer frees) | context | — |
 | `__rt_hash_hmac` | Keyed HMAC over a message | algo + key + data | `x1`/`x2` |
 | `__rt_hash_equals` | Constant-time string comparison | two strings | `x0` (0 or 1) |
 | `__rt_hash_algos_list` | Build the `hash_algos()` array of supported algorithm names | — | `x0` (array ptr) |
@@ -196,9 +198,9 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Callable routines
 
-**Source:** `src/codegen/runtime/callables/` (3 files including `mod.rs`)
+**Source:** `src/codegen/runtime/callables/` (4 files including `mod.rs`)
 
-These routines implement the runtime fallback path for `is_callable()` when the argument is not a compile-time literal or statically known callable value. They consult generated metadata for builtins, user functions, public methods, public static methods, and `__invoke` objects.
+These routines implement the runtime fallback path for `is_callable()` when the argument is not a compile-time literal or statically known callable value, plus the `Closure::bind` family helper. They consult generated metadata for builtins, user functions, public methods, public static methods, and `__invoke` objects.
 
 Dynamic invocation builtins use generated callable descriptors rather than these boolean helpers. A descriptor is an eight-word record: callable kind, native entry pointer, PHP-visible name pointer, name length, signature-record pointer, environment-record pointer, invocation-record pointer, and optional uniform invoker pointer. Indirect calls keep the one-word callable ABI by loading the native entry from the descriptor, while descriptor-invoker paths call the generated `(descriptor, boxed argument container) -> mixed` adapter.
 
@@ -219,6 +221,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 | `__rt_is_callable_mixed` | Unbox a Mixed value and dispatch string, array, hash, or object callable checks | mixed pointer | `x0` = bool |
 | `__rt_is_callable_heap` | Dispatch callable checks from a raw heap pointer by inspecting its heap-kind tag | heap pointer | `x0` = bool |
 | `__rt_callable_descriptor_release` | Free a heap-backed callable descriptor copy plus the by-value capture slots appended after its static header; static `.data` descriptors are ignored | `x0` = descriptor pointer | — |
+| `__rt_closure_bind` | Bind a `$this`-only closure to a new receiver for `Closure::bind` / `Closure::bindTo` / `Closure::call`: copy the runtime descriptor, overwrite the captured object, and incref it. Closures with any other capture shape abort with a fatal diagnostic | `x0` = source closure descriptor, `x1` = new `$this` object | `x0` = bound descriptor copy |
 
 ## Array routines
 
@@ -348,7 +351,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_gc_note_child_ref` | Add one transient incoming edge to a heap child during cycle counting | `x0` = child pointer | — |
 | `__rt_gc_mark_reachable` | Recursively mark array/hash/object blocks reachable from external roots | `x0` = pointer | — |
 | `__rt_gc_collect_cycles` | Run the targeted cycle collector over heap-backed arrays/hashes/objects | — | — |
-| `__rt_mixed_free_deep` | Free a mixed cell and release any nested heap-backed payload | `x0` = mixed pointer | — |
+| `__rt_mixed_free_deep` | Free a mixed cell and release any nested heap-backed payload; for tag-9 resources, dispatch the kind-specific destructor (kind 1 `close`, kind 2 `__rt_hash_ctx_free`, kind 3 `__rt_pclose`, kind 4 `__rt_closedir`) | `x0` = mixed pointer | — |
 | `__rt_object_free_deep` | Free an object and release heap-backed properties using runtime/class metadata | `x0` = object pointer | — |
 
 Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[user_ptr - 12]`. Each heap allocation starts with refcount 1. When a reference is shared (e.g., assigned to another variable or passed to a function), `__rt_incref` bumps it. When the reference goes away, `__rt_decref_any` can dispatch through the uniform heap-kind tag to the concrete string/array/hash/object/mixed release path. Arrays, hashes, objects, and boxed mixed cells still use ordinary reference counting first, but when a decref sees a container/object graph that can contain nested heap-backed values, the runtime can invoke `__rt_gc_collect_cycles` to clear transient metadata, count heap-only incoming edges, mark externally reachable blocks, and deep-free the remaining unreachable array/hash/object/mixed island.
@@ -442,6 +445,20 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 | `__rt_json_throw_error` | Record a JSON error code and construct/throw `JsonException` when `JSON_THROW_ON_ERROR` is active, using the shared formatted JSON error message | `x0` = JSON_ERROR_* code | may not return |
 | `__rt_json_last_error_msg` | Return the message string corresponding to `_json_last_error` through the `_json_err_msg_table` data table, including decode location suffixes when active | global JSON state | `x1`/`x2` = message |
 | `__rt_json_pretty_push` / `__rt_json_pretty_pop` / `__rt_json_pretty_line` / `__rt_json_pretty_colon_space` | Maintain `_json_indent_depth` and append PHP-style pretty-print whitespace while each container encoder emits bytes. These helpers are no-ops unless `JSON_PRETTY_PRINT` is active, avoiding a second buffer walk. | current JSON state, `x11` write pointer for line/space helpers | updated formatting state / `x11` write pointer |
+
+### Serialization routines
+
+**Files:** `system/serialize.rs`, `system/unserialize.rs`
+
+These helpers back PHP's `serialize()` / `unserialize()`. The serializer writes PHP's exact wire format (`N;`, `b:0;`/`b:1;`, `i:<int>;`, `d:<shortest-round-trip>;`, `s:<bytelen>:"<raw>";`, `a:<n>:{...}`, and `O:<len>:"<class>":<n>:{...}`) directly into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad), reusing `__rt_json_ftoa` for shortest-round-trip float digits. Object serialization honors `__sleep()` / `Serializable` and reuses an object back-reference table so repeated instances emit `r:`/`R:` references.
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_serialize_value` | Tag-dispatching serializer for a raw runtime value, appending its wire form to the concat buffer | value tag + payload | `x1`/`x2` = string slice |
+| `__rt_serialize_mixed` | Unbox a boxed Mixed cell (null pointer → `N;`), then serialize it | `x0` = mixed cell | `x1`/`x2` = string slice |
+| `__rt_serialize_indexed_array` / `__rt_serialize_hash` | Serialize indexed arrays and hashes as `a:<n>:{...}` | array/hash pointer | `x1`/`x2` = string slice |
+| `__rt_serialize_object` / `__rt_serialize_named_prop` / `__rt_serialize_obj_ref` | Serialize objects (`O:`/`C:`), emit one named property entry, and resolve back-references | object pointer | `x1`/`x2` = string slice |
+| `__rt_unserialize_begin` / `__rt_unserialize_mixed` / `__rt_unserialize_object` | Parse a serialized string back into boxed Mixed cells, including nested arrays/hashes and objects | `x1`/`x2` = serialized string | `x0` = Mixed* (0 on malformed input) |
 
 ### Regex routines
 
@@ -661,26 +678,26 @@ These helpers back SPL container classes whose PHP surface needs custom runtime 
 
 ## Generator routines
 
-**Source:** `src/codegen/runtime/generators/` (2 files)
+**Source:** `src/codegen/runtime/generators/` (3 files: `mod.rs`, `coro.rs`, `frame.rs`)
 
-These helpers back the built-in `Generator` class. Generator functions emit a heap-allocated frame and a generated resume function; the runtime helpers read/write that frame for the public Iterator surface and coroutine operations.
+These helpers back the built-in `Generator` class. Generators are **stackful coroutines** that reuse the [Fiber runtime](#fiber-routines): a `Generator` object reuses the Fiber 232-byte layout (so it can drive itself through `__rt_fiber_switch` / `suspend` / `resume` / `throw`) plus a small block of generator-specific fields (`last_key`, `last_value`, `return_value`, `auto_key`, `delegated_iter`) at offsets 184..224 inside the otherwise-unused Fiber reserved region. The generated generator body runs on its own coroutine stack and calls `__rt_gen_suspend` at each `yield`; the accessor helpers below drive the coroutine for the public Iterator surface, `send()`/`throw()`, and `getReturn()`.
+
+Because the fiber suspend boundary re-raises a scheduled exception *inside* the coroutine's own stack, `Generator::throw()` lands in an in-generator `try/catch` (issue #329) rather than unwinding the caller.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
-| `__rt_gen_current` | Return an owned ref to the boxed Mixed value from the most recent yield | `GeneratorFrame*` | boxed `mixed` payload |
-| `__rt_gen_key` | Return an owned ref to the boxed Mixed key from the most recent yield | `GeneratorFrame*` | boxed `mixed` key |
-| `__rt_gen_valid` | Report whether the generator is not terminated | `GeneratorFrame*` | bool |
-| `__rt_gen_next` | Resume the state machine past the current yield unless terminated | `GeneratorFrame*` | — |
-| `__rt_gen_next_done` | Shared global return label used after `next()` skips or completes a resume | `GeneratorFrame*` | — |
-| `__rt_gen_send` | Store a boxed Mixed sent value, then resume the state machine | `GeneratorFrame*`, boxed `mixed` value | boxed `mixed` payload |
-| `__rt_gen_send_done` | Shared global return label used after `send()` skips or completes a resume | `GeneratorFrame*` | boxed `mixed` payload |
-| `__rt_gen_send_epilogue` | Shared epilogue that boxes and returns the yield produced by a resumed `send()` | `GeneratorFrame*` | boxed `mixed` payload |
-| `__rt_gen_rewind` | Run the generator to its first yield once | `GeneratorFrame*` | — |
-| `__rt_gen_rewind_done` | Shared global return label used when `rewind()` has already run or just finished | `GeneratorFrame*` | — |
-| `__rt_gen_throw` | Mark the generator terminated and throw through the normal exception runtime | `GeneratorFrame*`, throwable object | does not return |
-| `__rt_gen_get_return` | Return an owned ref to the boxed terminal return value | `GeneratorFrame*` | boxed `mixed` payload |
+| `__rt_gen_suspend` | `yield` suspension primitive: record the yielded key/value into the generator's persistent slots (NULL key → auto-increment integer key), then suspend via `__rt_fiber_suspend` | boxed key cell, boxed value cell | boxed `mixed` delivered by the next `send()`/`next()` |
+| `__rt_gen_current` | Return an owned ref to the boxed Mixed value from the most recent yield | `Generator*` | boxed `mixed` payload |
+| `__rt_gen_key` | Return an owned ref to the boxed Mixed key from the most recent yield | `Generator*` | boxed `mixed` key |
+| `__rt_gen_valid` | Report whether the generator is not terminated | `Generator*` | bool |
+| `__rt_gen_next` | Resume the coroutine past the current yield unless terminated | `Generator*` | — |
+| `__rt_gen_send` | Store a boxed Mixed sent value, then resume the coroutine | `Generator*`, boxed `mixed` value | boxed `mixed` payload |
+| `__rt_gen_throw` | Schedule a pending throw and resume so the exception is re-raised inside the coroutine | `Generator*`, throwable object | boxed `mixed` payload or rethrown exception |
+| `__rt_gen_rewind` | Run the generator to its first yield once | `Generator*` | — |
+| `__rt_gen_get_return` | Return an owned ref to the boxed terminal return value | `Generator*` | boxed `mixed` payload |
+| `__rt_gen_delegate` | Drive a `yield from` delegate stored in `delegated_iter`, forwarding inner yields to the outer caller until the inner iterator is exhausted | `Generator*` | — |
 
-Generator frames are stamped as object heap blocks because `Generator` is a built-in class implementing `Iterator`. `__rt_object_free_deep` detects the built-in Generator class id and releases the frame's custom Mixed slots plus any active `yield from` delegate instead of treating the payload as ordinary class properties.
+Generators are stamped as object heap blocks (heap kind `4`) because `Generator` is a built-in class implementing `Iterator`. `__rt_object_free_deep` detects the built-in Generator class id and releases the coroutine's custom Mixed slots plus any active `yield from` delegate instead of treating the payload as ordinary class properties.
 
 ## Fiber routines
 
@@ -715,10 +732,10 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     // diagnostics: runtime warning emission and @ suppression state
     // strings: itoa, resource display/stdout, ftoa, concat, atoi, equality, formatting, trim/mask,
     // search/replace, explode/implode, hashing, encoding, sscanf, ...
-    // callables: dynamic is_callable() fallback plus callable-descriptor release
-    // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, regex
+    // callables: dynamic is_callable() fallback, callable-descriptor release, Closure::bind
+    // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, serialize/unserialize, regex
     // exceptions: cleanup walk, catch matching, class-implements, throw/rethrow helpers
-    // generators: Generator current/key/valid/next/send/rewind/throw/getReturn helpers
+    // generators: fiber-backed Generator suspend/current/key/valid/next/send/rewind/throw/getReturn/yield-from
     // arrays: heap alloc/free, array/hash helpers, sort, callbacks, refcount
     // spl: SplDoublyLinkedList/SplStack/SplQueue and SplFixedArray storage helpers
     // objects: stdClass dynamic properties and boxed Mixed property/index dispatch
@@ -729,9 +746,9 @@ pub fn emit_runtime(emitter: &mut Emitter) {
 }
 ```
 
-Notable runtime-only helpers emitted here include `__rt_diag_push_suppression`, `__rt_diag_pop_suppression`, `__rt_diag_warning`, `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_instanceof_lookup`, `__rt_instanceof_invalid_target`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_mixed_instanceof`, `__rt_iterable_write_stdout`, `__rt_iterable_unsupported_kind`, `__rt_class_implements_interface`, `__rt_callable_descriptor_release`, `__rt_spl_dll_new`, `__rt_spl_fixed_new`, `__rt_gen_current`, `__rt_gen_send`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, `__rt_cstr_to_str`, `__rt_fiber_switch`, and `__rt_fiber_entry` in addition to the more user-visible helpers.
+Notable runtime-only helpers emitted here include `__rt_diag_push_suppression`, `__rt_diag_pop_suppression`, `__rt_diag_warning`, `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_instanceof_lookup`, `__rt_instanceof_invalid_target`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_mixed_instanceof`, `__rt_iterable_write_stdout`, `__rt_iterable_unsupported_kind`, `__rt_class_implements_interface`, `__rt_callable_descriptor_release`, `__rt_closure_bind`, `__rt_serialize_value`, `__rt_unserialize_begin`, `__rt_spl_dll_new`, `__rt_spl_fixed_new`, `__rt_gen_suspend`, `__rt_gen_current`, `__rt_gen_send`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, `__rt_cstr_to_str`, `__rt_fiber_switch`, and `__rt_fiber_entry` in addition to the more user-visible helpers.
 
-Every routine in the selected target runtime slice is linked into the binary, even if unused by the current program. elephc already does AST-side control-flow pruning and dead-code elimination before codegen, but runtime-specific dead stripping is still future work.
+Compiled **executables** dead-strip unreachable runtime helpers at link time. On Linux each `__rt_*` helper is emitted in its own `.text.<name>` section and collected with `--gc-sections`; on macOS the runtime object carries a `.subsections_via_symbols` footer so each helper is a separately collectable atom dropped by `-dead_strip` (internal cross-helper labels stay assembler-local `L`-locals, with the few helpers reached by a `b`/`bl` from another atom marked `.alt_entry` so they remain live symbols). Combined with the AST-side control-flow pruning and dead-code elimination elephc already does before codegen, only the helpers a program actually reaches are linked. Shared libraries (`--emit cdylib`) keep the full runtime so every exported entry stays callable.
 
 The runtime can also be emitted in **position-independent mode** for `--emit cdylib` builds: the emitter's `pic_data_refs` flag makes the `abi::symbols` helpers route every global data reference through the GOT (`@GOTPCREL` on x86_64, `:got:`/`:got_lo12:` on AArch64) instead of direct PC-relative addressing, and on ELF targets every internal global gets a `.hidden` visibility directive. The PIC and non-PIC variants produce different assembly text, so they cache as separate runtime objects. See [The Codegen](the-codegen.md) and [Shared Libraries](../beyond-php/cdylib.md).
 

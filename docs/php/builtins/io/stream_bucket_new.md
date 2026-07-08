@@ -1,8 +1,8 @@
 ---
 title: "stream_bucket_new()"
-description: "Lowers `stream_bucket_new(stream, data)` into a stdClass-backed bucket object."
+description: "Creates a new bucket for use in a stream filter."
 sidebar:
-  order: 173
+  order: 190
 ---
 
 ## stream_bucket_new()
@@ -11,7 +11,7 @@ sidebar:
 function stream_bucket_new(resource $stream, string $buffer): mixed
 ```
 
-Lowers `stream_bucket_new(stream, data)` into a stdClass-backed bucket object.
+Creates a new bucket for use in a stream filter.
 
 **Parameters**:
 - `$stream` (`resource`)

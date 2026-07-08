@@ -1,8 +1,8 @@
 ---
 title: "is_executable()"
-description: "Lowers `is_executable(path)` through the target-aware runtime access helper."
+description: "Tells whether the filename is executable."
 sidebar:
-  order: 106
+  order: 123
 ---
 
 ## is_executable()
@@ -11,7 +11,7 @@ sidebar:
 function is_executable(string $filename): bool
 ```
 
-Lowers `is_executable(path)` through the target-aware runtime access helper.
+Tells whether the filename is executable.
 
 **Parameters**:
 - `$filename` (`string`)

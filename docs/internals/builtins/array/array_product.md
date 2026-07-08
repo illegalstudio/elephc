@@ -2,15 +2,15 @@
 title: "array_product() — internals"
 description: "Compiler internals for array_product(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 18
+  order: 28
 ---
 
 ## `array_product()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:56](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L56) (`lower_array_product`)
+- **Signature**: [`src/builtins/array/array_product.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_product.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:55](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L55) (`lower_array_product`)
 - **Function symbol**: `lower_array_product()`
 
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_product(array $array): float
+function array_product(array $array): int
 ```
 
 ## What the type checker enforces
@@ -36,4 +36,3 @@ function array_product(array $array): float
 ## Cross-references
 
 - [User reference for `array_product()`](../../../php/builtins/array/array_product.md)
-

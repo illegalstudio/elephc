@@ -1,22 +1,22 @@
 ---
 title: "microtime()"
-description: "Lowers `microtime()` / `microtime(true)` / `microtime(false)` / `microtime($flag)`."
+description: "Returns the current Unix timestamp with microseconds."
 sidebar:
-  order: 77
+  order: 94
 ---
 
 ## microtime()
 
 ```php
-function microtime(bool $as_float): int
+function microtime(bool $as_float = false): mixed
 ```
 
-Lowers `microtime()` / `microtime(true)` / `microtime(false)` / `microtime($flag)`.
+Returns the current Unix timestamp with microseconds.
 
 **Parameters**:
-- `$as_float` (`bool`), optional
+- `$as_float` (`bool`), default `false`, optional
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

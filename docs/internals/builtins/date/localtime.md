@@ -2,15 +2,15 @@
 title: "localtime() — internals"
 description: "Compiler internals for localtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 76
+  order: 93
 ---
 
 ## `localtime()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:220](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L220) (`lower_localtime`)
+- **Signature**: [`src/builtins/system/localtime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/localtime.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:220](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L220) (`lower_localtime`)
 - **Function symbol**: `lower_localtime()`
 
 
@@ -32,7 +32,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function localtime(int $timestamp, bool $associative): array
+function localtime(int $timestamp = -1, bool $associative = false): array
 ```
 
 ## What the type checker enforces
@@ -42,4 +42,3 @@ function localtime(int $timestamp, bool $associative): array
 ## Cross-references
 
 - [User reference for `localtime()`](../../../php/builtins/date/localtime.md)
-

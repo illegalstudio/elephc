@@ -2,15 +2,15 @@
 title: "base64_encode() — internals"
 description: "Compiler internals for base64_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 322
+  order: 340
 ---
 
 ## `base64_encode()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
+- **Signature**: [`src/builtins/string/base64_encode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/base64_encode.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
 - **Function symbol**: `lower_unary_string_runtime()`
 
 
@@ -37,4 +37,3 @@ function base64_encode(string $string): string
 ## Cross-references
 
 - [User reference for `base64_encode()`](../../../php/builtins/string/base64_encode.md)
-

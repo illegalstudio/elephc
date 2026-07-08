@@ -1,22 +1,22 @@
 ---
 title: "array_search()"
-description: "Lowers `array_search()` for indexed arrays with integer-like payloads."
+description: "Searches the array for a given value and returns the first corresponding key if successful."
 sidebar:
-  order: 23
+  order: 35
 ---
 
 ## array_search()
 
 ```php
-function array_search(mixed $needle, array $haystack, bool $strict): mixed
+function array_search(mixed $needle, array $haystack, bool $strict = false): mixed
 ```
 
-Lowers `array_search()` for indexed arrays with integer-like payloads.
+Searches the array for a given value and returns the first corresponding key if successful.
 
 **Parameters**:
 - `$needle` (`mixed`)
 - `$haystack` (`array`)
-- `$strict` (`bool`), optional
+- `$strict` (`bool`), default `false`, optional
 
 **Returns**: `mixed`
 

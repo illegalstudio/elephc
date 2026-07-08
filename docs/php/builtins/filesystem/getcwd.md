@@ -1,8 +1,8 @@
 ---
 title: "getcwd()"
-description: "Lowers `getcwd()` through the target-aware runtime helper."
+description: "Gets the current working directory."
 sidebar:
-  order: 102
+  order: 119
 ---
 
 ## getcwd()
@@ -11,7 +11,7 @@ sidebar:
 function getcwd(): string
 ```
 
-Lowers `getcwd()` through the target-aware runtime helper.
+Gets the current working directory.
 
 **Parameters**: none.
 

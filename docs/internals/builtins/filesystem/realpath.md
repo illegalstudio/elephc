@@ -2,15 +2,15 @@
 title: "realpath() — internals"
 description: "Compiler internals for realpath(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 122
+  order: 139
 ---
 
 ## `realpath()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3465](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3465) (`lower_realpath`)
+- **Signature**: [`src/builtins/io/realpath.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/realpath.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3690](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3690) (`lower_realpath`)
 - **Function symbol**: `lower_realpath()`
 
 
@@ -36,4 +36,3 @@ function realpath(string $path): mixed
 ## Cross-references
 
 - [User reference for `realpath()`](../../../php/builtins/filesystem/realpath.md)
-

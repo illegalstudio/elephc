@@ -1,8 +1,8 @@
 ---
 title: "ord()"
-description: "Lowers `ord()` by returning the first byte of a string or zero for empty input."
+description: "Returns the ASCII value of the first character of a string."
 sidebar:
-  order: 352
+  order: 373
 ---
 
 ## ord()
@@ -11,7 +11,7 @@ sidebar:
 function ord(string $character): int
 ```
 
-Lowers `ord()` by returning the first byte of a string or zero for empty input.
+Returns the ASCII value of the first character of a string.
 
 **Parameters**:
 - `$character` (`string`)

@@ -1,21 +1,20 @@
 ---
 title: "ksort()"
-description: "Lowers `ksort()` through the legacy key-sort helper surface."
+description: "Sorts an array by key in ascending order."
 sidebar:
-  order: 37
+  order: 54
 ---
 
 ## ksort()
 
 ```php
-function ksort(array $array, int $flags): bool
+function ksort(array $array): bool
 ```
 
-Lowers `ksort()` through the legacy key-sort helper surface.
+Sorts an array by key in ascending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`)
 
 **Returns**: `bool`
 

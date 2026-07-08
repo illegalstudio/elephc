@@ -1,8 +1,8 @@
 ---
 title: "rewinddir()"
-description: "Lowers `rewinddir(dir_handle)` for libc, glob, and userspace-wrapper handles."
+description: "Rewind directory handle."
 sidebar:
-  order: 171
+  order: 188
 ---
 
 ## rewinddir()
@@ -11,7 +11,7 @@ sidebar:
 function rewinddir(resource $dir_handle): void
 ```
 
-Lowers `rewinddir(dir_handle)` for libc, glob, and userspace-wrapper handles.
+Rewind directory handle.
 
 **Parameters**:
 - `$dir_handle` (`resource`)

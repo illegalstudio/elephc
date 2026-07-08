@@ -2,15 +2,15 @@
 title: "microtime() — internals"
 description: "Compiler internals for microtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 77
+  order: 94
 ---
 
 ## `microtime()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:111](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L111) (`lower_microtime`)
+- **Signature**: [`src/builtins/system/microtime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/microtime.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:111](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L111) (`lower_microtime`)
 - **Function symbol**: `lower_microtime()`
 
 
@@ -35,7 +35,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function microtime(bool $as_float): int
+function microtime(bool $as_float = false): mixed
 ```
 
 ## What the type checker enforces
@@ -45,4 +45,3 @@ function microtime(bool $as_float): int
 ## Cross-references
 
 - [User reference for `microtime()`](../../../php/builtins/date/microtime.md)
-

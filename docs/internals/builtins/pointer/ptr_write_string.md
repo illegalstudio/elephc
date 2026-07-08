@@ -2,15 +2,15 @@
 title: "ptr_write_string() — internals"
 description: "Compiler internals for ptr_write_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 285
+  order: 299
 ---
 
 ## `ptr_write_string()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/pointers.rs`:171](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/pointers.rs#L171) (`lower_ptr_write_string`)
+- **Signature**: [`src/builtins/pointers/ptr_write_string.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_write_string.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:171](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L171) (`lower_ptr_write_string`)
 - **Function symbol**: `lower_ptr_write_string()`
 
 
@@ -36,4 +36,3 @@ function ptr_write_string(pointer $pointer, string $string): int
 ## Cross-references
 
 - [User reference for `ptr_write_string()`](../../../php/builtins/pointer/ptr_write_string.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "realpath()"
-description: "Lowers `realpath(path)` and boxes the owned runtime string-or-false result."
+description: "Returns canonicalized absolute pathname."
 sidebar:
-  order: 122
+  order: 139
 ---
 
 ## realpath()
@@ -11,7 +11,7 @@ sidebar:
 function realpath(string $path): mixed
 ```
 
-Lowers `realpath(path)` and boxes the owned runtime string-or-false result.
+Returns canonicalized absolute pathname.
 
 **Parameters**:
 - `$path` (`string`)

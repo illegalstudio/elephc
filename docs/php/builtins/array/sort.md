@@ -1,21 +1,20 @@
 ---
 title: "sort()"
-description: "Lowers `sort()` for indexed integer arrays by mutating the source array in place."
+description: "Sorts an array in ascending order."
 sidebar:
-  order: 43
+  order: 60
 ---
 
 ## sort()
 
 ```php
-function sort(array $array, int $flags): bool
+function sort(array $array): bool
 ```
 
-Lowers `sort()` for indexed integer arrays by mutating the source array in place.
+Sorts an array in ascending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`)
 
 **Returns**: `bool`
 

@@ -1,22 +1,22 @@
 ---
 title: "stream_wrapper_register()"
-description: "Lowers `stream_wrapper_register(protocol, class, flags?)`."
+description: "Registers a URL wrapper implemented as a PHP class."
 sidebar:
-  order: 209
+  order: 226
 ---
 
 ## stream_wrapper_register()
 
 ```php
-function stream_wrapper_register(string $protocol, string $class, int $flags): bool
+function stream_wrapper_register(string $protocol, string $class, int $flags = 0): bool
 ```
 
-Lowers `stream_wrapper_register(protocol, class, flags?)`.
+Registers a URL wrapper implemented as a PHP class.
 
 **Parameters**:
 - `$protocol` (`string`)
 - `$class` (`string`)
-- `$flags` (`int`), optional
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 

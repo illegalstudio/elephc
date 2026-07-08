@@ -2,7 +2,7 @@
 title: "buffer_len() — internals"
 description: "Compiler internals for buffer_len(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 48
+  order: 65
 ---
 
 ## `buffer_len()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/buffers.rs`:19](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/buffers.rs#L19) (`lower_buffer_len`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/buffers.rs`:19](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/buffers.rs#L19) (`lower_buffer_len`)
 - **Function symbol**: `lower_buffer_len()`
 
 
@@ -35,4 +35,3 @@ function buffer_len(buffer $buffer): int
 ## Cross-references
 
 - [User reference for `buffer_len()`](../../../php/builtins/buffer/buffer_len.md)
-

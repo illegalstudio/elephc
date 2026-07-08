@@ -2,15 +2,15 @@
 title: "filegroup() — internals"
 description: "Compiler internals for filegroup(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 94
+  order: 111
 ---
 
 ## `filegroup()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4857](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4857) (`lower_filegroup`)
+- **Signature**: [`src/builtins/io/filegroup.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/filegroup.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5500](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5500) (`lower_filegroup`)
 - **Function symbol**: `lower_filegroup()`
 
 
@@ -39,4 +39,3 @@ function filegroup(string $filename): mixed
 ## Cross-references
 
 - [User reference for `filegroup()`](../../../php/builtins/filesystem/filegroup.md)
-

@@ -1,22 +1,22 @@
 ---
 title: "stream_socket_accept()"
-description: "Lowers `stream_socket_accept(server, timeout?, peer_name?)`."
+description: "Accept a connection on a socket created by stream_socket_server()."
 sidebar:
-  order: 199
+  order: 216
 ---
 
 ## stream_socket_accept()
 
 ```php
-function stream_socket_accept(resource $socket, float $timeout, string $peer_name): mixed
+function stream_socket_accept(resource $socket, float $timeout = null, string $peer_name = null): mixed
 ```
 
-Lowers `stream_socket_accept(server, timeout?, peer_name?)`.
+Accept a connection on a socket created by stream_socket_server().
 
 **Parameters**:
 - `$socket` (`resource`)
-- `$timeout` (`float`), optional
-- `$peer_name` (`string`), passed by reference, optional
+- `$timeout` (`float`), default `null`, optional
+- `$peer_name` (`string`), passed by reference, default `null`, optional
 
 **Returns**: `mixed`
 

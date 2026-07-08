@@ -239,7 +239,7 @@ namespace App\Handlers {
 
     class Home implements Handler
     {
-        public function handle(Request $request): void
+        public function handle(Request $_request): void
         {
             $help = "elephc-web mini-framework\n\n"
                 . "GET  /                this page\n"
@@ -262,7 +262,7 @@ namespace App\Handlers {
 
     class UserList implements Handler
     {
-        public function handle(Request $request): void
+        public function handle(Request $_request): void
         {
             $users = [
                 ['id' => 1, 'name' => 'Ada'],
@@ -274,7 +274,7 @@ namespace App\Handlers {
 
     class UserCreate implements Handler
     {
-        public function handle(Request $request): void
+        public function handle(Request $_request): void
         {
             $name = $_POST['name'] ?? '';
             if ($name === '') {
@@ -287,7 +287,7 @@ namespace App\Handlers {
 
     class Secret implements Handler
     {
-        public function handle(Request $request): void
+        public function handle(Request $_request): void
         {
             Response::json(json_encode(['secret' => 'the cake is a lie']))->send();
         }
@@ -295,7 +295,7 @@ namespace App\Handlers {
 
     class Boom implements Handler
     {
-        public function handle(Request $request): void
+        public function handle(Request $_request): void
         {
             throw new \Exception('intentional failure');
         }

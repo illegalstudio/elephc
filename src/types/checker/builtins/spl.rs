@@ -15,215 +15,11 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
 
-/// Result type for SPL builtin type-checking: `Ok(None)` means the builtin is not
-/// handled by this module (caller should try the next handler), `Ok(Some(t))` means
-/// the builtin was handled and returns type `t`, and `Err(e)` is a type-error.
-type BuiltinResult = Result<Option<PhpType>, CompileError>;
-
 const ITERATOR_APPLY_UNKNOWN_STATIC_CALLBACK_SIG: &str =
     "iterator_apply() callback must have a statically known callable signature";
 
-/// Type-checks a call to an SPL autoload or object-helper builtin.
-///
-/// Returns `Ok(None)` for unknown SPL builtins (caller falls through); `Ok(Some(t))`
-/// for handled builtins with inferred return type `t`; `Err` if argument count, types,
-/// or literal constraints are violated.
-///
-/// # Arguments
-/// * `checker` – mutable checker state used to infer argument types
-/// * `name` – lowercase SPL builtin name (e.g. `"spl_autoload_register"`);
-/// * `args` – call arguments to validate
-/// * `span` – source location for error reporting
-/// * `env` – current type environment
-pub(super) fn check_builtin(
-    checker: &mut Checker,
-    name: &str,
-    args: &[Expr],
-    span: crate::span::Span,
-    env: &TypeEnv,
-) -> BuiltinResult {
-    match name {
-        "spl_autoload_register" => {
-            if args.len() > 3 {
-                return Err(CompileError::new(
-                    span,
-                    "spl_autoload_register() takes at most 3 arguments",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Bool))
-        }
-        "spl_autoload_unregister" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "spl_autoload_unregister() takes exactly 1 argument",
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Bool))
-        }
-        "spl_autoload_functions" => {
-            if !args.is_empty() {
-                return Err(CompileError::new(
-                    span,
-                    "spl_autoload_functions() takes no arguments",
-                ));
-            }
-            Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
-        }
-        "spl_autoload_extensions" => {
-            if args.len() > 1 {
-                return Err(CompileError::new(
-                    span,
-                    "spl_autoload_extensions() takes at most 1 argument",
-                ));
-            }
-            if let Some(arg) = args.first() {
-                checker.infer_type(arg, env)?;
-                if !matches!(
-                    arg.kind,
-                    ExprKind::StringLiteral(_) | ExprKind::Null
-                ) {
-                    return Err(CompileError::new(
-                        span,
-                        "spl_autoload_extensions() argument must be a string literal or null",
-                    ));
-                }
-            }
-            Ok(Some(PhpType::Str))
-        }
-        "spl_autoload_call" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "spl_autoload_call() takes exactly 1 argument",
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Void))
-        }
-        "spl_autoload" => {
-            if args.is_empty() || args.len() > 2 {
-                return Err(CompileError::new(
-                    span,
-                    "spl_autoload() takes 1 or 2 arguments",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Void))
-        }
-        "spl_object_id" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "spl_object_id() takes exactly 1 argument",
-                ));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Object(_)) {
-                return Err(CompileError::new(
-                    span,
-                    "spl_object_id() argument must be an object",
-                ));
-            }
-            Ok(Some(PhpType::Int))
-        }
-        "spl_object_hash" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "spl_object_hash() takes exactly 1 argument",
-                ));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Object(_)) {
-                return Err(CompileError::new(
-                    span,
-                    "spl_object_hash() argument must be an object",
-                ));
-            }
-            Ok(Some(PhpType::Str))
-        }
-        "spl_classes" => {
-            if !args.is_empty() {
-                return Err(CompileError::new(
-                    span,
-                    "spl_classes() takes no arguments",
-                ));
-            }
-            Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
-        }
-        "iterator_count" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "iterator_count() takes exactly 1 argument",
-                ));
-            }
-            check_iterator_source(checker, &args[0], span, env, "iterator_count()")?;
-            Ok(Some(PhpType::Int))
-        }
-        "iterator_to_array" => {
-            if args.is_empty() || args.len() > 2 {
-                return Err(CompileError::new(
-                    span,
-                    "iterator_to_array() takes 1 or 2 arguments",
-                ));
-            }
-            let source_ty =
-                check_iterator_source(checker, &args[0], span, env, "iterator_to_array()")?;
-            let preserve_keys = if let Some(arg) = args.get(1) {
-                check_iterator_to_array_preserve_keys(checker, arg, env)?
-            } else {
-                Some(true)
-            };
-            Ok(Some(iterator_to_array_return_type(
-                checker,
-                &source_ty,
-                preserve_keys,
-            )))
-        }
-        "iterator_apply" => {
-            if args.len() < 2 || args.len() > 3 {
-                return Err(CompileError::new(
-                    span,
-                    "iterator_apply() takes 2 or 3 arguments",
-                ));
-            }
-            check_iterator_apply_source(checker, &args[0], span, env)?;
-            match iterator_apply_callback_args(checker, args.get(2), span, env)? {
-                IteratorApplyArgs::Static(callback_args) => {
-                    check_iterator_apply_static_callback(
-                        checker,
-                        &args[1],
-                        callback_args,
-                        span,
-                        env,
-                    )?;
-                }
-                IteratorApplyArgs::Dynamic { associative } => {
-                    check_iterator_apply_dynamic_callback(
-                        checker,
-                        &args[1],
-                        associative,
-                        span,
-                        env,
-                    )?;
-                }
-            }
-            Ok(Some(PhpType::Int))
-        }
-        _ => Ok(None),
-    }
-}
-
 /// Checks iterator source and reports a compile error when it is invalid.
-fn check_iterator_source(
+pub(crate) fn check_iterator_source(
     checker: &mut Checker,
     arg: &Expr,
     span: crate::span::Span,
@@ -253,7 +49,7 @@ fn iterator_source_supported(checker: &Checker, ty: &PhpType) -> bool {
 }
 
 /// Checks iterator apply source and reports a compile error when it is invalid.
-fn check_iterator_apply_source(
+pub(crate) fn check_iterator_apply_source(
     checker: &mut Checker,
     arg: &Expr,
     span: crate::span::Span,
@@ -281,7 +77,7 @@ fn traversable_object_supported(checker: &Checker, name: &str) -> bool {
 }
 
 /// Checks iterator to array preserve keys and reports a compile error when it is invalid.
-fn check_iterator_to_array_preserve_keys(
+pub(crate) fn check_iterator_to_array_preserve_keys(
     checker: &mut Checker,
     arg: &Expr,
     env: &TypeEnv,
@@ -326,7 +122,7 @@ fn static_preserve_keys(expr: &Expr) -> Option<bool> {
 }
 
 /// Computes the type metadata for iterator to array return.
-fn iterator_to_array_return_type(
+pub(crate) fn iterator_to_array_return_type(
     checker: &Checker,
     source_ty: &PhpType,
     preserve_keys: Option<bool>,
@@ -357,13 +153,13 @@ fn iterator_to_array_static_return_type(source_ty: &PhpType, preserve_keys: bool
     }
 }
 
-enum IteratorApplyArgs<'a> {
+pub(crate) enum IteratorApplyArgs<'a> {
     Static(&'a [Expr]),
     Dynamic { associative: bool },
 }
 
 /// Builds the argument list for iterator apply callback.
-fn iterator_apply_callback_args<'a>(
+pub(crate) fn iterator_apply_callback_args<'a>(
     checker: &mut Checker,
     args_expr: Option<&'a Expr>,
     span: crate::span::Span,
@@ -405,7 +201,7 @@ fn iterator_apply_callback_args<'a>(
 }
 
 /// Checks iterator apply dynamic callback and reports a compile error when it is invalid.
-fn check_iterator_apply_dynamic_callback(
+pub(crate) fn check_iterator_apply_dynamic_callback(
     checker: &mut Checker,
     callback: &Expr,
     associative_args: bool,
@@ -517,7 +313,7 @@ fn check_iterator_apply_dynamic_callback(
 }
 
 /// Checks iterator apply static callback and reports a compile error when it is invalid.
-fn check_iterator_apply_static_callback(
+pub(crate) fn check_iterator_apply_static_callback(
     checker: &mut Checker,
     callback: &Expr,
     callback_args: &[Expr],

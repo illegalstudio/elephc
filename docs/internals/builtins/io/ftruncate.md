@@ -2,15 +2,15 @@
 title: "ftruncate() — internals"
 description: "Compiler internals for ftruncate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 158
+  order: 175
 ---
 
 ## `ftruncate()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2989](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2989) (`lower_ftruncate`)
+- **Signature**: [`src/builtins/io/ftruncate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ftruncate.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3210](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3210) (`lower_ftruncate`)
 - **Function symbol**: `lower_ftruncate()`
 
 
@@ -35,4 +35,3 @@ function ftruncate(resource $stream, int $size): bool
 ## Cross-references
 
 - [User reference for `ftruncate()`](../../../php/builtins/io/ftruncate.md)
-

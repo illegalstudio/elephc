@@ -1,21 +1,21 @@
 ---
 title: "iterator_to_array()"
-description: "Lowers `iterator_to_array()` over arrays, `iterable`, and Traversable objects."
+description: "Copy the iterator into an array."
 sidebar:
-  order: 301
+  order: 322
 ---
 
 ## iterator_to_array()
 
 ```php
-function iterator_to_array(traversable $iterator, bool $preserve_keys): array
+function iterator_to_array(traversable $iterator, bool $preserve_keys = true): array
 ```
 
-Lowers `iterator_to_array()` over arrays, `iterable`, and Traversable objects.
+Copy the iterator into an array.
 
 **Parameters**:
 - `$iterator` (`traversable`)
-- `$preserve_keys` (`bool`), optional
+- `$preserve_keys` (`bool`), default `true`, optional
 
 **Returns**: `array`
 

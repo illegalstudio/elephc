@@ -2,15 +2,15 @@
 title: "stream_context_set_params() — internals"
 description: "Compiler internals for stream_context_set_params(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 180
+  order: 197
 ---
 
 ## `stream_context_set_params()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1005](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1005) (`lower_stream_context_set_params`)
+- **Signature**: [`src/builtins/io/stream_context_set_params.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_set_params.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1118](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1118) (`lower_stream_context_set_params`)
 - **Function symbol**: `lower_stream_context_set_params()`
 
 
@@ -35,4 +35,3 @@ function stream_context_set_params(resource $context, array $params): bool
 ## Cross-references
 
 - [User reference for `stream_context_set_params()`](../../../php/builtins/io/stream_context_set_params.md)
-

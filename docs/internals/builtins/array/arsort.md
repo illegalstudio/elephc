@@ -2,15 +2,15 @@
 title: "arsort() — internals"
 description: "Compiler internals for arsort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 32
+  order: 47
 ---
 
 ## `arsort()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1091](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1091) (`lower_arsort`)
+- **Signature**: [`src/builtins/array/arsort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/arsort.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1094](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1094) (`lower_arsort`)
 - **Function symbol**: `lower_arsort()`
 
 
@@ -30,15 +30,14 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function arsort(array $array, int $flags): bool
+function arsort(array $array): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes exactly 1 argument.
 - **By-reference parameters**: `$array`.
 
 ## Cross-references
 
 - [User reference for `arsort()`](../../../php/builtins/array/arsort.md)
-

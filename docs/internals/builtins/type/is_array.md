@@ -2,15 +2,15 @@
 title: "is_array() — internals"
 description: "Compiler internals for is_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 401
+  order: 419
 ---
 
 ## `is_array()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1480](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1480) (`lower_is_array`)
+- **Signature**: [`src/builtins/types/is_array.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_array.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1002](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1002) (`lower_is_array`)
 - **Function symbol**: `lower_is_array()`
 
 
@@ -37,4 +37,3 @@ function is_array(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_array()`](../../../php/builtins/type/is_array.md)
-

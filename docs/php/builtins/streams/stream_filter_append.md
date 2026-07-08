@@ -1,23 +1,23 @@
 ---
 title: "stream_filter_append()"
-description: "stream_filter_append() — streams builtin supported by Elephc."
+description: "Attaches a filter to a stream."
 sidebar:
-  order: 315
+  order: 336
 ---
 
 ## stream_filter_append()
 
 ```php
-function stream_filter_append(resource $stream, string $filter_name, int $mode, mixed $params): mixed
+function stream_filter_append(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed
 ```
 
-`stream_filter_append()` is a streams builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Attaches a filter to a stream.
 
 **Parameters**:
 - `$stream` (`resource`)
-- `$filter_name` (`string`)
-- `$mode` (`int`), optional
-- `$params` (`mixed`), optional
+- `$filtername` (`string`)
+- `$read_write` (`int`), default `3`, optional
+- `$params` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 
@@ -28,4 +28,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `stream_filter_append` is implemented in the compiler, see [the internals page](../../../internals/builtins/streams/stream_filter_append.md).
 

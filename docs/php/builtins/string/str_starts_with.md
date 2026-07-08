@@ -1,8 +1,8 @@
 ---
 title: "str_starts_with()"
-description: "Lowers a two-argument string builtin that directly delegates to a runtime helper."
+description: "Checks if a string starts with a given substring."
 sidebar:
-  order: 367
+  order: 388
 ---
 
 ## str_starts_with()
@@ -11,7 +11,7 @@ sidebar:
 function str_starts_with(string $haystack, string $needle): bool
 ```
 
-Lowers a two-argument string builtin that directly delegates to a runtime helper.
+Checks if a string starts with a given substring.
 
 **Parameters**:
 - `$haystack` (`string`)

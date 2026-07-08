@@ -1,8 +1,8 @@
 ---
 title: "hypot()"
-description: "Lowers `hypot()` using the C ABI argument order `x, y`."
+description: "Calculates the length of the hypotenuse of a right-angle triangle."
 sidebar:
-  order: 232
+  order: 249
 ---
 
 ## hypot()
@@ -11,7 +11,7 @@ sidebar:
 function hypot(float $x, float $y): float
 ```
 
-Lowers `hypot()` using the C ABI argument order `x, y`.
+Calculates the length of the hypotenuse of a right-angle triangle.
 
 **Parameters**:
 - `$x` (`float`)

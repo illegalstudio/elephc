@@ -63,6 +63,7 @@ pub struct Module {
     pub extern_class_infos: HashMap<String, ExternClassInfo>,
     pub packed_class_infos: HashMap<String, PackedClassInfo>,
     pub packed_layouts: PackedLayoutTable,
+    pub extern_globals: HashMap<String, PhpType>,
     pub required_runtime_features: RuntimeFeatures,
 }
 
@@ -95,6 +96,7 @@ impl Module {
             extern_class_infos: HashMap::new(),
             packed_class_infos: HashMap::new(),
             packed_layouts: PackedLayoutTable::default(),
+            extern_globals: HashMap::new(),
             required_runtime_features: RuntimeFeatures::none(),
         }
     }

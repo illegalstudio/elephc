@@ -1,8 +1,8 @@
 ---
 title: "sin()"
-description: "sin() — math builtin supported by Elephc."
+description: "Returns the sine of a number (radians)."
 sidebar:
-  order: 249
+  order: 266
 ---
 
 ## sin()
@@ -11,7 +11,7 @@ sidebar:
 function sin(float $num): float
 ```
 
-`sin()` is a math builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Returns the sine of a number (radians).
 
 **Parameters**:
 - `$num` (`float`)
@@ -25,4 +25,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `sin` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/sin.md).
 

@@ -1,8 +1,8 @@
 ---
 title: "ptr_write16()"
-description: "Lowers `ptr_write16(pointer, value)` by writing one 16-bit word through a checked pointer."
+description: "Writes one 16-bit word through a raw pointer."
 sidebar:
-  order: 279
+  order: 296
 ---
 
 ## ptr_write16()
@@ -11,7 +11,7 @@ sidebar:
 function ptr_write16(pointer $pointer, int $value): void
 ```
 
-Lowers `ptr_write16(pointer, value)` by writing one 16-bit word through a checked pointer.
+Writes one 16-bit word through a raw pointer.
 
 **Parameters**:
 - `$pointer` (`pointer`)

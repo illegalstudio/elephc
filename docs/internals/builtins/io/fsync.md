@@ -2,15 +2,15 @@
 title: "fsync() — internals"
 description: "Compiler internals for fsync(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 156
+  order: 173
 ---
 
 ## `fsync()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3040](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3040) (`lower_fsync`)
+- **Signature**: [`src/builtins/io/fsync.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fsync.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3261](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3261) (`lower_fsync`)
 - **Function symbol**: `lower_fsync()`
 
 
@@ -37,4 +37,3 @@ function fsync(resource $stream): bool
 ## Cross-references
 
 - [User reference for `fsync()`](../../../php/builtins/io/fsync.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "urldecode()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Decodes a URL-encoded string, including '+' as a space."
 sidebar:
-  order: 383
+  order: 404
 ---
 
 ## urldecode()
@@ -11,7 +11,7 @@ sidebar:
 function urldecode(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Decodes a URL-encoded string, including '+' as a space.
 
 **Parameters**:
 - `$string` (`string`)

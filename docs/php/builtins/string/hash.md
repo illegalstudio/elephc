@@ -1,23 +1,22 @@
 ---
 title: "hash()"
-description: "Lowers `hash(algo, data, binary?)` through the shared runtime digest dispatcher."
+description: "Generates a hash value using the given algorithm."
 sidebar:
-  order: 330
+  order: 351
 ---
 
 ## hash()
 
 ```php
-function hash(string $algo, string $data, bool $binary = false, array $options = []): string
+function hash(string $algo, string $data, bool $binary = false): string
 ```
 
-Lowers `hash(algo, data, binary?)` through the shared runtime digest dispatcher.
+Generates a hash value using the given algorithm.
 
 **Parameters**:
 - `$algo` (`string`)
 - `$data` (`string`)
 - `$binary` (`bool`), default `false`, optional
-- `$options` (`array`), default `[]`, optional
 
 **Returns**: `string`
 

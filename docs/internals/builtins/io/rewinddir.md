@@ -2,15 +2,15 @@
 title: "rewinddir() — internals"
 description: "Compiler internals for rewinddir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 171
+  order: 188
 ---
 
 ## `rewinddir()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3365](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3365) (`lower_rewinddir`)
+- **Signature**: [`src/builtins/io/rewinddir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/rewinddir.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3588](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3588) (`lower_rewinddir`)
 - **Function symbol**: `lower_rewinddir()`
 
 
@@ -37,4 +37,3 @@ function rewinddir(resource $dir_handle): void
 ## Cross-references
 
 - [User reference for `rewinddir()`](../../../php/builtins/io/rewinddir.md)
-

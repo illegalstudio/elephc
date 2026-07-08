@@ -1,22 +1,22 @@
 ---
 title: "class_alias()"
-description: "Lowers the defensive `class_alias()` fallback that remains after AOT alias extraction."
+description: "Creates an alias for a class."
 sidebar:
-  order: 49
+  order: 66
 ---
 
 ## class_alias()
 
 ```php
-function class_alias(string $class, string $alias, bool $autoload): bool
+function class_alias(string $class, string $alias, bool $autoload = true): bool
 ```
 
-Lowers the defensive `class_alias()` fallback that remains after AOT alias extraction.
+Creates an alias for a class.
 
 **Parameters**:
 - `$class` (`string`)
 - `$alias` (`string`)
-- `$autoload` (`bool`), optional
+- `$autoload` (`bool`), default `true`, optional
 
 **Returns**: `bool`
 

@@ -1,22 +1,21 @@
 ---
 title: "range()"
-description: "Lowers `range()` for integer endpoints through the shared runtime constructor."
+description: "Create an array containing a range of elements."
 sidebar:
-  order: 40
+  order: 57
 ---
 
 ## range()
 
 ```php
-function range(mixed $start, mixed $end, int $step): array
+function range(mixed $start, mixed $end): array
 ```
 
-Lowers `range()` for integer endpoints through the shared runtime constructor.
+Create an array containing a range of elements.
 
 **Parameters**:
 - `$start` (`mixed`)
 - `$end` (`mixed`)
-- `$step` (`int`)
 
 **Returns**: `array`
 

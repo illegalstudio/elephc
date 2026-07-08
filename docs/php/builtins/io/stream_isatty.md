@@ -1,8 +1,8 @@
 ---
 title: "stream_isatty()"
-description: "Lowers `stream_isatty(stream)`."
+description: "Checks if a stream is a TTY."
 sidebar:
-  order: 191
+  order: 208
 ---
 
 ## stream_isatty()
@@ -11,7 +11,7 @@ sidebar:
 function stream_isatty(resource $stream): bool
 ```
 
-Lowers `stream_isatty(stream)`.
+Checks if a stream is a TTY.
 
 **Parameters**:
 - `$stream` (`resource`)

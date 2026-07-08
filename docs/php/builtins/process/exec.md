@@ -1,22 +1,20 @@
 ---
 title: "exec()"
-description: "Lowers `exec(command)` by capturing shell stdout through the shared runtime helper."
+description: "Executes an external program and returns the last line of output."
 sidebar:
-  order: 284
+  order: 305
 ---
 
 ## exec()
 
 ```php
-function exec(string $command, array $output, int $result_code): string
+function exec(string $command): string
 ```
 
-Lowers `exec(command)` by capturing shell stdout through the shared runtime helper.
+Executes an external program and returns the last line of output.
 
 **Parameters**:
 - `$command` (`string`)
-- `$output` (`array`), passed by reference
-- `$result_code` (`int`), passed by reference
 
 **Returns**: `string`
 

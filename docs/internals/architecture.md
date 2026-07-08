@@ -137,9 +137,8 @@ PHP source (.php)
        │
        ▼
 ┌─────────────┐
-│ EIR Codegen │  src/codegen_ir/ + shared src/codegen/abi/
-│             │  Emits target assembly text from EIR. The legacy AST backend
-│             │  remains in src/codegen/ behind --ast-backend.
+│ EIR Codegen │  src/codegen/ + shared src/codegen_support/abi/
+│             │  Emits target assembly text from EIR.
 └──────┬──────┘
      │
      ▼
@@ -190,7 +189,8 @@ src/
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
 ├── ir_lower/                  Active checked-AST to EIR lowering
 ├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation
-├── codegen_ir/                Active EIR to target assembly backend
+├── codegen/                   Active EIR to target assembly backend
+├── codegen_support/           Shared ABI, runtime, platform, metadata, and callable support
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
 ├── termination.rs             Structured terminal-effect analysis shared by checker and optimizer
@@ -259,19 +259,20 @@ src/
 │       ├── yield_validation/  Generator return coercion and yield-scope validation
 │       └── ...
 │
-├── codegen/
-│   ├── mod.rs                 Frozen legacy AST-backend orchestration plus shared runtime feature scans
-│   ├── driver_support.rs      Pipeline glue and orchestration helpers
-│   ├── main_emission.rs       Top-level program, globals, and deferred-body emission
-│   ├── class_methods.rs       Instance/static method emission orchestration
-│   ├── function_variants.rs   Include-loaded function variant dispatchers
+├── codegen_support/
+│   ├── mod.rs                 Shared codegen metadata registries and support re-exports
+│   ├── driver_support.rs      Runtime object, deferred callable, boxing, and hash-key helpers
+│   ├── arrays.rs              Shared array value-type metadata stamping helpers
+│   ├── callable_invoker_args.rs Descriptor-invoker argument cloning and Mixed boxing helpers
+│   ├── value_boxing.rs        Shared runtime-value and owned-value boxing into Mixed cells
+│   ├── wrappers/              Shared callback and fiber wrapper emitters
 │   ├── interface_wrappers.rs  Interface dispatch return-shape adapters
 │   ├── callables.rs           Top-level callable metadata and indirect-call helpers
 │   ├── reflection.rs          Shared ReflectionAttribute materialization helpers
-│   ├── prescan.rs             Pre-pass that collects program-wide codegen metadata
-│   ├── program_usage.rs       Program-usage analysis feeding metadata emission
-│   ├── program_usage/         Required-class and variable usage scanners
-│   ├── functions/generator/   Generator wrapper and resume state-machine lowering
+│   ├── prescan.rs             Constant pre-scan feeding EIR lowering
+│   ├── program_usage.rs       Required-class analysis feeding metadata emission
+│   ├── program_usage/         Required-class scanners
+│   ├── functions/generator/   Closure generator wrapper and resume state-machine lowering
 │   ├── expr.rs                Expression codegen dispatcher
 │   ├── expr/                  Expression submodules
 │   │   ├── arrays.rs          Array-expression dispatch
@@ -307,10 +308,8 @@ src/
 │   │   └── storage/           `locals.rs`, `extern_globals.rs`
 │   ├── functions/             User function emission
 │   │   ├── mod.rs             Function lowering entry point
-│   │   ├── callback_wrapper.rs Captured callback environment wrappers
 │   │   ├── cleanup.rs         Epilogue / ownership cleanup helpers
 │   │   ├── control_flow.rs    Return / early-exit lowering
-│   │   ├── fiber_wrapper.rs   Fiber callback entry wrappers
 │   │   ├── locals.rs          Local slot layout
 │   │   └── types/             Function-local type inference helpers
 │   ├── abi/                   Target-aware calling convention helpers
@@ -353,18 +352,18 @@ src/
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
 │       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (71 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (132 files)
-│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed plus callable descriptor release (3 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (145 files)
+│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (4 files)
 │       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (113 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (6 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, preg_*, ... (40 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, preg_*, ... (42 files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 files) + `api/` (target-aware public API helpers)
 │       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding, destructor dispatch, new-by-name helpers (6 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
-│       └── generators/        Generator frame layout and __rt_gen_* helpers (2 files)
+│       └── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │
 │
 └── errors/
@@ -488,7 +487,7 @@ The runtime data emission in `src/codegen/runtime/data/` is split into `emit_run
 Offset  Size  Field
   0      8    count       (number of occupied entries)
   8      8    capacity    (number of slots)
- 16      8    value_type  (coarse summary: 0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object, 7=mixed)
+ 16      8    value_type  (coarse summary: 0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object, 7=mixed, 8=null)
  24      8    head        (slot index of first inserted entry, or -1)
  32      8    tail        (slot index of last inserted entry, or -1)
  40      ...  entries     (each entry is 64 bytes)

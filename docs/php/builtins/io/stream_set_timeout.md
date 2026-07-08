@@ -1,22 +1,22 @@
 ---
 title: "stream_set_timeout()"
-description: "Lowers `stream_set_timeout(stream, seconds, microseconds?)`."
+description: "Sets timeout period on a stream."
 sidebar:
-  order: 197
+  order: 214
 ---
 
 ## stream_set_timeout()
 
 ```php
-function stream_set_timeout(resource $stream, int $seconds, int $microseconds): bool
+function stream_set_timeout(resource $stream, int $seconds, int $microseconds = 0): bool
 ```
 
-Lowers `stream_set_timeout(stream, seconds, microseconds?)`.
+Sets timeout period on a stream.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$seconds` (`int`)
-- `$microseconds` (`int`), optional
+- `$microseconds` (`int`), default `0`, optional
 
 **Returns**: `bool`
 

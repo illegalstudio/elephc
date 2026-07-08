@@ -1,8 +1,8 @@
 ---
 title: "linkinfo()"
-description: "Lowers `linkinfo(path)` through the target-aware runtime lstat helper."
+description: "Gets information about a link."
 sidebar:
-  order: 115
+  order: 132
 ---
 
 ## linkinfo()
@@ -11,7 +11,7 @@ sidebar:
 function linkinfo(string $path): int
 ```
 
-Lowers `linkinfo(path)` through the target-aware runtime lstat helper.
+Gets information about a link.
 
 **Parameters**:
 - `$path` (`string`)

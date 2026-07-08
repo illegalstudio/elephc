@@ -2,19 +2,19 @@
 title: "var_dump()"
 description: "Dumps information about a variable, including its type and value."
 sidebar:
-  order: 267
+  order: 284
 ---
 
 ## var_dump()
 
 ```php
-function var_dump(...$values): void
+function var_dump(mixed $value): void
 ```
 
 Dumps information about a variable, including its type and value.
 
 **Parameters**:
-- `...$values` — variadic: collects excess arguments into `$values`.
+- `$value` (`mixed`)
 
 **Returns**: `void`
 

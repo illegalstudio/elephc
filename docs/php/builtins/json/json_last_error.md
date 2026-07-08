@@ -1,8 +1,8 @@
 ---
 title: "json_last_error()"
-description: "Lowers `json_last_error()` by reading the shared runtime error-code symbol."
+description: "Returns the last error (if any) occurred during the last JSON encoding/decoding."
 sidebar:
-  order: 215
+  order: 232
 ---
 
 ## json_last_error()
@@ -11,7 +11,7 @@ sidebar:
 function json_last_error(): int
 ```
 
-Lowers `json_last_error()` by reading the shared runtime error-code symbol.
+Returns the last error (if any) occurred during the last JSON encoding/decoding.
 
 **Parameters**: none.
 

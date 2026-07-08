@@ -1,21 +1,21 @@
 ---
 title: "log()"
-description: "Lowers `log()` in one-argument and base-changing two-argument forms."
+description: "Natural logarithm."
 sidebar:
-  order: 237
+  order: 254
 ---
 
 ## log()
 
 ```php
-function log(float $num, float $base): float
+function log(float $num, float $base = 2.718281828459045): float
 ```
 
-Lowers `log()` in one-argument and base-changing two-argument forms.
+Natural logarithm.
 
 **Parameters**:
 - `$num` (`float`)
-- `$base` (`float`), optional
+- `$base` (`float`), default `2.718281828459045`, optional
 
 **Returns**: `float`
 

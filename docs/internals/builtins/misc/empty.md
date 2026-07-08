@@ -2,7 +2,7 @@
 title: "empty() — internals"
 description: "Compiler internals for empty(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 262
+  order: 274
 ---
 
 ## `empty()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1096](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1096) (`lower_empty`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:618](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L618) (`lower_empty`)
 - **Function symbol**: `lower_empty()`
 
 
@@ -36,4 +36,3 @@ function empty(mixed $value): bool
 ## Cross-references
 
 - [User reference for `empty()`](../../../php/builtins/misc/empty.md)
-

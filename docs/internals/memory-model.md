@@ -107,9 +107,9 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 
 elephc has two representations for PHP `null` in scalar slots, selected per compilation by
 `--null-repr=sentinel|tagged` (or `ELEPHC_NULL_REPR`). The tagged representation is the
-default; the sentinel is the legacy opt-out.
+default; the sentinel is the compatibility opt-out.
 
-#### The in-band sentinel (legacy opt-out)
+#### The in-band sentinel (compatibility opt-out)
 
 `null` is represented as the integer `0x7FFFFFFFFFFFFFFE` (`PHP_INT_MAX - 1`). Because every
 64-bit pattern is a valid PHP int, this sentinel collides with the real integer
@@ -150,9 +150,9 @@ cmp x1, #8                ; runtime tag 8 = PHP null
 b.eq value_is_null
 ```
 
-A tagged null carries the legacy sentinel as its payload word, so boxing it into a Mixed
-cell produces exactly the legacy `{tag 8, sentinel}` words and un-audited consumers degrade
-to the legacy behavior. `?int` parameters, returns, and properties keep their boxed Mixed
+A tagged null carries the sentinel as its payload word, so boxing it into a Mixed
+cell produces `{tag 8, sentinel}` words and un-audited consumers degrade
+to sentinel behavior. `?int` parameters, returns, and properties keep their boxed Mixed
 representation under both modes.
 
 ### Pointer values
@@ -376,7 +376,7 @@ Associative arrays use a separate heap-allocated structure: an open-addressing h
 |---|---|---|
 | `count` | 8 bytes | Number of occupied entries |
 | `capacity` | 8 bytes | Total number of slots |
-| `val_type` | 8 bytes | Coarse value-type summary (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object, 7=mixed) |
+| `val_type` | 8 bytes | Coarse value-type summary (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object, 7=mixed, 8=null) |
 | `head` | 8 bytes | Slot index of the first inserted entry, or `-1` when empty |
 | `tail` | 8 bytes | Slot index of the most recently inserted entry, or `-1` when empty |
 
@@ -585,6 +585,8 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame` = 32 bytes total | Fixed-size current-fiber and main-frame resume bookkeeping |
 | Runtime diagnostics | `_rt_diag_suppression` = 8 bytes total | Fixed-size warning-suppression depth used by `@` and exception unwinding |
 | JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc`, `_json_error_source_ptr`, `_json_error_location_active`, `_json_error_line`, `_json_error_column` = 104 bytes total | Fixed-size bookkeeping for JSON calls and decode error locations |
+| Serialize/unserialize state | `_ser_value_counter`, `_ser_obj_count`, `_unser_count` = 8 bytes each; `_ser_obj_ptrs`, `_ser_obj_idxs`, `_unser_values` = 512KB each | `serialize()` object-dedup counters/maps and `unserialize()` reference registry; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref) |
+| Date/time state | `_strtotime_clock`, `_php_default_tz_len` = 8 bytes each; `_php_tz_env`, `_php_tz_save` = 264 bytes each | `strtotime()` clock override plus default-timezone (`date_default_timezone_*`) env/save buffers and stored identifier length |
 | CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
 | User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
 | Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |
@@ -595,7 +597,7 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | Stream filter scratch | `_stream_filter_buf`, `_stream_grow_scratch` = 64KB each | Scratch space for stream filters, including length-growing filters such as base64 and quoted-printable encoders |
 | Stream context and callbacks | `_stream_context_options`, `_stream_notification_callback`, `_stream_connect_host`, `_stream_open_opened_path_scratch`, `_url_stat_matched` | Current stream-context options hash, notification callback, TLS peer host, wrapper opened-path scratch, and wrapper url_stat match flag |
 | TLS and crypto function slots | `_elephc_tls_*_fn`, `_zlib_*_fn`, `_bz2_*_fn`, `_phar_zlib_*_fn`, `_phar_bz2_*_fn`, `_iconv_*_fn`, `_elephc_crypto_*_fn` = 8 bytes per slot | Late-bound function pointers so programs only link optional TLS/compression/iconv/crypto support when a call site publishes the symbol |
-| HTTP/HTTPS/FTP buffers | `_http_resp_buf`, `_https_resp_buf`, `_user_wrapper_drain_buf`, `_phar_write_out` = 1MB each; `_http_req_scratch` = 8KB; `_http_redirect_path_buf`, `_fgc_url_retr` = 2KB each; `_fgc_url_addr`, `_fsockopen_addr` = 512 bytes each; `_ftp_resp_buf` = 4KB; `_ftp_data_addr`, `_ftp_cmd_scratch` = 64 bytes each | Protocol-specific response, request, redirect, FTP, wrapper, and PHAR writer scratch buffers |
+| HTTP/HTTPS/FTP buffers | `_http_resp_buf`, `_https_resp_buf`, `_user_wrapper_drain_buf`, `_phar_write_out` = 1MB each; `_http_req_scratch` = 8KB; `_http_redirect_path_buf`, `_fgc_url_retr` = 2KB each; `_fgc_url_addr`, `_fsockopen_addr` = 512 bytes each; `_ftp_resp_buf` = 4KB; `_ftp_data_addr`, `_ftp_cmd_scratch` = 64 bytes each; `_ftp_use_tls` = 8 bytes (FTPS handshake flag) | Protocol-specific response, request, redirect, FTP/FTPS, wrapper, and PHAR writer scratch buffers and flags |
 | HTTP active context | `_http_active_ignore_errors`, `_http_active_max_redirects`, `_http_active_timeout_seconds`, `_http_active_proxy_ptr`, `_http_active_proxy_len`, `_http_active_host_ptr`, `_http_active_host_len`, `_http_redirect_path_len` | Fixed-size state shared between HTTP request construction and redirect/open helpers |
 | Socket address scratch | `_recvfrom_addr_ptr`, `_recvfrom_addr_len`, `_accept_peer_ptr`, `_accept_peer_len` = 8 bytes each | Stores peer/address strings returned through by-reference socket parameters |
 | Protocol/service lookup buffers | `_protoent_buf` = 32KB, `_servent_buf` = 1MB | Scratch buffers for protocol and service database lookups |
@@ -617,7 +619,8 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 7. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
 8. **Stack memory** — automatically reclaimed when functions return
 9. **Generator frame release** — Generator frames participate in object refcounting, with a custom deep-free branch for their frame slots and delegated iterator
-10. **Process exit** — all memory reclaimed by the OS
+10. **Resource scope-cleanup** — Mixed-boxed resources (tag 9) carry a resource-kind subtype in the high payload word, and `__rt_mixed_free_deep` runs the matching destructor when the box is released: kind 1 = native stream fd (`close()`), kind 2 = HashContext handle (`elephc_crypto_free` through `__rt_hash_ctx_free`), kind 3 = `popen` pipe (`__rt_pclose`, which closes the `FILE*` and reaps the child), kind 4 = `opendir` stream (`__rt_closedir`). Kind 0 resources (generic resources) are skipped, and every fd-backed kind also skips handles `>= 0x40000000` — synthetic wrapper handles and the `-1` sentinel that an explicit `fclose`/`pclose`/`closedir` stamps into the box so the descriptor is never released twice (even if its fd number was reused). Alias safety comes from the Mixed box refcount — `$b = $a` increfs the box, so only the last release triggers the destructor
+11. **Process exit** — all memory reclaimed by the OS
 
 ### What is NOT freed
 
@@ -628,6 +631,8 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 - **Container-copying builtins** no longer blindly duplicate borrowed heap handles for common nested payload paths: refcounted runtime variants now retain values before new arrays/hash tables take ownership (`array` literals with spreads, `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, `array_fill_keys`)
 - **Regression coverage now explicitly exercises** local aliases, borrowed nested-container returns, `Owned`/`Borrowed` control-flow merges, and scope-exit paths so future ownership work has focused tripwires instead of relying only on large end-to-end suites
 - **Raw/off-heap ownership cycles** are still outside the collector. `ptr` values, extern-managed buffers, and raw helper allocations (`kind=0`) are not traversed just because an address exists somewhere
+- **Kind-0 resources** (generic/unknown resource kind, including synthetic user-wrapper handles `>= 0x40000000`) are not auto-freed by the Mixed deep-free path — their lifecycle remains managed by the wrapper layer or the user's explicit `close()` call. Kinds 1–4 (native stream fd, HashContext, `popen` pipe, `opendir` stream) are auto-released at scope exit
+- **HashContext reuse after `hash_final()`** is memory-safe but not PHP-equivalent: `elephc_crypto_final` finalizes a *clone* and leaves the original handle live and owned by its Mixed box, so the box's kind-2 destructor frees it exactly once. A second `hash_final()` or a `hash_update()`/`hash_copy()` on the same handle therefore does not double-free or use-after-free (where PHP throws "Supplied resource is not a valid Hash Context resource"), it simply keeps hashing the still-live context (documented in `src/codegen/runtime/strings/hash_context.rs`)
 
 ### Targeted cycle collection
 

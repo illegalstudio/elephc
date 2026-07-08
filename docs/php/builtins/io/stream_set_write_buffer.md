@@ -1,8 +1,8 @@
 ---
 title: "stream_set_write_buffer()"
-description: "Lowers stream read/write buffer setters as successful no-ops."
+description: "Sets the write file buffering on a stream."
 sidebar:
-  order: 198
+  order: 215
 ---
 
 ## stream_set_write_buffer()
@@ -11,7 +11,7 @@ sidebar:
 function stream_set_write_buffer(resource $stream, int $size): int
 ```
 
-Lowers stream read/write buffer setters as successful no-ops.
+Sets the write file buffering on a stream.
 
 **Parameters**:
 - `$stream` (`resource`)

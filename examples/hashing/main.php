@@ -41,6 +41,18 @@ hash_update($branch, "right");
 echo "branch A: " . hash_final($base) . "\n";
 echo "branch B: " . hash_final($branch) . "\n";
 
+// A context that is never finalized is auto-freed at scope exit: the runtime
+// calls elephc_crypto_free through __rt_mixed_free_deep (tag-9 kind-2) when
+// the Mixed box's refcount reaches zero. No leak, no double-free.
+function leak_ctx(): void {
+    $ctx = hash_init("sha256");
+    hash_update($ctx, "abandoned");
+    // No hash_final() — $ctx is auto-freed when the function returns.
+}
+leak_ctx();
+echo "\n--- auto-free scope cleanup ---\n";
+echo "unfinalized context freed without crash\n";
+
 echo "\n--- supported algorithms ---\n";
 echo "count: " . count(hash_algos()) . "\n";
 

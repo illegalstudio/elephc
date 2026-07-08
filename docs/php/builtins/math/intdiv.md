@@ -1,8 +1,8 @@
 ---
 title: "intdiv()"
-description: "Lowers `intdiv()` for concrete integer-like numeric operands."
+description: "Integer division."
 sidebar:
-  order: 233
+  order: 250
 ---
 
 ## intdiv()
@@ -11,7 +11,7 @@ sidebar:
 function intdiv(int $num1, int $num2): int
 ```
 
-Lowers `intdiv()` for concrete integer-like numeric operands.
+Integer division.
 
 **Parameters**:
 - `$num1` (`int`)

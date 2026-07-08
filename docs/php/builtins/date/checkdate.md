@@ -1,8 +1,8 @@
 ---
 title: "checkdate()"
-description: "Lowers `checkdate(month, day, year)` through the shared Gregorian-validation runtime helper."
+description: "Validates a Gregorian date."
 sidebar:
-  order: 68
+  order: 85
 ---
 
 ## checkdate()
@@ -11,7 +11,7 @@ sidebar:
 function checkdate(int $month, int $day, int $year): bool
 ```
 
-Lowers `checkdate(month, day, year)` through the shared Gregorian-validation runtime helper.
+Validates a Gregorian date.
 
 **Parameters**:
 - `$month` (`int`)

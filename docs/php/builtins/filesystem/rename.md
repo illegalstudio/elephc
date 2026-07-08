@@ -1,22 +1,21 @@
 ---
 title: "rename()"
-description: "Lowers `rename(from, to)` through the target-aware runtime helper."
+description: "Renames a file or directory."
 sidebar:
-  order: 125
+  order: 142
 ---
 
 ## rename()
 
 ```php
-function rename(string $from, string $to, mixed $context): bool
+function rename(string $from, string $to): bool
 ```
 
-Lowers `rename(from, to)` through the target-aware runtime helper.
+Renames a file or directory.
 
 **Parameters**:
 - `$from` (`string`)
 - `$to` (`string`)
-- `$context` (`mixed`)
 
 **Returns**: `bool`
 

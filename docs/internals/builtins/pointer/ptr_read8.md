@@ -2,15 +2,15 @@
 title: "ptr_read8() — internals"
 description: "Compiler internals for ptr_read8(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 278
+  order: 292
 ---
 
 ## `ptr_read8()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/pointers.rs`:119](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/pointers.rs#L119) (`lower_ptr_read8`)
+- **Signature**: [`src/builtins/pointers/ptr_read8.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_read8.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:119](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L119) (`lower_ptr_read8`)
 - **Function symbol**: `lower_ptr_read8()`
 
 
@@ -35,4 +35,3 @@ function ptr_read8(pointer $pointer): int
 ## Cross-references
 
 - [User reference for `ptr_read8()`](../../../php/builtins/pointer/ptr_read8.md)
-

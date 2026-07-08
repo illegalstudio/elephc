@@ -38,9 +38,10 @@ use crate::errors::CompileError;
 use crate::parser::ast::{
     CallableTarget, Expr, Program, TypeExpr,
 };
+use crate::span::Span;
 use crate::types::{
     CheckResult, ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig,
-    InterfaceInfo, PackedClassInfo, PhpType, TypeEnv,
+    InterfaceInfo, PackedClassInfo, PhpType, ThrowAccessInfo, TypeEnv,
 };
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
@@ -62,6 +63,11 @@ pub(crate) struct Checker {
     pub function_variant_groups: HashMap<String, Vec<String>>,
     /// Canonical function signatures indexed by fully-qualified name.
     pub functions: HashMap<String, FunctionSig>,
+    /// Functions whose body is currently being checked.
+    ///
+    /// Recursive calls may use their provisional signature, but must not re-specialize the same
+    /// declaration while it is in flight.
+    pub resolving_functions: HashSet<String>,
     /// Top-level constant types indexed by canonical name.
     pub constants: HashMap<String, PhpType>,
     /// Tracks the return type of closures assigned to variables, keyed by variable name.
@@ -136,6 +142,14 @@ pub(crate) struct Checker {
     pub active_globals: HashSet<String>,
     /// Names introduced via `static` declarations in the current local scope.
     pub active_statics: HashSet<String>,
+    /// Names bound as `foreach` loop keys in the current function/closure scope.
+    /// A foreach key is a boxed `Mixed` cell at runtime (`Op::IterCurrentKey`)
+    /// even when the checker types it as `Int`/`Str` from the source array, so an
+    /// `$dst[$k] = $v` write under such a key must defer the indexed-vs-hash
+    /// decision to `Op::ArraySetMixedKey` (destination `Array(Mixed)`) instead of
+    /// promoting to `AssocArray` like a statically-known string key would. Mirrors
+    /// the lowering's `foreach_int_key_locals` lifetime (per function, not popped).
+    pub foreach_key_locals: HashSet<String>,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
     /// Stacks of break/continue depths at each enclosing `finally` block boundary,
@@ -150,6 +164,9 @@ pub(crate) struct Checker {
     /// checking bodies and applied to `classes` after checking so every access lowers
     /// through the property's ref-cell. See `apply_reference_property_promotions`.
     pub reference_property_promotions: HashSet<(String, String)>,
+    /// Statically-decided access violations that must lower to a catchable
+    /// `Error` throw instead of a compile-time error, keyed by source span.
+    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
 }
 
 #[derive(Clone)]
@@ -187,6 +204,7 @@ pub fn check_types(program: &Program, target_platform: Platform) -> Result<Check
 
     let mut warnings = crate::types::warnings::collect_warnings(program);
     warnings.extend(checker.warnings);
+    dedupe_warnings(&mut warnings);
 
     Ok(CheckResult {
         global_env,
@@ -203,7 +221,23 @@ pub fn check_types(program: &Program, target_platform: Platform) -> Result<Check
         extern_globals: checker.extern_globals,
         required_libraries: checker.required_libraries,
         warnings,
+        throw_access_sites: checker.throw_access_sites,
     })
+}
+
+/// Removes duplicate warnings emitted by repeated checker stabilization passes.
+///
+/// The first occurrence is preserved so diagnostic order stays stable; duplicates are keyed by
+/// source span and message, matching the user-visible warning identity.
+fn dedupe_warnings(warnings: &mut Vec<crate::errors::CompileWarning>) {
+    let mut seen = HashSet::new();
+    warnings.retain(|warning| {
+        seen.insert((
+            warning.span.line,
+            warning.span.col,
+            warning.message.clone(),
+        ))
+    });
 }
 
 /// Returns the single object class named by a type, ignoring a nullable arm.

@@ -1,8 +1,8 @@
 ---
 title: "array_unshift()"
-description: "Lowers `array_unshift()` by ensuring uniqueness, prepending one scalar value, and returning count."
+description: "Prepends one or more elements to the beginning of an array."
 sidebar:
-  order: 29
+  order: 43
 ---
 
 ## array_unshift()
@@ -11,7 +11,7 @@ sidebar:
 function array_unshift(array $array, ...$values): int
 ```
 
-Lowers `array_unshift()` by ensuring uniqueness, prepending one scalar value, and returning count.
+Prepends one or more elements to the beginning of an array.
 
 **Parameters**:
 - `$array` (`array`), passed by reference

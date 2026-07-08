@@ -1,21 +1,20 @@
 ---
 title: "krsort()"
-description: "Lowers `krsort()` through the legacy reverse key-sort helper surface."
+description: "Sorts an array by key in descending order."
 sidebar:
-  order: 36
+  order: 53
 ---
 
 ## krsort()
 
 ```php
-function krsort(array $array, int $flags): bool
+function krsort(array $array): bool
 ```
 
-Lowers `krsort()` through the legacy reverse key-sort helper surface.
+Sorts an array by key in descending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`)
 
 **Returns**: `bool`
 

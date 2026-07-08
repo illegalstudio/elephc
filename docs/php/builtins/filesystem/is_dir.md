@@ -1,8 +1,8 @@
 ---
 title: "is_dir()"
-description: "Lowers `is_dir(path)` through the target-aware runtime stat helper."
+description: "Tells whether the filename is a directory."
 sidebar:
-  order: 105
+  order: 122
 ---
 
 ## is_dir()
@@ -11,7 +11,7 @@ sidebar:
 function is_dir(string $filename): bool
 ```
 
-Lowers `is_dir(path)` through the target-aware runtime stat helper.
+Tells whether the filename is a directory.
 
 **Parameters**:
 - `$filename` (`string`)

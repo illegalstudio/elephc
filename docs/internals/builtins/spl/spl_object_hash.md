@@ -2,15 +2,15 @@
 title: "spl_object_hash() — internals"
 description: "Compiler internals for spl_object_hash(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 312
+  order: 330
 ---
 
 ## `spl_object_hash()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:225](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L225) (`lower_spl_object_hash`)
+- **Signature**: [`src/builtins/spl/spl_object_hash.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_object_hash.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/spl.rs`:226](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/spl.rs#L226) (`lower_spl_object_hash`)
 - **Function symbol**: `lower_spl_object_hash()`
 
 
@@ -36,4 +36,3 @@ function spl_object_hash(object $object): string
 ## Cross-references
 
 - [User reference for `spl_object_hash()`](../../../php/builtins/spl/spl_object_hash.md)
-

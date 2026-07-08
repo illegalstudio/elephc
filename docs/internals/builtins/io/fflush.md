@@ -2,15 +2,15 @@
 title: "fflush() — internals"
 description: "Compiler internals for fflush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 140
+  order: 157
 ---
 
 ## `fflush()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3045](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3045) (`lower_fflush`)
+- **Signature**: [`src/builtins/io/fflush.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fflush.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3266](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3266) (`lower_fflush`)
 - **Function symbol**: `lower_fflush()`
 
 
@@ -36,4 +36,3 @@ function fflush(resource $stream): bool
 ## Cross-references
 
 - [User reference for `fflush()`](../../../php/builtins/io/fflush.md)
-

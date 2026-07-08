@@ -1,8 +1,8 @@
 ---
 title: "ucfirst()"
-description: "Lowers `ucfirst()` by copying the string and uppercasing the first ASCII byte."
+description: "Uppercases the first character of a string."
 sidebar:
-  order: 381
+  order: 402
 ---
 
 ## ucfirst()
@@ -11,7 +11,7 @@ sidebar:
 function ucfirst(string $string): string
 ```
 
-Lowers `ucfirst()` by copying the string and uppercasing the first ASCII byte.
+Uppercases the first character of a string.
 
 **Parameters**:
 - `$string` (`string`)

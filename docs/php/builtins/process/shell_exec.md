@@ -1,8 +1,8 @@
 ---
 title: "shell_exec()"
-description: "Lowers `shell_exec(command)` by capturing shell stdout through the shared runtime helper."
+description: "Executes a command via the shell and returns the complete output as a string."
 sidebar:
-  order: 290
+  order: 311
 ---
 
 ## shell_exec()
@@ -11,7 +11,7 @@ sidebar:
 function shell_exec(string $command): string
 ```
 
-Lowers `shell_exec(command)` by capturing shell stdout through the shared runtime helper.
+Executes a command via the shell and returns the complete output as a string.
 
 **Parameters**:
 - `$command` (`string`)

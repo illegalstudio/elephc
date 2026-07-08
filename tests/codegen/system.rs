@@ -1222,6 +1222,94 @@ echo date("D", $ts);
     assert_eq!(out, "Wed");
 }
 
+/// Regression for #391: `strtotime("next Mon")` with a short weekday abbreviation
+/// after a modifier must correctly match the 3-letter abbreviation. On x86_64 the
+/// weekday scan previously used a fixed length 16 instead of min(remaining, 16),
+/// which could scan into zero-padded buffer tail. This test ensures the short
+/// abbreviation after a modifier resolves correctly.
+#[test]
+fn test_strtotime_next_mon_abbrev() {
+    let out = compile_and_run(
+        r#"<?php
+$ts = strtotime("next Mon");
+echo date("D", $ts);
+"#,
+    );
+    assert_eq!(out, "Mon");
+}
+
+/// Regression for #391: `strtotime("last Fri")` with a short weekday abbreviation
+/// after a modifier must resolve to the previous Friday.
+#[test]
+fn test_strtotime_last_fri_abbrev() {
+    let out = compile_and_run(
+        r#"<?php
+$ts = strtotime("last Fri");
+echo date("D", $ts);
+"#,
+    );
+    assert_eq!(out, "Fri");
+}
+
+/// Regression for #391: the Linux x86_64 weekday-modifier parser must pass
+/// `min(end - weekday_cursor, 16)` to `match_word`, not a fixed 16-byte window.
+#[test]
+fn test_strtotime_x86_64_weekday_modifier_match_window_is_remaining_capped() {
+    let target = Target::parse("linux-x86_64").expect("valid linux x86_64 target");
+    let runtime_asm = elephc::codegen::generate_runtime_with_features(
+        8_388_608,
+        target,
+        elephc::codegen::RuntimeFeatures::none(),
+    );
+    let modifier_block = asm_between_labels(
+        &runtime_asm,
+        "__rt_strtotime_weekdays_entry_linux_x86_64:",
+        "__rt_strtotime_weekdays_direct_linux_x86_64:",
+    );
+
+    assert_asm_contains_ordered(
+        modifier_block,
+        &[
+            "mov QWORD PTR [rsp + 112], rdi",
+            "lea rdi, [rbp - 64]",
+            "mov rcx, r10",
+            "sub rcx, QWORD PTR [rsp + 112]",
+            "mov r8, 16",
+            "cmp rcx, r8",
+            "cmovae rcx, r8",
+            "call __rt_strtotime_match_word_linux_x86_64",
+        ],
+    );
+    assert!(
+        !modifier_block.contains("mov rcx, 16"),
+        "weekday modifier path must not pass a fixed 16-byte window:\n{modifier_block}"
+    );
+}
+
+/// Returns the assembly slice between two labels, including the start label and
+/// excluding the end label.
+fn asm_between_labels<'a>(asm: &'a str, start_label: &str, end_label: &str) -> &'a str {
+    let start = asm
+        .find(start_label)
+        .unwrap_or_else(|| panic!("missing start label {start_label}"));
+    let tail = &asm[start..];
+    let end = tail
+        .find(end_label)
+        .unwrap_or_else(|| panic!("missing end label {end_label} after {start_label}"));
+    &tail[..end]
+}
+
+/// Asserts that every assembly needle appears in the provided order.
+fn assert_asm_contains_ordered(asm: &str, needles: &[&str]) {
+    let mut cursor = 0;
+    for needle in needles {
+        let relative = asm[cursor..].find(needle).unwrap_or_else(|| {
+            panic!("missing assembly line `{needle}` after byte {cursor}:\n{asm}")
+        });
+        cursor += relative + needle.len();
+    }
+}
+
 /// Verifies `strtotime("3 days ago")` produces a timestamp roughly 3 days behind now
 /// (259200 seconds ±1 hour for DST).
 #[test]
@@ -1504,6 +1592,24 @@ echo json_encode([
 fn test_json_encode_float() {
     let out = compile_and_run("<?php echo json_encode(3.14);");
     assert!(out.starts_with("3.14"), "Got: {}", out);
+}
+
+/// Regression: `json_encode` of floats needing exponential notation keeps PHP's
+/// json layout — a lowercase `e` exponent (`1.0e+20`). The shared
+/// `__rt_json_ftoa` now takes the exponent marker as a parameter so `serialize`
+/// can emit `'E'`; this guards json's lowercase `'e'` against regressing.
+/// Covers positive/negative mantissa, negative exponent, and a 3-digit exponent.
+#[test]
+fn test_json_encode_float_exponential_lowercase_e() {
+    let out = compile_and_run(
+        r#"<?php
+echo json_encode(1e20), "\n";
+echo json_encode(1.5e-10), "\n";
+echo json_encode(-2.5e-8), "\n";
+echo json_encode(1e100), "\n";
+"#,
+    );
+    assert_eq!(out, "1.0e+20\n1.5e-10\n-2.5e-8\n1.0e+100\n");
 }
 
 /// Verifies `json_last_error()` returns 0 (JSON_ERROR_NONE) after a successful encode with no errors.

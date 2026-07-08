@@ -1,8 +1,8 @@
 ---
 title: "stream_set_blocking()"
-description: "Lowers `stream_set_blocking(stream, enable)`."
+description: "Sets blocking/non-blocking mode on a stream."
 sidebar:
-  order: 194
+  order: 211
 ---
 
 ## stream_set_blocking()
@@ -11,7 +11,7 @@ sidebar:
 function stream_set_blocking(resource $stream, bool $enable): bool
 ```
 
-Lowers `stream_set_blocking(stream, enable)`.
+Sets blocking/non-blocking mode on a stream.
 
 **Parameters**:
 - `$stream` (`resource`)

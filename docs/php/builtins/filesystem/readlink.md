@@ -1,8 +1,8 @@
 ---
 title: "readlink()"
-description: "Lowers `readlink(path)` and boxes the owned runtime string-or-false result."
+description: "Returns the target of a symbolic link."
 sidebar:
-  order: 121
+  order: 138
 ---
 
 ## readlink()
@@ -11,7 +11,7 @@ sidebar:
 function readlink(string $path): mixed
 ```
 
-Lowers `readlink(path)` and boxes the owned runtime string-or-false result.
+Returns the target of a symbolic link.
 
 **Parameters**:
 - `$path` (`string`)

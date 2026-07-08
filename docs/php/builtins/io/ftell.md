@@ -1,8 +1,8 @@
 ---
 title: "ftell()"
-description: "Lowers `ftell(stream)` as `lseek(fd, 0, SEEK_CUR)`."
+description: "Returns the current position of the file read/write pointer."
 sidebar:
-  order: 157
+  order: 174
 ---
 
 ## ftell()
@@ -11,7 +11,7 @@ sidebar:
 function ftell(resource $stream): int
 ```
 
-Lowers `ftell(stream)` as `lseek(fd, 0, SEEK_CUR)`.
+Returns the current position of the file read/write pointer.
 
 **Parameters**:
 - `$stream` (`resource`)

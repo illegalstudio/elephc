@@ -1,8 +1,8 @@
 ---
 title: "getservbyname()"
-description: "Lowers `getservbyname(service, protocol)` and boxes a missing entry as PHP `false`."
+description: "Gets port number associated with an Internet service and protocol."
 sidebar:
-  order: 165
+  order: 182
 ---
 
 ## getservbyname()
@@ -11,7 +11,7 @@ sidebar:
 function getservbyname(string $service, string $protocol): mixed
 ```
 
-Lowers `getservbyname(service, protocol)` and boxes a missing entry as PHP `false`.
+Gets port number associated with an Internet service and protocol.
 
 **Parameters**:
 - `$service` (`string`)

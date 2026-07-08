@@ -2,7 +2,7 @@
 title: "buffer_new() — internals"
 description: "Compiler internals for buffer_new(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 257
+  order: 271
 ---
 
 ## `buffer_new()` — internals
@@ -31,4 +31,3 @@ function buffer_new(int $length): mixed
 ## Cross-references
 
 - [User reference for `buffer_new()`](../../../php/builtins/misc/buffer_new.md)
-

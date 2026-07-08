@@ -2,15 +2,15 @@
 title: "__elephc_phar_list_entries() — internals"
 description: "Compiler internals for __elephc_phar_list_entries(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 414
+  order: 442
 ---
 
 ## `__elephc_phar_list_entries()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3634](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3634) (`lower_elephc_phar_list_entries`)
+- **Signature**: [`src/builtins/io/__elephc_phar_list_entries.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_list_entries.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4277](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4277) (`lower_elephc_phar_list_entries`)
 - **Function symbol**: `lower_elephc_phar_list_entries()`
 
 
@@ -26,7 +26,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function __elephc_phar_list_entries(mixed $filename): array
+function __elephc_phar_list_entries(string $filename): array
 ```
 
 ## What the type checker enforces

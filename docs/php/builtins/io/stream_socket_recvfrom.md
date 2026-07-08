@@ -1,23 +1,23 @@
 ---
 title: "stream_socket_recvfrom()"
-description: "Lowers `stream_socket_recvfrom(socket, length, flags?, address?)`."
+description: "Receives data from a socket, connected or not."
 sidebar:
-  order: 204
+  order: 221
 ---
 
 ## stream_socket_recvfrom()
 
 ```php
-function stream_socket_recvfrom(resource $socket, int $length, int $flags, string $address): mixed
+function stream_socket_recvfrom(resource $socket, int $length, int $flags = 0, string $address = ''): mixed
 ```
 
-Lowers `stream_socket_recvfrom(socket, length, flags?, address?)`.
+Receives data from a socket, connected or not.
 
 **Parameters**:
 - `$socket` (`resource`)
 - `$length` (`int`)
-- `$flags` (`int`), optional
-- `$address` (`string`), passed by reference, optional
+- `$flags` (`int`), default `0`, optional
+- `$address` (`string`), passed by reference, default `''`, optional
 
 **Returns**: `mixed`
 

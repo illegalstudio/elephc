@@ -1,8 +1,8 @@
 ---
 title: "is_readable()"
-description: "Lowers `is_readable(path)` through the target-aware runtime access helper."
+description: "Tells whether the filename is readable."
 sidebar:
-  order: 109
+  order: 126
 ---
 
 ## is_readable()
@@ -11,7 +11,7 @@ sidebar:
 function is_readable(string $filename): bool
 ```
 
-Lowers `is_readable(path)` through the target-aware runtime access helper.
+Tells whether the filename is readable.
 
 **Parameters**:
 - `$filename` (`string`)

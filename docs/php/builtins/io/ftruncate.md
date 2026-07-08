@@ -1,8 +1,8 @@
 ---
 title: "ftruncate()"
-description: "Lowers `ftruncate(stream, size)` through the shared fd truncate runtime helper."
+description: "Truncates a file to a given length."
 sidebar:
-  order: 158
+  order: 175
 ---
 
 ## ftruncate()
@@ -11,7 +11,7 @@ sidebar:
 function ftruncate(resource $stream, int $size): bool
 ```
 
-Lowers `ftruncate(stream, size)` through the shared fd truncate runtime helper.
+Truncates a file to a given length.
 
 **Parameters**:
 - `$stream` (`resource`)

@@ -1,8 +1,8 @@
 ---
 title: "uasort()"
-description: "Lowers `uasort()` through the legacy user-sort helper for static comparators."
+description: "Sorts an array with a user-defined comparison function and maintains index association."
 sidebar:
-  order: 44
+  order: 61
 ---
 
 ## uasort()
@@ -11,7 +11,7 @@ sidebar:
 function uasort(array $array, callable $callback): bool
 ```
 
-Lowers `uasort()` through the legacy user-sort helper for static comparators.
+Sorts an array with a user-defined comparison function and maintains index association.
 
 **Parameters**:
 - `$array` (`array`), passed by reference

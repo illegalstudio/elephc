@@ -1,23 +1,22 @@
 ---
 title: "array_slice()"
-description: "Lowers `array_slice()` for indexed arrays with pointer-sized payload slots."
+description: "Extracts a slice of an array."
 sidebar:
-  order: 25
+  order: 37
 ---
 
 ## array_slice()
 
 ```php
-function array_slice(array $array, int $offset, int $length, bool $preserve_keys): array
+function array_slice(array $array, int $offset, int $length = null): array
 ```
 
-Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
+Extracts a slice of an array.
 
 **Parameters**:
 - `$array` (`array`)
 - `$offset` (`int`)
-- `$length` (`int`), optional
-- `$preserve_keys` (`bool`)
+- `$length` (`int`), default `null`, optional
 
 **Returns**: `array`
 

@@ -1,8 +1,8 @@
 ---
 title: "settype()"
-description: "Lowers `settype($local, \"type\")` by mutating the resolved local slot and returning true."
+description: "Sets the type of a variable."
 sidebar:
-  order: 410
+  order: 431
 ---
 
 ## settype()
@@ -11,7 +11,7 @@ sidebar:
 function settype(mixed $var, string $type): bool
 ```
 
-Lowers `settype($local, "type")` by mutating the resolved local slot and returning true.
+Sets the type of a variable.
 
 **Parameters**:
 - `$var` (`mixed`), passed by reference

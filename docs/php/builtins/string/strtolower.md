@@ -1,8 +1,8 @@
 ---
 title: "strtolower()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Converts a string to lowercase."
 sidebar:
-  order: 376
+  order: 397
 ---
 
 ## strtolower()
@@ -11,7 +11,7 @@ sidebar:
 function strtolower(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Converts a string to lowercase.
 
 **Parameters**:
 - `$string` (`string`)

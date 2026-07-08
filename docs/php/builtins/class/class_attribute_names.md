@@ -1,8 +1,8 @@
 ---
 title: "class_attribute_names()"
-description: "Lowers `class_attribute_names(class)` into an indexed string array."
+description: "Returns the list of attribute names applied to a class."
 sidebar:
-  order: 51
+  order: 68
 ---
 
 ## class_attribute_names()
@@ -11,7 +11,7 @@ sidebar:
 function class_attribute_names(string $class_name): array
 ```
 
-Lowers `class_attribute_names(class)` into an indexed string array.
+Returns the list of attribute names applied to a class.
 
 **Parameters**:
 - `$class_name` (`string`)

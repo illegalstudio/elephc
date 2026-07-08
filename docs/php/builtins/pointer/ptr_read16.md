@@ -1,8 +1,8 @@
 ---
 title: "ptr_read16()"
-description: "Lowers `ptr_read16(pointer)` by reading one unsigned 16-bit word through a checked pointer."
+description: "Reads one unsigned 16-bit word through a raw pointer and returns it as an integer."
 sidebar:
-  order: 273
+  order: 290
 ---
 
 ## ptr_read16()
@@ -11,7 +11,7 @@ sidebar:
 function ptr_read16(pointer $pointer): int
 ```
 
-Lowers `ptr_read16(pointer)` by reading one unsigned 16-bit word through a checked pointer.
+Reads one unsigned 16-bit word through a raw pointer and returns it as an integer.
 
 **Parameters**:
 - `$pointer` (`pointer`)

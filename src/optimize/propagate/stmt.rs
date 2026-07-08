@@ -1,12 +1,16 @@
 //! Purpose:
-//! Implements constant propagation stmt support.
-//! Tracks scalar facts through expressions, writes, simulations, and statement rewriting.
+//! Implements constant propagation statement support: per-statement
+//! environment updates, the reference-volatility ledger, and the
+//! function-scope flag feeding the top-level globals guard.
 //!
 //! Called from:
 //! - `crate::optimize::propagate`
 //!
 //! Key details:
-//! - Only immutable scalar facts are propagated; arrays, objects, references, and unknown calls force conservative invalidation.
+//! - Statements remove only the names their `Invalidation` write set proves
+//!   writable; reference-exposure points (`&`-aliases, `global`, `static`,
+//!   by-ref captures/foreach/args, superglobals) mark names volatile so they
+//!   never carry facts.
 
 use super::*;
 
@@ -31,8 +35,8 @@ use env::{env_after_list_unpack, env_after_scalar_assign};
 thread_local! {
     /// Variables that are bound by reference (`$x = &…`) somewhere in the program being
     /// propagated. Their value can change through the alias (another local, an object
-    /// property, or a by-reference call result) without a visible local write, so their
-    /// scalar constants must never be propagated. Conservative across the whole program.
+    /// property, or a by-reference call result) without a visible local write, so they
+    /// must never carry a propagated fact. Conservative across the whole program.
     static REFERENCE_VOLATILE: std::cell::RefCell<std::collections::HashSet<String>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
 }
@@ -43,28 +47,48 @@ pub(crate) fn reset_reference_volatile() {
 }
 
 /// Marks `name` as bound by reference, disabling constant propagation for it.
-fn mark_reference_volatile(name: &str) {
+pub(in crate::optimize) fn mark_reference_volatile(name: &str) {
     REFERENCE_VOLATILE.with(|cell| {
         cell.borrow_mut().insert(name.to_string());
     });
 }
 
 /// Returns true when `name` is bound by reference and must not carry a propagated constant.
-pub(super) fn is_reference_volatile(name: &str) -> bool {
+pub(in crate::optimize) fn is_reference_volatile(name: &str) -> bool {
     REFERENCE_VOLATILE.with(|cell| cell.borrow().contains(name))
 }
 
-/// Returns the input environment if no expression has side effects,
-/// otherwise returns an empty environment to force conservative invalidation.
-fn env_after_expr_side_effects(env: ConstantEnv, exprs: &[&Expr]) -> ConstantEnv {
-    if exprs
-        .iter()
-        .any(|expr| expr_effect(expr).has_side_effects)
-    {
-        HashMap::new()
-    } else {
-        env
+thread_local! {
+    /// True while propagating a function, method, or closure body. Top-level
+    /// locals are globals, so calls to global-writing callees invalidate
+    /// everything there; inside function bodies the `global`-bound names are
+    /// volatile instead.
+    static IN_FUNCTION_SCOPE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` with the propagation scope marked as a function/method/closure
+/// body, restoring the previous scope afterwards.
+pub(in crate::optimize) fn with_function_scope<R>(f: impl FnOnce() -> R) -> R {
+    IN_FUNCTION_SCOPE.with(|cell| {
+        let previous = cell.replace(true);
+        let result = f();
+        cell.set(previous);
+        result
+    })
+}
+
+/// Returns true while propagating inside a function/method/closure body.
+pub(in crate::optimize) fn in_function_scope() -> bool {
+    IN_FUNCTION_SCOPE.with(|cell| cell.get())
+}
+
+/// Removes from the environment every local the given expressions can write
+/// (targeted invalidation); an unknowable write set clears it entirely.
+fn env_after_expr_side_effects(mut env: ConstantEnv, exprs: &[&Expr]) -> ConstantEnv {
+    for expr in exprs {
+        expr_invalidation(expr).apply(&mut env);
     }
+    env
 }
 
 /// Iterates through a block of statements, propagating constants and stopping early
@@ -115,11 +139,13 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             (Stmt::new(StmtKind::Assign { name, value }, span), std::mem::take(&mut next_env))
         }
         StmtKind::RefAssign { target, source } => {
-            // The target — and a plain-variable source — alias one storage cell; either
-            // side can change the other's value invisibly, so neither may carry a constant.
+            // The target — and the local at the root of the source lvalue — alias one
+            // storage cell; either side can change the other's value invisibly, so
+            // neither may carry a constant. `$t = &$a[0]` exposes `$a`'s storage the
+            // same way a plain-variable source exposes that variable.
             mark_reference_volatile(&target);
-            if let ExprKind::Variable(source_name) = &source.kind {
-                mark_reference_volatile(source_name);
+            if let Some(root) = lvalue_root(&source) {
+                mark_reference_volatile(root);
             }
             (
                 Stmt::new(StmtKind::RefAssign { target, source }, span),
@@ -188,10 +214,10 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
         StmtKind::NestedArrayAssign { target, value } => {
             let target = propagate_expr(target, &env);
             let value = propagate_expr(value, &env);
-            (
-                Stmt::new(StmtKind::NestedArrayAssign { target, value }, span),
-                HashMap::new(),
-            )
+            let mut next_env = env;
+            let stmt = Stmt::new(StmtKind::NestedArrayAssign { target, value }, span);
+            stmt_invalidation(&stmt).apply(&mut next_env);
+            (stmt, next_env)
         }
         StmtKind::ArrayPush { array, value } => {
             let value = propagate_expr(value, &env);
@@ -242,17 +268,10 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
         StmtKind::Continue(levels) => (Stmt::new(StmtKind::Continue(levels), span), env),
         StmtKind::ExprStmt(expr) => {
             let expr = propagate_expr(expr, &env);
-            let next_env = if let Some(names) = unset_target_names(&expr) {
-                let mut next_env = env;
-                for name in names {
-                    next_env.remove(&name);
-                }
-                next_env
-            } else if expr_effect(&expr).has_side_effects {
-                HashMap::new()
-            } else {
-                env
-            };
+            // Targeted invalidation covers `unset` (including array-element
+            // targets), by-ref call arguments, and the top-level globals guard.
+            let mut next_env = env;
+            expr_invalidation(&expr).apply(&mut next_env);
             (Stmt::new(StmtKind::ExprStmt(expr), span), next_env)
         }
         StmtKind::NamespaceDecl { name } => (Stmt::new(StmtKind::NamespaceDecl { name }, span), env),
@@ -281,7 +300,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                     variadic,
                     variadic_type,
                     return_type,
-                    body: propagate_block(body, HashMap::new()).0,
+                    body: with_function_scope(|| propagate_block(body, HashMap::new()).0),
                 },
                 span,
             ),
@@ -304,13 +323,19 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             )
         }
         StmtKind::Global { vars } => {
+            // A global-bound local aliases global storage: any callee can rewrite it
+            // without a visible local write, so it must never carry a constant.
             let mut next_env = env;
             for var in &vars {
+                mark_reference_volatile(var);
                 next_env.remove(var);
             }
             (Stmt::new(StmtKind::Global { vars }, span), next_env)
         }
         StmtKind::StaticVar { name, init } => {
+            // A static-bound local aliases the function's shared static cell: a
+            // recursive call can rewrite it, so it must never carry a constant.
+            mark_reference_volatile(&name);
             let init = propagate_expr(init, &env);
             let mut next_env = env;
             next_env.remove(&name);

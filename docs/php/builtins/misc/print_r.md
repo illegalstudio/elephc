@@ -2,19 +2,19 @@
 title: "print_r()"
 description: "Prints human-readable information about a variable."
 sidebar:
-  order: 265
+  order: 280
 ---
 
 ## print_r()
 
 ```php
-function print_r(...$values): void
+function print_r(mixed $value): void
 ```
 
 Prints human-readable information about a variable.
 
 **Parameters**:
-- `...$values` — variadic: collects excess arguments into `$values`.
+- `$value` (`mixed`)
 
 **Returns**: `void`
 

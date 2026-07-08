@@ -2,15 +2,15 @@
 title: "stream_select() — internals"
 description: "Compiler internals for stream_select(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 193
+  order: 210
 ---
 
 ## `stream_select()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2097](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2097) (`lower_stream_select`)
+- **Signature**: [`src/builtins/io/stream_select.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_select.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2316](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2316) (`lower_stream_select`)
 - **Function symbol**: `lower_stream_select()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds): int
+function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = 0): int
 ```
 
 ## What the type checker enforces
@@ -36,4 +36,3 @@ function stream_select(array $read, array $write, array $except, int $seconds, i
 ## Cross-references
 
 - [User reference for `stream_select()`](../../../php/builtins/io/stream_select.md)
-

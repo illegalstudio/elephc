@@ -2,19 +2,18 @@
 title: "phpversion()"
 description: "Returns the current PHP version information."
 sidebar:
-  order: 264
+  order: 279
 ---
 
 ## phpversion()
 
 ```php
-function phpversion(string $extension = null): string
+function phpversion(): string
 ```
 
 Returns the current PHP version information.
 
-**Parameters**:
-- `$extension` (`string`), default `null`, optional
+**Parameters**: none.
 
 **Returns**: `string`
 

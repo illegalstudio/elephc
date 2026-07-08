@@ -291,9 +291,16 @@ The exact textual IR contains value ids, types, ownership, spans, and terminator
 
 ## Phase 16: Code generation
 
-**Files:** `src/codegen_ir/`, plus shared `src/codegen/abi/`, `src/codegen/runtime/`, and target helpers — See [The Code Generator](the-codegen.md) for details.
+**Files:** `src/codegen/`, plus shared `src/codegen_support/abi/`,
+`src/codegen_support/runtime/`, and target helpers — See
+[The Code Generator](the-codegen.md) for details.
 
-The EIR backend emits assembly for the selected target. For ordinary control flow this is mostly straight-line branches and labels; for `try` / `catch` / `finally`, the compiler additionally emits handler records and resume labels around `_setjmp` / `_longjmp`-based exception unwinding. The legacy AST backend remains available only through `--ast-backend`; new PHP-visible behavior is expected to go through EIR. By this point our running example has already lost the `if` shell, so the AArch64 form is simpler than the original source (simplified, with comments):
+The EIR backend emits assembly for the selected target. For ordinary control
+flow this is mostly straight-line branches and labels; for `try` / `catch` /
+`finally`, the compiler additionally emits handler records and resume labels
+around `_setjmp` / `_longjmp`-based exception unwinding. By this point our
+running example has already lost the `if` shell, so the AArch64 form is simpler
+than the original source (simplified, with comments):
 
 ```asm
 .global _main

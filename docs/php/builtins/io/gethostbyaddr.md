@@ -1,8 +1,8 @@
 ---
 title: "gethostbyaddr()"
-description: "Lowers `gethostbyaddr(address)` and boxes malformed addresses as PHP `false`."
+description: "Gets the Internet host name corresponding to a given IP address."
 sidebar:
-  order: 160
+  order: 177
 ---
 
 ## gethostbyaddr()
@@ -11,7 +11,7 @@ sidebar:
 function gethostbyaddr(string $ip): mixed
 ```
 
-Lowers `gethostbyaddr(address)` and boxes malformed addresses as PHP `false`.
+Gets the Internet host name corresponding to a given IP address.
 
 **Parameters**:
 - `$ip` (`string`)

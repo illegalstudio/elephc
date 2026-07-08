@@ -1,8 +1,8 @@
 ---
 title: "long2ip()"
-description: "Lowers `long2ip(value)` through the IPv4 formatting runtime helper."
+description: "Converts an IPv4 address from long integer to dotted string notation."
 sidebar:
-  order: 347
+  order: 368
 ---
 
 ## long2ip()
@@ -11,7 +11,7 @@ sidebar:
 function long2ip(int $ip): string
 ```
 
-Lowers `long2ip(value)` through the IPv4 formatting runtime helper.
+Converts an IPv4 address from long integer to dotted string notation.
 
 **Parameters**:
 - `$ip` (`int`)

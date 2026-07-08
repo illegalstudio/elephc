@@ -2,15 +2,15 @@
 title: "array_pad() — internals"
 description: "Compiler internals for array_pad(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 16
+  order: 26
 ---
 
 ## `array_pad()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:99](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L99) (`lower_array_pad`)
+- **Signature**: [`src/builtins/array/array_pad.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_pad.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:99](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L99) (`lower_array_pad`)
 - **Function symbol**: `lower_array_pad()`
 
 
@@ -35,4 +35,3 @@ function array_pad(array $array, int $length, mixed $value): array
 ## Cross-references
 
 - [User reference for `array_pad()`](../../../php/builtins/array/array_pad.md)
-

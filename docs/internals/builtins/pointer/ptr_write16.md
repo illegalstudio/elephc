@@ -2,15 +2,15 @@
 title: "ptr_write16() — internals"
 description: "Compiler internals for ptr_write16(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 282
+  order: 296
 ---
 
 ## `ptr_write16()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/pointers.rs`:161](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/pointers.rs#L161) (`lower_ptr_write16`)
+- **Signature**: [`src/builtins/pointers/ptr_write16.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_write16.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:161](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L161) (`lower_ptr_write16`)
 - **Function symbol**: `lower_ptr_write16()`
 
 
@@ -36,4 +36,3 @@ function ptr_write16(pointer $pointer, int $value): void
 ## Cross-references
 
 - [User reference for `ptr_write16()`](../../../php/builtins/pointer/ptr_write16.md)
-

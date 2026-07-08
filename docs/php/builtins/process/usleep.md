@@ -1,8 +1,8 @@
 ---
 title: "usleep()"
-description: "Lowers `usleep(microseconds)` through the target's C library symbol."
+description: "Delays execution for a number of microseconds."
 sidebar:
-  order: 293
+  order: 314
 ---
 
 ## usleep()
@@ -11,7 +11,7 @@ sidebar:
 function usleep(int $microseconds): void
 ```
 
-Lowers `usleep(microseconds)` through the target's C library symbol.
+Delays execution for a number of microseconds.
 
 **Parameters**:
 - `$microseconds` (`int`)

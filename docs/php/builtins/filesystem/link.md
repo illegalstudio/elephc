@@ -1,8 +1,8 @@
 ---
 title: "link()"
-description: "Lowers `link(oldpath, newpath)` through the target-aware libc wrapper."
+description: "Creates a hard link."
 sidebar:
-  order: 114
+  order: 131
 ---
 
 ## link()
@@ -11,7 +11,7 @@ sidebar:
 function link(string $target, string $link): bool
 ```
 
-Lowers `link(oldpath, newpath)` through the target-aware libc wrapper.
+Creates a hard link.
 
 **Parameters**:
 - `$target` (`string`)

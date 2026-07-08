@@ -1,23 +1,23 @@
 ---
 title: "stream_context_set_option()"
-description: "Lowers `stream_context_set_option(context, options)` and the four-argument form."
+description: "Sets an option on the specified context."
 sidebar:
-  order: 179
+  order: 196
 ---
 
 ## stream_context_set_option()
 
 ```php
-function stream_context_set_option(resource $context, string $wrapper_or_options, string $option_name, mixed $value): bool
+function stream_context_set_option(resource $context, string $wrapper_or_options, string $option_name = null, mixed $value = null): bool
 ```
 
-Lowers `stream_context_set_option(context, options)` and the four-argument form.
+Sets an option on the specified context.
 
 **Parameters**:
 - `$context` (`resource`)
 - `$wrapper_or_options` (`string`)
-- `$option_name` (`string`), optional
-- `$value` (`mixed`), optional
+- `$option_name` (`string`), default `null`, optional
+- `$value` (`mixed`), default `null`, optional
 
 **Returns**: `bool`
 

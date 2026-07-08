@@ -1,22 +1,22 @@
 ---
 title: "flock()"
-description: "Lowers `flock(stream, operation, would_block?)` through the libc flock wrapper."
+description: "Portable advisory file locking."
 sidebar:
-  order: 147
+  order: 164
 ---
 
 ## flock()
 
 ```php
-function flock(resource $stream, int $operation, bool $would_block): bool
+function flock(resource $stream, int $operation, bool $would_block = null): bool
 ```
 
-Lowers `flock(stream, operation, would_block?)` through the libc flock wrapper.
+Portable advisory file locking.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$operation` (`int`)
-- `$would_block` (`bool`), passed by reference, optional
+- `$would_block` (`bool`), passed by reference, default `null`, optional
 
 **Returns**: `bool`
 

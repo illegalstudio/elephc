@@ -1,8 +1,8 @@
 ---
 title: "ptr_read8()"
-description: "Lowers `ptr_read8(pointer)` by reading one unsigned byte through a checked pointer."
+description: "Reads one unsigned byte through a raw pointer and returns it as an integer."
 sidebar:
-  order: 275
+  order: 292
 ---
 
 ## ptr_read8()
@@ -11,7 +11,7 @@ sidebar:
 function ptr_read8(pointer $pointer): int
 ```
 
-Lowers `ptr_read8(pointer)` by reading one unsigned byte through a checked pointer.
+Reads one unsigned byte through a raw pointer and returns it as an integer.
 
 **Parameters**:
 - `$pointer` (`pointer`)

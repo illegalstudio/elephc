@@ -1,8 +1,8 @@
 ---
 title: "gethostname()"
-description: "Lowers `gethostname()` through the shared runtime helper."
+description: "Gets the standard host name for the local machine."
 sidebar:
-  order: 162
+  order: 179
 ---
 
 ## gethostname()
@@ -11,7 +11,7 @@ sidebar:
 function gethostname(): string
 ```
 
-Lowers `gethostname()` through the shared runtime helper.
+Gets the standard host name for the local machine.
 
 **Parameters**: none.
 

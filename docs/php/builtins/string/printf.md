@@ -1,8 +1,8 @@
 ---
 title: "printf()"
-description: "Lowers `printf(format, values...)` as `sprintf()` followed by stdout emission."
+description: "Outputs a formatted string."
 sidebar:
-  order: 353
+  order: 374
 ---
 
 ## printf()
@@ -11,7 +11,7 @@ sidebar:
 function printf(string $format, ...$values): int
 ```
 
-Lowers `printf(format, values...)` as `sprintf()` followed by stdout emission.
+Outputs a formatted string.
 
 **Parameters**:
 - `$format` (`string`)

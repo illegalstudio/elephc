@@ -61,6 +61,7 @@ pub(crate) fn lower_main(
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
+        &check_result.throw_access_sites,
         constants,
         None,
         PhpType::Void,
@@ -220,6 +221,7 @@ pub(crate) fn lower_user_function(
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
+        &check_result.throw_access_sites,
         constants,
         None,
         body_return_type.clone(),
@@ -310,6 +312,7 @@ pub(crate) fn lower_class_method(
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
+        &check_result.throw_access_sites,
         constants,
         Some(class_name.to_string()),
         method_body_return_type.clone(),
@@ -338,6 +341,7 @@ pub(crate) fn lower_property_init_thunk(
     let function_name = format!("_class_propinit_{}", class_info.class_id);
     let this_type = PhpType::Object(class_name.to_string());
     let mut function = Function::new(function_name.clone(), IrType::Void, PhpType::Void);
+    function.flags.is_synthetic = true;
     function.params.push(FunctionParam {
         name: "this".to_string(),
         ir_type: value_ir_type(&this_type),
@@ -376,6 +380,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
+        &check_result.throw_access_sites,
         constants,
         Some(class_name.to_string()),
         PhpType::Void,
@@ -533,6 +538,7 @@ fn lower_closure_function_with_signature(
         parent.enums,
         parent.interfaces,
         parent.packed_classes,
+        parent.throw_access_sites,
         &parent.constants,
         parent.current_class.clone(),
         closure_body_return_type.clone(),
@@ -561,6 +567,7 @@ fn lower_body_into_function(
     enums: &std::collections::HashMap<String, crate::types::EnumInfo>,
     interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
+    throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     current_class: Option<String>,
     return_php_type: PhpType,
@@ -593,6 +600,7 @@ fn lower_body_into_function(
         enums,
         interfaces,
         packed_classes,
+        throw_access_sites,
         constants,
         top_level_env,
         current_class,

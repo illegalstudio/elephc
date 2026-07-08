@@ -1,22 +1,22 @@
 ---
 title: "strstr()"
-description: "Lowers `strstr(haystack, needle)` by searching and returning the matching suffix."
+description: "Returns the portion of a string starting at the first occurrence of a substring."
 sidebar:
-  order: 375
+  order: 396
 ---
 
 ## strstr()
 
 ```php
-function strstr(string $haystack, string $needle, bool $before_needle): string
+function strstr(string $haystack, string $needle, bool $before_needle = false): string
 ```
 
-Lowers `strstr(haystack, needle)` by searching and returning the matching suffix.
+Returns the portion of a string starting at the first occurrence of a substring.
 
 **Parameters**:
 - `$haystack` (`string`)
 - `$needle` (`string`)
-- `$before_needle` (`bool`), optional
+- `$before_needle` (`bool`), default `false`, optional
 
 **Returns**: `string`
 

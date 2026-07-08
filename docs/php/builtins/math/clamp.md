@@ -1,24 +1,24 @@
 ---
 title: "clamp()"
-description: "Lowers numeric `clamp(value, min, max)` calls with PHP-compatible bound checks."
+description: "Clamps a value to be within a specified range."
 sidebar:
-  order: 224
+  order: 241
 ---
 
 ## clamp()
 
 ```php
-function clamp(int $value, int $min, int $max): string
+function clamp(int $value, int $min, int $max): mixed
 ```
 
-Lowers numeric `clamp(value, min, max)` calls with PHP-compatible bound checks.
+Clamps a value to be within a specified range.
 
 **Parameters**:
 - `$value` (`int`)
 - `$min` (`int`)
 - `$max` (`int`)
 
-**Returns**: `string`
+**Returns**: `mixed`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

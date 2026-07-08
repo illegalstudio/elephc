@@ -1,8 +1,8 @@
 ---
 title: "stream_bucket_make_writeable()"
-description: "Lowers `stream_bucket_make_writeable(brigade)` by popping the brigade head."
+description: "Returns a bucket object from the brigade for use in a stream filter."
 sidebar:
-  order: 172
+  order: 189
 ---
 
 ## stream_bucket_make_writeable()
@@ -11,7 +11,7 @@ sidebar:
 function stream_bucket_make_writeable(mixed $brigade): mixed
 ```
 
-Lowers `stream_bucket_make_writeable(brigade)` by popping the brigade head.
+Returns a bucket object from the brigade for use in a stream filter.
 
 **Parameters**:
 - `$brigade` (`mixed`)

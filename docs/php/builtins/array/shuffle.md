@@ -1,8 +1,8 @@
 ---
 title: "shuffle()"
-description: "Lowers `shuffle()` for indexed arrays with 8-byte slots by mutating the source array in place."
+description: "Shuffles an array into random order."
 sidebar:
-  order: 42
+  order: 59
 ---
 
 ## shuffle()
@@ -11,7 +11,7 @@ sidebar:
 function shuffle(array $array): bool
 ```
 
-Lowers `shuffle()` for indexed arrays with 8-byte slots by mutating the source array in place.
+Shuffles an array into random order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference

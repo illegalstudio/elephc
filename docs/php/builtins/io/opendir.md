@@ -1,8 +1,8 @@
 ---
 title: "opendir()"
-description: "Lowers `opendir(path)` and boxes the directory stream as `resource|false`."
+description: "Open directory handle."
 sidebar:
-  order: 168
+  order: 185
 ---
 
 ## opendir()
@@ -11,7 +11,7 @@ sidebar:
 function opendir(string $directory): mixed
 ```
 
-Lowers `opendir(path)` and boxes the directory stream as `resource|false`.
+Open directory handle.
 
 **Parameters**:
 - `$directory` (`string`)

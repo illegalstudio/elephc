@@ -1,8 +1,8 @@
 ---
 title: "ptr()"
-description: "Lowers `ptr(value)` by materializing the address of addressable local/global storage."
+description: "Returns a raw pointer to the given variable."
 sidebar:
-  order: 268
+  order: 285
 ---
 
 ## ptr()
@@ -11,7 +11,7 @@ sidebar:
 function ptr(mixed $value): mixed
 ```
 
-Lowers `ptr(value)` by materializing the address of addressable local/global storage.
+Returns a raw pointer to the given variable.
 
 **Parameters**:
 - `$value` (`mixed`)

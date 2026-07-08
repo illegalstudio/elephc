@@ -2,15 +2,15 @@
 title: "stream_get_filters() — internals"
 description: "Compiler internals for stream_get_filters(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 185
+  order: 202
 ---
 
 ## `stream_get_filters()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1380](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1380) (`lower_stream_get_filters`)
+- **Signature**: [`src/builtins/io/stream_get_filters.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_filters.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1493](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1493) (`lower_stream_get_filters`)
 - **Function symbol**: `lower_stream_get_filters()`
 
 
@@ -35,4 +35,3 @@ function stream_get_filters(): array
 ## Cross-references
 
 - [User reference for `stream_get_filters()`](../../../php/builtins/io/stream_get_filters.md)
-

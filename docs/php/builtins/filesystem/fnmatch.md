@@ -1,22 +1,22 @@
 ---
 title: "fnmatch()"
-description: "Lowers `fnmatch(pattern, filename, flags?)` through the target-aware runtime helper."
+description: "Matches a filename against a pattern."
 sidebar:
-  order: 101
+  order: 118
 ---
 
 ## fnmatch()
 
 ```php
-function fnmatch(string $pattern, string $filename, int $flags): bool
+function fnmatch(string $pattern, string $filename, int $flags = 0): bool
 ```
 
-Lowers `fnmatch(pattern, filename, flags?)` through the target-aware runtime helper.
+Matches a filename against a pattern.
 
 **Parameters**:
 - `$pattern` (`string`)
 - `$filename` (`string`)
-- `$flags` (`int`), optional
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 

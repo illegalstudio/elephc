@@ -1,21 +1,21 @@
 ---
 title: "round()"
-description: "Lowers `round()` for concrete integer-like and floating operands."
+description: "Rounds a float."
 sidebar:
-  order: 248
+  order: 265
 ---
 
 ## round()
 
 ```php
-function round(float $num, int $precision): float
+function round(float $num, int $precision = 0): float
 ```
 
-Lowers `round()` for concrete integer-like and floating operands.
+Rounds a float.
 
 **Parameters**:
 - `$num` (`float`)
-- `$precision` (`int`), optional
+- `$precision` (`int`), default `0`, optional
 
 **Returns**: `float`
 

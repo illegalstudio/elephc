@@ -1,21 +1,21 @@
 ---
 title: "chop()"
-description: "chop() — string builtin supported by Elephc."
+description: "Alias of rtrim: strips whitespace (or other characters) from the end of a string."
 sidebar:
-  order: 321
+  order: 342
 ---
 
 ## chop()
 
 ```php
-function chop(string $string, string $characters): string
+function chop(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string
 ```
 
-`chop()` is a string builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Alias of rtrim: strips whitespace (or other characters) from the end of a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$characters` (`string`), optional
+- `$characters` (`string`), default `' \n\r\t\x0b\x0c\x00'`, optional
 
 **Returns**: `string`
 
@@ -26,4 +26,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `chop` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/chop.md).
 

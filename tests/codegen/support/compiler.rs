@@ -9,37 +9,9 @@
 
 use super::*;
 
-/// Backend used by codegen fixtures when turning optimized AST/EIR into assembly.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TestCodegenBackend {
-    Legacy,
-    Ir,
-}
-
-/// Selects the fixture backend from `ELEPHC_TEST_BACKEND`, defaulting to EIR codegen.
-fn selected_test_codegen_backend() -> TestCodegenBackend {
-    match std::env::var("ELEPHC_TEST_BACKEND") {
-        Ok(value)
-            if value.is_empty()
-                || value.eq_ignore_ascii_case("ir")
-                || value.eq_ignore_ascii_case("eir") =>
-        {
-            TestCodegenBackend::Ir
-        }
-        Ok(value) if value.eq_ignore_ascii_case("legacy") || value.eq_ignore_ascii_case("ast") => {
-            TestCodegenBackend::Legacy
-        }
-        Ok(value) => panic!(
-            "unsupported ELEPHC_TEST_BACKEND `{}`; expected `legacy`, `ast`, `ir`, or `eir`",
-            value
-        ),
-        Err(_) => TestCodegenBackend::Ir,
-    }
-}
-
 /// Returns true when codegen fixtures are compiling through the EIR backend.
 pub(crate) fn codegen_fixture_uses_ir_backend() -> bool {
-    selected_test_codegen_backend() == TestCodegenBackend::Ir
+    true
 }
 
 // Variant of `compile_source_to_asm_with_defines` that uses an empty define set.
@@ -120,11 +92,11 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::pdo_prelude::inject_if_used(resolved);
-    let resolved = elephc::tz_prelude::inject_if_used(resolved);
+    let resolved = elephc::pdo_prelude::inject_if_used(resolved, false);
+    let resolved = elephc::tz_prelude::inject_if_used(resolved, false);
     let resolved = elephc::list_id_prelude::inject_if_used(resolved);
     let resolved = elephc::var_export_prelude::inject_if_used(resolved);
-    let resolved = elephc::image_prelude::inject_if_used(resolved);
+    let resolved = elephc::image_prelude::inject_if_used(resolved, false);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
@@ -140,61 +112,24 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
         .iter()
         .any(|lib| lib == "elephc_tls");
     let ir_module = lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result);
-    let (user_asm, runtime_asm, runtime_features) = match selected_test_codegen_backend() {
-        TestCodegenBackend::Legacy => {
-            let (user_asm, runtime_asm) = elephc::codegen::generate(
-                &optimized,
-                &check_result.global_env,
-                &check_result.functions,
-                &check_result.callable_param_sigs,
-                &check_result.callable_return_sigs,
-                &check_result.callable_array_return_sigs,
-                &check_result.interfaces,
-                &check_result.classes,
-                &check_result.enums,
-                &check_result.packed_classes,
-                &check_result.extern_functions,
-                &check_result.extern_classes,
-                &check_result.extern_globals,
-                heap_size,
-                gc_stats,
-                heap_debug,
-                target(),
-                requires_elephc_tls,
-                null_repr,
-            );
-            let runtime_features = elephc::codegen::runtime_features_for_program_and_classes(
-                &optimized,
-                &check_result.classes,
-            );
-            (user_asm, runtime_asm, runtime_features)
-        }
-        TestCodegenBackend::Ir => {
-            let exported_functions = HashMap::new();
-            // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under
-            // both the linear-scan allocator (default) and the stack fallback.
-            let regalloc_linear =
-                !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
-            let user_asm = elephc::codegen_ir::generate_user_asm_from_ir_with_options(
-                &ir_module,
-                gc_stats,
-                heap_debug,
-                requires_elephc_tls,
-                elephc::codegen::Emit::Executable,
-                &exported_functions,
-                regalloc_linear,
-                false,
-            )
-            .expect("EIR backend codegen failed for codegen fixture");
-            let runtime_features = ir_module.required_runtime_features;
-            let runtime_asm = elephc::codegen::generate_runtime_with_features(
-                heap_size,
-                target(),
-                runtime_features,
-            );
-            (user_asm, runtime_asm, runtime_features)
-        }
-    };
+    let exported_functions = HashMap::new();
+    // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
+    // the linear-scan allocator (default) and the stack fallback.
+    let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
+    let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
+        &ir_module,
+        gc_stats,
+        heap_debug,
+        requires_elephc_tls,
+        elephc::codegen::Emit::Executable,
+        &exported_functions,
+        regalloc_linear,
+        false,
+    )
+    .expect("EIR backend codegen failed for codegen fixture");
+    let runtime_features = ir_module.required_runtime_features;
+    let runtime_asm =
+        elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
     let mut required_libraries = check_result.required_libraries;
     for lib in elephc::codegen::required_libraries_for_runtime_features(runtime_features) {
         if !required_libraries.contains(&lib) {
@@ -206,7 +141,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
 }
 
 /// Lowers codegen fixtures to EIR, runs the default-on IR optimizer, and validates the result.
-fn lower_and_validate_ir_for_codegen_fixture(
+pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
     program: &elephc::parser::ast::Program,
     check_result: &elephc::types::CheckResult,
 ) -> elephc::ir::Module {

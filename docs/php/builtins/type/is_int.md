@@ -1,8 +1,8 @@
 ---
 title: "is_int()"
-description: "is_int() — type builtin supported by Elephc."
+description: "Checks whether a variable is an integer."
 sidebar:
-  order: 402
+  order: 423
 ---
 
 ## is_int()
@@ -11,7 +11,7 @@ sidebar:
 function is_int(mixed $value): bool
 ```
 
-`is_int()` is a type builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Checks whether a variable is an integer.
 
 **Parameters**:
 - `$value` (`mixed`)
@@ -25,4 +25,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `is_int` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_int.md).
 

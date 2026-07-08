@@ -1,22 +1,20 @@
 ---
 title: "file()"
-description: "Lowers `file(path)` through the target-aware runtime line-array helper."
+description: "Reads an entire file into an array."
 sidebar:
-  order: 144
+  order: 161
 ---
 
 ## file()
 
 ```php
-function file(string $filename, int $flags, mixed $context): array
+function file(string $filename): array
 ```
 
-Lowers `file(path)` through the target-aware runtime line-array helper.
+Reads an entire file into an array.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$flags` (`int`)
-- `$context` (`mixed`)
 
 **Returns**: `array`
 

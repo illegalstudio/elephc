@@ -2,15 +2,15 @@
 title: "ctype_space() — internals"
 description: "Compiler internals for ctype_space(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 395
+  order: 413
 ---
 
 ## `ctype_space()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/ctype.rs`:35](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/ctype.rs#L35) (`lower_ctype_space`)
+- **Signature**: [`src/builtins/string/ctype_space.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ctype_space.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/ctype.rs`:35](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/ctype.rs#L35) (`lower_ctype_space`)
 - **Function symbol**: `lower_ctype_space()`
 
 
@@ -35,4 +35,3 @@ function ctype_space(string $text): bool
 ## Cross-references
 
 - [User reference for `ctype_space()`](../../../php/builtins/type/ctype_space.md)
-

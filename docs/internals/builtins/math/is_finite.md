@@ -2,15 +2,15 @@
 title: "is_finite() — internals"
 description: "Compiler internals for is_finite(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 234
+  order: 251
 ---
 
 ## `is_finite()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math.rs`:169](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math.rs#L169) (`lower_is_finite`)
+- **Signature**: [`src/builtins/types/is_finite.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_finite.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math.rs`:169](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math.rs#L169) (`lower_is_finite`)
 - **Function symbol**: `lower_is_finite()`
 
 
@@ -35,4 +35,3 @@ function is_finite(float $num): bool
 ## Cross-references
 
 - [User reference for `is_finite()`](../../../php/builtins/math/is_finite.md)
-

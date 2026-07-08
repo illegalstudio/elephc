@@ -2,15 +2,15 @@
 title: "readfile() — internals"
 description: "Compiler internals for readfile(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 120
+  order: 137
 ---
 
 ## `readfile()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:193](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L193) (`lower_readfile`)
+- **Signature**: [`src/builtins/io/readfile.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/readfile.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:300](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L300) (`lower_readfile`)
 - **Function symbol**: `lower_readfile()`
 
 
@@ -25,14 +25,13 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function readfile(string $filename, bool $use_include_path, mixed $context): mixed
+function readfile(string $filename): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
+- **Arity**: takes exactly 1 argument.
 
 ## Cross-references
 
 - [User reference for `readfile()`](../../../php/builtins/filesystem/readfile.md)
-
