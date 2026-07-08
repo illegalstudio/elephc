@@ -68,46 +68,6 @@ pub(in crate::interpreter) fn eval_stream_socket_client_result(
     }
 }
 
-/// Evaluates `fsockopen()` or `pfsockopen()`.
-pub(in crate::interpreter) fn eval_builtin_fsockopen(
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !(2..=5).contains(&args.len()) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let host = eval_expr(&args[0], context, scope, values)?;
-    let port = eval_expr(&args[1], context, scope, values)?;
-    let error_code_target = args
-        .get(2)
-        .map(|error_code| eval_socket_output_ref_target(error_code, context, scope, values))
-        .transpose()?;
-    let error_message_target = args
-        .get(3)
-        .map(|error_message| eval_socket_output_ref_target(error_message, context, scope, values))
-        .transpose()?;
-    if let Some(timeout) = args.get(4) {
-        let _ = eval_expr(timeout, context, scope, values)?;
-    }
-    let (result, error_code, error_message) =
-        eval_fsockopen_with_error_result(host, port, context, values)?;
-    eval_write_socket_int_output_ref_target(
-        error_code_target.as_ref(),
-        error_code,
-        context,
-        values,
-    )?;
-    eval_write_socket_output_ref_target(
-        error_message_target.as_ref(),
-        Some(error_message),
-        context,
-        values,
-    )?;
-    Ok(result)
-}
-
 /// Evaluates `fsockopen()` or `pfsockopen()` over full eval call metadata.
 pub(in crate::interpreter) fn eval_builtin_fsockopen_call(
     args: &[EvalCallArg],
@@ -183,29 +143,6 @@ pub(in crate::interpreter) fn eval_fsockopen_with_error_result(
             Ok((values.bool_value(false)?, error_code, error.to_string()))
         }
     }
-}
-
-/// Evaluates `stream_socket_accept(socket, timeout = null, peer_name = null)`.
-pub(in crate::interpreter) fn eval_builtin_stream_socket_accept(
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !(1..=3).contains(&args.len()) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let socket = eval_expr(&args[0], context, scope, values)?;
-    if let Some(timeout) = args.get(1) {
-        let _ = eval_expr(timeout, context, scope, values)?;
-    }
-    let peer_name_target = args
-        .get(2)
-        .map(|peer_name| eval_socket_output_ref_target(peer_name, context, scope, values))
-        .transpose()?;
-    let (result, peer_name) = eval_stream_socket_accept_with_peer_result(socket, context, values)?;
-    eval_write_socket_output_ref_target(peer_name_target.as_ref(), peer_name, context, values)?;
-    Ok(result)
 }
 
 /// Evaluates `stream_socket_accept()` over full eval call metadata.
@@ -382,31 +319,6 @@ pub(in crate::interpreter) fn eval_stream_socket_sendto_result(
     eval_fwrite_result(stream, data, context, values)
 }
 
-/// Evaluates `stream_socket_recvfrom(stream, length, flags = 0, address = null)`.
-pub(in crate::interpreter) fn eval_builtin_stream_socket_recvfrom(
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !(2..=4).contains(&args.len()) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let stream = eval_expr(&args[0], context, scope, values)?;
-    let length = eval_expr(&args[1], context, scope, values)?;
-    if let Some(flags) = args.get(2) {
-        let _ = eval_expr(flags, context, scope, values)?;
-    }
-    let address_target = args
-        .get(3)
-        .map(|address| eval_socket_output_ref_target(address, context, scope, values))
-        .transpose()?;
-    let (result, address) =
-        eval_stream_socket_recvfrom_with_address_result(stream, length, context, values)?;
-    eval_write_socket_output_ref_target(address_target.as_ref(), address, context, values)?;
-    Ok(result)
-}
-
 /// Evaluates `stream_socket_recvfrom()` over full eval call metadata.
 pub(in crate::interpreter) fn eval_builtin_stream_socket_recvfrom_call(
     args: &[EvalCallArg],
@@ -452,17 +364,6 @@ pub(in crate::interpreter) fn eval_stream_socket_recvfrom_with_address_result(
     let address = context.stream_resources().socket_name(id, true);
     let result = eval_fread_result(stream, length, context, values)?;
     Ok((result, address))
-}
-
-/// Captures a writable output argument target for socket by-reference parameters.
-fn eval_socket_output_ref_target(
-    expr: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<EvalReferenceTarget, EvalStatus> {
-    let (_, target) = eval_call_arg_value(expr, context, scope, values)?;
-    target.ok_or(EvalStatus::RuntimeFatal)
 }
 
 /// Writes a socket output string to a captured by-reference target when available.
@@ -536,31 +437,6 @@ pub(in crate::interpreter) fn eval_stream_socket_pair_result(
     let key = values.int(1)?;
     let value = values.resource(right)?;
     values.array_set(result, key, value)
-}
-
-/// Evaluates `stream_select(...)` as a conservative non-blocking readiness check.
-pub(in crate::interpreter) fn eval_builtin_stream_select(
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !(4..=5).contains(&args.len()) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let mut evaluated_args = Vec::with_capacity(args.len());
-    let mut targets = Vec::with_capacity(3);
-    for arg in args.iter().take(3) {
-        let (value, target) = eval_call_arg_value(arg, context, scope, values)?;
-        evaluated_args.push(value);
-        targets.push(target.ok_or(EvalStatus::RuntimeFatal)?);
-    }
-    for arg in args.iter().skip(3) {
-        evaluated_args.push(eval_expr(arg, context, scope, values)?);
-    }
-    let result = eval_stream_select_result(&evaluated_args, context, values)?;
-    eval_write_stream_select_empty_arrays(&targets, context, values)?;
-    Ok(result)
 }
 
 /// Evaluates `stream_select()` over full eval call metadata.

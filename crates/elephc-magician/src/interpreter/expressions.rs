@@ -1,5 +1,5 @@
 //! Purpose:
-//! Evaluates EvalIR expressions, match expressions, function-like calls, and positional builtin dispatch.
+//! Evaluates EvalIR expressions, match expressions, and function-like calls.
 //!
 //! Called from:
 //! - `crate::interpreter::statements` for expression statements and expression-bearing statements.
@@ -1519,7 +1519,7 @@ pub(in crate::interpreter) fn eval_call_args_are_plain_positional(args: &[EvalCa
         .all(|arg| arg.name().is_none() && !arg.is_spread())
 }
 
-/// Evaluates builtins and language constructs after positional-only argument validation.
+/// Evaluates registry-backed direct builtins and language constructs after positional-only validation.
 pub(in crate::interpreter) fn eval_positional_expr_call(
     name: &str,
     args: &[EvalExpr],
@@ -1527,154 +1527,13 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if name == "eval" {
+        return eval_nested_eval(args, context, scope, values);
+    }
+
     if let Some(result) = eval_declared_builtin_direct_call(name, args, context, scope, values)? {
         return Ok(result);
     }
 
-    match name {
-        "array_combine" => eval_builtin_array_combine(args, context, scope, values),
-        "array_chunk" => eval_builtin_array_chunk(args, context, scope, values),
-        "array_column" => eval_builtin_array_column(args, context, scope, values),
-        "array_fill" => eval_builtin_array_fill(args, context, scope, values),
-        "array_fill_keys" => eval_builtin_array_fill_keys(args, context, scope, values),
-        "array_filter" => eval_builtin_array_filter(args, context, scope, values),
-        "array_map" => eval_builtin_array_map(args, context, scope, values),
-        "array_reduce" => eval_builtin_array_reduce(args, context, scope, values),
-        "array_walk" => eval_builtin_array_walk(args, context, scope, values),
-        "array_diff" | "array_intersect" => {
-            eval_builtin_array_value_set(name, args, context, scope, values)
-        }
-        "array_diff_key" | "array_intersect_key" => {
-            eval_builtin_array_key_set(name, args, context, scope, values)
-        }
-        "array_merge" => eval_builtin_array_merge(args, context, scope, values),
-        "class_alias" => eval_builtin_class_alias(args, context, scope, values),
-        "class_attribute_args" => {
-            eval_builtin_class_attribute_metadata(name, args, context, scope, values)
-        }
-        "class_attribute_names" | "class_get_attributes" => {
-            eval_builtin_class_attribute_metadata(name, args, context, scope, values)
-        }
-        "class_exists" => eval_builtin_class_exists(args, context, scope, values),
-        "class_implements" | "class_parents" | "class_uses" => {
-            eval_builtin_class_relation(name, args, context, scope, values)
-        }
-        "method_exists" | "property_exists" => {
-            eval_builtin_member_exists(name, args, context, scope, values)
-        }
-        "get_class_methods" => eval_builtin_get_class_methods(args, context, scope, values),
-        "get_class_vars" => eval_builtin_get_class_vars(args, context, scope, values),
-        "get_object_vars" => eval_builtin_get_object_vars(args, context, scope, values),
-        "interface_exists" => eval_builtin_interface_exists(args, context, scope, values),
-        "trait_exists" | "enum_exists" => {
-            eval_builtin_class_like_exists(name, args, context, scope, values)
-        }
-        "is_a" | "is_subclass_of" => eval_builtin_is_a_relation(name, args, context, scope, values),
-        "empty" => eval_builtin_empty(args, context, scope, values),
-        "eval" => eval_nested_eval(args, context, scope, values),
-        "fgetcsv" => eval_builtin_fgetcsv(args, context, scope, values),
-        "fopen" => eval_builtin_fopen(args, context, scope, values),
-        "fputcsv" => eval_builtin_fputcsv(args, context, scope, values),
-        "fprintf" => eval_builtin_fprintf(args, context, scope, values),
-        "fsockopen" | "pfsockopen" => eval_builtin_fsockopen(args, context, scope, values),
-        "fscanf" => eval_builtin_fscanf(args, context, scope, values),
-        "function_exists" | "is_callable" => {
-            eval_builtin_function_probe(name, args, context, scope, values)
-        }
-        "get_called_class" => eval_builtin_get_called_class(args, context, values),
-        "get_class" => eval_builtin_get_class(args, context, scope, values),
-        "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
-            eval_builtin_get_declared_symbols(name, args, context, values)
-        }
-        "get_parent_class" => eval_builtin_get_parent_class(args, context, scope, values),
-        "get_resource_id" | "get_resource_type" => {
-            eval_builtin_resource_introspection(name, args, context, scope, values)
-        }
-        "iterator_apply" => eval_builtin_iterator_apply(args, context, scope, values),
-        "iterator_count" => eval_builtin_iterator_count(args, context, scope, values),
-        "iterator_to_array" => eval_builtin_iterator_to_array(args, context, scope, values),
-        "buffer_free" | "buffer_len" | "buffer_new" | "ptr" | "ptr_get" | "ptr_is_null"
-        | "ptr_null" | "ptr_offset" | "ptr_read8" | "ptr_read16" | "ptr_read32"
-        | "ptr_read_string" | "ptr_set" | "ptr_sizeof" | "ptr_write8" | "ptr_write16"
-        | "ptr_write32" | "ptr_write_string" => {
-            eval_builtin_raw_memory(name, args, context, scope, values)
-        }
-        "print_r" => eval_builtin_print_r(args, context, scope, values),
-        "readline" => eval_builtin_readline(args, context, scope, values),
-        "isset" => eval_builtin_isset(args, context, scope, values),
-        "spl_autoload_register" | "spl_autoload_unregister" => {
-            eval_builtin_spl_autoload_bool(name, args, context, scope, values)
-        }
-        "spl_autoload" | "spl_autoload_call" => {
-            eval_builtin_spl_autoload_void(name, args, context, scope, values)
-        }
-        "spl_autoload_functions" => {
-            eval_builtin_spl_autoload_functions(args, context, scope, values)
-        }
-        "spl_autoload_extensions" => {
-            eval_builtin_spl_autoload_extensions(args, context, scope, values)
-        }
-        "spl_classes" => eval_builtin_spl_classes(args, values),
-        "spl_object_id" | "spl_object_hash" => {
-            eval_builtin_spl_object_identity(name, args, context, scope, values)
-        }
-        "stream_context_create" => eval_builtin_stream_context_create(args, context, scope, values),
-        "stream_context_get_default" => {
-            eval_builtin_stream_context_get_default(args, context, scope, values)
-        }
-        "stream_context_get_options" => {
-            eval_builtin_stream_context_get_options(args, context, scope, values)
-        }
-        "stream_context_get_params" => {
-            eval_builtin_stream_context_get_params(args, context, scope, values)
-        }
-        "stream_context_set_default" => {
-            eval_builtin_stream_context_set_default(args, context, scope, values)
-        }
-        "stream_context_set_option" => {
-            eval_builtin_stream_context_set_option(args, context, scope, values)
-        }
-        "stream_context_set_params" => {
-            eval_builtin_stream_context_set_params(args, context, scope, values)
-        }
-        "stream_wrapper_register" | "stream_wrapper_unregister" | "stream_wrapper_restore" => {
-            eval_builtin_stream_wrapper_registry(name, args, context, scope, values)
-        }
-        "stream_filter_register" => {
-            eval_builtin_stream_filter_register(args, context, scope, values)
-        }
-        "stream_filter_append" | "stream_filter_prepend" => {
-            eval_builtin_stream_filter_attach(name, args, context, scope, values)
-        }
-        "stream_filter_remove" => eval_builtin_stream_filter_remove(args, context, scope, values),
-        "stream_bucket_new" => eval_builtin_stream_bucket_new(args, context, scope, values),
-        "stream_bucket_make_writeable" => {
-            eval_builtin_stream_bucket_make_writeable(args, context, scope, values)
-        }
-        "stream_bucket_append" | "stream_bucket_prepend" => {
-            eval_builtin_stream_bucket_push(name, args, context, scope, values)
-        }
-        "stream_select" => eval_builtin_stream_select(args, context, scope, values),
-        "stream_socket_server" => eval_builtin_stream_socket_server(args, context, scope, values),
-        "stream_socket_client" => eval_builtin_stream_socket_client(args, context, scope, values),
-        "stream_socket_accept" => eval_builtin_stream_socket_accept(args, context, scope, values),
-        "stream_socket_get_name" => {
-            eval_builtin_stream_socket_get_name(args, context, scope, values)
-        }
-        "stream_socket_shutdown" => {
-            eval_builtin_stream_socket_shutdown(args, context, scope, values)
-        }
-        "stream_socket_enable_crypto" => {
-            eval_builtin_stream_socket_enable_crypto(args, context, scope, values)
-        }
-        "stream_socket_sendto" => eval_builtin_stream_socket_sendto(args, context, scope, values),
-        "stream_socket_recvfrom" => {
-            eval_builtin_stream_socket_recvfrom(args, context, scope, values)
-        }
-        "stream_socket_pair" => eval_builtin_stream_socket_pair(args, context, scope, values),
-        "unset" => eval_builtin_unset(args, context, scope, values),
-        "var_dump" => eval_builtin_var_dump(args, context, scope, values),
-        "vfprintf" => eval_builtin_vfprintf(args, context, scope, values),
-        _ => Err(EvalStatus::UnsupportedConstruct),
-    }
+    Err(EvalStatus::UnsupportedConstruct)
 }

@@ -11,6 +11,7 @@
 //!   runtime cell allocation and coercion.
 
 mod access;
+mod callbacks;
 mod core;
 mod filters;
 mod mutation;
@@ -19,6 +20,7 @@ mod sort;
 mod splice;
 
 pub(in crate::interpreter) use access::*;
+pub(in crate::interpreter) use callbacks::*;
 pub(in crate::interpreter) use core::*;
 pub(in crate::interpreter) use filters::*;
 pub(in crate::interpreter) use mutation::*;

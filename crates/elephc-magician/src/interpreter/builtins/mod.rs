@@ -45,6 +45,7 @@ pub(super) use core::*;
 pub(super) use filesystem::*;
 pub(super) use formatting::*;
 pub(super) use json::*;
+pub(super) use math::*;
 pub(super) use network_env::*;
 pub(super) use process_control::*;
 pub(super) use raw_memory::*;

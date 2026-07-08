@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Leaf files register metadata through `eval_builtin!`.
+//! - Runtime helpers stay in focused support modules when direct hooks need
+//!   expression evaluation.
 
 mod abs;
 mod acos;
@@ -36,8 +38,11 @@ mod rand;
 mod random_int;
 mod rad2deg;
 mod round;
+mod runtime;
 mod sin;
 mod sinh;
 mod sqrt;
 mod tan;
 mod tanh;
+
+pub(in crate::interpreter) use runtime::*;
