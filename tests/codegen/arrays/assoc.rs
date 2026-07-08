@@ -629,3 +629,87 @@ echo 3;
     );
     assert_eq!(out, "3");
 }
+
+/// Regression for #357: a null array key after a float key normalizes to the empty
+/// string "" (PHP behavior), not a huge integer sentinel.
+#[test]
+fn test_null_key_after_float_key() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[1.9] = 1;
+$a[null] = 2;
+foreach ($a as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#,
+    );
+    assert_eq!(out, "[1:1][:2]");
+}
+
+/// Regression for #357: a null array key before a float key normalizes to the empty
+/// string "" (PHP behavior), preserving insertion order.
+#[test]
+fn test_null_key_before_float_key() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[null] = 1;
+$a[1.9] = 2;
+foreach ($a as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#,
+    );
+    assert_eq!(out, "[:1][1:2]");
+}
+
+/// Regression for #357: a null key in an array literal normalizes to the empty string.
+#[test]
+fn test_null_key_in_array_literal() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [null => "first", "x" => "second", 5 => "third"];
+foreach ($a as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#,
+    );
+    assert_eq!(out, "[:first][x:second][5:third]");
+}
+
+/// Regression for #357: a null foreach key rebuilt into a destination array keeps the
+/// empty-string key instead of collapsing to a huge integer sentinel.
+#[test]
+fn test_null_foreach_key_rebuild() {
+    let out = compile_and_run(
+        r#"<?php
+$src = [null => 1, "x" => 2];
+$dst = [];
+foreach ($src as $k => $v) { $dst[$k] = $v; }
+foreach ($dst as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#,
+    );
+    assert_eq!(out, "[:1][x:2]");
+}
+
+/// Regression for #357: array_key_exists with a null key matches the empty-string slot.
+#[test]
+fn test_array_key_exists_null_key() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["" => "empty"];
+echo isset($a[null]) ? "set" : "unset";
+echo "|";
+echo array_key_exists(null, $a) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "set|yes");
+}
+
+/// Regression for #357: a null key read on an associative array misses unless the empty
+/// string slot exists, matching PHP's null-to-empty-string normalization.
+#[test]
+fn test_null_key_read_miss() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1, "y" => 2];
+echo $a[null] ?? "miss";
+"#,
+    );
+    assert_eq!(out, "miss");
+}

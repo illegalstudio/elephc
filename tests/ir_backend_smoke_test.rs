@@ -1,12 +1,12 @@
 //! Purpose:
-//! Integration smoke tests for the opt-in EIR backend CLI path.
+//! Integration smoke tests for the default EIR backend through the CLI.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - These tests exercise the binary-level `--ir-backend` path instead of only
-//!   testing library helpers.
+//! - These tests exercise binary-level CLI compilation instead of only testing
+//!   library helpers.
 
 use std::fs;
 use std::io::Write;
@@ -2469,7 +2469,9 @@ if (Defaults::$b) { echo "T"; } else { echo "F"; }
     );
 }
 
-/// Verifies typed static properties still fatal when read before initialization.
+/// Verifies typed static properties throw a catchable Error when read before
+/// initialization; without a try/catch the no-handler path prints the specific
+/// fatal diagnostic (issue #339).
 #[test]
 fn ir_backend_fatals_on_uninitialized_typed_static_property() {
     let run = compile_ir_backend_and_run(
@@ -3950,7 +3952,9 @@ echo $tmp->fread(10);
     );
 }
 
-/// Verifies typed declared properties still fatal when read before initialization.
+/// Verifies typed declared properties throw a catchable Error when read before
+/// initialization; without a try/catch the no-handler path prints the specific
+/// fatal diagnostic (issue #339).
 #[test]
 fn ir_backend_fatals_on_uninitialized_typed_object_property() {
     let run = compile_ir_backend_and_run(
@@ -6541,7 +6545,7 @@ fn ir_backend_handles_define_builtin() {
     );
 }
 
-/// Verifies is_callable() static string and scalar decisions match the legacy backend.
+/// Verifies is_callable() static string and scalar decisions follow PHP-compatible rules.
 #[test]
 fn ir_backend_handles_static_is_callable_checks() {
     let source = "<?php function f() { return 1; } echo is_callable('f') ? 'yes' : 'no'; echo ':'; echo is_callable('strlen') ? 'yes' : 'no'; echo ':'; echo is_callable('missing') ? 'yes' : 'no'; echo ':'; echo is_callable(42) ? 'yes' : 'no';";
@@ -6710,7 +6714,7 @@ fn ir_backend_requires_include_before_function_variant_dispatch() {
     );
 }
 
-/// Compiles `source` with `--ir-backend`, runs the output binary, and returns stdout.
+/// Compiles `source`, runs the output binary, and returns stdout.
 fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
     compile_and_run_ir_backend_with_args(name, source, &[])
 }
@@ -6729,12 +6733,12 @@ fn compile_and_run_ir_backend_with_stdin(name: &str, source: &str, stdin: &str) 
     String::from_utf8(run.stdout).unwrap()
 }
 
-/// Compiles `source` with `--ir-backend`, runs the binary, and returns raw process output.
+/// Compiles `source`, runs the binary, and returns raw process output.
 fn compile_ir_backend_and_run(name: &str, source: &str, args: &[&str]) -> Output {
     compile_ir_backend_and_run_with_compile_args(name, source, &[], args)
 }
 
-/// Compiles `source` with `--ir-backend` plus extra compiler flags, then runs the binary.
+/// Compiles `source` with extra compiler flags, then runs the binary.
 fn compile_ir_backend_and_run_with_compile_args(
     name: &str,
     source: &str,
@@ -6754,14 +6758,13 @@ fn compile_ir_backend_and_run_with_compile_args(
     let compile = Command::new(elephc_cli_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .current_dir(&dir)
-        .arg("--ir-backend")
         .args(compile_args)
         .arg(&php_path)
         .output()
-        .expect("failed to run elephc CLI with --ir-backend");
+        .expect("failed to run elephc CLI");
     assert!(
         compile.status.success(),
-        "elephc --ir-backend failed for {name}: stderr={}",
+        "elephc failed for {name}: stderr={}",
         String::from_utf8_lossy(&compile.stderr)
     );
 
@@ -6775,7 +6778,7 @@ fn compile_ir_backend_and_run_with_compile_args(
     run
 }
 
-/// Compiles `source` with `--ir-backend`, feeds stdin, and returns raw process output.
+/// Compiles `source`, feeds stdin, and returns raw process output.
 fn compile_ir_backend_and_run_with_stdin(name: &str, source: &str, stdin: &str) -> Output {
     let dir = std::env::temp_dir().join(format!(
         "elephc_ir_backend_{}_{}_{}",
@@ -6790,13 +6793,12 @@ fn compile_ir_backend_and_run_with_stdin(name: &str, source: &str, stdin: &str) 
     let compile = Command::new(elephc_cli_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .current_dir(&dir)
-        .arg("--ir-backend")
         .arg(&php_path)
         .output()
-        .expect("failed to run elephc CLI with --ir-backend");
+        .expect("failed to run elephc CLI");
     assert!(
         compile.status.success(),
-        "elephc --ir-backend failed for {name}: stderr={}",
+        "elephc failed for {name}: stderr={}",
         String::from_utf8_lossy(&compile.stderr)
     );
 
@@ -6821,7 +6823,7 @@ fn compile_ir_backend_and_run_with_stdin(name: &str, source: &str, stdin: &str) 
     run
 }
 
-/// Compiles multiple PHP files with `--ir-backend`, runs the entry binary, and returns stdout.
+/// Compiles multiple PHP files, runs the entry binary, and returns stdout.
 fn compile_and_run_ir_backend_files(
     name: &str,
     files: &[(&str, &str)],
@@ -6833,7 +6835,7 @@ fn compile_and_run_ir_backend_files(
     String::from_utf8(run.stdout).unwrap()
 }
 
-/// Compiles a multi-file `--ir-backend` fixture and returns raw process output.
+/// Compiles a multi-file fixture and returns raw process output.
 fn compile_ir_backend_files_and_run(
     name: &str,
     files: &[(&str, &str)],
@@ -6859,13 +6861,12 @@ fn compile_ir_backend_files_and_run(
     let compile = Command::new(elephc_cli_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .current_dir(&dir)
-        .arg("--ir-backend")
         .arg(&entry_path)
         .output()
-        .expect("failed to run elephc CLI with --ir-backend");
+        .expect("failed to run elephc CLI");
     assert!(
         compile.status.success(),
-        "elephc --ir-backend failed for {name}: stderr={}",
+        "elephc failed for {name}: stderr={}",
         String::from_utf8_lossy(&compile.stderr)
     );
 

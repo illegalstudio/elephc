@@ -43,6 +43,10 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         package: "elephc-phar",
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_tz",
+        package: "elephc-tz",
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_image",
         package: "elephc-image",
     },

@@ -1,8 +1,8 @@
 ---
 title: "is_object()"
-description: "Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose"
+description: "Checks whether a variable is an object."
 sidebar:
-  order: 423
+  order: 427
 ---
 
 ## is_object()
@@ -11,7 +11,7 @@ sidebar:
 function is_object(mixed $value): bool
 ```
 
-Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose
+Checks whether a variable is an object.
 
 **Parameters**:
 - `$value` (`mixed`)

@@ -2,15 +2,15 @@
 title: "symlink() — internals"
 description: "Compiler internals for symlink(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 144
+  order: 146
 ---
 
 ## `symlink()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5448](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5448) (`lower_symlink`)
+- **Signature**: [`src/builtins/io/symlink.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/symlink.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5448](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5448) (`lower_symlink`)
 - **Function symbol**: `lower_symlink()`
 
 
@@ -39,4 +39,3 @@ function symlink(string $target, string $link): bool
 ## Cross-references
 
 - [User reference for `symlink()`](../../../php/builtins/filesystem/symlink.md)
-

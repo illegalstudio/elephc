@@ -126,6 +126,12 @@ impl Function {
         self.values.get(id.as_raw() as usize)
     }
 
+    /// Returns a mutable value by identifier, used by IR passes that narrow a
+    /// value's type (e.g. constant folding a checked op into a scalar constant).
+    pub fn value_mut(&mut self, id: ValueId) -> Option<&mut Value> {
+        self.values.get_mut(id.as_raw() as usize)
+    }
+
     /// Assigns the module-local function identifier.
     pub fn set_id(&mut self, id: FunctionId) {
         self.id = id;
@@ -188,4 +194,8 @@ pub struct FunctionFlags {
     pub is_static: bool,
     /// `true` when the function/closure returns by reference (`function &f()` / `fn &()`).
     pub by_ref_return: bool,
+    /// `true` for compiler-generated bodies that have no user-written PHP source:
+    /// property-default init thunks and builtin class methods (Reflection, SPL,
+    /// DateTime) lowered into the module. Consumed by source-map emission.
+    pub is_synthetic: bool,
 }

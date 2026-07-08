@@ -1,20 +1,20 @@
 ---
 title: "spl_autoload_extensions()"
-description: "Lowers `spl_autoload_extensions()` against the legacy mutable extension globals."
+description: "Register and return default file extensions for spl_autoload."
 sidebar:
-  order: 321
+  order: 325
 ---
 
 ## spl_autoload_extensions()
 
 ```php
-function spl_autoload_extensions(string $file_extensions): string
+function spl_autoload_extensions(string $file_extensions = null): string
 ```
 
-Lowers `spl_autoload_extensions()` against the legacy mutable extension globals.
+Register and return default file extensions for spl_autoload.
 
 **Parameters**:
-- `$file_extensions` (`string`), optional
+- `$file_extensions` (`string`), default `null`, optional
 
 **Returns**: `string`
 

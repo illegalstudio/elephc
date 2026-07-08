@@ -1,6 +1,6 @@
 ---
 title: "array_shift()"
-description: "Lowers `array_shift()` for indexed arrays by compacting slots and boxing `T|null` as Mixed."
+description: "Shifts an element off the beginning of array."
 sidebar:
   order: 36
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_shift(array $array): mixed
 ```
 
-Lowers `array_shift()` for indexed arrays by compacting slots and boxing `T|null` as Mixed.
+Shifts an element off the beginning of array.
 
 **Parameters**:
 - `$array` (`array`), passed by reference

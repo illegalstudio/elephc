@@ -47,7 +47,7 @@ pub(crate) use array_keys::{
 };
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
-pub use result::{check_with_target, CheckResult};
+pub use result::{check_with_target, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,
@@ -56,6 +56,8 @@ pub use schema::{
 pub(crate) use signatures::{
     builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
 };
+#[cfg(test)]
+pub(crate) use signatures::legacy_builtin_call_sig;
 pub use signatures::FunctionSig;
 
 /// Type checks the program after name resolution. Returns `CheckResult` with type

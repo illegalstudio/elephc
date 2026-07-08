@@ -2,7 +2,7 @@
 title: "exit() — internals"
 description: "Compiler internals for exit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 305
+  order: 306
 ---
 
 ## `exit()` — internals
@@ -31,4 +31,3 @@ function exit(int $status): void
 ## Cross-references
 
 - [User reference for `exit()`](../../../php/builtins/process/exit.md)
-

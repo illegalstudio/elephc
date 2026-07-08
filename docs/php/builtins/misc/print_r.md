@@ -8,15 +8,16 @@ sidebar:
 ## print_r()
 
 ```php
-function print_r(...$values): string
+function print_r(mixed $value, bool $return = false): mixed
 ```
 
 Prints human-readable information about a variable.
 
 **Parameters**:
-- `...$values` — variadic: collects excess arguments into `$values`.
+- `$value` (`mixed`)
+- `$return` (`bool`), default `false`, optional
 
-**Returns**: `string`
+**Returns**: `mixed`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

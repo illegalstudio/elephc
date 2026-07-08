@@ -1,6 +1,6 @@
 ---
 title: "ptr_get()"
-description: "Lowers `ptr_get(pointer)` by reading one machine word through a checked pointer."
+description: "Reads one machine word through a raw pointer and returns it as an integer."
 sidebar:
   order: 286
 ---
@@ -11,7 +11,7 @@ sidebar:
 function ptr_get(pointer $pointer): int
 ```
 
-Lowers `ptr_get(pointer)` by reading one machine word through a checked pointer.
+Reads one machine word through a raw pointer and returns it as an integer.
 
 **Parameters**:
 - `$pointer` (`pointer`)

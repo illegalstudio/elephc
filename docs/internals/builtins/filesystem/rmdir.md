@@ -2,15 +2,15 @@
 title: "rmdir() — internals"
 description: "Compiler internals for rmdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 141
+  order: 143
 ---
 
 ## `rmdir()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4433](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4433) (`lower_rmdir`)
+- **Signature**: [`src/builtins/io/rmdir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/rmdir.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4433](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4433) (`lower_rmdir`)
 - **Function symbol**: `lower_rmdir()`
 
 
@@ -30,14 +30,13 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function rmdir(string $directory, mixed $context = null): bool
+function rmdir(string $directory): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–2 arguments (1 optional).
+- **Arity**: takes exactly 1 argument.
 
 ## Cross-references
 
 - [User reference for `rmdir()`](../../../php/builtins/filesystem/rmdir.md)
-

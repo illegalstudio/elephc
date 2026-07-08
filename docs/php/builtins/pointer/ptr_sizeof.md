@@ -1,6 +1,6 @@
 ---
 title: "ptr_sizeof()"
-description: "Lowers `ptr_sizeof(\"type\")` by materializing the checked static byte size."
+description: "Returns the byte size of the named pointer target type."
 sidebar:
   order: 295
 ---
@@ -8,15 +8,15 @@ sidebar:
 ## ptr_sizeof()
 
 ```php
-function ptr_sizeof(string $type): mixed
+function ptr_sizeof(string $type): int
 ```
 
-Lowers `ptr_sizeof("type")` by materializing the checked static byte size.
+Returns the byte size of the named pointer target type.
 
 **Parameters**:
 - `$type` (`string`)
 
-**Returns**: `mixed`
+**Returns**: `int`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

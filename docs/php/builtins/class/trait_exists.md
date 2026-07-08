@@ -1,21 +1,21 @@
 ---
 title: "trait_exists()"
-description: "trait_exists() — class builtin supported by Elephc."
+description: "Checks whether the trait exists."
 sidebar:
-  order: 82
+  order: 84
 ---
 
 ## trait_exists()
 
 ```php
-function trait_exists(string $trait, bool $autoload): bool
+function trait_exists(string $trait, bool $autoload = true): bool
 ```
 
-`trait_exists()` is a class builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Checks whether the trait exists.
 
 **Parameters**:
 - `$trait` (`string`)
-- `$autoload` (`bool`), optional
+- `$autoload` (`bool`), default `true`, optional
 
 **Returns**: `bool`
 
@@ -26,4 +26,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `trait_exists` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/trait_exists.md).
 

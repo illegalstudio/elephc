@@ -1,6 +1,6 @@
 ---
 title: "array_udiff()"
-description: "Lowers `array_udiff()`: keeps first-array elements not equal (per comparator) to any second-array element."
+description: "Computes the difference of arrays using a callback comparator."
 sidebar:
   order: 40
 ---
@@ -8,17 +8,17 @@ sidebar:
 ## array_udiff()
 
 ```php
-function array_udiff(array $array1, array $array2, callable $callback): mixed
+function array_udiff(array $array1, array $array2, callable $callback): array
 ```
 
-Lowers `array_udiff()`: keeps first-array elements not equal (per comparator) to any second-array element.
+Computes the difference of arrays using a callback comparator.
 
 **Parameters**:
 - `$array1` (`array`)
 - `$array2` (`array`)
 - `$callback` (`callable`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

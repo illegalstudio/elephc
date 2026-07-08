@@ -1,8 +1,8 @@
 ---
 title: "hex2bin()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Decodes a hexadecimal string back into its binary representation."
 sidebar:
-  order: 355
+  order: 359
 ---
 
 ## hex2bin()
@@ -11,7 +11,7 @@ sidebar:
 function hex2bin(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Decodes a hexadecimal string back into its binary representation.
 
 **Parameters**:
 - `$string` (`string`)

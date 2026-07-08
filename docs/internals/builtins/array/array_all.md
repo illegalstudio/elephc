@@ -9,8 +9,8 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1536](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1536) (`lower_array_all`)
+- **Signature**: [`src/builtins/array/array_all.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_all.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1578](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1578) (`lower_array_all`)
 - **Function symbol**: `lower_array_all()`
 
 
@@ -27,7 +27,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_all(array $array, mixed $callback): mixed
+function array_all(mixed $array, mixed $callback): bool
 ```
 
 ## What the type checker enforces
@@ -37,4 +37,3 @@ function array_all(array $array, mixed $callback): mixed
 ## Cross-references
 
 - [User reference for `array_all()`](../../../php/builtins/array/array_all.md)
-

@@ -77,7 +77,6 @@ pub(crate) enum PlannedSourceValue {
 /// overwrite diagnostics.
 #[derive(Clone)]
 pub(crate) struct SpreadBoundsCheck {
-    pub(crate) spread_expr: Expr,
     pub(crate) min_len: usize,
     pub(crate) max_len: Option<usize>,
     pub(crate) max_len_param_name: Option<String>,
@@ -111,11 +110,6 @@ pub(crate) enum CallArgPlanError {
 }
 
 impl CallArgPlan {
-    /// Returns `true` if any source argument used named-parameter syntax.
-    pub(crate) fn has_named_args(&self) -> bool {
-        self.first_named_pos.is_some()
-    }
-
     /// Returns `true` if any source argument used the spread (`...`) operator.
     pub(crate) fn has_spread_args(&self) -> bool {
         self.source_args
@@ -202,10 +196,7 @@ impl CallArgPlan {
     pub(crate) fn positional_prefix_expr(&self, call_span: Span) -> Option<Expr> {
         let first_named_pos = self.first_named_pos?;
         let prefix_args = self.source_args[..first_named_pos].to_vec();
-        let prefix_span = prefix_args
-            .first()
-            .map(|arg| arg.span)
-            .unwrap_or(call_span);
+        let prefix_span = prefix_args.first().map(|arg| arg.span).unwrap_or(call_span);
         if let [arg] = prefix_args.as_slice() {
             if let ExprKind::Spread(inner) = &arg.kind {
                 return Some((**inner).clone());
@@ -402,10 +393,7 @@ mod tests {
 
         assert_eq!(plan.spread_bounds_checks[0].min_len, 2);
         let normalized = plan.normalized_args();
-        assert!(matches!(
-            &normalized[0].kind,
-            ExprKind::ArrayAccess { .. }
-        ));
+        assert!(matches!(&normalized[0].kind, ExprKind::ArrayAccess { .. }));
     }
 
     /// Implements the `normalized_args_keep_default_guard_when_spread_may_skip_optional_slot`

@@ -1,8 +1,8 @@
 ---
 title: "is_writeable()"
-description: "Lowers `is_writeable(path)`, PHP's alias of `is_writable(path)`."
+description: "Tells whether the filename is writable (alias of is_writable)."
 sidebar:
-  order: 126
+  order: 128
 ---
 
 ## is_writeable()
@@ -11,7 +11,7 @@ sidebar:
 function is_writeable(string $filename): bool
 ```
 
-Lowers `is_writeable(path)`, PHP's alias of `is_writable(path)`.
+Tells whether the filename is writable (alias of is_writable).
 
 **Parameters**:
 - `$filename` (`string`)

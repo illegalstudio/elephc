@@ -1,22 +1,22 @@
 ---
 title: "strrpos()"
-description: "Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed."
+description: "Finds the numeric position of the last occurrence of a substring."
 sidebar:
-  order: 391
+  order: 395
 ---
 
 ## strrpos()
 
 ```php
-function strrpos(string $haystack, string $needle, int $offset): mixed
+function strrpos(string $haystack, string $needle, int $offset = 0): mixed
 ```
 
-Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed.
+Finds the numeric position of the last occurrence of a substring.
 
 **Parameters**:
 - `$haystack` (`string`)
 - `$needle` (`string`)
-- `$offset` (`int`), optional
+- `$offset` (`int`), default `0`, optional
 
 **Returns**: `mixed`
 

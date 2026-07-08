@@ -1,21 +1,21 @@
 ---
 title: "str_split()"
-description: "Lowers `str_split(string, length?)` into the fixed-width string-array splitter."
+description: "Converts a string into an array of chunks of the given length."
 sidebar:
-  order: 383
+  order: 387
 ---
 
 ## str_split()
 
 ```php
-function str_split(string $string, int $length): array
+function str_split(string $string, int $length = 1): array
 ```
 
-Lowers `str_split(string, length?)` into the fixed-width string-array splitter.
+Converts a string into an array of chunks of the given length.
 
 **Parameters**:
 - `$string` (`string`)
-- `$length` (`int`), optional
+- `$length` (`int`), default `1`, optional
 
 **Returns**: `array`
 

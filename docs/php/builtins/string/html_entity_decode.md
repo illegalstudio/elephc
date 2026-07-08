@@ -1,22 +1,20 @@
 ---
 title: "html_entity_decode()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Converts HTML entities in a string back into their corresponding characters."
 sidebar:
-  order: 356
+  order: 360
 ---
 
 ## html_entity_decode()
 
 ```php
-function html_entity_decode(string $string, int $flags, string $encoding): string
+function html_entity_decode(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Converts HTML entities in a string back into their corresponding characters.
 
 **Parameters**:
 - `$string` (`string`)
-- `$flags` (`int`)
-- `$encoding` (`string`)
 
 **Returns**: `string`
 

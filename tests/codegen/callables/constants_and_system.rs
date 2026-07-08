@@ -324,6 +324,36 @@ fn test_list_unpack_static_property_targets() {
     assert_eq!(out, "7 8");
 }
 
+// Tests that list unpacking from a shorter array yields null for missing keys
+// so `??` treats them as null: `[$a, $b, $c] = [10]; echo ($a ?? 'n') ... ;`
+// outputs "10:n:n". Regression for #337.
+/// Verifies that list unpack missing keys null.
+#[test]
+fn test_list_unpack_missing_keys_null() {
+    let out = compile_and_run(
+        "<?php\n[$a, $b, $c] = [10];\necho ($a ?? 'n') . ':' . ($b ?? 'n') . ':' . ($c ?? 'n');\n",
+    );
+    assert_eq!(out, "10:n:n");
+}
+
+// Tests that list unpacking more targets than elements still reads the present
+// elements: `[$a, $b] = [1, 2, 3];` outputs "1:2". Regression for #337.
+/// Verifies that list unpack partial read.
+#[test]
+fn test_list_unpack_partial_read() {
+    let out = compile_and_run("<?php\n[$a, $b] = [1, 2, 3];\necho $a . ':' . $b;\n");
+    assert_eq!(out, "1:2");
+}
+
+// Tests that list unpacking from an empty array yields null for every target:
+// `[$a, $b] = []; echo ($a ?? 'n') ... ;` outputs "n:n". Regression for #337.
+/// Verifies that list unpack empty array null.
+#[test]
+fn test_list_unpack_empty_array_null() {
+    let out = compile_and_run("<?php\n[$a, $b] = [];\necho ($a ?? 'n') . ':' . ($b ?? 'n');\n");
+    assert_eq!(out, "n:n");
+}
+
 // --- call_user_func_array ---
 
 // Tests basic `call_user_func_array("add", [3, 4])` where `add($a, $b) { return $a + $b; }`

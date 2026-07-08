@@ -2,15 +2,15 @@
 title: "is_object() — internals"
 description: "Compiler internals for is_object(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 426
+  order: 427
 ---
 
 ## `is_object()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1537](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1537) (`lower_is_object`)
+- **Signature**: [`src/builtins/types/is_object.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_object.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1017](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1017) (`lower_is_object`)
 - **Function symbol**: `lower_is_object()`
 
 
@@ -36,4 +36,3 @@ function is_object(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_object()`](../../../php/builtins/type/is_object.md)
-

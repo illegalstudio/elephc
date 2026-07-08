@@ -1,22 +1,21 @@
 ---
 title: "gzdeflate()"
-description: "Lowers `gzdeflate(data, level?)` through inline raw-DEFLATE zlib calls."
+description: "Deflate a string using the DEFLATE data format."
 sidebar:
-  order: 344
+  order: 348
 ---
 
 ## gzdeflate()
 
 ```php
-function gzdeflate(string $data, int $level, int $encoding): string
+function gzdeflate(string $data, int $level = -1): string
 ```
 
-Lowers `gzdeflate(data, level?)` through inline raw-DEFLATE zlib calls.
+Deflate a string using the DEFLATE data format.
 
 **Parameters**:
 - `$data` (`string`)
-- `$level` (`int`), optional
-- `$encoding` (`int`)
+- `$level` (`int`), default `-1`, optional
 
 **Returns**: `string`
 

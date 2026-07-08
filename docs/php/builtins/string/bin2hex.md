@@ -1,8 +1,8 @@
 ---
 title: "bin2hex()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Converts binary data into its hexadecimal string representation."
 sidebar:
-  order: 337
+  order: 341
 ---
 
 ## bin2hex()
@@ -11,7 +11,7 @@ sidebar:
 function bin2hex(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Converts binary data into its hexadecimal string representation.
 
 **Parameters**:
 - `$string` (`string`)

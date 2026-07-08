@@ -2,15 +2,15 @@
 title: "stat() — internals"
 description: "Compiler internals for stat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 143
+  order: 145
 ---
 
 ## `stat()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5529](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5529) (`lower_stat`)
+- **Signature**: [`src/builtins/io/stat.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stat.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5529](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5529) (`lower_stat`)
 - **Function symbol**: `lower_stat()`
 
 
@@ -38,4 +38,3 @@ function stat(string $filename): mixed
 ## Cross-references
 
 - [User reference for `stat()`](../../../php/builtins/filesystem/stat.md)
-

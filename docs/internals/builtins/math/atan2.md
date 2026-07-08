@@ -2,15 +2,15 @@
 title: "atan2() — internals"
 description: "Compiler internals for atan2(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 237
+  order: 239
 ---
 
 ## `atan2()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/libm.rs`:35](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/libm.rs#L35) (`lower_atan2`)
+- **Signature**: [`src/builtins/math/atan2.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/atan2.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/libm.rs`:35](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/libm.rs#L35) (`lower_atan2`)
 - **Function symbol**: `lower_atan2()`
 
 
@@ -35,4 +35,3 @@ function atan2(float $y, float $x): float
 ## Cross-references
 
 - [User reference for `atan2()`](../../../php/builtins/math/atan2.md)
-

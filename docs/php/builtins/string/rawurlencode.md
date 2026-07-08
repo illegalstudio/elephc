@@ -1,8 +1,8 @@
 ---
 title: "rawurlencode()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "URL-encodes a string using RFC 3986 percent-encoding (no '+' for spaces)."
 sidebar:
-  order: 372
+  order: 376
 ---
 
 ## rawurlencode()
@@ -11,7 +11,7 @@ sidebar:
 function rawurlencode(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+URL-encodes a string using RFC 3986 percent-encoding (no '+' for spaces).
 
 **Parameters**:
 - `$string` (`string`)

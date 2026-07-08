@@ -2,15 +2,15 @@
 title: "hash_hmac() — internals"
 description: "Compiler internals for hash_hmac(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 355
+  order: 356
 ---
 
 ## `hash_hmac()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:228](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L228) (`lower_hash_hmac`)
+- **Signature**: [`src/builtins/string/hash_hmac.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_hmac.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:228](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L228) (`lower_hash_hmac`)
 - **Function symbol**: `lower_hash_hmac()`
 
 
@@ -27,7 +27,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function hash_hmac(string $algo, string $data, string $key, bool $binary): string
+function hash_hmac(string $algo, string $data, string $key, bool $binary = false): string
 ```
 
 ## What the type checker enforces
@@ -37,4 +37,3 @@ function hash_hmac(string $algo, string $data, string $key, bool $binary): strin
 ## Cross-references
 
 - [User reference for `hash_hmac()`](../../../php/builtins/string/hash_hmac.md)
-

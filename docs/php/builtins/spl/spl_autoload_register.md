@@ -1,22 +1,22 @@
 ---
 title: "spl_autoload_register()"
-description: "Lowers autoload registration stubs by preserving arg effects and returning true."
+description: "Register given function as __autoload() implementation."
 sidebar:
-  order: 323
+  order: 327
 ---
 
 ## spl_autoload_register()
 
 ```php
-function spl_autoload_register(callable $callback, bool $throw, bool $prepend): bool
+function spl_autoload_register(callable $callback = null, bool $throw = true, bool $prepend = false): bool
 ```
 
-Lowers autoload registration stubs by preserving arg effects and returning true.
+Register given function as __autoload() implementation.
 
 **Parameters**:
-- `$callback` (`callable`), optional
-- `$throw` (`bool`), optional
-- `$prepend` (`bool`), optional
+- `$callback` (`callable`), default `null`, optional
+- `$throw` (`bool`), default `true`, optional
+- `$prepend` (`bool`), default `false`, optional
 
 **Returns**: `bool`
 

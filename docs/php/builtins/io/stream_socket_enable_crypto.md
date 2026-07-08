@@ -1,23 +1,23 @@
 ---
 title: "stream_socket_enable_crypto()"
-description: "Lowers `stream_socket_enable_crypto(stream, enable, method?, session_stream?)`."
+description: "Turns encryption on/off on an already connected socket."
 sidebar:
-  order: 216
+  order: 218
 ---
 
 ## stream_socket_enable_crypto()
 
 ```php
-function stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto_method, resource $session_stream): bool
+function stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool
 ```
 
-Lowers `stream_socket_enable_crypto(stream, enable, method?, session_stream?)`.
+Turns encryption on/off on an already connected socket.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$enable` (`bool`)
-- `$crypto_method` (`int`), optional
-- `$session_stream` (`resource`), optional
+- `$crypto_method` (`int`), default `null`, optional
+- `$session_stream` (`resource`), default `null`, optional
 
 **Returns**: `bool`
 

@@ -1,8 +1,8 @@
 ---
 title: "ctype_alnum()"
-description: "Lowers `ctype_alnum(string)` by checking every byte against ASCII alpha or digit ranges."
+description: "Checks if all characters in the string are alphanumeric."
 sidebar:
-  order: 406
+  order: 410
 ---
 
 ## ctype_alnum()
@@ -11,7 +11,7 @@ sidebar:
 function ctype_alnum(string $text): bool
 ```
 
-Lowers `ctype_alnum(string)` by checking every byte against ASCII alpha or digit ranges.
+Checks if all characters in the string are alphanumeric.
 
 **Parameters**:
 - `$text` (`string`)

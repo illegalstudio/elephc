@@ -8,13 +8,13 @@ sidebar:
 ## php_uname()
 
 ```php
-function php_uname(string $mode): string
+function php_uname(string $mode = 'a'): string
 ```
 
 Returns information about the operating system PHP is running on.
 
 **Parameters**:
-- `$mode` (`string`), optional
+- `$mode` (`string`), default `'a'`, optional
 
 **Returns**: `string`
 

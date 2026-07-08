@@ -1,6 +1,6 @@
 ---
 title: "array_key_last()"
-description: "Lowers `array_key_last()` through the shared edge-key helper with selector `1`."
+description: "Gets the last key of an array."
 sidebar:
   order: 20
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_key_last(array $array): mixed
 ```
 
-Lowers `array_key_last()` through the shared edge-key helper with selector `1`.
+Gets the last key of an array.
 
 **Parameters**:
 - `$array` (`array`)

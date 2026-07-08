@@ -1,22 +1,20 @@
 ---
 title: "scandir()"
-description: "Lowers `scandir(path)` through the target-aware runtime directory listing helper."
+description: "Lists files and directories inside the specified path."
 sidebar:
-  order: 142
+  order: 144
 ---
 
 ## scandir()
 
 ```php
-function scandir(string $directory, int $sorting_order, mixed $context): array
+function scandir(string $directory): array
 ```
 
-Lowers `scandir(path)` through the target-aware runtime directory listing helper.
+Lists files and directories inside the specified path.
 
 **Parameters**:
 - `$directory` (`string`)
-- `$sorting_order` (`int`)
-- `$context` (`mixed`)
 
 **Returns**: `array`
 

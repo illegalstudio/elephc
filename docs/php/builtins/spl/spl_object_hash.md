@@ -1,8 +1,8 @@
 ---
 title: "spl_object_hash()"
-description: "Lowers `spl_object_hash(object)` by formatting the loaded object pointer as a string."
+description: "Return hash id for given object."
 sidebar:
-  order: 326
+  order: 330
 ---
 
 ## spl_object_hash()
@@ -11,7 +11,7 @@ sidebar:
 function spl_object_hash(object $object): string
 ```
 
-Lowers `spl_object_hash(object)` by formatting the loaded object pointer as a string.
+Return hash id for given object.
 
 **Parameters**:
 - `$object` (`object`)

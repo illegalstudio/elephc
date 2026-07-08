@@ -1,8 +1,8 @@
 ---
 title: "is_resource()"
-description: "Lowers `is_resource(value)` for static resources and boxed Mixed resource cells."
+description: "Checks whether a variable is a resource."
 sidebar:
-  order: 424
+  order: 428
 ---
 
 ## is_resource()
@@ -11,7 +11,7 @@ sidebar:
 function is_resource(mixed $value): bool
 ```
 
-Lowers `is_resource(value)` for static resources and boxed Mixed resource cells.
+Checks whether a variable is a resource.
 
 **Parameters**:
 - `$value` (`mixed`)

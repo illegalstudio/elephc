@@ -756,9 +756,9 @@ imposed. See `docs/internals/the-ir.md`.
 - [x] Register-pressure mitigations: caller-saved reuse for non-call-crossing intervals; better spill heuristic. The linear-scan allocator now classifies each live interval as call-free (never crosses a clobber point — an instruction/terminator whose lowering emits a call or touches a caller-saved register, per the safe-by-default allowlist in `src/ir_passes/clobber.rs`) and assigns call-free intervals from caller-saved pools that need no prologue save/restore (`x12`–`x15`/`d16`–`d23` on aarch64, `rsi`/`rdi`/`r8`/`r9`/`xmm2`–`xmm7` on x86_64), falling back to callee-saved (`x21`–`x28`/`d8`–`d14`/`rbx`) for cross-call values. This notably unlocks register allocation for x86_64 floats (no callee-saved XMM) and integers (callee pool is only `rbx`). The spill heuristic is now use-weighted: under pressure the rarely-used, furthest-reaching interval is evicted first, keeping hot values in registers
 
 Expected outcome: EIR is the default and only active implementation backend in
-v0.24.x. The legacy AST backend is frozen behind `--ast-backend` for diagnostics
-and removal work only, and ≥15% performance improvement on compute benchmarks
-after Phase 06 by end of v0.24.x.
+v0.24.x. The legacy AST backend is frozen for diagnostics and removal work only,
+and ≥15% performance improvement on compute benchmarks after Phase 06 by end of
+v0.24.x.
 
 ## v0.25.x — EIR optimization passes and Image support
 
@@ -933,9 +933,14 @@ runtime helpers are reused and driven through EIR lowering.
 Optimization work should now be driven by benchmarks, generated assembly size,
 and 0.x validation rather than by speculative pass work.
 
-- [x] Generators reimplemented on stackful coroutines (issue #329) — a generator body is compiled by the normal EIR backend and runs on its own coroutine stack (reusing the Fiber runtime), replacing the v1 state-machine lowering on the EIR path. `Generator::throw()` now raises the exception at the suspended `yield`, so a `try`/`catch` inside the generator body handles it and resumes instead of always terminating the generator and propagating to the caller; in-generator method calls, arbitrary control flow, and `try`/`finally` around `yield` work like ordinary functions. `yield from` over generators delegates through `__rt_gen_delegate` (forwarding sent values and returning the inner `getReturn()`) and over arrays desugars into an iterator loop; `send()`/`getReturn()`/closure captures preserved; Generator GC frees the coroutine stack and boxed key/value/return cells. The frozen legacy AST backend keeps its own `GeneratorFrame` state machine.
-- [ ] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling
-- [ ] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes
+- [x] Generators reimplemented on stackful coroutines (issue #329) — a generator body is compiled by the normal EIR backend and runs on its own coroutine stack (reusing the Fiber runtime), replacing the v1 state-machine lowering on the EIR path. `Generator::throw()` now raises the exception at the suspended `yield`, so a `try`/`catch` inside the generator body handles it and resumes instead of always terminating the generator and propagating to the caller; in-generator method calls, arbitrary control flow, and `try`/`finally` around `yield` work like ordinary functions. `yield from` over generators delegates through `__rt_gen_delegate` (forwarding sent values and returning the inner `getReturn()`) and over arrays desugars into an iterator loop; `send()`/`getReturn()`/closure captures preserved; Generator GC frees the coroutine stack and boxed key/value/return cells.
+- [x] Closure rebinding — `Closure::bind()`, `bindTo()`, and `Closure::call()` rebind a closure to a new receiver; a top-level closure that captures `$this` now binds it correctly instead of losing the receiver, and a by-reference `Closure::bind` stored in a variable and called later is tracked as a static callable so the call carries the bound cell directly (`__rt_closure_bind`) rather than going through the generic descriptor invoker
+- [x] New magic methods `__callStatic`, `__isset`, and `__unset` — a static call to an undeclared method dispatches to `__callStatic`; `isset()`/`empty()` on an undeclared property route through `__isset` (and only read `__get` when `__isset` is truthy, so an unset virtual property is empty without ever being read); and `unset($obj->prop)` on a virtual property calls `__unset`
+- [x] Reflection over functions — `ReflectionFunction` (name and parameter counts), `getParameters()`, `ReflectionParameter`, `ReflectionParameter::getType()`, and `ReflectionNamedType`; attribute arguments are exposed in reflection metadata, including float, positional-array, named-argument and associative-array values, references to global and class constants, and enum-case references
+- [x] References to object properties — `$x = &$obj->prop` aliases the property with write-through in both directions, and a by-reference function/method return can be captured with `$x = &f()` (including `string`- and `float`-typed properties); lowered via the `LoadPropRefCell` / `BindRefCellPtr` IR ops. Reassigning an array reference to a non-empty literal of a different type boxes the literal's elements to match the property's element type
+- [x] Enum case `->name` property (issue #330) — every enum case, pure or backed, exposes the read-only `name` string holding the case identifier (`E::A->name` is `"A"`), matching PHP's `UnitEnum::$name`; backed cases keep `->value`, `$this->name` is readable inside enum methods, and access works through direct case access, an aliasing variable, `cases()`, and string interpolation
+- [x] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling (`elephc-source-map` version 2: function ranges with entry symbols, in-function labels, opcode-tagged instruction mappings; schema contract in `docs/compiling/source-maps.md`)
+- [x] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes — locals holding all-scalar array literals carry a COW-snapshot fact (`$a[<const>]` folds, `list()` unpacks, `$b = $a` copies), and side-effecting statements now invalidate only the locals they can write: known writes and complex `unset` targets stay exact, calls kill their by-ref argument roots (user signatures pre-scanned, builtin signatures from the registry, callback-invoking builtins treated as unknown callees) plus top-level facts only when the callee transitively writes `global` storage, all backed by a reference-volatility ledger covering `&`-aliases, by-ref captures/foreach/args, `global`/`static` bindings, and superglobals
 - [x] Resource scope-cleanup — auto-free tag-9 resource handles that leave scope without their explicit close (today an unclosed `fopen()` leaks its fd and an unfinalized `hash_init()` context leaks its heap state until process exit; `functions/cleanup.rs` skips `Resource`s by design). Prerequisites: a resource-kind subtype in the Mixed cell so the cleanup pass can pick the right destructor (fd → `close()`, HashContext → `elephc_crypto_free`, …), and aliasing safety (resources have no refcount; `$b = $a` would double-free under naive scope-free). Includes wiring the currently-uncalled `elephc_crypto_free` (`_elephc_crypto_free_fn` slot + publish entry + a `__rt_hash_ctx_free` helper) as the single HashContext destructor and making `hash_final` finalize a *clone* (leaving the original owned by its Mixed box) so a finalized context that later leaves scope is freed exactly once — closing the double-final/use-after-free hole documented in `src/codegen/runtime/strings/hash_context.rs`. `popen` pipes (kind 3 → `__rt_pclose`) and `opendir` streams (kind 4 → `__rt_closedir`) are released the same way, and an explicit `fclose`/`pclose`/`closedir` stamps a `-1` sentinel into the box so a descriptor (whose fd number may be reused) is never closed twice
 - [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling (feeds the EIR effects table)
 - [ ] Guard reasoning v2 for dead-code elimination — broader range reasoning and multi-variable facts beyond current strict-scalar, boolean, loose-comparison, and safe relational-complement guards
@@ -944,16 +949,17 @@ and 0.x validation rather than by speculative pass work.
 - [ ] Composite conditional include function variants — extend include-graph exclusivity from one direct `if` / `elseif` / `else` chain to nested/composed conditional paths where declarations are pairwise exclusive only after combining multiple branch decisions
 - [ ] Switch-aware conditional include function variants — extend include-graph exclusivity beyond `if` / `elseif` / `else` to `switch` cases once fall-through, `break`, and terminating case bodies are modeled precisely; revisit `match` only if include-like statement lowering ever appears inside match arms
 - [x] Runtime routine dead stripping — include or link only runtime helpers reachable from the generated program instead of carrying the whole target runtime slice
+- [x] Statically-known catchable `Error` conditions (issue #383) — private/protected method access from an inaccessible scope and readonly property writes outside the declaring constructor raise a catchable `Error` at runtime instead of being rejected at compile time, matching PHP
 - [ ] Tail-call optimization — direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding)
 - [ ] Performance within 2x of C -O0 on compute benchmarks
-- [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before deleting the frozen legacy backend
+- [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before release
 - [ ] Real-world CLI tools compiled as validation
-- [ ] Audit remaining references to `--ast-backend` and legacy AST emitters so docs, help text, and release notes present them as frozen diagnostic-only fallback before removal
-- [ ] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
-- [ ] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
-- [ ] Rename `src/codegen_ir/` to `src/codegen/`
-- [ ] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
-- [ ] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
+- [x] Audit remaining references to `--ast-backend` and legacy AST emitters so docs, help text, and release notes no longer present a selectable fallback
+- [x] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
+- [x] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
+- [x] Rename `src/codegen_ir/` to `src/codegen/`
+- [x] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
+- [x] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [ ] Installation / packaging documentation for the supported host platforms
 
@@ -1012,9 +1018,9 @@ statics, and static class properties all reset between requests). Run it with
 
 ## v0.28.x — PHP extension bridge (experimental)
 
-- [ ] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
+- [x] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
 - [ ] Link against PHP extension `.so` / `.dylib` shared libraries
-- [ ] Bridge for string, int, float, bool, array types
+- [x] Bridge for string, int, float, bool, array types
 - [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
 - [ ] `--ext` flag to specify extension libraries at compile time
 - [ ] Documentation: how to bridge a PHP extension

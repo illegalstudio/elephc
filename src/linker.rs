@@ -32,6 +32,11 @@ struct BridgeStaticlib {
     /// Cargo package that produces the staticlib (e.g. `"elephc-tls"`), used for
     /// the source-checkout auto-build and workspace detection.
     crate_name: &'static str,
+    /// User-facing short name for the `--with-<flag_name>` force flag (e.g.
+    /// `"pdo"` → `--with-pdo`). Conventionally `crate_name` minus the `elephc-`
+    /// prefix. `--with-<flag_name>` force-links this bridge (whole-archived so it
+    /// survives dead-stripping) regardless of feature auto-detection.
+    flag_name: &'static str,
     /// When true the whole archive is force-loaded so the staticlib's link-time
     /// side effects survive (e.g. rustls provider registration); when false a
     /// plain `-l` is enough.
@@ -52,6 +57,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_tls",
         env_var: "ELEPHC_TLS_LIB_DIR",
         crate_name: "elephc-tls",
+        flag_name: "tls",
         whole_archive: true,
         macos_frameworks: &[],
         needs_libdl: true,
@@ -60,6 +66,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_pdo",
         env_var: "ELEPHC_PDO_LIB_DIR",
         crate_name: "elephc-pdo",
+        flag_name: "pdo",
         whole_archive: false,
         // The PostgreSQL driver pulls in `whoami` (to default the connection
         // user), which references CoreFoundation / SystemConfiguration on macOS.
@@ -70,6 +77,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_crypto",
         env_var: "ELEPHC_CRYPTO_LIB_DIR",
         crate_name: "elephc-crypto",
+        flag_name: "crypto",
         // Pure-Rust hashing: no link-time side effects (unlike rustls' provider
         // registration), so a plain `-l elephc_crypto` is sufficient.
         whole_archive: false,
@@ -82,6 +90,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_phar",
         env_var: "ELEPHC_PHAR_LIB_DIR",
         crate_name: "elephc-phar",
+        flag_name: "phar",
         whole_archive: false,
         macos_frameworks: &[],
         needs_libdl: true,
@@ -90,6 +99,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_tz",
         env_var: "ELEPHC_TZ_LIB_DIR",
         crate_name: "elephc-tz",
+        flag_name: "tz",
         // Timezone-introspection tables baked from PHP and embedded with
         // include_str!: pure data lookup, no link-time side effects, so a plain
         // `-l elephc_tz` is sufficient.
@@ -104,6 +114,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_image",
         env_var: "ELEPHC_IMAGE_LIB_DIR",
         crate_name: "elephc-image",
+        flag_name: "image",
         // Pure-Rust image codecs/drawing: no link-time side effects, so a plain
         // `-l elephc_image` suffices.
         whole_archive: false,
@@ -115,6 +126,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_web",
         env_var: "ELEPHC_WEB_LIB_DIR",
         crate_name: "elephc-web",
+        flag_name: "web",
         // The bridge owns the program entry (elephc_web_run) and tokio/hyper
         // link-time machinery, so the whole archive is force-loaded.
         whole_archive: true,
@@ -123,6 +135,22 @@ const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
     },
 ];
+
+/// Resolves a `--with-<flag>` crate flag to its bridge `lib_name`, or `None`
+/// when `flag` does not name a known bridge crate. Used by the CLI to validate
+/// `--with-<crate>` and by the pipeline to force-link the matching staticlib.
+pub(crate) fn bridge_lib_for_flag(flag: &str) -> Option<&'static str> {
+    BRIDGES
+        .iter()
+        .find(|bridge| bridge.flag_name == flag)
+        .map(|bridge| bridge.lib_name)
+}
+
+/// Returns every user-facing `--with-<flag>` crate flag name, in table order,
+/// so the CLI can list the accepted crates in its error message.
+pub(crate) fn crate_flag_names() -> Vec<&'static str> {
+    BRIDGES.iter().map(|bridge| bridge.flag_name).collect()
+}
 
 impl BridgeStaticlib {
     /// Returns the `lib<name>.a` archive filename this bridge produces.
@@ -221,6 +249,23 @@ pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
     run_tool("Assembler", &mut as_cmd);
 }
 
+/// Makes `--debug-info` line tables reachable by debuggers after the user
+/// object file is deleted.
+///
+/// On macOS the linked binary only carries a debug map pointing at the object
+/// files, so `dsymutil` must bake the DWARF into a standalone `.dSYM` bundle
+/// while the object still exists. Returns `false` when that fails (the caller
+/// then keeps the object file so lldb can follow the debug map instead).
+/// On Linux the linker copies `.debug_line` into the binary itself, so there
+/// is nothing to do.
+pub(crate) fn bake_debug_info(target: Target, bin_path: &Path) -> bool {
+    if target.platform != Platform::MacOS {
+        return true;
+    }
+    let status = Command::new("dsymutil").arg(bin_path).status();
+    matches!(status, Ok(status) if status.success())
+}
+
 /// Links object files and runtime objects into a final binary.
 /// - `target`: Compiler target (controls platform, linker command, and flags).
 /// - `emit`: Output kind. `Executable` produces a standalone binary; `Cdylib`
@@ -247,6 +292,7 @@ pub(crate) fn link(
     extra_link_libs: &[String],
     extra_link_paths: &[String],
     extra_frameworks: &[String],
+    forced_whole_archive: &[String],
 ) {
     // Bridge staticlibs this program actually links, paired with the directory
     // each one resolved to (`None` when it could not be located/built). Driven
@@ -256,6 +302,10 @@ pub(crate) fn link(
         .filter(|bridge| extra_link_libs.iter().any(|l| l.as_str() == bridge.lib_name))
         .map(|bridge| (bridge, bridge.lib_dir()))
         .collect();
+    // A bridge is force-loaded either because its `BRIDGES` entry demands it
+    // (link-time side effects / owned entry point) or because the user passed
+    // `--with-<crate>` (`forced_whole_archive`), which guarantees the staticlib
+    // is retained even when no program symbol references it.
     let needs_libdl = needed_bridges.iter().any(|(bridge, _)| bridge.needs_libdl);
 
     let mut ld_cmd = match target.platform {
@@ -353,7 +403,12 @@ pub(crate) fn link(
         .filter_map(|lib| {
             needed_bridges
                 .iter()
-                .find(|(b, d)| b.lib_name == lib.as_str() && b.whole_archive && d.is_some())
+                .find(|(b, d)| {
+                    b.lib_name == lib.as_str()
+                        && (b.whole_archive
+                            || forced_whole_archive.iter().any(|l| l.as_str() == b.lib_name))
+                        && d.is_some()
+                })
                 .map(|(b, _)| (*b, lib.as_str()))
         })
         .collect();
@@ -408,7 +463,10 @@ pub(crate) fn link(
         // is force-loaded so its link-time side effects survive; everything else
         // links with a plain `-l`.
         let whole_archive_bridge = needed_bridges.iter().find(|(bridge, dir)| {
-            bridge.lib_name == lib.as_str() && bridge.whole_archive && dir.is_some()
+            bridge.lib_name == lib.as_str()
+                && (bridge.whole_archive
+                    || forced_whole_archive.iter().any(|l| l.as_str() == bridge.lib_name))
+                && dir.is_some()
         });
         match whole_archive_bridge {
             Some((bridge, dir)) => {
@@ -719,5 +777,34 @@ mod tests {
         assert_eq!(entry.env_var, "ELEPHC_TZ_LIB_DIR");
         assert_eq!(entry.archive_filename(), "libelephc_tz.a");
         assert!(!entry.whole_archive, "tz bridge must not force-load (no link-time side effects)");
+    }
+
+    /// Verifies every bridge exposes a non-empty `--with-<flag>` name and that
+    /// `bridge_lib_for_flag` maps each one back to its `lib_name`, so the CLI's
+    /// `--with-<crate>` validation stays in lockstep with the `BRIDGES` table.
+    #[test]
+    fn crate_flags_map_back_to_bridge_lib_names() {
+        for bridge in BRIDGES {
+            assert!(!bridge.flag_name.is_empty(), "{} has no flag_name", bridge.lib_name);
+            assert_eq!(
+                bridge_lib_for_flag(bridge.flag_name),
+                Some(bridge.lib_name),
+                "flag {} must resolve to {}",
+                bridge.flag_name,
+                bridge.lib_name
+            );
+        }
+        assert_eq!(bridge_lib_for_flag("pdo"), Some("elephc_pdo"));
+        assert_eq!(bridge_lib_for_flag("web"), Some("elephc_web"));
+    }
+
+    /// Verifies an unknown crate flag resolves to `None` so the CLI rejects
+    /// `--with-<bogus>` instead of silently ignoring it.
+    #[test]
+    fn unknown_crate_flag_resolves_to_none() {
+        assert_eq!(bridge_lib_for_flag("bogus"), None);
+        assert_eq!(bridge_lib_for_flag("elephc_pdo"), None);
+        assert!(crate_flag_names().contains(&"pdo"));
+        assert_eq!(crate_flag_names().len(), BRIDGES.len());
     }
 }

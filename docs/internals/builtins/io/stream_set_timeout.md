@@ -2,15 +2,15 @@
 title: "stream_set_timeout() — internals"
 description: "Compiler internals for stream_set_timeout(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 212
+  order: 214
 ---
 
 ## `stream_set_timeout()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2267](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2267) (`lower_stream_set_timeout`)
+- **Signature**: [`src/builtins/io/stream_set_timeout.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_set_timeout.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2267](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2267) (`lower_stream_set_timeout`)
 - **Function symbol**: `lower_stream_set_timeout()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function stream_set_timeout(resource $stream, int $seconds, int $microseconds): bool
+function stream_set_timeout(resource $stream, int $seconds, int $microseconds = 0): bool
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function stream_set_timeout(resource $stream, int $seconds, int $microseconds): 
 ## Cross-references
 
 - [User reference for `stream_set_timeout()`](../../../php/builtins/io/stream_set_timeout.md)
-

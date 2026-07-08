@@ -2,15 +2,15 @@
 title: "log() — internals"
 description: "Compiler internals for log(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 252
+  order: 254
 ---
 
 ## `log()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/libm.rs`:51](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/libm.rs#L51) (`lower_log`)
+- **Signature**: [`src/builtins/math/log.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/log.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/libm.rs`:51](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/libm.rs#L51) (`lower_log`)
 - **Function symbol**: `lower_log()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function log(float $num, float $base): float
+function log(float $num, float $base = 2.718281828459045): float
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function log(float $num, float $base): float
 ## Cross-references
 
 - [User reference for `log()`](../../../php/builtins/math/log.md)
-

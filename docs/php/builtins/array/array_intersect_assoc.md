@@ -1,6 +1,6 @@
 ---
 title: "array_intersect_assoc()"
-description: "Lowers `array_intersect_assoc()` via the shared associative diff/intersect helper (mode 1 = intersect)."
+description: "Computes the intersection of arrays with additional index check."
 sidebar:
   order: 15
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_intersect_assoc(array $array, ...$arrays): mixed
 ```
 
-Lowers `array_intersect_assoc()` via the shared associative diff/intersect helper (mode 1 = intersect).
+Computes the intersection of arrays with additional index check.
 
 **Parameters**:
 - `$array` (`array`)

@@ -2,15 +2,15 @@
 title: "http_response_code() — internals"
 description: "Compiler internals for http_response_code(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 279
+  order: 276
 ---
 
 ## `http_response_code()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:264](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L264) (`lower_http_response_code`)
+- **Signature**: [`src/builtins/system/http_response_code.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/http_response_code.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:264](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L264) (`lower_http_response_code`)
 - **Function symbol**: `lower_http_response_code()`
 
 
@@ -30,7 +30,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function http_response_code(mixed $response_code): int
+function http_response_code(int $response_code = 0): int
 ```
 
 ## What the type checker enforces
@@ -40,4 +40,3 @@ function http_response_code(mixed $response_code): int
 ## Cross-references
 
 - [User reference for `http_response_code()`](../../../php/builtins/misc/http_response_code.md)
-

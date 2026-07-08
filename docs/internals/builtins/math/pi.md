@@ -2,21 +2,21 @@
 title: "pi() — internals"
 description: "Compiler internals for pi(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 258
+  order: 260
 ---
 
 ## `pi()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:638](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L638) (`lower_pi`)
+- **Signature**: [`src/builtins/math/pi.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/pi.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math.rs`:240](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math.rs#L240) (`lower_pi`)
 - **Function symbol**: `lower_pi()`
 
 
 ### Lowering notes
 
-- Lowers `pi()` as the same data-section float constant used by the legacy backend.
+- Lowers `pi()` as a data-section float constant.
 
 ## Runtime helpers
 
@@ -35,4 +35,3 @@ function pi(): float
 ## Cross-references
 
 - [User reference for `pi()`](../../../php/builtins/math/pi.md)
-

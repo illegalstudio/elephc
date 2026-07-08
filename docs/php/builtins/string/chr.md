@@ -1,8 +1,8 @@
 ---
 title: "chr()"
-description: "Lowers `chr()` by converting an integer code point into a one-byte string."
+description: "Returns a one-character string from the given byte code point."
 sidebar:
-  order: 339
+  order: 343
 ---
 
 ## chr()
@@ -11,7 +11,7 @@ sidebar:
 function chr(int $codepoint): string
 ```
 
-Lowers `chr()` by converting an integer code point into a one-byte string.
+Returns a one-character string from the given byte code point.
 
 **Parameters**:
 - `$codepoint` (`int`)

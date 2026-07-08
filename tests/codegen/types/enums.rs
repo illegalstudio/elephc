@@ -29,6 +29,29 @@ fn test_backed_enum_value_and_from_identity() {
     assert_eq!(out, "1\n1");
 }
 
+/// Regression: an enum used as a class property / promoted-constructor-param TYPE
+/// must resolve. Previously failed with "Unknown type: Tag" because enum names were
+/// not pre-declared before the class schema pass resolved member type annotations.
+#[test]
+fn test_enum_as_promoted_constructor_param_type() {
+    let out = compile_and_run(
+        "<?php
+        enum Tag: string {
+            case Div = 'div';
+            case Span = 'span';
+        }
+        final class Element {
+            public function __construct(private Tag $tag, private string $text) {}
+            public function render(): string {
+                return '<' . $this->tag->value . '>' . $this->text . '</' . $this->tag->value . '>';
+            }
+        }
+        echo (new Element(Tag::Div, 'hi'))->render();
+        ",
+    );
+    assert_eq!(out, "<div>hi</div>");
+}
+
 /// Verifies `Color::tryFrom(99)` returns `null` for an unknown value (with null coalescing to `Color::Red`),
 /// `Color::cases()` returns all cases, and case index `1` is `Color::Green` by identity.
 #[test]
@@ -534,4 +557,279 @@ fn test_enum_name_in_interpolation() {
         ",
     );
     assert_eq!(out, "name=High value=9");
+}
+
+/// Regression for #349: an int-backed enum's `from()` accepts a PHP numeric string
+/// (e.g. `"1"`), coercing it to the integer backing value and returning the matching
+/// case — instead of rejecting the string argument at compile time.
+#[test]
+fn test_backed_int_enum_from_numeric_string() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        echo Level::from(\"1\")->name;
+        echo Level::from(\"2\")->name;
+        ",
+    );
+    assert_eq!(out, "LowHigh");
+}
+
+/// Regression for #349: PHP's coercive int parameter rules accept signed,
+/// whitespace-padded, decimal-float, and exponent-form numeric strings for
+/// int-backed enum `from()`, with float strings truncated toward zero.
+#[test]
+fn test_backed_int_enum_from_numeric_string_coercion_forms() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Zero = 0; case One = 1; case Thousand = 1000; }
+        echo Level::from(\" 1 \")->name, \"|\";
+        echo Level::from(\"+1\")->name, \"|\";
+        echo Level::from(\"1.0\")->name, \"|\";
+        echo Level::from(\"1.5\")->name, \"|\";
+        echo Level::from(\"1e3\")->name, \"|\";
+        echo Level::from(\".5\")->name;
+        ",
+    );
+    assert_eq!(out, "One|One|One|One|Thousand|Zero");
+}
+
+/// Regression for #349: `tryFrom()` on an int-backed enum coerces a numeric string and
+/// returns the matching case, or `null` when the coerced value matches no case.
+#[test]
+fn test_backed_int_enum_tryfrom_numeric_string() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        echo Level::tryFrom(\"1\")->name;
+        $miss = Level::tryFrom(\"3\");
+        echo $miss === null ? \"null\" : $miss->name;
+        ",
+    );
+    assert_eq!(out, "Lownull");
+}
+
+/// Regression for #349: a numeric string that coerces to an int with no matching case
+/// throws a `ValueError` with PHP's backing-value message (like an integer argument would).
+#[test]
+fn test_backed_int_enum_from_unmatched_numeric_string_throws_value_error() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        try {
+            Level::from(\"3\");
+        } catch (ValueError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(out, "ValueError:3 is not a valid backing value for enum Level");
+}
+
+/// Regression for #349: negative numeric strings still coerce successfully before
+/// enum lookup, so a missing negative backing value raises `ValueError`, not `TypeError`.
+#[test]
+fn test_backed_int_enum_from_negative_numeric_string_throws_value_error() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        try {
+            Level::from(\"-1\");
+        } catch (ValueError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(
+        out,
+        "ValueError:-1 is not a valid backing value for enum Level"
+    );
+}
+
+/// Regression for #349: a non-numeric string passed to an int-backed enum's `from()`
+/// throws a `TypeError` at runtime with PHP's exact argument-type message, matching
+/// PHP's coercive-typing behavior instead of being accepted or rejected at compile time.
+#[test]
+fn test_backed_int_enum_from_non_numeric_string_throws_type_error() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        try {
+            Level::from(\"x\");
+        } catch (TypeError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(
+        out,
+        "TypeError:Level::from(): Argument #1 ($value) must be of type int, string given"
+    );
+}
+
+/// Regression for #349: enum int-parameter coercion must reject libc `strtod`
+/// extensions (`0x` hex floats, `INF`/`INFINITY`, and `NAN`) as `TypeError`, even
+/// though the general numeric-string probe used by loose comparison accepts them.
+#[test]
+fn test_backed_int_enum_from_rejects_strtod_only_numeric_forms() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        function mark(string $value) {
+            try {
+                Level::from($value);
+                echo \"ok\";
+            } catch (TypeError $e) {
+                echo \"T\";
+            } catch (ValueError $e) {
+                echo \"V\";
+            }
+            echo \"|\";
+        }
+        mark(\"0x1\");
+        mark(\"0X1\");
+        mark(\"INF\");
+        mark(\"inf\");
+        mark(\"+inf\");
+        mark(\"Infinity\");
+        mark(\"NAN\");
+        mark(\"nan\");
+        mark(\"1abc\");
+        mark(\"\");
+        ",
+    );
+    assert_eq!(out, "T|T|T|T|T|T|T|T|T|T|");
+}
+
+/// Regression for #349: repeatedly coercing a heap-owned numeric string through an
+/// int-backed enum `from()` in a loop and storing the reassigned result must keep the
+/// case singleton's refcount balanced (it is a persistent, program-lifetime object).
+/// Before the fix the returned singleton was under-retained and freed after a few
+/// iterations, corrupting the heap free-list and crashing. Exercises the ownership path,
+/// not just single-shot coercion.
+#[test]
+fn test_backed_int_enum_from_numeric_string_in_loop_keeps_singleton_alive() {
+    let out = compile_and_run(
+        "<?php
+        enum L: int { case A = 1; case B = 2; }
+        $acc = 0;
+        for ($n = 0; $n < 50; $n++) {
+            $t = str_repeat(\"2\", 1);
+            $c = L::from($t);
+            $acc += $c->value;
+        }
+        echo $acc;
+        ",
+    );
+    assert_eq!(out, "100");
+}
+
+/// Regression for #349: `tryFrom()` also throws a `TypeError` (not `null`) for a
+/// non-numeric string argument, matching PHP.
+#[test]
+fn test_backed_int_enum_tryfrom_non_numeric_string_throws_type_error() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        try {
+            Level::tryFrom(\"x\");
+        } catch (TypeError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(
+        out,
+        "TypeError:Level::tryFrom(): Argument #1 ($value) must be of type int, string given"
+    );
+}
+
+/// Regression for #349: `tryFrom()` shares the same int-parameter coercion probe as
+/// `from()`, so strtod-only forms such as `NAN` throw `TypeError` instead of returning
+/// `null` or entering enum backing-value lookup.
+#[test]
+fn test_backed_int_enum_tryfrom_rejects_strtod_only_numeric_forms() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        try {
+            Level::tryFrom(\"NAN\");
+        } catch (TypeError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(
+        out,
+        "TypeError:Level::tryFrom(): Argument #1 ($value) must be of type int, string given"
+    );
+}
+
+/// Regression for #449: an int-backed enum's `from()` accepts a `Mixed` argument — here the
+/// value of a `foreach` over a string array — coercing each element to the backing value.
+/// Before the fix this failed to compile with "backing input PHP type Mixed".
+#[test]
+fn test_backed_int_enum_from_mixed_foreach_value() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        foreach ([\"1\", \"2\", \"1\"] as $v) {
+            echo Level::from($v)->name;
+        }
+        ",
+    );
+    assert_eq!(out, "LowHighLow");
+}
+
+/// Regression for #449: an untyped (`Mixed`) parameter passed to `from()` coerces on its
+/// runtime tag — a numeric string and an integer both resolve to the matching case.
+#[test]
+fn test_backed_int_enum_from_mixed_untyped_param() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        function pick($x) { return Level::from($x)->name; }
+        echo pick(\"1\"), pick(2), pick(\"2\");
+        ",
+    );
+    assert_eq!(out, "LowHighHigh");
+}
+
+/// Regression for #449: a heterogeneous (`Mixed`) array mixing coercible and non-coercible
+/// values dispatches per element — integers and numeric strings resolve, a non-numeric
+/// string and an array each throw `TypeError` with PHP's runtime-type message.
+#[test]
+fn test_backed_int_enum_from_mixed_per_element_dispatch() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        function pick($x) {
+            try {
+                return Level::from($x)->name;
+            } catch (TypeError $e) {
+                return $e->getMessage();
+            }
+        }
+        foreach ([1, \"2\", \"x\", [9]] as $v) {
+            echo pick($v), \"|\";
+        }
+        ",
+    );
+    assert_eq!(
+        out,
+        "Low|High|Level::from(): Argument #1 ($value) must be of type int, string given|Level::from(): Argument #1 ($value) must be of type int, array given|"
+    );
+}
+
+/// Regression for #449: `tryFrom()` on a `Mixed` argument coerces and returns the matching
+/// case, or `null` when the coerced value matches no case.
+#[test]
+fn test_backed_int_enum_tryfrom_mixed() {
+    let out = compile_and_run(
+        "<?php
+        enum Level: int { case Low = 1; case High = 2; }
+        function pick($x) { $r = Level::tryFrom($x); return $r === null ? \"null\" : $r->name; }
+        echo pick(\"2\"), pick(\"9\"), pick(1);
+        ",
+    );
+    assert_eq!(out, "HighnullLow");
 }

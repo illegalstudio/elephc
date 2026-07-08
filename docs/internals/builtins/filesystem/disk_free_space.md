@@ -2,15 +2,15 @@
 title: "disk_free_space() — internals"
 description: "Compiler internals for disk_free_space(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 104
+  order: 106
 ---
 
 ## `disk_free_space()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3370](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3370) (`lower_disk_free_space`)
+- **Signature**: [`src/builtins/io/disk_free_space.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/disk_free_space.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3370](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3370) (`lower_disk_free_space`)
 - **Function symbol**: `lower_disk_free_space()`
 
 
@@ -36,4 +36,3 @@ function disk_free_space(string $directory): float
 ## Cross-references
 
 - [User reference for `disk_free_space()`](../../../php/builtins/filesystem/disk_free_space.md)
-

@@ -1,22 +1,22 @@
 ---
 title: "iterator_apply()"
-description: "Lowers `iterator_apply()` over supported Traversable sources and callback forms."
+description: "Call a function for every element in an iterator."
 sidebar:
-  order: 316
+  order: 320
 ---
 
 ## iterator_apply()
 
 ```php
-function iterator_apply(traversable $iterator, callable $callback, array $args): int
+function iterator_apply(traversable $iterator, callable $callback, array $args = null): int
 ```
 
-Lowers `iterator_apply()` over supported Traversable sources and callback forms.
+Call a function for every element in an iterator.
 
 **Parameters**:
 - `$iterator` (`traversable`)
 - `$callback` (`callable`)
-- `$args` (`array`), optional
+- `$args` (`array`), default `null`, optional
 
 **Returns**: `int`
 

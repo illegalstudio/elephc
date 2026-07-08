@@ -1,8 +1,8 @@
 ---
 title: "readdir()"
-description: "Lowers `readdir(dir_handle)` for libc, glob, and userspace-wrapper handles."
+description: "Read entry from directory handle."
 sidebar:
-  order: 184
+  order: 186
 ---
 
 ## readdir()
@@ -11,7 +11,7 @@ sidebar:
 function readdir(resource $dir_handle): mixed
 ```
 
-Lowers `readdir(dir_handle)` for libc, glob, and userspace-wrapper handles.
+Read entry from directory handle.
 
 **Parameters**:
 - `$dir_handle` (`resource`)

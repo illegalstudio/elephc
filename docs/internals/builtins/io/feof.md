@@ -2,15 +2,15 @@
 title: "feof() — internals"
 description: "Compiler internals for feof(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 154
+  order: 156
 ---
 
 ## `feof()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3121](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3121) (`lower_feof`)
+- **Signature**: [`src/builtins/io/feof.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/feof.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3121](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3121) (`lower_feof`)
 - **Function symbol**: `lower_feof()`
 
 
@@ -37,4 +37,3 @@ function feof(resource $stream): bool
 ## Cross-references
 
 - [User reference for `feof()`](../../../php/builtins/io/feof.md)
-

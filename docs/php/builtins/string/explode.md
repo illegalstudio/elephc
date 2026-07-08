@@ -1,22 +1,22 @@
 ---
 title: "explode()"
-description: "Lowers `explode(delimiter, string)` into the shared string-array splitter helper."
+description: "Splits a string by a separator into an array of substrings."
 sidebar:
-  order: 341
+  order: 345
 ---
 
 ## explode()
 
 ```php
-function explode(string $separator, string $string, int $limit): array
+function explode(string $separator, string $string, int $limit = PHP_INT_MAX): array
 ```
 
-Lowers `explode(delimiter, string)` into the shared string-array splitter helper.
+Splits a string by a separator into an array of substrings.
 
 **Parameters**:
 - `$separator` (`string`)
 - `$string` (`string`)
-- `$limit` (`int`), optional
+- `$limit` (`int`), default `PHP_INT_MAX`, optional
 
 **Returns**: `array`
 

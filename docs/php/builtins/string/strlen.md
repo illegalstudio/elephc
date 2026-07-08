@@ -1,8 +1,8 @@
 ---
 title: "strlen()"
-description: "Lowers `strlen()` by coercing string-like values and returning the byte length."
+description: "Returns the length of a string."
 sidebar:
-  order: 388
+  order: 392
 ---
 
 ## strlen()
@@ -11,7 +11,7 @@ sidebar:
 function strlen(string $string): int
 ```
 
-Lowers `strlen()` by coercing string-like values and returning the byte length.
+Returns the length of a string.
 
 **Parameters**:
 - `$string` (`string`)

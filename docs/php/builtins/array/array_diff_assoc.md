@@ -1,6 +1,6 @@
 ---
 title: "array_diff_assoc()"
-description: "Lowers `array_diff_assoc()` via the shared associative diff/intersect helper (mode 0 = diff)."
+description: "Computes the difference of arrays with additional index check."
 sidebar:
   order: 7
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_diff_assoc(array $array, ...$arrays): mixed
 ```
 
-Lowers `array_diff_assoc()` via the shared associative diff/intersect helper (mode 0 = diff).
+Computes the difference of arrays with additional index check.
 
 **Parameters**:
 - `$array` (`array`)

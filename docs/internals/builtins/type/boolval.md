@@ -2,15 +2,15 @@
 title: "boolval() — internals"
 description: "Compiler internals for boolval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 408
+  order: 409
 ---
 
 ## `boolval()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1106](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1106) (`lower_boolval`)
+- **Signature**: [`src/builtins/types/boolval.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/boolval.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:586](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L586) (`lower_boolval`)
 - **Function symbol**: `lower_boolval()`
 
 
@@ -35,4 +35,3 @@ function boolval(mixed $value): bool
 ## Cross-references
 
 - [User reference for `boolval()`](../../../php/builtins/type/boolval.md)
-

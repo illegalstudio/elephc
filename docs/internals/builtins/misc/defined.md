@@ -2,15 +2,15 @@
 title: "defined() — internals"
 description: "Compiler internals for defined(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 276
+  order: 273
 ---
 
 ## `defined()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:786](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L786) (`lower_defined`)
+- **Signature**: [`src/builtins/system/defined.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/defined.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:261](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L261) (`lower_defined`)
 - **Function symbol**: `lower_defined()`
 
 
@@ -35,4 +35,3 @@ function defined(string $constant_name): bool
 ## Cross-references
 
 - [User reference for `defined()`](../../../php/builtins/misc/defined.md)
-

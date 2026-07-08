@@ -1,8 +1,8 @@
 ---
 title: "sprintf()"
-description: "Lowers `sprintf(format, values...)` by packing variadic records for `__rt_sprintf`."
+description: "Returns a formatted string."
 sidebar:
-  order: 375
+  order: 379
 ---
 
 ## sprintf()
@@ -11,7 +11,7 @@ sidebar:
 function sprintf(string $format, ...$values): string
 ```
 
-Lowers `sprintf(format, values...)` by packing variadic records for `__rt_sprintf`.
+Returns a formatted string.
 
 **Parameters**:
 - `$format` (`string`)

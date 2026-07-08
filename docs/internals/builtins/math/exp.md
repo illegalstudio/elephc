@@ -2,17 +2,21 @@
 title: "exp() — internals"
 description: "Compiler internals for exp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 243
+  order: 245
 ---
 
 ## `exp()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/math/exp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/exp.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/libm.rs`:22](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/libm.rs#L22) (`lower_unary_libm`)
+- **Function symbol**: `lower_unary_libm()`
 
+
+### Lowering notes
+
+- Lowers a one-argument libm builtin such as `sin()`, `cos()`, or `exp()`.
 
 ## Runtime helpers
 
@@ -31,4 +35,3 @@ function exp(float $num): float
 ## Cross-references
 
 - [User reference for `exp()`](../../../php/builtins/math/exp.md)
-

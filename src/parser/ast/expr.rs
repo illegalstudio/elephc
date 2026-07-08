@@ -281,6 +281,30 @@ pub enum CallableTarget {
     },
 }
 
+/// Returns `true` when an assignment value came from `$name op= rhs` or `$name ??= rhs`.
+///
+/// Compound assignment parsing lowers the value to a regular `BinaryOp`/`NullCoalesce`, so the
+/// caller's assignment span is used to distinguish actual compound syntax from a plain
+/// self-referential assignment such as `$x = $x + 1`.
+pub fn is_compound_assignment_self_read(
+    value: &Expr,
+    name: &str,
+    assignment_span: Span,
+) -> bool {
+    if value.span.line != assignment_span.line || value.span.col != assignment_span.col {
+        return false;
+    }
+    match &value.kind {
+        ExprKind::BinaryOp { left, .. } => {
+            matches!(&left.kind, ExprKind::Variable(v) if v == name)
+        }
+        ExprKind::NullCoalesce { value: inner, .. } => {
+            matches!(&inner.kind, ExprKind::Variable(v) if v == name)
+        }
+        _ => false,
+    }
+}
+
 impl PartialEq for Expr {
     /// Compares two expressions by comparing their `ExprKind`s only.
     /// Spans are not considered in equality.

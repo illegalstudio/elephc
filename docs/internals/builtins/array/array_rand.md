@@ -9,8 +9,8 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1007](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1007) (`lower_array_rand`)
+- **Signature**: [`src/builtins/array/array_rand.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_rand.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1010](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1010) (`lower_array_rand`)
 - **Function symbol**: `lower_array_rand()`
 
 
@@ -27,14 +27,13 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_rand(array $array, int $num): int
+function array_rand(array $array): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes exactly 1 argument.
 
 ## Cross-references
 
 - [User reference for `array_rand()`](../../../php/builtins/array/array_rand.md)
-

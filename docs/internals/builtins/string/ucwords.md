@@ -2,15 +2,15 @@
 title: "ucwords() — internals"
 description: "Compiler internals for ucwords(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 402
+  order: 403
 ---
 
 ## `ucwords()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
+- **Signature**: [`src/builtins/string/ucwords.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ucwords.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
 - **Function symbol**: `lower_unary_string_runtime()`
 
 
@@ -27,7 +27,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function ucwords(string $string, string $separators): string
+function ucwords(string $string, string $separators = ' \t\r\n\x0c\x0b'): string
 ```
 
 ## What the type checker enforces
@@ -37,4 +37,3 @@ function ucwords(string $string, string $separators): string
 ## Cross-references
 
 - [User reference for `ucwords()`](../../../php/builtins/string/ucwords.md)
-

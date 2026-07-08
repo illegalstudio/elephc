@@ -1,8 +1,8 @@
 ---
 title: "iterator_count()"
-description: "Lowers `iterator_count()` over arrays, `iterable`, and Traversable objects."
+description: "Count the elements in an iterator."
 sidebar:
-  order: 317
+  order: 321
 ---
 
 ## iterator_count()
@@ -11,7 +11,7 @@ sidebar:
 function iterator_count(traversable $iterator): int
 ```
 
-Lowers `iterator_count()` over arrays, `iterable`, and Traversable objects.
+Count the elements in an iterator.
 
 **Parameters**:
 - `$iterator` (`traversable`)

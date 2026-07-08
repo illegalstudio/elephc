@@ -78,6 +78,19 @@ fn test_warning_unreachable_after_try_finally_return() {
     );
 }
 
+/// Verifies that undefined-variable compound-assignment warnings are reported once,
+/// even though the checker runs multiple stabilization passes.
+#[test]
+fn test_warning_undefined_compound_assignment_is_deduped() {
+    let result = check_source_full("<?php $x += 1; echo $x;").unwrap();
+    let count = result
+        .warnings
+        .iter()
+        .filter(|warning| warning.message.contains("Undefined variable: $x"))
+        .count();
+    assert_eq!(count, 1);
+}
+
 /// Verifies that code after a `try-catch` where only the `catch` branch returns
 /// is NOT flagged as unreachable, because the `try` block may complete without
 /// returning and fall through to the subsequent code.

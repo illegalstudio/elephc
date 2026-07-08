@@ -2,7 +2,7 @@
 title: "buffer_free() — internals"
 description: "Compiler internals for buffer_free(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 62
+  order: 64
 ---
 
 ## `buffer_free()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/buffers.rs`:24](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/buffers.rs#L24) (`lower_buffer_free`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/buffers.rs`:24](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/buffers.rs#L24) (`lower_buffer_free`)
 - **Function symbol**: `lower_buffer_free()`
 
 
@@ -35,4 +35,3 @@ function buffer_free(buffer $buffer): mixed
 ## Cross-references
 
 - [User reference for `buffer_free()`](../../../php/builtins/buffer/buffer_free.md)
-

@@ -2,15 +2,15 @@
 title: "exec() — internals"
 description: "Compiler internals for exec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 304
+  order: 305
 ---
 
 ## `exec()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:690](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L690) (`lower_exec`)
+- **Signature**: [`src/builtins/system/exec.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/exec.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:690](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L690) (`lower_exec`)
 - **Function symbol**: `lower_exec()`
 
 
@@ -25,15 +25,13 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function exec(string $command, array $output, int $result_code): string
+function exec(string $command): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
-- **By-reference parameters**: `$output`, `$result_code`.
+- **Arity**: takes exactly 1 argument.
 
 ## Cross-references
 
 - [User reference for `exec()`](../../../php/builtins/process/exec.md)
-

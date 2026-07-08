@@ -292,20 +292,12 @@ on compute-heavy code.
 | Value | Meaning |
 |---|---|
 | `tagged` (default) | Inline two-word `{payload, tag}` scalars. |
-| `sentinel` | In-band `PHP_INT_MAX - 1` sentinel in one-word slots (legacy opt-out). |
+| `sentinel` | In-band `PHP_INT_MAX - 1` sentinel in one-word slots (compatibility opt-out). |
 
 ```bash
-elephc --null-repr=sentinel legacy.php
+elephc --null-repr=sentinel sentinel.php
 ```
 
 `ELEPHC_NULL_REPR` overrides the default for a whole run. Most programs should
-use the default; `sentinel` exists as a legacy opt-out. See
+use the default; `sentinel` exists as a compatibility opt-out. See
 [Memory Model](../internals/memory-model.md).
-
-## The frozen legacy backend
-
-`--ast-backend` selects the legacy direct AST→assembly backend. It is
-**deprecated**, frozen (no new language or runtime features), emits a warning,
-and is scheduled for removal in v0.26.0. Use it only to compare behavior with the
-old backend during the transition. The EIR backend is the default and the only
-active implementation target.

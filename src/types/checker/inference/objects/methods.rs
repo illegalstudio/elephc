@@ -318,15 +318,30 @@ impl Checker {
                         .map(String::as_str)
                         .unwrap_or(class_name);
                     if !self.can_access_member(declaring_class, visibility) {
-                        return Err(CompileError::new(
+                        // PHP raises this as a catchable `Error` at runtime instead of a
+                        // compile-time rejection. Record the throw site so EIR lowering
+                        // emits the throw sequence, and continue with the declared return
+                        // type so later passes stay type-consistent.
+                        self.throw_access_sites.insert(
                             expr.span,
-                            &format!(
-                                "Cannot access {} method: {}::{}",
-                                Self::visibility_label(visibility),
-                                class_name,
-                                method
-                            ),
-                        ));
+                            crate::types::ThrowAccessInfo {
+                                span: expr.span,
+                                kind: crate::types::ThrowAccessKind::PrivateMethod {
+                                    visibility: match visibility {
+                                        crate::parser::ast::Visibility::Private => {
+                                            "private".to_string()
+                                        }
+                                        crate::parser::ast::Visibility::Protected => {
+                                            "protected".to_string()
+                                        }
+                                        _ => "private".to_string(),
+                                    },
+                                    class_name: class_name.to_string(),
+                                    method: method.to_string(),
+                                },
+                            },
+                        );
+                        return Ok(sig.return_type.clone());
                     }
                 }
                 let declared_flags =

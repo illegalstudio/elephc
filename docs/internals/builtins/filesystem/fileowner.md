@@ -2,15 +2,15 @@
 title: "fileowner() — internals"
 description: "Compiler internals for fileowner(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 112
+  order: 114
 ---
 
 ## `fileowner()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5492](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5492) (`lower_fileowner`)
+- **Signature**: [`src/builtins/io/fileowner.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fileowner.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5492](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5492) (`lower_fileowner`)
 - **Function symbol**: `lower_fileowner()`
 
 
@@ -38,4 +38,3 @@ function fileowner(string $filename): mixed
 ## Cross-references
 
 - [User reference for `fileowner()`](../../../php/builtins/filesystem/fileowner.md)
-

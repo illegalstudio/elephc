@@ -1,8 +1,8 @@
 ---
 title: "str_ends_with()"
-description: "Lowers a two-argument string builtin that directly delegates to a runtime helper."
+description: "Checks if a string ends with a given substring."
 sidebar:
-  order: 378
+  order: 382
 ---
 
 ## str_ends_with()
@@ -11,7 +11,7 @@ sidebar:
 function str_ends_with(string $haystack, string $needle): bool
 ```
 
-Lowers a two-argument string builtin that directly delegates to a runtime helper.
+Checks if a string ends with a given substring.
 
 **Parameters**:
 - `$haystack` (`string`)

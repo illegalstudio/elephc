@@ -2,15 +2,15 @@
 title: "ord() — internals"
 description: "Compiler internals for ord(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 372
+  order: 373
 ---
 
 ## `ord()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:834](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L834) (`lower_ord`)
+- **Signature**: [`src/builtins/string/ord.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ord.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:834](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L834) (`lower_ord`)
 - **Function symbol**: `lower_ord()`
 
 
@@ -35,4 +35,3 @@ function ord(string $character): int
 ## Cross-references
 
 - [User reference for `ord()`](../../../php/builtins/string/ord.md)
-

@@ -2,15 +2,15 @@
 title: "tmpfile() — internals"
 description: "Compiler internals for tmpfile(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 147
+  order: 149
 ---
 
 ## `tmpfile()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5416](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5416) (`lower_tmpfile`)
+- **Signature**: [`src/builtins/io/tmpfile.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/tmpfile.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5416](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5416) (`lower_tmpfile`)
 - **Function symbol**: `lower_tmpfile()`
 
 
@@ -38,4 +38,3 @@ function tmpfile(): mixed
 ## Cross-references
 
 - [User reference for `tmpfile()`](../../../php/builtins/filesystem/tmpfile.md)
-

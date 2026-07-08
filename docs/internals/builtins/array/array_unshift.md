@@ -9,8 +9,8 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays/unshift.rs`:23](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays/unshift.rs#L23) (`lower_array_unshift`)
+- **Signature**: [`src/builtins/array/array_unshift.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_unshift.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays/unshift.rs`:23](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays/unshift.rs#L23) (`lower_array_unshift`)
 - **Function symbol**: `lower_array_unshift()`
 
 
@@ -37,4 +37,3 @@ function array_unshift(array $array, ...$values): int
 ## Cross-references
 
 - [User reference for `array_unshift()`](../../../php/builtins/array/array_unshift.md)
-

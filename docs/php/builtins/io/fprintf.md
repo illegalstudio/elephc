@@ -1,8 +1,8 @@
 ---
 title: "fprintf()"
-description: "Lowers `fprintf(stream, format, values...)` as `sprintf()` plus stream write."
+description: "Write a formatted string to a stream."
 sidebar:
-  order: 165
+  order: 167
 ---
 
 ## fprintf()
@@ -11,7 +11,7 @@ sidebar:
 function fprintf(resource $stream, string $format, ...$values): int
 ```
 
-Lowers `fprintf(stream, format, values...)` as `sprintf()` plus stream write.
+Write a formatted string to a stream.
 
 **Parameters**:
 - `$stream` (`resource`)

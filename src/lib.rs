@@ -9,10 +9,13 @@
 //! - Public module boundaries here are part of the crate-facing compiler API.
 
 pub mod autoload;
-/// Compiler pipeline for autoloading classes.
+/// Single-source builtin registry: catalog, signatures, type-check, and lowering dispatch.
+pub mod builtins;
+/// Canonical EIR-consuming assembly backend and public codegen helpers.
 pub mod codegen;
-/// EIR-consuming assembly backend track.
-pub mod codegen_ir;
+/// Shared target/runtime support used by the EIR backend.
+#[doc(hidden)]
+pub mod codegen_support;
 /// Conditional compilation directives.
 pub mod conditional;
 /// Error and warning reporting.

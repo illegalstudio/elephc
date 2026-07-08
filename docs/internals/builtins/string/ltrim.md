@@ -2,15 +2,15 @@
 title: "ltrim() — internals"
 description: "Compiler internals for ltrim(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 368
+  order: 369
 ---
 
 ## `ltrim()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:112](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L112) (`lower_trim_like`)
+- **Signature**: [`src/builtins/string/ltrim.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ltrim.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:112](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L112) (`lower_trim_like`)
 - **Function symbol**: `lower_trim_like()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function ltrim(string $string, string $characters): string
+function ltrim(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function ltrim(string $string, string $characters): string
 ## Cross-references
 
 - [User reference for `ltrim()`](../../../php/builtins/string/ltrim.md)
-

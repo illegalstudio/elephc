@@ -1,8 +1,8 @@
 ---
 title: "ip2long()"
-description: "Lowers `ip2long(string)` and boxes invalid-address results as PHP false."
+description: "Converts a string containing an IPv4 address into a long integer."
 sidebar:
-  order: 362
+  order: 366
 ---
 
 ## ip2long()
@@ -11,7 +11,7 @@ sidebar:
 function ip2long(string $ip): mixed
 ```
 
-Lowers `ip2long(string)` and boxes invalid-address results as PHP false.
+Converts a string containing an IPv4 address into a long integer.
 
 **Parameters**:
 - `$ip` (`string`)

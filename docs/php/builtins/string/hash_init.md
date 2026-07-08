@@ -1,23 +1,22 @@
 ---
 title: "hash_init()"
-description: "Lowers `hash_init(algo)` and returns a boxed HashContext resource."
+description: "Initialize an incremental hashing context."
 sidebar:
-  order: 353
+  order: 357
 ---
 
 ## hash_init()
 
 ```php
-function hash_init(string $algo, int $flags = 0, string $key = '', array $options = []): mixed
+function hash_init(string $algo, int $flags = 0, string $key = ''): mixed
 ```
 
-Lowers `hash_init(algo)` and returns a boxed HashContext resource.
+Initialize an incremental hashing context.
 
 **Parameters**:
 - `$algo` (`string`)
 - `$flags` (`int`), default `0`, optional
 - `$key` (`string`), default `''`, optional
-- `$options` (`array`), default `[]`, optional
 
 **Returns**: `mixed`
 

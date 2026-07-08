@@ -1,8 +1,8 @@
 ---
 title: "stream_get_transports()"
-description: "Lowers `stream_get_transports()` to the static transport list."
+description: "Retrieves list of registered socket transports."
 sidebar:
-  order: 203
+  order: 205
 ---
 
 ## stream_get_transports()
@@ -11,7 +11,7 @@ sidebar:
 function stream_get_transports(): array
 ```
 
-Lowers `stream_get_transports()` to the static transport list.
+Retrieves list of registered socket transports.
 
 **Parameters**: none.
 

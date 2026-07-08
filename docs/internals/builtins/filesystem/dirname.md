@@ -2,15 +2,15 @@
 title: "dirname() — internals"
 description: "Compiler internals for dirname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 103
+  order: 105
 ---
 
 ## `dirname()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4575](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4575) (`lower_dirname`)
+- **Signature**: [`src/builtins/io/dirname.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/dirname.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4575](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4575) (`lower_dirname`)
 - **Function symbol**: `lower_dirname()`
 
 
@@ -27,7 +27,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function dirname(string $path, int $levels): string
+function dirname(string $path, int $levels = 1): string
 ```
 
 ## What the type checker enforces
@@ -37,4 +37,3 @@ function dirname(string $path, int $levels): string
 ## Cross-references
 
 - [User reference for `dirname()`](../../../php/builtins/filesystem/dirname.md)
-

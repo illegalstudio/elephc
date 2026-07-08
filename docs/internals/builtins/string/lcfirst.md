@@ -2,15 +2,15 @@
 title: "lcfirst() — internals"
 description: "Compiler internals for lcfirst(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 366
+  order: 367
 ---
 
 ## `lcfirst()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:104](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L104) (`lower_lcfirst`)
+- **Signature**: [`src/builtins/string/lcfirst.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/lcfirst.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:104](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L104) (`lower_lcfirst`)
 - **Function symbol**: `lower_lcfirst()`
 
 
@@ -36,4 +36,3 @@ function lcfirst(string $string): string
 ## Cross-references
 
 - [User reference for `lcfirst()`](../../../php/builtins/string/lcfirst.md)
-

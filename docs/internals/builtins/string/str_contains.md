@@ -2,15 +2,15 @@
 title: "str_contains() — internals"
 description: "Compiler internals for str_contains(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 380
+  order: 381
 ---
 
 ## `str_contains()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:682](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L682) (`lower_str_contains`)
+- **Signature**: [`src/builtins/string/str_contains.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_contains.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:682](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L682) (`lower_str_contains`)
 - **Function symbol**: `lower_str_contains()`
 
 
@@ -36,4 +36,3 @@ function str_contains(string $haystack, string $needle): bool
 ## Cross-references
 
 - [User reference for `str_contains()`](../../../php/builtins/string/str_contains.md)
-

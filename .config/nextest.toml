@@ -6,3 +6,43 @@ failure-output = "immediate-final"
 final-status-level = "slow"
 slow-timeout = { period = "60s", terminate-after = 1 }
 status-level = "slow"
+
+# `cargo nextest archive` captures the test binaries + the `elephc` bin, but NOT
+# the bridge staticlibs — the codegen test runner links compiled PHP programs
+# against libelephc_*.a at run time (via `ld`), so nextest can't discover them.
+# Include them explicitly so archived shards can run on a machine that never
+# rebuilt the workspace. Built into target/debug by `cargo build $BRIDGE_CRATES`
+# in the archive job before archiving.
+[[profile.ci.archive.include]]
+path = "debug/libelephc_tls.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_pdo.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_crypto.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_phar.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_tz.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_image.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_web.a"
+relative-to = "target"
+
+# The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
+# parity programs (several link the PCRE staticlib), each compiled and run twice.
+# It legitimately runs ~65-70s, just over the global 60s cap, so it needs a
+# longer slow-timeout to avoid spurious termination on loaded runners.
+[[profile.default.overrides]]
+filter = 'test(parity_function_first_class_callable_dispatch)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(parity_function_first_class_callable_dispatch)'
+slow-timeout = { period = "180s", terminate-after = 1 }

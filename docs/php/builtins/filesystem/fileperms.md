@@ -1,8 +1,8 @@
 ---
 title: "fileperms()"
-description: "Lowers `fileperms(path)` and boxes the runtime integer-or-false result."
+description: "Gets file permissions."
 sidebar:
-  order: 113
+  order: 115
 ---
 
 ## fileperms()
@@ -11,7 +11,7 @@ sidebar:
 function fileperms(string $filename): mixed
 ```
 
-Lowers `fileperms(path)` and boxes the runtime integer-or-false result.
+Gets file permissions.
 
 **Parameters**:
 - `$filename` (`string`)

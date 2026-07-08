@@ -1,21 +1,21 @@
 ---
 title: "date()"
-description: "Lowers `date(format, timestamp?)` through the shared formatter runtime helper."
+description: "Formats a local time/date."
 sidebar:
-  order: 84
+  order: 86
 ---
 
 ## date()
 
 ```php
-function date(string $format, int $timestamp): string
+function date(string $format, int $timestamp = null): string
 ```
 
-Lowers `date(format, timestamp?)` through the shared formatter runtime helper.
+Formats a local time/date.
 
 **Parameters**:
 - `$format` (`string`)
-- `$timestamp` (`int`), optional
+- `$timestamp` (`int`), default `null`, optional
 
 **Returns**: `string`
 

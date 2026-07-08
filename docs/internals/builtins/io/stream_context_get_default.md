@@ -2,15 +2,15 @@
 title: "stream_context_get_default() — internals"
 description: "Compiler internals for stream_context_get_default(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 190
+  order: 192
 ---
 
 ## `stream_context_get_default()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1078](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1078) (`lower_stream_context_get_default`)
+- **Signature**: [`src/builtins/io/stream_context_get_default.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_get_default.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1078](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1078) (`lower_stream_context_get_default`)
 - **Function symbol**: `lower_stream_context_get_default()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function stream_context_get_default(array $options): mixed
+function stream_context_get_default(array $options = null): mixed
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function stream_context_get_default(array $options): mixed
 ## Cross-references
 
 - [User reference for `stream_context_get_default()`](../../../php/builtins/io/stream_context_get_default.md)
-

@@ -335,8 +335,9 @@ fn test_cli_runtime_cache_reuses_runtime_object() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies `--source-map` emits a sidecar .map file containing the
-/// "elephc-source-map-v1" format header and the correct PHP source line.
+/// Verifies `--source-map` emits a sidecar .map file in the v2 schema:
+/// versioned envelope, function ranges (user function + main), labels, and
+/// opcode-tagged line mappings.
 #[test]
 fn test_cli_source_map_writes_sidecar_file() {
     let dir = make_cli_test_dir("elephc_cli_source_map");
@@ -344,7 +345,10 @@ fn test_cli_source_map_writes_sidecar_file() {
     fs::write(
         &php_path,
         r#"<?php
-echo 1;
+function foo(int $x): int {
+    return $x + 1;
+}
+echo foo(1);
 "#,
     )
     .unwrap();
@@ -366,12 +370,98 @@ echo 1;
     assert!(map_path.exists(), "expected source map sidecar to exist");
     let map = fs::read_to_string(&map_path).expect("failed to read source map");
     assert!(
-        map.contains("\"format\": \"elephc-source-map-v1\""),
+        map.contains("\"format\": \"elephc-source-map\""),
         "missing source map format header: {map}"
     );
     assert!(
-        map.contains("\"php_line\": 2"),
-        "expected source map to reference PHP line 2: {map}"
+        map.contains("\"version\": 2"),
+        "missing source map schema version: {map}"
+    );
+    assert!(
+        map.contains("\"asm\":"),
+        "expected source map to record the asm path: {map}"
+    );
+    assert!(
+        map.contains("\"name\": \"foo\""),
+        "expected a function entry for foo: {map}"
+    );
+    assert!(
+        map.contains("\"name\": \"main\""),
+        "expected a function entry for main: {map}"
+    );
+    assert!(
+        map.contains("\"php_line\": 3"),
+        "expected a mapping for the return on PHP line 3: {map}"
+    );
+    assert!(
+        map.contains("\"op\": \""),
+        "expected opcode-tagged mappings: {map}"
+    );
+    assert!(
+        map.contains("\"labels\": ["),
+        "expected a labels section: {map}"
+    );
+    assert!(
+        map.contains("\"source_sha256\": \""),
+        "expected a source checksum: {map}"
+    );
+    assert!(
+        map.contains("\"synthetic\": true") && map.contains("\"synthetic\": false"),
+        "expected both user and synthetic function entries: {map}"
+    );
+    assert!(
+        map.contains("\"block\": \"entry\""),
+        "expected an entry-block label annotation: {map}"
+    );
+    assert!(
+        map.contains("\"php_end_col\":"),
+        "expected expression end positions in mappings: {map}"
+    );
+    assert!(
+        map.contains("\"lines\": ["),
+        "expected the PHP-line inverse index: {map}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--debug-info` injects DWARF line-table directives into the emitted
+/// assembly: one `.file 1` header and a `.loc 1 <line> <col>` per source marker.
+#[test]
+fn test_cli_debug_info_injects_dwarf_line_directives() {
+    let dir = make_cli_test_dir("elephc_cli_debug_info");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+echo 1 + 2;
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--emit-asm")
+        .arg("--debug-info")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI with --debug-info");
+
+    assert!(
+        output.status.success(),
+        "elephc --debug-info failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm_path = dir.join("main.s");
+    let asm = fs::read_to_string(&asm_path).expect("failed to read assembly");
+    assert!(
+        asm.starts_with(".file 1 \""),
+        "expected .file header at top of assembly, got: {}",
+        &asm[..asm.len().min(120)]
+    );
+    assert!(
+        asm.contains(".loc 1 2 "),
+        "expected a .loc directive for PHP line 2: {asm}"
     );
 
     let _ = fs::remove_dir_all(&dir);

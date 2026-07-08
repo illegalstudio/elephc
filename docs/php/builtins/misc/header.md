@@ -1,6 +1,6 @@
 ---
 title: "header()"
-description: "Lowers `header($line[, $replace[, $code]])` to `__rt_header`, materializing the"
+description: "Sends a raw HTTP header."
 sidebar:
   order: 275
 ---
@@ -8,15 +8,15 @@ sidebar:
 ## header()
 
 ```php
-function header(mixed $header, mixed $replace, mixed $response_code): void
+function header(string $header, bool $replace = true, int $response_code = 0): void
 ```
 
-Lowers `header($line[, $replace[, $code]])` to `__rt_header`, materializing the
+Sends a raw HTTP header.
 
 **Parameters**:
-- `$header` (`mixed`)
-- `$replace` (`mixed`), optional
-- `$response_code` (`mixed`), optional
+- `$header` (`string`)
+- `$replace` (`bool`), default `true`, optional
+- `$response_code` (`int`), default `0`, optional
 
 **Returns**: `void`
 

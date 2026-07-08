@@ -2,15 +2,15 @@
 title: "gzcompress() — internals"
 description: "Compiler internals for gzcompress(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 346
+  order: 347
 ---
 
 ## `gzcompress()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:402](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L402) (`lower_gzcompress`)
+- **Signature**: [`src/builtins/string/gzcompress.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/gzcompress.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:402](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L402) (`lower_gzcompress`)
 - **Function symbol**: `lower_gzcompress()`
 
 
@@ -25,14 +25,13 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function gzcompress(string $data, int $level, int $encoding): string
+function gzcompress(string $data, int $level = -1): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–3 arguments (1 optional).
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Cross-references
 
 - [User reference for `gzcompress()`](../../../php/builtins/string/gzcompress.md)
-
