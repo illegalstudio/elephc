@@ -11,12 +11,10 @@
 //!   protected/private eval properties do not leak as dynamic properties.
 
 use super::super::super::*;
-use super::{eval_class_metadata_name, eval_class_relation_name_exists};
+use super::eval_class_metadata_name;
 
-mod class_vars;
 mod common;
 mod object_vars;
 
-pub(in crate::interpreter) use class_vars::*;
 pub(in crate::interpreter) use common::*;
 pub(in crate::interpreter) use object_vars::*;
