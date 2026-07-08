@@ -1,15 +1,32 @@
 //! Purpose:
-//! Implements PHP `mktime()` conversion from local date components.
+//! Eval registry entry and implementation for `mktime` plus shared mktime helpers.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::time` re-exports.
+//! - `crate::interpreter::builtins::time` direct and by-value dispatch.
 //!
 //! Key details:
-//! - Component coercion checks libc integer bounds before calling `mktime`.
+//! - `gmmktime` and `strtotime` reuse the timestamp conversion helpers from this file.
 
-use super::super::super::*;
 use super::super::*;
 use super::*;
+
+eval_builtin! {
+    name: "mktime",
+    area: Time,
+    params: [hour, minute, second, month, day, year],
+    direct: Time,
+    values: Time,
+}
+
+/// Evaluates PHP `mktime(hour, minute, second, month, day, year)`.
+pub(in crate::interpreter) fn eval_builtin_mktime(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_builtin_mktime_like("mktime", args, context, scope, values)
+}
 
 /// Evaluates PHP `mktime(hour, minute, second, month, day, year)`.
 pub(in crate::interpreter) fn eval_builtin_mktime_like(

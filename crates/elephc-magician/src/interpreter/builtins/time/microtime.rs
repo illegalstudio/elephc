@@ -1,40 +1,22 @@
 //! Purpose:
-//! Implements `time()` and `microtime()` eval builtins.
+//! Eval registry entry and implementation for `microtime`.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::time` re-exports.
+//! - `crate::interpreter::builtins::time` direct and by-value dispatch.
 //!
 //! Key details:
-//! - Current timestamps are read from `SystemTime::now()` and converted into PHP
-//!   integer or float runtime cells.
+//! - The optional argument is accepted for PHP arity parity but does not alter the result.
 
 use super::super::super::*;
 
-/// Evaluates PHP `time()` with no arguments.
-pub(in crate::interpreter) fn eval_builtin_time(
-    args: &[EvalExpr],
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !args.is_empty() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    eval_time_result(values)
-}
+use super::super::spec::EvalBuiltinDefaultValue;
 
-/// Returns the current Unix timestamp as a boxed PHP integer.
-pub(in crate::interpreter) fn eval_time_result(
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    values.int(eval_current_unix_timestamp()?)
-}
-
-/// Returns the current Unix timestamp as an integer payload.
-pub(in crate::interpreter) fn eval_current_unix_timestamp() -> Result<i64, EvalStatus> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| EvalStatus::RuntimeFatal)?
-        .as_secs();
-    i64::try_from(timestamp).map_err(|_| EvalStatus::RuntimeFatal)
+eval_builtin! {
+    name: "microtime",
+    area: Time,
+    params: [as_float = EvalBuiltinDefaultValue::Bool(false)],
+    direct: Time,
+    values: Time,
 }
 
 /// Evaluates PHP `microtime()` with an optional ignored argument.

@@ -1,137 +1,14 @@
 //! Purpose:
-//! Implements version and uname-related system builtins currently grouped with
-//! time/system eval support.
+//! Implements shared system information helpers still used by network/env builtins.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::time` re-exports.
+//! - `crate::interpreter::builtins::network_env` until those builtins are co-located.
 //!
 //! Key details:
 //! - `phpversion()` reads the workspace package version at compile time and
 //!   `php_uname()` formats libc `uname` fields.
 
 use super::super::super::*;
-
-/// Evaluates PHP `date_default_timezone_get()` with no arguments.
-pub(in crate::interpreter) fn eval_builtin_date_default_timezone_get(
-    args: &[EvalExpr],
-    context: &ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !args.is_empty() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    eval_date_default_timezone_get_result(context, values)
-}
-
-/// Returns the eval-local default timezone identifier.
-pub(in crate::interpreter) fn eval_date_default_timezone_get_result(
-    context: &ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    values.string(context.default_timezone())
-}
-
-/// Evaluates PHP `date_default_timezone_set($timezoneId)`.
-pub(in crate::interpreter) fn eval_builtin_date_default_timezone_set(
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [timezone] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let timezone = eval_expr(timezone, context, scope, values)?;
-    eval_date_default_timezone_set_result(timezone, context, values)
-}
-
-/// Stores one eval-local default timezone identifier and reports success.
-pub(in crate::interpreter) fn eval_date_default_timezone_set_result(
-    timezone: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let timezone = values.string_bytes(timezone)?;
-    let timezone = String::from_utf8_lossy(&timezone).into_owned();
-    context.set_default_timezone(timezone);
-    values.bool_value(true)
-}
-
-/// Evaluates PHP `http_response_code($response_code = 0)`.
-pub(in crate::interpreter) fn eval_builtin_http_response_code(
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    match args {
-        [] => eval_http_response_code_result(None, context, values),
-        [response_code] => {
-            let response_code = eval_expr(response_code, context, scope, values)?;
-            eval_http_response_code_result(Some(response_code), context, values)
-        }
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
-}
-
-/// Reads or updates the eval-local HTTP response code.
-pub(in crate::interpreter) fn eval_http_response_code_result(
-    response_code: Option<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let result = match response_code {
-        Some(response_code) => context.replace_http_response_code(eval_int_value(response_code, values)?),
-        None => context.http_response_code(),
-    };
-    values.int(result)
-}
-
-/// Evaluates PHP `header($header, $replace = true, $response_code = 0)`.
-pub(in crate::interpreter) fn eval_builtin_header(
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    match args {
-        [line] => {
-            let line = eval_expr(line, context, scope, values)?;
-            eval_header_result(line, None, None, context, values)
-        }
-        [line, replace] => {
-            let line = eval_expr(line, context, scope, values)?;
-            let replace = eval_expr(replace, context, scope, values)?;
-            eval_header_result(line, Some(replace), None, context, values)
-        }
-        [line, replace, response_code] => {
-            let line = eval_expr(line, context, scope, values)?;
-            let replace = eval_expr(replace, context, scope, values)?;
-            let response_code = eval_expr(response_code, context, scope, values)?;
-            eval_header_result(line, Some(replace), Some(response_code), context, values)
-        }
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
-}
-
-/// Applies eval-local `header()` side effects that are observable without a web bridge.
-pub(in crate::interpreter) fn eval_header_result(
-    line: RuntimeCellHandle,
-    replace: Option<RuntimeCellHandle>,
-    response_code: Option<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let _ = values.string_bytes(line)?;
-    if let Some(replace) = replace {
-        let _ = values.truthy(replace)?;
-    }
-    if let Some(response_code) = response_code {
-        let response_code = eval_int_value(response_code, values)?;
-        let _ = context.replace_http_response_code(response_code);
-    }
-    values.null()
-}
 
 /// Evaluates PHP `phpversion()` with no arguments.
 pub(in crate::interpreter) fn eval_builtin_phpversion(

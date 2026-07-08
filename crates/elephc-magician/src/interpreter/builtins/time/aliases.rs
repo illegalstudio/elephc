@@ -13,7 +13,6 @@
 //!   procedural date/time aliases; splitting by alias would obscure the shared
 //!   fallback and timezone-table rules.
 
-use super::super::super::*;
 use super::*;
 
 #[path = "../../../../../../src/list_id_prelude/table.rs"]

@@ -1,24 +1,43 @@
 //! Purpose:
-//! Implements PHP `date()` formatting for the eval-supported token subset.
+//! Eval registry entry and implementation for `date` plus shared date-format helpers.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::time` re-exports.
+//! - `crate::interpreter::builtins::time` direct and by-value dispatch.
 //!
 //! Key details:
-//! - Unix timestamps are converted through libc `localtime_r` before PHP date
-//!   tokens are expanded.
+//! - `gmdate` calls this file for shared formatting and UTC/local timestamp conversion.
 
-use super::super::super::*;
-use super::super::*;
-use super::*;
 use std::os::unix::ffi::OsStrExt;
 use std::sync::Mutex;
+
+use super::super::*;
+use super::*;
+
+use super::super::spec::EvalBuiltinDefaultValue;
+
+eval_builtin! {
+    name: "date",
+    area: Time,
+    params: [format, timestamp = EvalBuiltinDefaultValue::Null],
+    direct: Time,
+    values: Time,
+}
 
 static EVAL_TZ_MUTEX: Mutex<()> = Mutex::new(());
 
 unsafe extern "C" {
     /// Re-reads libc's process-global timezone environment.
     fn tzset();
+}
+
+/// Evaluates PHP `date($format, $timestamp = time())` for the eval subset.
+pub(in crate::interpreter) fn eval_builtin_date(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_builtin_date_like("date", args, context, scope, values)
 }
 
 /// Evaluates PHP `date($format, $timestamp = time())` for the eval subset.

@@ -1,15 +1,24 @@
 //! Purpose:
-//! Implements the eval-supported `strtotime()` date-string subset.
+//! Eval registry entry and implementation for `strtotime`.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::time` re-exports.
+//! - `crate::interpreter::builtins::time` direct and by-value dispatch.
 //!
 //! Key details:
-//! - Supported strings are fixed-width ISO date/datetime forms normalized through
-//!   the same local `mktime` path as explicit date components.
+//! - The supported parser subset normalizes fixed-width ISO dates through `mktime`.
 
-use super::super::super::*;
+use super::super::*;
 use super::*;
+
+use super::super::spec::EvalBuiltinDefaultValue;
+
+eval_builtin! {
+    name: "strtotime",
+    area: Time,
+    params: [datetime, baseTimestamp = EvalBuiltinDefaultValue::Null],
+    direct: Time,
+    values: Time,
+}
 
 /// Evaluates PHP `strtotime(datetime, baseTimestamp = null)` for eval's supported subset.
 pub(in crate::interpreter) fn eval_builtin_strtotime(
