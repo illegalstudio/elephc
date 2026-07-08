@@ -272,9 +272,11 @@ mod tests {
             "hash_hmac",
             "hash_init",
             "hash_update",
+            "header",
             "hex2bin",
             "htmlspecialchars",
             "hrtime",
+            "http_response_code",
             "implode",
             "intval",
             "is_array",
@@ -485,6 +487,26 @@ mod tests {
         assert_eq!(
             eval_declared_builtin_param_names("date_default_timezone_get"),
             Some([].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("header"),
+            Some(["header", "replace", "response_code"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("header", 1),
+            Some(EvalBuiltinDefaultValue::Bool(true))
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("header", 2),
+            Some(EvalBuiltinDefaultValue::Int(0))
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("http_response_code"),
+            Some(["response_code"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("http_response_code", 0),
+            Some(EvalBuiltinDefaultValue::Int(0))
         );
         assert_eq!(
             eval_declared_builtin_param_names("getdate"),

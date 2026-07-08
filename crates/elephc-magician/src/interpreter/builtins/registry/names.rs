@@ -82,8 +82,6 @@ pub(in crate::interpreter) const EVAL_PHP_VISIBLE_BUILTIN_FUNCTIONS: &[&str] = &
     "getprotobynumber",
     "getservbyname",
     "getservbyport",
-    "header",
-    "http_response_code",
     "inet_ntop",
     "inet_pton",
     "interface_exists",

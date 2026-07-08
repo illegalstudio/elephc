@@ -1606,13 +1606,11 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_resource_introspection(name, args, context, scope, values)
         }
         "getenv" => eval_builtin_getenv(args, context, scope, values),
-        "header" => eval_builtin_header(args, context, scope, values),
         "inet_ntop" => eval_builtin_inet_ntop(args, context, scope, values),
         "inet_pton" => eval_builtin_inet_pton(args, context, scope, values),
         "iterator_apply" => eval_builtin_iterator_apply(args, context, scope, values),
         "iterator_count" => eval_builtin_iterator_count(args, context, scope, values),
         "iterator_to_array" => eval_builtin_iterator_to_array(args, context, scope, values),
-        "http_response_code" => eval_builtin_http_response_code(args, context, scope, values),
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
         "phpversion" => eval_builtin_phpversion(args, values),

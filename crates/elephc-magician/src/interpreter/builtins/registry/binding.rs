@@ -192,8 +192,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "getservbyport" => Some(&["port", "protocol"]),
         "get_resource_id" | "get_resource_type" => Some(&["resource"]),
         "getenv" => Some(&["name"]),
-        "header" => Some(&["header", "replace", "response_code"]),
-        "http_response_code" => Some(&["response_code"]),
         "inet_ntop" => Some(&["ip"]),
         "inet_pton" => Some(&["ip"]),
         "iterator_apply" => Some(&["iterator", "callback", "args"]),

@@ -14,7 +14,6 @@ mod filesystem;
 mod network_env;
 mod scalars;
 mod symbols;
-mod time;
 
 use super::eval_declared_builtin_values_call;
 use super::super::super::*;
@@ -25,7 +24,6 @@ use filesystem::*;
 use network_env::*;
 use scalars::*;
 use symbols::*;
-use time::*;
 
 /// Evaluates PHP-visible builtins when they are invoked through a dynamic callable name.
 pub(in crate::interpreter) fn eval_builtin_with_values(
@@ -57,9 +55,6 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
     if let Some(result) =
         eval_date_procedural_alias_with_values(name, evaluated_args, context, values)?
     {
-        return Ok(Some(result));
-    }
-    if let Some(result) = eval_time_builtin_with_values(name, evaluated_args, context, values)? {
         return Ok(Some(result));
     }
     if let Some(result) =

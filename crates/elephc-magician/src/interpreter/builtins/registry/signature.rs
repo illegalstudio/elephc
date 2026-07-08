@@ -74,8 +74,6 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "get_class" | "get_parent_class" => optional(params, 0),
         "is_a" | "is_subclass_of" => optional(params, 2),
 
-        "header" => optional(params, 1),
-        "http_response_code" => optional(params, 0),
         "is_callable" => optional_by_ref(params, 1, &["callable_name"]),
         "php_uname" | "readline" | "exit" | "die" => optional(params, 0),
 
@@ -146,9 +144,6 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("is_a", 2) => Bool(false),
         ("is_subclass_of", 2) => Bool(true),
 
-        ("header", 1) => Bool(true),
-        ("header", 2) => Int(0),
-        ("http_response_code", 0) => Int(0),
         ("is_callable", 1) => Bool(false),
         ("is_callable", 2) => Null,
         ("php_uname", 0) => String("a"),

@@ -1,13 +1,15 @@
 //! Purpose:
-//! Declarative eval registry entries and dispatch adapters for time builtins.
+//! Declarative eval registry entries and dispatch adapters for time and
+//! response-header builtins.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::time` module loading.
 //! - `crate::interpreter::builtins::hooks` for migrated time dispatch.
 //!
 //! Key details:
-//! - Time/date algorithms remain in sibling helper modules such as `date`,
-//!   `calendar`, `clock`, `mktime`, `sleep`, and `strtotime`.
+//! - Time/date and response-state algorithms remain in sibling helper modules
+//!   such as `date`, `calendar`, `clock`, `mktime`, `sleep`, `strtotime`, and
+//!   `system`.
 //! - This module owns registry metadata and small hook adapters only.
 
 use super::super::super::*;
@@ -20,7 +22,9 @@ mod date_default_timezone_set;
 mod getdate;
 mod gmdate;
 mod gmmktime;
+mod header;
 mod hrtime;
+mod http_response_code;
 mod localtime;
 mod microtime;
 mod mktime;
@@ -46,7 +50,9 @@ pub(in crate::interpreter) fn eval_builtin_time_call(
         }
         "getdate" => eval_builtin_getdate(args, context, scope, values),
         "gmmktime" | "mktime" => eval_builtin_mktime_like(name, args, context, scope, values),
+        "header" => eval_builtin_header(args, context, scope, values),
         "hrtime" => eval_builtin_hrtime(args, context, scope, values),
+        "http_response_code" => eval_builtin_http_response_code(args, context, scope, values),
         "localtime" => eval_builtin_localtime(args, context, scope, values),
         "microtime" => eval_builtin_microtime(args, context, scope, values),
         "sleep" => eval_builtin_sleep(args, context, scope, values),
@@ -101,9 +107,22 @@ pub(in crate::interpreter) fn eval_time_values_result(
                 name, *hour, *minute, *second, *month, *day, *year, context, values,
             )
         }
+        "header" => match evaluated_args {
+            [line] => eval_header_result(*line, None, None, context, values),
+            [line, replace] => eval_header_result(*line, Some(*replace), None, context, values),
+            [line, replace, response_code] => {
+                eval_header_result(*line, Some(*replace), Some(*response_code), context, values)
+            }
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
         "hrtime" => match evaluated_args {
             [] => eval_hrtime_result(None, values),
             [as_number] => eval_hrtime_result(Some(*as_number), values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "http_response_code" => match evaluated_args {
+            [] => eval_http_response_code_result(None, context, values),
+            [response_code] => eval_http_response_code_result(Some(*response_code), context, values),
             _ => Err(EvalStatus::RuntimeFatal),
         },
         "localtime" => match evaluated_args {

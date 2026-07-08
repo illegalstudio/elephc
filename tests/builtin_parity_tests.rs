@@ -35,9 +35,6 @@ const EVAL_DYNAMIC_DISPATCH_SOURCES: &[&str] = &[
     include_str!(
         "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/symbols.rs"
     ),
-    include_str!(
-        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/time.rs"
-    ),
 ];
 
 /// Eval-only reflection probes exist because magician can inspect dynamic eval metadata before the AOT catalog exposes them.
@@ -190,11 +187,13 @@ const EVAL_DECLARATIVE_REGISTRY_BUILTINS: &[&str] = &[
     "hash_hmac",
     "hash_init",
     "hash_update",
+    "header",
     "hex2bin",
     "html_entity_decode",
     "htmlentities",
     "htmlspecialchars",
     "hrtime",
+    "http_response_code",
     "hypot",
     "implode",
     "intdiv",
