@@ -1,6 +1,7 @@
 //! Purpose:
-//! Propagates constants through statement env cases.
-//! Maintains scalar environments while preserving declarations and control-flow side effects.
+//! Propagates constants through statement env cases: records scalar and
+//! array-literal facts after assignments and list unpacking, applying targeted
+//! RHS invalidation and the volatility guard first.
 //!
 //! Called from:
 //! - `crate::optimize::propagate::stmt`

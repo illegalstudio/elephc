@@ -1,6 +1,8 @@
 //! Purpose:
-//! Runs scalar constant propagation across statements and control-flow joins.
-//! Coordinates expression substitution, write invalidation, branch simulation, and statement environment tracking.
+//! Runs constant propagation across statements and control-flow joins: scalar
+//! facts plus array-literal facts for heap-backed locals (COW value-semantics
+//! snapshots). Coordinates expression substitution, targeted write
+//! invalidation, branch simulation, and statement environment tracking.
 //!
 //! Called from:
 //! - `crate::optimize::propagate_constants()`

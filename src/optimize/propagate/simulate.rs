@@ -6,7 +6,9 @@
 //! - `crate::optimize::propagate`
 //!
 //! Key details:
-//! - Only immutable scalar facts are propagated; arrays, objects, references, and unknown calls force conservative invalidation.
+//! - Simulation reuses `propagate_stmt` for environment updates, so scalar and
+//!   array facts, targeted invalidation, and volatility behave identically on
+//!   simulated loop paths and on the real propagation walk.
 
 use super::*;
 

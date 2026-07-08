@@ -1,12 +1,16 @@
 //! Purpose:
-//! Implements constant propagation stmt support.
-//! Tracks scalar facts through expressions, writes, simulations, and statement rewriting.
+//! Implements constant propagation statement support: per-statement
+//! environment updates, the reference-volatility ledger, and the
+//! function-scope flag feeding the top-level globals guard.
 //!
 //! Called from:
 //! - `crate::optimize::propagate`
 //!
 //! Key details:
-//! - Only immutable scalar facts are propagated; arrays, objects, references, and unknown calls force conservative invalidation.
+//! - Statements remove only the names their `Invalidation` write set proves
+//!   writable; reference-exposure points (`&`-aliases, `global`, `static`,
+//!   by-ref captures/foreach/args, superglobals) mark names volatile so they
+//!   never carry facts.
 
 use super::*;
 
@@ -31,8 +35,8 @@ use env::{env_after_list_unpack, env_after_scalar_assign};
 thread_local! {
     /// Variables that are bound by reference (`$x = &…`) somewhere in the program being
     /// propagated. Their value can change through the alias (another local, an object
-    /// property, or a by-reference call result) without a visible local write, so their
-    /// scalar constants must never be propagated. Conservative across the whole program.
+    /// property, or a by-reference call result) without a visible local write, so they
+    /// must never carry a propagated fact. Conservative across the whole program.
     static REFERENCE_VOLATILE: std::cell::RefCell<std::collections::HashSet<String>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
 }

@@ -267,3 +267,67 @@ fn test_closure_by_ref_capture_kills_existing_fact() {
         "the pre-capture fact must die at the closure creation site"
     );
 }
+
+/// An expression-position assignment through a nested lvalue chain
+/// (`$x = ($a[0][1] = "X")`) writes `$a` even though the chain's root is not
+/// the immediate array operand: the array fact must die. Regression for the
+/// fast-path write collector missing nested lvalue roots.
+#[test]
+fn test_nested_lvalue_assignment_expr_kills_array_fact() {
+    let nested_target = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(Expr::var("a")),
+                    index: Box::new(Expr::int_lit(0)),
+                },
+                Span::dummy(),
+            )),
+            index: Box::new(Expr::int_lit(1)),
+        },
+        Span::dummy(),
+    );
+    let program = vec![
+        Stmt::assign(
+            "a",
+            Expr::new(
+                ExprKind::ArrayLiteral(vec![Expr::string_lit("ab"), Expr::string_lit("cd")]),
+                Span::dummy(),
+            ),
+        ),
+        Stmt::assign(
+            "x",
+            Expr::new(
+                ExprKind::Assignment {
+                    target: Box::new(nested_target),
+                    value: Box::new(Expr::string_lit("X")),
+                    result_target: None,
+                    prelude: Vec::new(),
+                    conditional_value_temp: None,
+                },
+                Span::dummy(),
+            ),
+        ),
+        Stmt::echo(Expr::new(
+            ExprKind::ArrayAccess {
+                array: Box::new(Expr::var("a")),
+                index: Box::new(Expr::int_lit(0)),
+            },
+            Span::dummy(),
+        )),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::new(
+            ExprKind::ArrayAccess {
+                array: Box::new(Expr::var("a")),
+                index: Box::new(Expr::int_lit(0)),
+            },
+            Span::dummy(),
+        )),
+        "a string-offset write through $a[0][1] mutates $a; the fact must die"
+    );
+}

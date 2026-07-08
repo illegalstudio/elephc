@@ -69,20 +69,10 @@ impl Invalidation {
 }
 
 /// Computes the caller locals an expression can write, including through the
-/// calls it performs.
+/// calls it performs. This is the single write-set authority for propagation:
+/// there is deliberately no faster pre-scan sharing the job, so lvalue-root
+/// extraction and call handling cannot drift between two implementations.
 pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
-    // Fast path: a `Some` from the write collector proves the expression
-    // contains no calls, complex `unset`s, pipes, or yields anywhere — the
-    // collected names are the exact write set.
-    if let Some(writes) = expr_local_writes(expr) {
-        return Invalidation::Names(writes);
-    }
-    expr_invalidation_slow(expr)
-}
-
-/// The recursive walk behind `expr_invalidation`, used when the expression
-/// contains at least one call-like construct.
-fn expr_invalidation_slow(expr: &Expr) -> Invalidation {
     match &expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
@@ -458,8 +448,8 @@ fn assignment_target_invalidation(target: &Expr) -> Invalidation {
     }
 }
 
-/// Computes the caller locals a statement can write, mirroring
-/// `stmt_local_writes` with call-aware precision.
+/// Computes the caller locals a statement can write, with the same call-aware
+/// precision as `expr_invalidation`.
 pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
     match &stmt.kind {
         StmtKind::Synthetic(stmts) | StmtKind::NamespaceBlock { body: stmts, .. } => {

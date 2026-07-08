@@ -1,12 +1,15 @@
 //! Purpose:
-//! Implements constant propagation expr support.
-//! Tracks scalar facts through expressions, writes, simulations, and statement rewriting.
+//! Implements constant propagation expression support: substitutes scalar
+//! facts at variable reads, folds constant-index reads of array-fact locals,
+//! and masks by-ref argument positions so they stay lvalues.
 //!
 //! Called from:
 //! - `crate::optimize::propagate`
 //!
 //! Key details:
-//! - Only immutable scalar facts are propagated; arrays, objects, references, and unknown calls force conservative invalidation.
+//! - Substitution runs against the environment minus the expression's own
+//!   `Invalidation` write set; array facts never substitute at plain variable
+//!   reads (materializing a literal would break by-ref argument passing).
 
 use super::*;
 
@@ -24,9 +27,10 @@ pub(crate) fn captured_constant_env(
 }
 
 /// Recursively propagates constant facts through an expression, substituting known scalar
-/// variables with their constant values. Clears the environment when local writes are detected
-/// to prevent incorrect propagation across assignments. Returns a new expression with
-/// substitutions applied, followed by constant folding.
+/// variables with their constant values and folding constant-index reads of array-fact
+/// locals. Substitution runs against the environment minus the expression's own write set
+/// so a stale fact is never propagated across an in-expression write. Returns a new
+/// expression with substitutions applied, followed by constant folding.
 pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     let reduced_env;
     // Drop the names this expression may write before substituting, so a stale
