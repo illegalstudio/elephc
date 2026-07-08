@@ -28,23 +28,29 @@ pub(crate) fn captured_constant_env(
 /// to prevent incorrect propagation across assignments. Returns a new expression with
 /// substitutions applied, followed by constant folding.
 pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
-    let empty_env;
-    // Clear the environment when evaluating this expression may write locals, so a stale
-    // constant is never propagated into a read sequenced after the write in the same
-    // expression. A known non-empty write set (e.g. an inline assignment) clears it; an
-    // *unknown* write set (`None`, produced by calls) clears it only when the expression
-    // actually has side effects — i.e. a by-reference-mutating call such as `bump($i)` in
-    // `match(bump($i)) . "|" . $i` (issue #384). A pure call (`gettype`, `strlen`, …) cannot
-    // mutate a local, so its constants stay foldable and behaviour is unchanged.
-    let must_clear = match expr_local_writes(&expr) {
-        Some(writes) => !writes.is_empty(),
-        None => expr_effect(&expr).has_side_effects,
-    };
-    let env = if must_clear {
-        empty_env = HashMap::new();
-        &empty_env
-    } else {
-        env
+    let reduced_env;
+    // Drop the names this expression may write before substituting, so a stale
+    // constant is never propagated into a read sequenced after the write in the
+    // same expression — e.g. `$i` after a by-reference-mutating `bump($i)` in
+    // `match(bump($i)) . "|" . $i` (issue #384). Sub-expression evaluation order
+    // is not tracked, so a written name is conservatively blocked everywhere in
+    // the expression; unwritten names keep folding. `All` (include, yield,
+    // spread into a by-ref callee, top-level global-writing call) blocks
+    // everything.
+    let env = match expr_invalidation(&expr) {
+        Invalidation::Names(writes) if writes.is_empty() => env,
+        Invalidation::Names(writes) => {
+            reduced_env = env
+                .iter()
+                .filter(|(name, _)| !writes.contains(*name))
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect();
+            &reduced_env
+        }
+        Invalidation::All => {
+            reduced_env = HashMap::new();
+            &reduced_env
+        }
     };
     let span = expr.span;
     let kind = match expr.kind {
@@ -183,7 +189,9 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
                 variadic,
                 variadic_type,
                 return_type,
-                body: propagate_block(body, captured_constant_env(&captures, &capture_refs, env)).0,
+                body: super::stmt::with_function_scope(|| {
+                    propagate_block(body, captured_constant_env(&captures, &capture_refs, env)).0
+                }),
                 is_arrow,
                 is_static,
                 captures,

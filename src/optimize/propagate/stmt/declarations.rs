@@ -64,7 +64,7 @@ pub(super) fn propagate_property(property: ClassProperty) -> ClassProperty {
 pub(super) fn propagate_method(method: ClassMethod) -> ClassMethod {
     ClassMethod {
         params: propagate_params(method.params),
-        body: propagate_block(method.body, HashMap::new()).0,
+        body: with_function_scope(|| propagate_block(method.body, HashMap::new()).0),
         ..method
     }
 }

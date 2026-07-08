@@ -27,8 +27,16 @@ pub(in crate::optimize) fn function_call_effect(name: &str) -> Effect {
             Effect::PURE
         } else if crate::builtins::registry::lookup(name).is_some() {
             // A known builtin can mutate by-ref arguments, heap state, or
-            // emit output, but it can never write PHP `global` storage.
-            Effect::PURE.with_side_effects().with_may_throw()
+            // emit output, but it can never write PHP `global` storage —
+            // unless it invokes a user callback, which can.
+            if builtin_invokes_callbacks(name) {
+                Effect::PURE
+                    .with_side_effects()
+                    .with_may_throw()
+                    .with_writes_globals()
+            } else {
+                Effect::PURE.with_side_effects().with_may_throw()
+            }
         } else {
             Effect::PURE
                 .with_side_effects()

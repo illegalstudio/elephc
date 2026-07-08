@@ -189,10 +189,10 @@ pub(super) fn propagate_switch_stmt(
     env: ConstantEnv,
 ) -> (Stmt, ConstantEnv) {
     let subject = propagate_expr(subject, &env);
-    let base_env = if expr_effect(&subject).has_side_effects {
-        HashMap::new()
-    } else {
-        env
+    let base_env = {
+        let mut base_env = env;
+        expr_invalidation(&subject).apply(&mut base_env);
+        base_env
     };
     let cases: Vec<_> = cases
         .into_iter()
@@ -280,10 +280,10 @@ pub(super) fn propagate_if_stmt(
     env: ConstantEnv,
 ) -> (Stmt, ConstantEnv) {
     let condition = propagate_expr(condition, &env);
-    let base_env = if expr_effect(&condition).has_side_effects {
-        HashMap::new()
-    } else {
-        env
+    let base_env = {
+        let mut base_env = env;
+        expr_invalidation(&condition).apply(&mut base_env);
+        base_env
     };
 
     let (then_body, then_env) = propagate_block(then_body, base_env.clone());
@@ -291,10 +291,10 @@ pub(super) fn propagate_if_stmt(
     let mut elseif_envs = Vec::new();
     for (condition, body) in elseif_clauses {
         let condition = propagate_expr(condition, &base_env);
-        let branch_env = if expr_effect(&condition).has_side_effects {
-            HashMap::new()
-        } else {
-            base_env.clone()
+        let branch_env = {
+            let mut branch_env = base_env.clone();
+            expr_invalidation(&condition).apply(&mut branch_env);
+            branch_env
         };
         let (body, env_after_body) = propagate_block(body, branch_env);
         if matches!(block_terminal_effect(&body), TerminalEffect::FallsThrough) {

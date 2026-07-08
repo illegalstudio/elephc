@@ -10,45 +10,29 @@
 
 use super::*;
 
-/// Computes a safe constant environment for a `for` loop by filtering out variables
-/// written within the loop's condition, body, and update expressions from the given environment.
-/// Returns an empty map conservatively if any expression cannot be analyzed.
+/// Computes a safe constant environment for a `for` loop by filtering out every
+/// variable the loop's condition, body, or update can write (targeted
+/// invalidation, so calls inside the loop keep facts for unwritten variables).
+/// Returns an empty map only when a write set is genuinely unknowable.
 pub(crate) fn safe_loop_env(
     env: &ConstantEnv,
     conditions: &[Expr],
     body: &[Stmt],
     update: Option<&Stmt>,
 ) -> ConstantEnv {
-    let mut written = HashSet::new();
-
+    let mut inv = block_invalidation(body);
     for condition in conditions {
-        let Some(condition_writes) = expr_local_writes(condition) else {
-            return HashMap::new();
-        };
-        written.extend(condition_writes);
+        inv = inv.union(expr_invalidation(condition));
     }
-
-    let Some(body_writes) = block_local_writes(body) else {
-        return HashMap::new();
-    };
-    written.extend(body_writes);
-
     if let Some(update) = update {
-        let Some(update_writes) = stmt_local_writes(update) else {
-            return HashMap::new();
-        };
-        written.extend(update_writes);
+        inv = inv.union(stmt_invalidation(update));
     }
-
-    env.iter()
-        .filter(|(name, _)| !written.contains(*name))
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect()
+    filter_written(env, inv)
 }
 
-/// Computes a safe constant environment for a `foreach` loop by filtering out variables
-/// written by the array expression, key/value loop variables, and the body from the given environment.
-/// Returns an empty map conservatively if the array expression cannot be analyzed.
+/// Computes a safe constant environment for a `foreach` loop by filtering out
+/// the key/value loop variables and everything the array expression or body
+/// can write (targeted invalidation).
 pub(crate) fn safe_foreach_env(
     env: &ConstantEnv,
     array: &Expr,
@@ -56,24 +40,24 @@ pub(crate) fn safe_foreach_env(
     value_var: &str,
     body: &[Stmt],
 ) -> ConstantEnv {
-    let Some(mut written) = expr_local_writes(array) else {
-        return HashMap::new();
-    };
-
-    written.insert(value_var.to_string());
+    let mut inv = expr_invalidation(array).union(block_invalidation(body));
+    inv.add(value_var);
     if let Some(key_var) = key_var {
-        written.insert(key_var.to_string());
+        inv.add(key_var);
     }
+    filter_written(env, inv)
+}
 
-    let Some(body_writes) = block_local_writes(body) else {
-        return HashMap::new();
-    };
-    written.extend(body_writes);
-
-    env.iter()
-        .filter(|(name, _)| !written.contains(*name))
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect()
+/// Returns `env` minus the names in `inv` (`All` empties it).
+fn filter_written(env: &ConstantEnv, inv: Invalidation) -> ConstantEnv {
+    match inv {
+        Invalidation::All => HashMap::new(),
+        Invalidation::Names(written) => env
+            .iter()
+            .filter(|(name, _)| !written.contains(*name))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect(),
+    }
 }
 
 /// Collects all local variable names written within a block of statements.
@@ -309,8 +293,11 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         | ExprKind::ConstRef(_)
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::This
-        | ExprKind::FirstClassCallable(_)
-        | ExprKind::Closure { .. } => Some(HashSet::new()),
+        | ExprKind::FirstClassCallable(_) => Some(HashSet::new()),
+        // Creating the closure writes nothing, but its by-ref captures alias
+        // the outer variables from this point on — report them as written so
+        // existing facts die at the creation site.
+        ExprKind::Closure { capture_refs, .. } => Some(capture_refs.iter().cloned().collect()),
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before optimizer passes")
         }

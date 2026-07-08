@@ -21,9 +21,7 @@ use super::*;
 /// - `value`: RHS expression
 /// Returns the updated environment.
 pub(super) fn env_after_scalar_assign(mut env: ConstantEnv, name: &str, value: &Expr) -> ConstantEnv {
-    if expr_effect(value).has_side_effects {
-        env.clear();
-    }
+    expr_invalidation(value).apply(&mut env);
     // A reference-bound local's value may change through its alias without a visible local
     // write, so never record a constant for it.
     if super::is_reference_volatile(name) {
@@ -49,9 +47,7 @@ pub(super) fn env_after_scalar_assign(mut env: ConstantEnv, name: &str, value: &
 /// - `value`: RHS expression producing the array to unpack
 /// Returns the updated environment.
 pub(super) fn env_after_list_unpack(mut env: ConstantEnv, vars: &[String], value: &Expr) -> ConstantEnv {
-    if expr_effect(value).has_side_effects {
-        env.clear();
-    }
+    expr_invalidation(value).apply(&mut env);
 
     for var in vars {
         env.remove(var);

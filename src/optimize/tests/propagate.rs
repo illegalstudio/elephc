@@ -13,6 +13,8 @@ use super::*;
 mod straight_line;
 mod control_paths;
 mod collections;
+mod invalidation;
 mod loops;
 mod signatures;
+mod targeted_invalidation;
 mod volatility;
