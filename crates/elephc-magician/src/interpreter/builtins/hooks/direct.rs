@@ -11,7 +11,7 @@
 
 use super::super::*;
 use super::super::super::{
-    eval_builtin_count, ElephcEvalContext, ElephcEvalScope, EvalExpr, EvalStatus,
+    ElephcEvalContext, ElephcEvalScope, EvalExpr, EvalStatus,
     RuntimeCellHandle, RuntimeValueOps,
 };
 
@@ -327,18 +327,20 @@ impl EvalDirectHook {
         match self {
             Self::Abs => eval_builtin_abs(args, context, scope, values),
             Self::Acos => eval_builtin_acos(args, context, scope, values),
-            Self::ArrayAggregate => eval_builtin_array_aggregate(name, args, context, scope, values),
-            Self::Array => eval_builtin_array_call(name, args, context, scope, values),
-            Self::ArrayFlip => eval_builtin_array_flip(args, context, scope, values),
-            Self::ArrayKeyExists => eval_builtin_array_key_exists(args, context, scope, values),
-            Self::ArrayPad => eval_builtin_array_pad(args, context, scope, values),
-            Self::ArrayKeys => eval_builtin_array_keys(args, context, scope, values),
-            Self::ArrayRand => eval_builtin_array_rand(args, context, scope, values),
-            Self::ArrayReverse => eval_builtin_array_reverse(args, context, scope, values),
-            Self::ArraySearch => eval_builtin_array_search(name, args, context, scope, values),
-            Self::ArraySlice => eval_builtin_array_slice(args, context, scope, values),
-            Self::ArrayUnique => eval_builtin_array_unique(args, context, scope, values),
-            Self::ArrayValues => eval_builtin_array_values(args, context, scope, values),
+            Self::ArrayAggregate
+            | Self::Array
+            | Self::ArrayFlip
+            | Self::ArrayKeyExists
+            | Self::ArrayPad
+            | Self::ArrayKeys
+            | Self::ArrayRand
+            | Self::ArrayReverse
+            | Self::ArraySearch
+            | Self::ArraySlice
+            | Self::ArrayUnique
+            | Self::ArrayValues
+            | Self::Count
+            | Self::Range => eval_builtin_array_declared_call(name, args, context, scope, values),
             Self::Asin => eval_builtin_asin(args, context, scope, values),
             Self::Atan => eval_builtin_atan(args, context, scope, values),
             Self::Atan2 => eval_builtin_atan2(args, context, scope, values),
@@ -349,7 +351,6 @@ impl EvalDirectHook {
             Self::Ceil => eval_builtin_ceil(args, context, scope, values),
             Self::Chr => eval_builtin_chr(args, context, scope, values),
             Self::Clamp => eval_builtin_clamp(args, context, scope, values),
-            Self::Count => eval_builtin_count(args, context, scope, values),
             Self::Core => eval_builtin_core_call(name, args, context, scope, values),
             Self::Cos => eval_builtin_cos(args, context, scope, values),
             Self::Cosh => eval_builtin_cosh(args, context, scope, values),
@@ -445,7 +446,6 @@ impl EvalDirectHook {
             Self::Rand => eval_builtin_rand(args, context, scope, values),
             Self::RandomInt => eval_builtin_random_int(args, context, scope, values),
             Self::Round => eval_builtin_round(args, context, scope, values),
-            Self::Range => eval_builtin_range(args, context, scope, values),
             Self::PregMatch => eval_builtin_preg_match(args, context, scope, values),
             Self::PregMatchAll => eval_builtin_preg_match_all(args, context, scope, values),
             Self::PregReplace => eval_builtin_preg_replace(args, context, scope, values),

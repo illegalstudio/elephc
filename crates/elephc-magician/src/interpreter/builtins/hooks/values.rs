@@ -12,7 +12,7 @@
 
 use super::super::*;
 use super::super::super::{
-    eval_count_result, ElephcEvalContext, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
+    ElephcEvalContext, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
 };
 use super::arity::{one_arg, three_args, two_args};
 use super::hash::{eval_hash_algos_values, eval_hash_context_values};
@@ -334,40 +334,23 @@ impl EvalValuesHook {
         match self {
             Self::Abs => one_arg(evaluated_args, values, eval_abs_result),
             Self::Acos => one_arg(evaluated_args, values, eval_acos_result),
-            Self::ArrayAggregate => one_arg(evaluated_args, values, |array, values| {
-                eval_array_aggregate_result(name, array, values)
-            }),
-            Self::Array => eval_array_non_mutating_values_result(name, evaluated_args, context, values),
-            Self::ArrayMutating => {
-                eval_array_mutating_values_result(name, evaluated_args, context, values)
+            Self::ArrayAggregate
+            | Self::Array
+            | Self::ArrayMutating
+            | Self::ArrayFlip
+            | Self::ArrayKeyExists
+            | Self::ArrayPad
+            | Self::ArrayKeys
+            | Self::ArrayRand
+            | Self::ArrayReverse
+            | Self::ArraySearch
+            | Self::ArraySlice
+            | Self::ArrayUnique
+            | Self::ArrayValues
+            | Self::Count
+            | Self::Range => {
+                eval_array_declared_values_result(name, evaluated_args, context, values)
             }
-            Self::ArrayFlip => one_arg(evaluated_args, values, eval_array_flip_result),
-            Self::ArrayKeyExists => two_args(evaluated_args, values, |key, array, values| {
-                values.array_key_exists(key, array)
-            }),
-            Self::ArrayPad => three_args(evaluated_args, values, eval_array_pad_result),
-            Self::ArrayKeys => one_arg(evaluated_args, values, eval_array_keys_result),
-            Self::ArrayRand => one_arg(evaluated_args, values, eval_array_rand_result),
-            Self::ArrayReverse => match evaluated_args {
-                [array] => eval_array_reverse_result(*array, false, values),
-                [array, preserve_keys] => {
-                    let preserve_keys = values.truthy(*preserve_keys)?;
-                    eval_array_reverse_result(*array, preserve_keys, values)
-                }
-                _ => Err(EvalStatus::RuntimeFatal),
-            },
-            Self::ArraySearch => two_args(evaluated_args, values, |needle, array, values| {
-                eval_array_search_result(name, needle, array, values)
-            }),
-            Self::ArraySlice => match evaluated_args {
-                [array, offset] => eval_array_slice_result(*array, *offset, None, values),
-                [array, offset, length] => {
-                    eval_array_slice_result(*array, *offset, Some(*length), values)
-                }
-                _ => Err(EvalStatus::RuntimeFatal),
-            },
-            Self::ArrayUnique => one_arg(evaluated_args, values, eval_array_unique_result),
-            Self::ArrayValues => one_arg(evaluated_args, values, eval_array_values_result),
             Self::Asin => one_arg(evaluated_args, values, eval_asin_result),
             Self::Atan => one_arg(evaluated_args, values, eval_atan_result),
             Self::Atan2 => two_args(evaluated_args, values, eval_atan2_result),
@@ -378,11 +361,6 @@ impl EvalValuesHook {
             Self::Ceil => one_arg(evaluated_args, values, eval_ceil_result),
             Self::Chr => one_arg(evaluated_args, values, eval_chr_result),
             Self::Clamp => three_args(evaluated_args, values, eval_clamp_result),
-            Self::Count => match evaluated_args {
-                [value] => eval_count_result(*value, None, context, values),
-                [value, mode] => eval_count_result(*value, Some(*mode), context, values),
-                _ => Err(EvalStatus::RuntimeFatal),
-            },
             Self::Core => eval_core_values_result(name, evaluated_args, context, values),
             Self::Cos => one_arg(evaluated_args, values, eval_cos_result),
             Self::Cosh => one_arg(evaluated_args, values, eval_cosh_result),
@@ -495,7 +473,6 @@ impl EvalValuesHook {
                 [value, precision] => eval_round_result(*value, Some(*precision), values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::Range => two_args(evaluated_args, values, eval_range_result),
             Self::PregMatch => eval_preg_match_values_result(evaluated_args, values),
             Self::PregMatchAll => eval_preg_match_all_values_result(evaluated_args, values),
             Self::PregReplace => eval_preg_replace_values_result(evaluated_args, values),

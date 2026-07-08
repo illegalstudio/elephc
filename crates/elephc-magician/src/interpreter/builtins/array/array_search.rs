@@ -9,10 +9,31 @@
 
 use super::super::spec::EvalBuiltinDefaultValue;
 
+use super::super::super::*;
+
 eval_builtin! {
     name: "array_search",
     area: Array,
     params: [needle, haystack, strict = EvalBuiltinDefaultValue::Bool(false)],
     direct: ArraySearch,
     values: ArraySearch,
+}
+/// Dispatches direct eval calls for the `array_search` array builtin.
+pub(in crate::interpreter) fn eval_array_search_declared_call(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_builtin_array_search("array_search", args, context, scope, values)
+}
+
+/// Dispatches evaluated-argument eval calls for the `array_search` array builtin.
+pub(in crate::interpreter) fn eval_array_search_declared_values_result(
+    evaluated_args: &[RuntimeCellHandle],
+    _context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [needle, array] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
+    eval_array_search_result("array_search", *needle, *array, values)
 }

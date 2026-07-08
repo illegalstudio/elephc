@@ -1,12 +1,12 @@
 //! Purpose:
-//! Per-builtin declarations for array and collection functions migrated to the
-//! eval builtin registry.
+//! Per-builtin declarations and eval adapters for array and collection functions.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins` module loading.
 //!
 //! Key details:
-//! - Leaf files register metadata through `eval_builtin!`.
+//! - Leaf files register metadata through `eval_builtin!` and own the concrete
+//!   direct or evaluated-argument adapter used by registry hooks.
 
 mod array_chunk;
 mod array_column;
@@ -23,8 +23,8 @@ mod array_key_exists;
 mod array_keys;
 mod array_map;
 mod array_merge;
-mod array_pop;
 mod array_pad;
+mod array_pop;
 mod array_product;
 mod array_push;
 mod array_rand;
@@ -42,16 +42,15 @@ mod array_walk;
 mod arsort;
 mod asort;
 mod count;
+mod direct_dispatch;
 mod in_array;
 mod iterator_apply;
 mod iterator_count;
 mod iterator_to_array;
 mod krsort;
 mod ksort;
-mod mutating;
 mod natcasesort;
 mod natsort;
-mod non_mutating;
 mod range;
 mod rsort;
 mod shuffle;
@@ -59,8 +58,8 @@ mod sort;
 mod uasort;
 mod uksort;
 mod usort;
+mod values_dispatch;
 
-pub(in crate::interpreter) use array_keys::*;
-pub(in crate::interpreter) use array_values::*;
-pub(in crate::interpreter) use mutating::*;
-pub(in crate::interpreter) use non_mutating::*;
+pub(in crate::interpreter) use direct_dispatch::eval_builtin_array_declared_call;
+pub(in crate::interpreter) use array_values::eval_array_values_result;
+pub(in crate::interpreter) use values_dispatch::eval_array_declared_values_result;

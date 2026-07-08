@@ -47,3 +47,22 @@ pub(in crate::interpreter) fn eval_array_values_result(
     }
     Ok(result)
 }
+/// Dispatches direct eval calls for the `array_values` array builtin.
+pub(in crate::interpreter) fn eval_array_values_declared_call(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_builtin_array_values(args, context, scope, values)
+}
+
+/// Dispatches evaluated-argument eval calls for the `array_values` array builtin.
+pub(in crate::interpreter) fn eval_array_values_declared_values_result(
+    evaluated_args: &[RuntimeCellHandle],
+    _context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [array] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
+    eval_array_values_result(*array, values)
+}
