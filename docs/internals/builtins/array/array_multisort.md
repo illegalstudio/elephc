@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_multisort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_multisort.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1719](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1719) (`lower_array_multisort`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1717](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1717) (`lower_array_multisort`)
 - **Function symbol**: `lower_array_multisort()`
 
 
