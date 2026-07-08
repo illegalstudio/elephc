@@ -1,11 +1,11 @@
 //! Purpose:
-//! Declarative eval registry entry for `spl_autoload_unregister`.
+//! Eval registry entry for `spl_autoload_unregister`.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::symbols`.
 //!
 //! Key details:
-//! - Runtime behavior stays delegated to the SPL autoload registration stub.
+//! - Registration stub behavior is shared with `spl_autoload_register()`.
 
 eval_builtin! {
     name: "spl_autoload_unregister",
@@ -17,21 +17,31 @@ eval_builtin! {
 
 use super::super::super::*;
 
-/// Dispatches direct eval calls for the `spl_autoload_unregister` symbol builtin through the area dispatcher.
+/// Evaluates direct `spl_autoload_unregister(...)` calls through the registration owner.
 pub(in crate::interpreter) fn eval_spl_autoload_unregister_declared_call(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::super::eval_builtin_spl_autoload_bool("spl_autoload_unregister", args, context, scope, values)
+    super::spl_autoload_register::eval_builtin_spl_autoload_bool(
+        "spl_autoload_unregister",
+        args,
+        context,
+        scope,
+        values,
+    )
 }
 
-/// Dispatches evaluated-argument calls for the `spl_autoload_unregister` symbol builtin through the area dispatcher.
+/// Evaluates materialized `spl_autoload_unregister(...)` arguments through the registration owner.
 pub(in crate::interpreter) fn eval_spl_autoload_unregister_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
     _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::super::eval_spl_autoload_bool_result("spl_autoload_unregister", evaluated_args, values)
+    super::spl_autoload_register::eval_spl_autoload_bool_result(
+        "spl_autoload_unregister",
+        evaluated_args,
+        values,
+    )
 }

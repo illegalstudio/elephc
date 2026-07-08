@@ -1,11 +1,11 @@
 //! Purpose:
-//! Declarative eval registry entry for `spl_autoload`.
+//! Eval registry entry and implementation for `spl_autoload`.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::symbols`.
 //!
 //! Key details:
-//! - Runtime behavior stays delegated to the SPL autoload stub.
+//! - Eval mirrors the main backend's conservative no-op autoload behavior.
 
 use super::super::spec::EvalBuiltinDefaultValue;
 
@@ -19,21 +19,53 @@ eval_builtin! {
 
 use super::super::super::*;
 
-/// Dispatches direct eval calls for the `spl_autoload` symbol builtin through the area dispatcher.
+/// Evaluates direct `spl_autoload(...)` calls as a no-op stub.
 pub(in crate::interpreter) fn eval_spl_autoload_declared_call(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::super::eval_builtin_spl_autoload_void("spl_autoload", args, context, scope, values)
+    eval_builtin_spl_autoload_void("spl_autoload", args, context, scope, values)
 }
 
-/// Dispatches evaluated-argument calls for the `spl_autoload` symbol builtin through the area dispatcher.
+/// Evaluates materialized `spl_autoload(...)` arguments as a no-op stub.
 pub(in crate::interpreter) fn eval_spl_autoload_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
     _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::super::eval_spl_autoload_void_result("spl_autoload", evaluated_args, values)
+    eval_spl_autoload_void_result("spl_autoload", evaluated_args, values)
+}
+
+/// Evaluates void SPL autoload call stubs.
+pub(in crate::interpreter) fn eval_builtin_spl_autoload_void(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match name {
+        "spl_autoload_call" if args.len() == 1 => {}
+        "spl_autoload" if (1..=2).contains(&args.len()) => {}
+        _ => return Err(EvalStatus::RuntimeFatal),
+    }
+    for arg in args {
+        let _ = eval_expr(arg, context, scope, values)?;
+    }
+    eval_spl_autoload_void_result(name, args, values)
+}
+
+/// Evaluates materialized void SPL autoload call stubs.
+pub(in crate::interpreter) fn eval_spl_autoload_void_result<T>(
+    name: &str,
+    evaluated_args: &[T],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match name {
+        "spl_autoload_call" if evaluated_args.len() == 1 => values.null(),
+        "spl_autoload" if (1..=2).contains(&evaluated_args.len()) => values.null(),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }

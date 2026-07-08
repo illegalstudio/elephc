@@ -1,11 +1,11 @@
 //! Purpose:
-//! Declarative eval registry entry for `spl_autoload_functions`.
+//! Eval registry entry and implementation for `spl_autoload_functions`.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::symbols`.
 //!
 //! Key details:
-//! - Runtime behavior stays delegated to the SPL autoload stub.
+//! - Eval models an empty autoload function table.
 
 eval_builtin! {
     name: "spl_autoload_functions",
@@ -17,21 +17,42 @@ eval_builtin! {
 
 use super::super::super::*;
 
-/// Dispatches direct eval calls for the `spl_autoload_functions` symbol builtin through the area dispatcher.
+/// Evaluates direct `spl_autoload_functions()` calls.
 pub(in crate::interpreter) fn eval_spl_autoload_functions_declared_call(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::super::eval_builtin_spl_autoload_functions(args, context, scope, values)
+    eval_builtin_spl_autoload_functions(args, context, scope, values)
 }
 
-/// Dispatches evaluated-argument calls for the `spl_autoload_functions` symbol builtin through the area dispatcher.
+/// Evaluates materialized `spl_autoload_functions()` arguments.
 pub(in crate::interpreter) fn eval_spl_autoload_functions_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
     _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::super::eval_spl_autoload_functions_result(evaluated_args, values)
+    eval_spl_autoload_functions_result(evaluated_args, values)
+}
+
+/// Evaluates `spl_autoload_functions()`.
+pub(in crate::interpreter) fn eval_builtin_spl_autoload_functions(
+    args: &[EvalExpr],
+    _context: &mut ElephcEvalContext,
+    _scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_spl_autoload_functions_result(args, values)
+}
+
+/// Evaluates materialized `spl_autoload_functions()`.
+pub(in crate::interpreter) fn eval_spl_autoload_functions_result<T>(
+    evaluated_args: &[T],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    values.array_new(0)
 }
