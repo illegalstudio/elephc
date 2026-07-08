@@ -193,8 +193,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         }
         "ptr_write_string" => Some(&["pointer", "string"]),
         "ptr_sizeof" => Some(&["type"]),
-        "print_r" => Some(&["value", "return"]),
-        "var_dump" => Some(&["value", "values"]),
         "readline" => Some(&["prompt"]),
         "spl_autoload_register" => Some(&["callback", "throw", "prepend"]),
         "spl_autoload_unregister" => Some(&["callback"]),

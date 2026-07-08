@@ -21,9 +21,6 @@ const EVAL_DYNAMIC_DISPATCH_SOURCES: &[&str] = &[
         "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/arrays.rs"
     ),
     include_str!(
-        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/core.rs"
-    ),
-    include_str!(
         "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/filesystem.rs"
     ),
     include_str!(
@@ -272,6 +269,7 @@ const EVAL_DECLARATIVE_REGISTRY_BUILTINS: &[&str] = &[
     "phpversion",
     "popen",
     "pow",
+    "print_r",
     "printf",
     "putenv",
     "preg_match",
@@ -363,6 +361,7 @@ const EVAL_DECLARATIVE_REGISTRY_BUILTINS: &[&str] = &[
     "urldecode",
     "urlencode",
     "usleep",
+    "var_dump",
     "vprintf",
     "vsprintf",
     "wordwrap",

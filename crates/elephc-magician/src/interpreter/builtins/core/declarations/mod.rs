@@ -18,6 +18,8 @@ mod define;
 mod defined;
 mod die;
 mod exit;
+mod print_r;
+mod var_dump;
 
 /// Dispatches direct expression-level calls for declaratively migrated core builtins.
 pub(in crate::interpreter) fn eval_builtin_core_call(
@@ -33,6 +35,8 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
         "define" => eval_builtin_define(args, context, scope, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
         "die" | "exit" => eval_builtin_exit(args, context, scope, values),
+        "print_r" => eval_builtin_print_r(args, context, scope, values),
+        "var_dump" => eval_builtin_var_dump(args, context, scope, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -57,6 +61,8 @@ pub(in crate::interpreter) fn eval_core_values_result(
         "define" => eval_define_result(evaluated_args, context, values),
         "defined" => eval_defined_result(evaluated_args, context, values),
         "die" | "exit" => eval_exit_result(evaluated_args, values),
+        "print_r" => eval_print_r_result(evaluated_args, context, values),
+        "var_dump" => eval_var_dump_result(evaluated_args, context, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

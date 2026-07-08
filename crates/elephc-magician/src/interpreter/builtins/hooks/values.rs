@@ -79,7 +79,7 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Clamp,
     /// Dispatches `count(...)`.
     Count,
-    /// Dispatches core callable, constant, and process-control builtins.
+    /// Dispatches core callable, constant, process-control, and debug-output builtins.
     Core,
     /// Dispatches `crc32(...)`.
     Crc32,

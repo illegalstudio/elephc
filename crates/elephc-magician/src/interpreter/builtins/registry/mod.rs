@@ -350,6 +350,7 @@ mod tests {
             "php_uname",
             "phpversion",
             "popen",
+            "print_r",
             "printf",
             "preg_match",
             "preg_match_all",
@@ -415,6 +416,7 @@ mod tests {
             "umask",
             "unlink",
             "usleep",
+            "var_dump",
             "vprintf",
             "vsprintf",
             "wordwrap",
@@ -468,6 +470,22 @@ mod tests {
         assert_eq!(
             eval_declared_builtin_spec("settype").map(EvalBuiltinSpec::by_ref_param_names),
             Some(["var"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("print_r"),
+            Some(["value", "return"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("print_r", 1),
+            Some(EvalBuiltinDefaultValue::Bool(false))
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("var_dump"),
+            Some(["value", "values"].as_slice())
+        );
+        assert_eq!(
+            eval_builtin_signature_shape("var_dump").map(|shape| shape.variadic),
+            Some(Some("values"))
         );
         for name in ["rand", "mt_rand", "random_int"] {
             assert_eq!(

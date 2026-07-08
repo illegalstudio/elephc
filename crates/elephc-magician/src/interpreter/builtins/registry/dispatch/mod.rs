@@ -9,7 +9,6 @@
 //!   builtin family and returns `Ok(None)` when the name is outside its domain.
 
 mod arrays;
-mod core;
 mod filesystem;
 mod symbols;
 
@@ -17,7 +16,6 @@ use super::eval_declared_builtin_values_call;
 use super::super::super::*;
 
 use arrays::*;
-use core::*;
 use filesystem::*;
 use symbols::*;
 
@@ -51,9 +49,6 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
         return Ok(Some(result));
     }
     if let Some(result) = eval_symbols_builtin_with_values(name, evaluated_args, context, values)? {
-        return Ok(Some(result));
-    }
-    if let Some(result) = eval_core_builtin_with_values(name, evaluated_args, context, values)? {
         return Ok(Some(result));
     }
     Ok(None)

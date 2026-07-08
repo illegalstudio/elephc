@@ -90,8 +90,6 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "array_filter" => optional(params, 1),
         "array_reduce" => optional(params, 2),
         "array_walk" | "usort" | "uksort" | "uasort" => fixed_by_ref(params, &["array"]),
-        "print_r" => optional(params, 1),
-        "var_dump" => variadic(params, &[]),
         "fopen" | "fputcsv" => optional(params, 2),
         "flock" => optional_by_ref(params, 2, &["would_block"]),
         "fgetcsv" => optional(params, 1),
@@ -147,8 +145,6 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("array_filter", 1) => Null,
         ("array_filter", 2) => Int(0),
         ("array_reduce", 2) => Null,
-        ("print_r", 1) => Bool(false),
-
         ("fopen", 2) => Bool(false),
         ("fopen", 3) => Null,
         ("flock", 2) => Null,

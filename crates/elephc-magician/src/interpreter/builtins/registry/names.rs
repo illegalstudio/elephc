@@ -96,7 +96,6 @@ pub(in crate::interpreter) const EVAL_PHP_VISIBLE_BUILTIN_FUNCTIONS: &[&str] = &
     "ptr_write16",
     "ptr_write32",
     "ptr_write_string",
-    "print_r",
     "property_exists",
     "readline",
     "rsort",
@@ -144,7 +143,6 @@ pub(in crate::interpreter) const EVAL_PHP_VISIBLE_BUILTIN_FUNCTIONS: &[&str] = &
     "uksort",
     "unset",
     "usort",
-    "var_dump",
     "vfprintf",
 ];
 

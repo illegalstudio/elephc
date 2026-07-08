@@ -186,6 +186,10 @@ macro_rules! eval_builtin {
         "break"
     };
 
+    (@name_str r#return) => {
+        "return"
+    };
+
     (@name_str r#type) => {
         "type"
     };

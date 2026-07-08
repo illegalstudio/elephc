@@ -20,7 +20,7 @@ pub(in crate::interpreter) use super::registry::EvalBuiltinDefaultValue;
 pub(in crate::interpreter) enum EvalArea {
     /// Array and collection builtins.
     Array,
-    /// Core callable, constant, and process-control builtins.
+    /// Core callable, constant, process-control, and debug-output builtins.
     Core,
     /// Filesystem, path, and stream builtins.
     Filesystem,
