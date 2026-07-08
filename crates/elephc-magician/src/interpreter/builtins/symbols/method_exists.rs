@@ -18,10 +18,10 @@ eval_builtin! {
 use super::super::super::*;
 use super::super::{
     eval_class_metadata_is_a, eval_class_metadata_name, eval_class_relation_name_exists,
-    eval_object_class_metadata_name, eval_object_public_property_exists,
-    eval_resolved_class_metadata_name, eval_runtime_property_access_metadata,
-    eval_same_class_metadata_name,
+    eval_object_class_metadata_name, eval_resolved_class_metadata_name,
+    eval_runtime_property_access_metadata, eval_same_class_metadata_name,
 };
+use super::get_object_vars::eval_object_public_property_exists;
 
 /// Dispatches direct eval calls for the `method_exists` symbol builtin.
 pub(in crate::interpreter) fn eval_method_exists_declared_call(

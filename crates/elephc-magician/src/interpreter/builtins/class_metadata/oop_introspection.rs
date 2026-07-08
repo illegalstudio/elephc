@@ -14,7 +14,5 @@ use super::super::super::*;
 use super::eval_class_metadata_name;
 
 mod common;
-mod object_vars;
 
 pub(in crate::interpreter) use common::*;
-pub(in crate::interpreter) use object_vars::*;
