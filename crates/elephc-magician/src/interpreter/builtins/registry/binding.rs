@@ -147,15 +147,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "interface_exists" => Some(&["interface", "autoload"]),
         "trait_exists" => Some(&["trait", "autoload"]),
         "is_a" | "is_subclass_of" => Some(&["object_or_class", "class", "allow_string"]),
-        "fgetcsv" => Some(&["stream", "length", "separator"]),
-        "fopen" => Some(&["filename", "mode", "use_include_path", "context"]),
-        "fputcsv" => Some(&["stream", "fields", "separator", "enclosure"]),
-        "fprintf" => Some(&["stream", "format", "values"]),
-        "fsockopen" | "pfsockopen" => {
-            Some(&["hostname", "port", "error_code", "error_message", "timeout"])
-        }
-        "flock" => Some(&["stream", "operation", "would_block"]),
-        "fscanf" => Some(&["stream", "format", "vars"]),
         "function_exists" => Some(&["function"]),
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => Some(&[]),
         "get_resource_id" | "get_resource_type" => Some(&["resource"]),
@@ -172,7 +163,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         }
         "ptr_write_string" => Some(&["pointer", "string"]),
         "ptr_sizeof" => Some(&["type"]),
-        "readline" => Some(&["prompt"]),
         "spl_autoload_register" => Some(&["callback", "throw", "prepend"]),
         "spl_autoload_unregister" => Some(&["callback"]),
         "spl_autoload_functions" | "spl_classes" => Some(&[]),
@@ -180,36 +170,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "spl_autoload_call" => Some(&["class"]),
         "spl_autoload" => Some(&["class", "file_extensions"]),
         "spl_object_id" | "spl_object_hash" => Some(&["object"]),
-        "stream_bucket_make_writeable" => Some(&["brigade"]),
-        "stream_bucket_new" => Some(&["stream", "buffer"]),
-        "stream_bucket_append" | "stream_bucket_prepend" => Some(&["brigade", "bucket"]),
-        "stream_context_create" => Some(&["options", "params"]),
-        "stream_context_get_default" => Some(&["options"]),
-        "stream_context_get_options" | "stream_context_get_params" => Some(&["context"]),
-        "stream_context_set_default" => Some(&["options"]),
-        "stream_context_set_option" => {
-            Some(&["context", "wrapper_or_options", "option_name", "value"])
-        }
-        "stream_context_set_params" => Some(&["context", "params"]),
-        "stream_filter_register" => Some(&["filter_name", "class"]),
-        "stream_filter_append" | "stream_filter_prepend" => {
-            Some(&["stream", "filtername", "read_write", "params"])
-        }
-        "stream_filter_remove" => Some(&["stream_filter"]),
-        "stream_select" => Some(&["read", "write", "except", "seconds", "microseconds"]),
-        "stream_socket_server" | "stream_socket_client" => Some(&["address"]),
-        "stream_socket_accept" => Some(&["socket", "timeout", "peer_name"]),
-        "stream_socket_enable_crypto" => {
-            Some(&["stream", "enable", "crypto_method", "session_stream"])
-        }
-        "stream_socket_get_name" => Some(&["socket", "remote"]),
-        "stream_socket_pair" => Some(&["domain", "type", "protocol"]),
-        "stream_socket_recvfrom" => Some(&["socket", "length", "flags", "address"]),
-        "stream_socket_sendto" => Some(&["socket", "data", "flags", "address"]),
-        "stream_socket_shutdown" => Some(&["stream", "mode"]),
-        "stream_wrapper_register" => Some(&["protocol", "class", "flags"]),
-        "stream_wrapper_unregister" | "stream_wrapper_restore" => Some(&["protocol"]),
-        "vfprintf" => Some(&["stream", "format", "values"]),
         _ => None,
     }
 }

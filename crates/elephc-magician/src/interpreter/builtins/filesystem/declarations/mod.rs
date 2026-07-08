@@ -6,11 +6,8 @@
 //! - `crate::interpreter::builtins::hooks` for migrated filesystem dispatch.
 //!
 //! Key details:
-//! - This covers simple path/query/content and non-by-ref mutation helpers;
-//!   stream and by-reference filesystem calls stay on the legacy path.
-
-use super::super::super::*;
-use super::*;
+//! - Stream and by-reference-output builtins are registered here; direct calls
+//!   that must preserve writable caller storage keep source-sensitive helpers.
 
 mod basename;
 mod chdir;
@@ -20,6 +17,7 @@ mod chown;
 mod closedir;
 mod clearstatcache;
 mod copy;
+mod direct_dispatch;
 mod dirname;
 mod disk_free_space;
 mod disk_total_space;
@@ -40,14 +38,21 @@ mod fclose;
 mod fdatasync;
 mod feof;
 mod fflush;
+mod fgetcsv;
 mod fgetc;
 mod fgets;
 mod fnmatch;
+mod flock;
+mod fopen;
+mod fprintf;
 mod fpassthru;
+mod fputcsv;
 mod fread;
+mod fscanf;
 mod fseek;
 mod fstat;
 mod ftruncate;
+mod fsockopen;
 mod fsync;
 mod ftell;
 mod fwrite;
@@ -67,10 +72,13 @@ mod linkinfo;
 mod lstat;
 mod mkdir;
 mod opendir;
+mod path_values_dispatch;
 mod pathinfo;
 mod pclose;
+mod pfsockopen;
 mod popen;
 mod readdir;
+mod readline;
 mod readfile;
 mod readlink;
 mod realpath;
@@ -82,17 +90,46 @@ mod rewinddir;
 mod rmdir;
 mod scandir;
 mod stat;
+mod stream_bucket_append;
+mod stream_bucket_make_writeable;
+mod stream_bucket_new;
+mod stream_bucket_prepend;
+mod stream_context_create;
+mod stream_context_get_default;
+mod stream_context_get_options;
+mod stream_context_get_params;
+mod stream_context_set_default;
+mod stream_context_set_option;
+mod stream_context_set_params;
 mod stream_copy_to_stream;
+mod stream_filter_append;
+mod stream_filter_prepend;
+mod stream_filter_register;
+mod stream_filter_remove;
 mod stream_get_contents;
 mod stream_get_line;
 mod stream_get_meta_data;
 mod stream_isatty;
 mod stream_resolve_include_path;
+mod stream_select;
 mod stream_set_blocking;
 mod stream_set_chunk_size;
 mod stream_set_read_buffer;
 mod stream_set_timeout;
 mod stream_set_write_buffer;
+mod stream_socket_accept;
+mod stream_socket_client;
+mod stream_socket_enable_crypto;
+mod stream_socket_get_name;
+mod stream_socket_pair;
+mod stream_socket_recvfrom;
+mod stream_socket_sendto;
+mod stream_socket_server;
+mod stream_socket_shutdown;
+mod stream_values_dispatch;
+mod stream_wrapper_register;
+mod stream_wrapper_restore;
+mod stream_wrapper_unregister;
 mod symlink;
 mod sys_get_temp_dir;
 mod tempnam;
@@ -100,354 +137,8 @@ mod tmpfile;
 mod touch;
 mod umask;
 mod unlink;
+mod values_dispatch;
+mod vfprintf;
 
-/// Dispatches direct expression-level calls for declaratively migrated filesystem builtins.
-pub(in crate::interpreter) fn eval_builtin_filesystem_call(
-    name: &str,
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    match name {
-        "basename" => eval_builtin_basename(args, context, scope, values),
-        "chdir" | "mkdir" | "rmdir" => {
-            eval_builtin_unary_path_bool(name, args, context, scope, values)
-        }
-        "chmod" => eval_builtin_chmod(args, context, scope, values),
-        "chown" | "chgrp" | "lchown" | "lchgrp" => {
-            eval_builtin_chown_like(name, args, context, scope, values)
-        }
-        "clearstatcache" => eval_builtin_clearstatcache(args, context, scope, values),
-        "copy" | "link" | "rename" | "symlink" => {
-            eval_builtin_binary_path_bool(name, args, context, scope, values)
-        }
-        "dirname" => eval_builtin_dirname(args, context, scope, values),
-        "disk_free_space" | "disk_total_space" => {
-            eval_builtin_disk_space(name, args, context, scope, values)
-        }
-        "file_exists" | "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable"
-        | "is_writable" | "is_writeable" => {
-            eval_builtin_file_probe(name, args, context, scope, values)
-        }
-        "fileatime" | "filectime" | "filegroup" | "fileinode" | "filemtime" | "fileowner"
-        | "fileperms" => eval_builtin_file_stat_scalar(name, args, context, scope, values),
-        "file" => eval_builtin_file(args, context, scope, values),
-        "file_get_contents" => eval_builtin_file_get_contents(args, context, scope, values),
-        "file_put_contents" => eval_builtin_file_put_contents(args, context, scope, values),
-        "filesize" => eval_builtin_filesize(args, context, scope, values),
-        "filetype" => eval_builtin_filetype(args, context, scope, values),
-        "fclose" | "fgetc" | "fgets" | "feof" | "fflush" | "fpassthru" | "fsync"
-        | "fdatasync" | "ftell" | "rewind" | "fstat" | "stream_get_meta_data" => {
-            eval_builtin_unary_stream(name, args, context, scope, values)
-        }
-        "fnmatch" => eval_builtin_fnmatch(args, context, scope, values),
-        "fread" => eval_builtin_fread(args, context, scope, values),
-        "fseek" => eval_builtin_fseek(args, context, scope, values),
-        "ftruncate" => eval_builtin_ftruncate(args, context, scope, values),
-        "fwrite" => eval_builtin_fwrite(args, context, scope, values),
-        "getcwd" => eval_builtin_getcwd(args, values),
-        "glob" => eval_builtin_glob(args, context, scope, values),
-        "linkinfo" => eval_builtin_linkinfo(args, context, scope, values),
-        "opendir" => eval_builtin_opendir(args, context, scope, values),
-        "pathinfo" => eval_builtin_pathinfo(args, context, scope, values),
-        "pclose" => eval_builtin_pclose(args, context, scope, values),
-        "popen" => eval_builtin_popen(args, context, scope, values),
-        "closedir" | "readdir" | "rewinddir" => {
-            eval_builtin_unary_directory(name, args, context, scope, values)
-        }
-        "readfile" => eval_builtin_readfile(args, context, scope, values),
-        "readlink" => eval_builtin_readlink(args, context, scope, values),
-        "realpath" => eval_builtin_realpath(args, context, scope, values),
-        "realpath_cache_get" => eval_builtin_realpath_cache_get(args, values),
-        "realpath_cache_size" => eval_builtin_realpath_cache_size(args, values),
-        "scandir" => eval_builtin_scandir(args, context, scope, values),
-        "stat" | "lstat" => eval_builtin_stat_array(name, args, context, scope, values),
-        "stream_copy_to_stream" => eval_builtin_stream_copy_to_stream(args, context, scope, values),
-        "stream_get_contents" => eval_builtin_stream_get_contents(args, context, scope, values),
-        "stream_get_line" => eval_builtin_stream_get_line(args, context, scope, values),
-        "stream_resolve_include_path" => {
-            eval_builtin_stream_resolve_include_path(args, context, scope, values)
-        }
-        "stream_isatty" => eval_builtin_stream_isatty(args, context, scope, values),
-        "stream_set_blocking" => eval_builtin_stream_set_blocking(args, context, scope, values),
-        "stream_set_chunk_size" | "stream_set_read_buffer" | "stream_set_write_buffer" => {
-            eval_builtin_stream_set_buffer_like(name, args, context, scope, values)
-        }
-        "stream_set_timeout" => eval_builtin_stream_set_timeout(args, context, scope, values),
-        "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
-        "tempnam" => eval_builtin_tempnam(args, context, scope, values),
-        "tmpfile" => eval_builtin_tmpfile(args, context, values),
-        "touch" => eval_builtin_touch(args, context, scope, values),
-        "umask" => eval_builtin_umask(args, context, scope, values),
-        "unlink" => eval_builtin_unlink(args, context, scope, values),
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
-}
-
-/// Dispatches evaluated-argument calls for declaratively migrated filesystem builtins.
-pub(in crate::interpreter) fn eval_filesystem_values_result(
-    name: &str,
-    evaluated_args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    match name {
-        "basename" => match evaluated_args {
-            [path] => eval_basename_result(*path, None, values),
-            [path, suffix] => eval_basename_result(*path, Some(*suffix), values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "chdir" | "mkdir" | "rmdir" => match evaluated_args {
-            [path] => eval_unary_path_bool_result(name, *path, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "chmod" => match evaluated_args {
-            [filename, permissions] => eval_chmod_result(*filename, *permissions, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "chown" | "chgrp" | "lchown" | "lchgrp" => match evaluated_args {
-            [filename, principal] => {
-                eval_chown_like_result(name, *filename, *principal, context, values)
-            }
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "clearstatcache" => {
-            if evaluated_args.len() > 2 {
-                Err(EvalStatus::RuntimeFatal)
-            } else {
-                values.null()
-            }
-        }
-        "copy" | "link" | "rename" | "symlink" => match evaluated_args {
-            [from, to] => eval_binary_path_bool_result(name, *from, *to, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "dirname" => match evaluated_args {
-            [path] => eval_dirname_result(*path, None, values),
-            [path, levels] => eval_dirname_result(*path, Some(*levels), values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "disk_free_space" | "disk_total_space" => match evaluated_args {
-            [directory] => eval_disk_space_result(name, *directory, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "file_exists" | "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable"
-        | "is_writable" | "is_writeable" => match evaluated_args {
-            [filename] => eval_file_probe_result(name, *filename, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "fileatime" | "filectime" | "filegroup" | "fileinode" | "filemtime" | "fileowner"
-        | "fileperms" => match evaluated_args {
-            [filename] => eval_file_stat_scalar_result(name, *filename, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "file" => match evaluated_args {
-            [filename] => eval_file_result(*filename, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "file_get_contents" => match evaluated_args {
-            [filename] => eval_file_get_contents_result(*filename, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "file_put_contents" => match evaluated_args {
-            [filename, data] => eval_file_put_contents_result(*filename, *data, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "filesize" => match evaluated_args {
-            [filename] => eval_filesize_result(*filename, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "filetype" => match evaluated_args {
-            [filename] => eval_filetype_result(*filename, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "fclose" | "fgetc" | "fgets" | "feof" | "fflush" | "fpassthru" | "fsync"
-        | "fdatasync" | "ftell" | "rewind" | "fstat" | "stream_get_meta_data" => {
-            match evaluated_args {
-                [stream] => eval_unary_stream_result(name, *stream, context, values),
-                _ => Err(EvalStatus::RuntimeFatal),
-            }
-        }
-        "fnmatch" => match evaluated_args {
-            [pattern, filename] => eval_fnmatch_result(*pattern, *filename, None, values),
-            [pattern, filename, flags] => {
-                eval_fnmatch_result(*pattern, *filename, Some(*flags), values)
-            }
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "fread" => match evaluated_args {
-            [stream, length] => eval_fread_result(*stream, *length, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "fseek" => match evaluated_args {
-            [stream, offset] => eval_fseek_result(*stream, *offset, None, context, values),
-            [stream, offset, whence] => {
-                eval_fseek_result(*stream, *offset, Some(*whence), context, values)
-            }
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "ftruncate" => match evaluated_args {
-            [stream, size] => eval_ftruncate_result(*stream, *size, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "fwrite" => match evaluated_args {
-            [stream, data] => eval_fwrite_result(*stream, *data, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "getcwd" => match evaluated_args {
-            [] => eval_getcwd_result(values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "glob" => match evaluated_args {
-            [pattern] => eval_glob_result(*pattern, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "linkinfo" => match evaluated_args {
-            [path] => eval_linkinfo_result(*path, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "opendir" => match evaluated_args {
-            [directory] => eval_opendir_result(*directory, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "pathinfo" => match evaluated_args {
-            [path] => eval_pathinfo_result(*path, None, values),
-            [path, flags] => eval_pathinfo_result(*path, Some(*flags), values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "pclose" => match evaluated_args {
-            [handle] => eval_pclose_result(*handle, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "popen" => match evaluated_args {
-            [command, mode] => eval_popen_result(*command, *mode, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "closedir" | "readdir" | "rewinddir" => match evaluated_args {
-            [dir_handle] => eval_unary_directory_result(name, *dir_handle, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "readfile" => match evaluated_args {
-            [filename] => eval_readfile_result(*filename, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "readlink" => match evaluated_args {
-            [path] => eval_readlink_result(*path, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "realpath" => match evaluated_args {
-            [path] => eval_realpath_result(*path, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "realpath_cache_get" => match evaluated_args {
-            [] => eval_realpath_cache_get_result(values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "realpath_cache_size" => match evaluated_args {
-            [] => eval_realpath_cache_size_result(values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "scandir" => match evaluated_args {
-            [directory] => eval_scandir_result(*directory, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "stat" | "lstat" => match evaluated_args {
-            [filename] => eval_stat_array_result(name, *filename, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "stream_copy_to_stream" => match evaluated_args {
-            [from, to] => eval_stream_copy_to_stream_result(*from, *to, None, None, context, values),
-            [from, to, length] => {
-                eval_stream_copy_to_stream_result(*from, *to, Some(*length), None, context, values)
-            }
-            [from, to, length, offset] => eval_stream_copy_to_stream_result(
-                *from,
-                *to,
-                Some(*length),
-                Some(*offset),
-                context,
-                values,
-            ),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "stream_get_contents" => match evaluated_args {
-            [stream] => eval_stream_get_contents_result(*stream, None, None, context, values),
-            [stream, length] => {
-                eval_stream_get_contents_result(*stream, Some(*length), None, context, values)
-            }
-            [stream, length, offset] => eval_stream_get_contents_result(
-                *stream,
-                Some(*length),
-                Some(*offset),
-                context,
-                values,
-            ),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "stream_get_line" => match evaluated_args {
-            [stream, length] => eval_stream_get_line_result(*stream, *length, None, context, values),
-            [stream, length, ending] => {
-                eval_stream_get_line_result(*stream, *length, Some(*ending), context, values)
-            }
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "stream_resolve_include_path" => match evaluated_args {
-            [filename] => eval_stream_resolve_include_path_result(*filename, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "stream_isatty" => match evaluated_args {
-            [stream] => eval_stream_isatty_result(*stream, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "stream_set_blocking" => match evaluated_args {
-            [stream, enable] => eval_stream_set_blocking_result(*stream, *enable, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "stream_set_chunk_size" | "stream_set_read_buffer" | "stream_set_write_buffer" => {
-            match evaluated_args {
-                [stream, size] => {
-                    eval_stream_set_buffer_like_result(name, *stream, *size, context, values)
-                }
-                _ => Err(EvalStatus::RuntimeFatal),
-            }
-        }
-        "stream_set_timeout" => match evaluated_args {
-            [stream, seconds] => eval_stream_set_timeout_result(*stream, *seconds, None, context, values),
-            [stream, seconds, microseconds] => {
-                eval_stream_set_timeout_result(*stream, *seconds, Some(*microseconds), context, values)
-            }
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "sys_get_temp_dir" => match evaluated_args {
-            [] => eval_sys_get_temp_dir_result(values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "tempnam" => match evaluated_args {
-            [directory, prefix] => eval_tempnam_result(*directory, *prefix, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "tmpfile" => match evaluated_args {
-            [] => eval_tmpfile_result(context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "touch" => match evaluated_args {
-            [filename] => eval_touch_result(*filename, None, None, context, values),
-            [filename, mtime] => eval_touch_result(*filename, Some(*mtime), None, context, values),
-            [filename, mtime, atime] => {
-                eval_touch_result(*filename, Some(*mtime), Some(*atime), context, values)
-            }
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "umask" => match evaluated_args {
-            [] => eval_umask_result(None, values),
-            [mask] => eval_umask_result(Some(*mask), values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        "unlink" => match evaluated_args {
-            [filename] => eval_unlink_result(*filename, context, values),
-            _ => Err(EvalStatus::RuntimeFatal),
-        },
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
-}
+pub(in crate::interpreter) use direct_dispatch::eval_builtin_filesystem_call;
+pub(in crate::interpreter) use values_dispatch::eval_filesystem_values_result;

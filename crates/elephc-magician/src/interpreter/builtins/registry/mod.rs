@@ -917,6 +917,30 @@ mod tests {
             Some(["stream", "length"].as_slice())
         );
         assert_eq!(
+            eval_declared_builtin_param_names("fgetcsv"),
+            Some(["stream", "length", "separator"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("fgetcsv", 2),
+            Some(EvalBuiltinDefaultValue::String(","))
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("flock"),
+            Some(["stream", "operation", "would_block"].as_slice())
+        );
+        assert_eq!(
+            eval_builtin_signature_shape("flock").map(|shape| shape.by_ref_params),
+            Some(["would_block"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("fsockopen"),
+            Some(["hostname", "port", "error_code", "error_message", "timeout"].as_slice())
+        );
+        assert_eq!(
+            eval_builtin_signature_shape("fsockopen").map(|shape| shape.by_ref_params),
+            Some(["error_code", "error_message"].as_slice())
+        );
+        assert_eq!(
             eval_declared_builtin_param_names("fwrite"),
             Some(["stream", "data"].as_slice())
         );
@@ -957,12 +981,46 @@ mod tests {
             Some(EvalBuiltinDefaultValue::Int(-1))
         );
         assert_eq!(
+            eval_declared_builtin_param_names("stream_context_set_option"),
+            Some(["context", "wrapper_or_options", "option_name", "value"].as_slice())
+        );
+        assert_eq!(
+            eval_builtin_signature_shape("stream_context_set_option")
+                .map(|shape| shape.required_param_count),
+            Some(2)
+        );
+        assert_eq!(
             eval_declared_builtin_param_names("stream_get_line"),
             Some(["stream", "length", "ending"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_default_value("stream_get_line", 2),
             Some(EvalBuiltinDefaultValue::String(""))
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_select"),
+            Some(["read", "write", "except", "seconds", "microseconds"].as_slice())
+        );
+        assert_eq!(
+            eval_builtin_signature_shape("stream_select").map(|shape| shape.by_ref_params),
+            Some(["read", "write", "except"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_socket_recvfrom"),
+            Some(["socket", "length", "flags", "address"].as_slice())
+        );
+        assert_eq!(
+            eval_builtin_signature_shape("stream_socket_recvfrom")
+                .map(|shape| shape.by_ref_params),
+            Some(["address"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_wrapper_register"),
+            Some(["protocol", "class", "flags"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("vfprintf"),
+            Some(["stream", "format", "values"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("stream_get_wrappers"),

@@ -71,25 +71,6 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "is_a" | "is_subclass_of" => optional(params, 2),
 
         "is_callable" => optional_by_ref(params, 1, &["callable_name"]),
-        "readline" => optional(params, 0),
-
-        "fprintf" | "fscanf" => variadic(params, &[]),
-
-        "fopen" | "fputcsv" => optional(params, 2),
-        "flock" => optional_by_ref(params, 2, &["would_block"]),
-        "fgetcsv" => optional(params, 1),
-        "stream_socket_accept" => optional_by_ref(params, 1, &["peer_name"]),
-        "fsockopen" | "pfsockopen" => {
-            optional_by_ref(params, 2, &["error_code", "error_message"])
-        }
-        "stream_wrapper_register" | "stream_socket_enable_crypto" => optional(params, 2),
-        "stream_context_create" | "stream_context_get_default" => optional(params, 0),
-        "stream_context_set_option" => optional(params, 2),
-        "stream_socket_sendto" | "stream_filter_append" | "stream_filter_prepend" => {
-            optional(params, 2)
-        }
-        "stream_select" => optional_by_ref(params, 4, &["read", "write", "except"]),
-        "stream_socket_recvfrom" => optional_by_ref(params, 2, &["address"]),
 
         "spl_autoload_register" | "spl_autoload_extensions" => optional(params, 0),
         "spl_autoload" => optional(params, 1),
@@ -122,28 +103,6 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
 
         ("is_callable", 1) => Bool(false),
         ("is_callable", 2) => Null,
-        ("readline", 0) => Null,
-        ("fopen", 2) => Bool(false),
-        ("fopen", 3) => Null,
-        ("flock", 2) => Null,
-        ("fgetcsv", 1) => Null,
-        ("fgetcsv", 2) => String(","),
-        ("fputcsv", 2) => String(","),
-        ("fputcsv", 3) => String("\""),
-        ("stream_socket_accept", 1 | 2) => Null,
-        ("fsockopen" | "pfsockopen", 2 | 3 | 4) => Null,
-        ("stream_wrapper_register", 2) => Int(0),
-        ("stream_socket_enable_crypto", 2 | 3) => Null,
-        ("stream_context_create", 0 | 1) => Null,
-        ("stream_context_get_default", 0) => Null,
-        ("stream_context_set_option", 2 | 3) => Null,
-        ("stream_select", 4) => Int(0),
-        ("stream_socket_sendto", 2) => Int(0),
-        ("stream_socket_sendto", 3) => String(""),
-        ("stream_socket_recvfrom", 2) => Int(0),
-        ("stream_socket_recvfrom", 3) => String(""),
-        ("stream_filter_append" | "stream_filter_prepend", 2) => Int(3),
-        ("stream_filter_append" | "stream_filter_prepend", 3) => Null,
 
         ("spl_autoload_register", 0) => Null,
         ("spl_autoload_register", 1) => Bool(true),
