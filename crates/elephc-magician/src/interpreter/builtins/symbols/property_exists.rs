@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::symbols`.
 //!
 //! Key details:
-//! - Runtime behavior stays delegated to the OOP member-existence helper.
+//! - Shared member-existence logic lives in `method_exists`.
 
 eval_builtin! {
     name: "property_exists",
@@ -17,21 +17,21 @@ eval_builtin! {
 
 use super::super::super::*;
 
-/// Dispatches direct eval calls for the `property_exists` symbol builtin through the area dispatcher.
+/// Dispatches direct eval calls for the `property_exists` symbol builtin.
 pub(in crate::interpreter) fn eval_property_exists_declared_call(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::super::eval_builtin_member_exists("property_exists", args, context, scope, values)
+    super::method_exists::eval_builtin_member_exists("property_exists", args, context, scope, values)
 }
 
-/// Dispatches evaluated-argument calls for the `property_exists` symbol builtin through the area dispatcher.
+/// Dispatches evaluated-argument calls for the `property_exists` symbol builtin.
 pub(in crate::interpreter) fn eval_property_exists_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::super::eval_member_exists_result("property_exists", evaluated_args, context, values)
+    super::method_exists::eval_member_exists_result("property_exists", evaluated_args, context, values)
 }

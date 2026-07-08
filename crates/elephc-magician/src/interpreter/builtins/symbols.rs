@@ -63,3 +63,4 @@ pub(in crate::interpreter) use is_callable::{
     eval_builtin_is_callable_call, eval_is_callable_call_with_evaluated_args,
     eval_is_callable_value,
 };
+pub(in crate::interpreter) use method_exists::eval_member_exists_result;

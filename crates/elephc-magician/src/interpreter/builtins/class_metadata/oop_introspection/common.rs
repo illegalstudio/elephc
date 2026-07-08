@@ -17,7 +17,7 @@ const EVAL_CLASS_METADATA_FLAG_PROTECTED: u64 = 4;
 const EVAL_CLASS_METADATA_FLAG_PRIVATE: u64 = 8;
 
 /// Resolves an object-or-class argument to a PHP class name and records whether it was an object.
-pub(super) fn eval_class_metadata_target_name(
+pub(in crate::interpreter) fn eval_class_metadata_target_name(
     target: RuntimeCellHandle,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -36,7 +36,7 @@ pub(super) fn eval_class_metadata_target_name(
 }
 
 /// Resolves an object cell to its eval or runtime class name.
-pub(super) fn eval_object_class_metadata_name(
+pub(in crate::interpreter) fn eval_object_class_metadata_name(
     object: RuntimeCellHandle,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -53,7 +53,7 @@ pub(super) fn eval_object_class_metadata_name(
 }
 
 /// Reads a class-name cell and applies eval alias resolution.
-pub(super) fn eval_resolved_class_metadata_name(
+pub(in crate::interpreter) fn eval_resolved_class_metadata_name(
     name: RuntimeCellHandle,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -63,7 +63,7 @@ pub(super) fn eval_resolved_class_metadata_name(
 }
 
 /// Returns whether one eval or generated/AOT class name is the same as or extends another.
-pub(super) fn eval_class_metadata_is_a(
+pub(in crate::interpreter) fn eval_class_metadata_is_a(
     class_name: &str,
     target: &str,
     context: &ElephcEvalContext,
@@ -97,13 +97,13 @@ fn eval_native_class_metadata_is_a(
 }
 
 /// Returns whether two PHP class names refer to the same normalized metadata name.
-pub(super) fn eval_same_class_metadata_name(left: &str, right: &str) -> bool {
+pub(in crate::interpreter) fn eval_same_class_metadata_name(left: &str, right: &str) -> bool {
     left.trim_start_matches('\\')
         .eq_ignore_ascii_case(right.trim_start_matches('\\'))
 }
 
 /// Returns access metadata for one generated/AOT method name, if reflection exposes it.
-pub(super) fn eval_runtime_method_access_metadata(
+pub(in crate::interpreter) fn eval_runtime_method_access_metadata(
     class_name: &str,
     method_name: &str,
     values: &mut impl RuntimeValueOps,
@@ -121,7 +121,7 @@ pub(super) fn eval_runtime_method_access_metadata(
 }
 
 /// Returns access metadata for one generated/AOT property name, if reflection exposes it.
-pub(super) fn eval_runtime_property_access_metadata(
+pub(in crate::interpreter) fn eval_runtime_property_access_metadata(
     class_name: &str,
     property_name: &str,
     values: &mut impl RuntimeValueOps,
@@ -151,7 +151,7 @@ fn eval_runtime_member_visibility(flags: u64) -> EvalVisibility {
 }
 
 /// Builds an indexed PHP array from owned Rust strings.
-pub(super) fn eval_indexed_string_array_result(
+pub(in crate::interpreter) fn eval_indexed_string_array_result(
     names: &[String],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -165,7 +165,7 @@ pub(super) fn eval_indexed_string_array_result(
 }
 
 /// Copies a runtime string array into Rust-owned strings for class metadata helpers.
-pub(super) fn eval_runtime_string_array_to_vec(
+pub(in crate::interpreter) fn eval_runtime_string_array_to_vec(
     array: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<String>, EvalStatus> {

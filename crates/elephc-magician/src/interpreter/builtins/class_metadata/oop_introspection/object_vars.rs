@@ -307,7 +307,7 @@ fn eval_public_object_vars_result(
 }
 
 /// Returns whether an object has a public bridge-visible property by exact name.
-pub(super) fn eval_object_public_property_exists(
+pub(in crate::interpreter) fn eval_object_public_property_exists(
     object: RuntimeCellHandle,
     property_name: &str,
     values: &mut impl RuntimeValueOps,
