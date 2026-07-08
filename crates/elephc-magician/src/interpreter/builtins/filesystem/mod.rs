@@ -18,7 +18,6 @@ mod clearstatcache;
 mod closedir;
 mod copy;
 mod direct_dispatch;
-mod directories;
 mod dirname;
 mod disk_free_space;
 mod disk_total_space;
@@ -159,7 +158,6 @@ mod user_wrapper_streams;
 mod values_dispatch;
 mod vfprintf;
 
-pub(in crate::interpreter) use directories::*;
 pub(in crate::interpreter) use file_io::*;
 pub(in crate::interpreter) use fnmatch::*;
 pub(in crate::interpreter) use path::*;

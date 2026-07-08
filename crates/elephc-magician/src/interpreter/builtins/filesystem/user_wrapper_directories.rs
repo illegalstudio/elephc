@@ -2,8 +2,8 @@
 //! Dispatches eval directory builtins to userspace stream-wrapper directory methods.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::filesystem::directories` for `opendir()`,
-//!   `readdir()`, `rewinddir()`, and `closedir()`.
+//! - `crate::interpreter::builtins::filesystem::opendir` and `closedir`
+//!   builtin owners for directory-resource operations.
 //!
 //! Key details:
 //! - `dir_opendir()` owns the wrapper object for the directory resource lifetime;

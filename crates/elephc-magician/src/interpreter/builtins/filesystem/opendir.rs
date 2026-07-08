@@ -16,6 +16,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use super::*;
 
 /// Dispatches direct eval calls for the `opendir` filesystem builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_opendir_declared_call(
@@ -24,7 +25,7 @@ pub(in crate::interpreter) fn eval_opendir_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::direct_dispatch::eval_builtin_filesystem_call_impl("opendir", args, context, scope, values)
+    eval_builtin_opendir(args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `opendir` filesystem builtin through the area dispatcher.
@@ -33,5 +34,38 @@ pub(in crate::interpreter) fn eval_opendir_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::values_dispatch::eval_filesystem_values_result_impl("opendir", evaluated_args, context, values)
+    match evaluated_args {
+        [directory] => eval_opendir_result(*directory, context, values),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Evaluates PHP `opendir($directory)` over one eval expression.
+pub(in crate::interpreter) fn eval_builtin_opendir(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [directory] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let directory = eval_expr(directory, context, scope, values)?;
+    eval_opendir_result(directory, context, values)
+}
+
+/// Opens a local directory and returns a resource cell or PHP false.
+pub(in crate::interpreter) fn eval_opendir_result(
+    directory: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let directory = eval_path_string(directory, values)?;
+    if let Some(result) = eval_user_wrapper_opendir_result(&directory, context, values)? {
+        return Ok(result);
+    }
+    match context.stream_resources_mut().open_directory(&directory) {
+        Some(id) => values.resource(id),
+        None => values.bool_value(false),
+    }
 }

@@ -24,7 +24,7 @@ pub(in crate::interpreter) fn eval_readdir_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::direct_dispatch::eval_builtin_filesystem_call_impl("readdir", args, context, scope, values)
+    super::closedir::eval_builtin_unary_directory("readdir", args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `readdir` filesystem builtin through the area dispatcher.
@@ -33,5 +33,8 @@ pub(in crate::interpreter) fn eval_readdir_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::values_dispatch::eval_filesystem_values_result_impl("readdir", evaluated_args, context, values)
+    match evaluated_args {
+        [dir_handle] => super::closedir::eval_unary_directory_result("readdir", *dir_handle, context, values),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }

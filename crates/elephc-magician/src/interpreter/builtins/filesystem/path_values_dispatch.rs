@@ -48,20 +48,12 @@ pub(in crate::interpreter::builtins::filesystem) fn eval_filesystem_path_values_
             [] => eval_getcwd_result(values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
-        "opendir" => match evaluated_args {
-            [directory] => eval_opendir_result(*directory, context, values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
         "pclose" => match evaluated_args {
             [handle] => eval_pclose_result(*handle, context, values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         "popen" => match evaluated_args {
             [command, mode] => eval_popen_result(*command, *mode, context, values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "closedir" | "readdir" | "rewinddir" => match evaluated_args {
-            [dir_handle] => eval_unary_directory_result(name, *dir_handle, context, values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         "realpath_cache_get" => match evaluated_args {

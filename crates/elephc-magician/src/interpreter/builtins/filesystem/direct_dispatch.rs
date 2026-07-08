@@ -183,12 +183,8 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call_impl(
         "ftruncate" => eval_builtin_ftruncate(args, context, scope, values),
         "fwrite" => eval_builtin_fwrite(args, context, scope, values),
         "getcwd" => eval_builtin_getcwd(args, values),
-        "opendir" => eval_builtin_opendir(args, context, scope, values),
         "pclose" => eval_builtin_pclose(args, context, scope, values),
         "popen" => eval_builtin_popen(args, context, scope, values),
-        "closedir" | "readdir" | "rewinddir" => {
-            eval_builtin_unary_directory(name, args, context, scope, values)
-        }
         "readline" => eval_builtin_readline(args, context, scope, values),
         "realpath_cache_get" => eval_builtin_realpath_cache_get(args, values),
         "realpath_cache_size" => eval_builtin_realpath_cache_size(args, values),
