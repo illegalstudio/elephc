@@ -1732,12 +1732,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "stream_socket_pair" => eval_builtin_stream_socket_pair(args, context, scope, values),
         "stream_get_contents" => eval_builtin_stream_get_contents(args, context, scope, values),
         "stream_get_line" => eval_builtin_stream_get_line(args, context, scope, values),
-        "stream_isatty" => eval_builtin_stream_isatty(args, context, scope, values),
-        "stream_set_blocking" => eval_builtin_stream_set_blocking(args, context, scope, values),
-        "stream_set_chunk_size" | "stream_set_read_buffer" | "stream_set_write_buffer" => {
-            eval_builtin_stream_set_buffer_like(name, args, context, scope, values)
-        }
-        "stream_set_timeout" => eval_builtin_stream_set_timeout(args, context, scope, values),
         "long2ip" => eval_builtin_long2ip(args, context, scope, values),
         "unset" => eval_builtin_unset(args, context, scope, values),
         "var_dump" => eval_builtin_var_dump(args, context, scope, values),

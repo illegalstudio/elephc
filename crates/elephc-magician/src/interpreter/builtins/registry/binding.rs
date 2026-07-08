@@ -258,7 +258,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "spl_object_id" | "spl_object_hash" => Some(&["object"]),
         "sscanf" => Some(&["string", "format", "vars"]),
         "sprintf" | "printf" => Some(&["format", "values"]),
-        "stream_isatty" => Some(&["stream"]),
         "stream_bucket_make_writeable" => Some(&["brigade"]),
         "stream_bucket_new" => Some(&["stream", "buffer"]),
         "stream_bucket_append" | "stream_bucket_prepend" => Some(&["brigade", "bucket"]),
@@ -278,11 +277,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "stream_filter_remove" => Some(&["stream_filter"]),
         "stream_get_contents" => Some(&["stream", "length", "offset"]),
         "stream_get_line" => Some(&["stream", "length", "ending"]),
-        "stream_set_blocking" => Some(&["stream", "enable"]),
-        "stream_set_chunk_size" | "stream_set_read_buffer" | "stream_set_write_buffer" => {
-            Some(&["stream", "size"])
-        }
-        "stream_set_timeout" => Some(&["stream", "seconds", "microseconds"]),
         "stream_select" => Some(&["read", "write", "except", "seconds", "microseconds"]),
         "stream_socket_server" | "stream_socket_client" => Some(&["address"]),
         "stream_socket_accept" => Some(&["socket", "timeout", "peer_name"]),

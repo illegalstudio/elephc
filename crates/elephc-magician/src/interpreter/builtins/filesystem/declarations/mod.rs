@@ -67,7 +67,13 @@ mod rewinddir;
 mod rmdir;
 mod scandir;
 mod stat;
+mod stream_isatty;
 mod stream_resolve_include_path;
+mod stream_set_blocking;
+mod stream_set_chunk_size;
+mod stream_set_read_buffer;
+mod stream_set_timeout;
+mod stream_set_write_buffer;
 mod symlink;
 mod sys_get_temp_dir;
 mod tempnam;
@@ -133,6 +139,12 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call(
         "stream_resolve_include_path" => {
             eval_builtin_stream_resolve_include_path(args, context, scope, values)
         }
+        "stream_isatty" => eval_builtin_stream_isatty(args, context, scope, values),
+        "stream_set_blocking" => eval_builtin_stream_set_blocking(args, context, scope, values),
+        "stream_set_chunk_size" | "stream_set_read_buffer" | "stream_set_write_buffer" => {
+            eval_builtin_stream_set_buffer_like(name, args, context, scope, values)
+        }
+        "stream_set_timeout" => eval_builtin_stream_set_timeout(args, context, scope, values),
         "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
         "tempnam" => eval_builtin_tempnam(args, context, scope, values),
         "tmpfile" => eval_builtin_tmpfile(args, context, values),
@@ -290,6 +302,29 @@ pub(in crate::interpreter) fn eval_filesystem_values_result(
         },
         "stream_resolve_include_path" => match evaluated_args {
             [filename] => eval_stream_resolve_include_path_result(*filename, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "stream_isatty" => match evaluated_args {
+            [stream] => eval_stream_isatty_result(*stream, context, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "stream_set_blocking" => match evaluated_args {
+            [stream, enable] => eval_stream_set_blocking_result(*stream, *enable, context, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "stream_set_chunk_size" | "stream_set_read_buffer" | "stream_set_write_buffer" => {
+            match evaluated_args {
+                [stream, size] => {
+                    eval_stream_set_buffer_like_result(name, *stream, *size, context, values)
+                }
+                _ => Err(EvalStatus::RuntimeFatal),
+            }
+        }
+        "stream_set_timeout" => match evaluated_args {
+            [stream, seconds] => eval_stream_set_timeout_result(*stream, *seconds, None, context, values),
+            [stream, seconds, microseconds] => {
+                eval_stream_set_timeout_result(*stream, *seconds, Some(*microseconds), context, values)
+            }
             _ => Err(EvalStatus::RuntimeFatal),
         },
         "sys_get_temp_dir" => match evaluated_args {

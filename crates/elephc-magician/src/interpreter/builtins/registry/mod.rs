@@ -312,7 +312,13 @@ mod tests {
             "stream_get_transports",
             "stream_get_wrappers",
             "stream_is_local",
+            "stream_isatty",
             "stream_resolve_include_path",
+            "stream_set_blocking",
+            "stream_set_chunk_size",
+            "stream_set_read_buffer",
+            "stream_set_timeout",
+            "stream_set_write_buffer",
             "stream_supports_lock",
             "str_contains",
             "str_pad",
@@ -661,6 +667,34 @@ mod tests {
         assert_eq!(
             eval_declared_builtin_param_names("stream_supports_lock"),
             Some(["stream"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_isatty"),
+            Some(["stream"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_set_blocking"),
+            Some(["stream", "enable"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_set_chunk_size"),
+            Some(["stream", "size"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_set_read_buffer"),
+            Some(["stream", "size"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_set_write_buffer"),
+            Some(["stream", "size"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_set_timeout"),
+            Some(["stream", "seconds", "microseconds"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("stream_set_timeout", 2),
+            Some(EvalBuiltinDefaultValue::Int(0))
         );
         assert_eq!(
             eval_declared_builtin_default_value("touch", 1),

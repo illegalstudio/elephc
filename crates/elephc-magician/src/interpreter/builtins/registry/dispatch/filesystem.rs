@@ -359,37 +359,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
-        "stream_isatty" => {
-            let [stream] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_stream_isatty_result(*stream, context, values)?
-        }
-        "stream_set_blocking" => {
-            let [stream, enable] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_stream_set_blocking_result(*stream, *enable, context, values)?
-        }
-        "stream_set_chunk_size" | "stream_set_read_buffer" | "stream_set_write_buffer" => {
-            let [stream, size] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_stream_set_buffer_like_result(name, *stream, *size, context, values)?
-        }
-        "stream_set_timeout" => match evaluated_args {
-            [stream, seconds] => {
-                eval_stream_set_timeout_result(*stream, *seconds, None, context, values)?
-            }
-            [stream, seconds, microseconds] => eval_stream_set_timeout_result(
-                *stream,
-                *seconds,
-                Some(*microseconds),
-                context,
-                values,
-            )?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
         "vfprintf" => {
             let [stream, format, array] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
