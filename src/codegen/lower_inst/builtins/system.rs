@@ -1034,6 +1034,10 @@ pub(super) fn lower_elephc_worker_register(
     let handler = expect_operand(inst, 0)?;
     // Store the callable handler into the global slot so the trampoline can read
     // it back per request. The callable is a single-word pointer (descriptor).
+    // The slot is typed Callable (see `global_alias_type`), matching both this
+    // raw descriptor store and the prelude's dummy assignment, so the trampoline
+    // loads it back as a raw Callable descriptor (no Mixed unbox) and invokes it
+    // directly.
     let handler_ty = ctx.load_value_to_result(handler)?;
     let global_symbol = crate::names::ir_global_symbol("__elephc_worker_handler");
     ctx.data

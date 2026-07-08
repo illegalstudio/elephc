@@ -313,9 +313,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Mixed cell) so the function read agrees with the prelude's StoreGlobal.
     /// Ordinary PHP globals use boxed Mixed storage in every scope because any
     /// function with `global $x` can replace the value with a different runtime type.
+    ///
+    /// The compiler-internal `__elephc_worker_handler` slot is an exception: it is
+    /// only ever written by the prelude dummy assignment and by the
+    /// `elephc_worker_register` builtin (both store a raw Callable descriptor),
+    /// and it is never reassigned by user code, so widening it to Mixed would
+    /// break the trampoline's round-trip (the stored raw descriptor would be
+    /// reinterpreted as a boxed Mixed cell pointer and fail the callable tag
+    /// check). Keep it typed Callable so the load agrees with both stores.
     pub(crate) fn global_alias_type(&self, name: &str) -> PhpType {
         if crate::superglobals::is_superglobal(name) {
             return crate::superglobals::superglobal_type();
+        }
+        if name == "__elephc_worker_handler" {
+            return PhpType::Callable;
         }
         PhpType::Mixed
     }
