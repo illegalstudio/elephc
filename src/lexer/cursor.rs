@@ -50,7 +50,7 @@ impl<'a> Cursor<'a> {
     ///
     /// Used to attach source locations to tokens for diagnostics.
     pub fn span(&self) -> Span {
-        Span::new(self.line, self.col)
+        Span::new(self.line as u32, self.col as u32)
     }
 
     /// Returns the next character without advancing the cursor.

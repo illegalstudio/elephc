@@ -10,20 +10,23 @@
 //! - `end_line`/`end_col` are the EXCLUSIVE end position (the character after the
 //!   spanned text). A span whose end equals its start is a point span: the extent
 //!   is unknown and only the start position is meaningful.
+//! - Coordinates are `u32` to keep `Span` at 16 bytes: it is embedded in every
+//!   token and AST node, so its size directly sets the recursive parser's stack
+//!   frame growth (a 32-byte span overflowed 2 MiB test-thread stacks).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Source position span for AST nodes.
 pub struct Span {
-    pub line: usize,
-    pub col: usize,
-    pub end_line: usize,
-    pub end_col: usize,
+    pub line: u32,
+    pub col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
 }
 
 impl Span {
     /// Creates a point span from one-based line and column coordinates.
     /// The end position equals the start (extent unknown).
-    pub fn new(line: usize, col: usize) -> Self {
+    pub fn new(line: u32, col: u32) -> Self {
         Self {
             line,
             col,
@@ -33,7 +36,7 @@ impl Span {
     }
 
     /// Creates a span from a one-based start position and exclusive end position.
-    pub fn with_end(line: usize, col: usize, end_line: usize, end_col: usize) -> Self {
+    pub fn with_end(line: u32, col: u32, end_line: u32, end_col: u32) -> Self {
         Self {
             line,
             col,
@@ -92,6 +95,15 @@ impl Span {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Spans are embedded in every token and AST node and flow through the
+    /// recursive-descent parser's stack frames; growing this struct directly
+    /// deepens no recursion but fattens every frame, and 2 MiB test threads
+    /// overflowed when it doubled to 32 bytes. Keep it at 16.
+    #[test]
+    fn span_stays_16_bytes() {
+        assert_eq!(std::mem::size_of::<Span>(), 16);
+    }
 
     /// Verifies merge takes the earlier start and later end across lines.
     #[test]
