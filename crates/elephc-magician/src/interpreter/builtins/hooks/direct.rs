@@ -13,14 +13,14 @@ use super::super::super::{
     eval_builtin_base64_decode, eval_builtin_base64_encode, eval_builtin_bin2hex,
     eval_builtin_ceil, eval_builtin_chr, eval_builtin_clamp, eval_builtin_count,
     eval_builtin_crc32, eval_builtin_ctype, eval_builtin_explode, eval_builtin_float_binary,
-    eval_builtin_float_pair, eval_builtin_float_unary, eval_builtin_floor, eval_builtin_gettype,
+    eval_builtin_float_pair, eval_builtin_float_unary, eval_builtin_floor,
     eval_builtin_formatting_call, eval_builtin_gzip, eval_builtin_hash_algos,
     eval_builtin_hash_copy, eval_builtin_hash_final, eval_builtin_hash_init,
     eval_builtin_hash_one_shot, eval_builtin_hash_update, eval_builtin_hex2bin,
     eval_builtin_implode, eval_builtin_intdiv, eval_builtin_log, eval_builtin_min_max,
     eval_builtin_number_format, eval_builtin_ord, eval_builtin_pi, eval_builtin_pow,
     eval_builtin_rand, eval_builtin_random_int, eval_builtin_round, eval_builtin_slashes,
-    eval_builtin_sqrt, eval_builtin_str_repeat, eval_builtin_strlen, eval_builtin_type_predicate,
+    eval_builtin_sqrt, eval_builtin_str_repeat, eval_builtin_strlen,
     eval_builtin_url_decode, eval_builtin_url_encode, ElephcEvalContext, ElephcEvalScope,
     EvalExpr, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
 };
@@ -29,16 +29,24 @@ use super::super::{
     eval_builtin_array_flip, eval_builtin_array_key_exists, eval_builtin_array_keys,
     eval_builtin_array_pad, eval_builtin_array_rand, eval_builtin_array_reverse,
     eval_builtin_array_search, eval_builtin_array_slice, eval_builtin_array_unique,
-    eval_builtin_array_values,
-    eval_builtin_cast, eval_builtin_core_call, eval_builtin_filesystem_call,
+    eval_builtin_array_values, eval_builtin_boolval, eval_builtin_core_call,
+    eval_builtin_filesystem_call, eval_builtin_floatval, eval_builtin_gettype,
+    eval_builtin_intval, eval_builtin_is_array, eval_builtin_is_bool,
+    eval_builtin_is_double, eval_builtin_is_finite, eval_builtin_is_float,
+    eval_builtin_is_infinite, eval_builtin_is_int, eval_builtin_is_integer,
+    eval_builtin_is_iterable, eval_builtin_is_long, eval_builtin_is_nan,
+    eval_builtin_is_null, eval_builtin_is_numeric, eval_builtin_is_object,
+    eval_builtin_is_real, eval_builtin_is_resource, eval_builtin_is_scalar,
+    eval_builtin_is_string,
     eval_builtin_grapheme_strrev, eval_builtin_hash_equals, eval_builtin_html_entity,
     eval_builtin_json_call, eval_builtin_network_env_call, eval_builtin_nl2br, eval_builtin_range,
     eval_builtin_raw_memory_call, eval_builtin_regex_call, eval_builtin_str_pad, eval_builtin_str_replace,
     eval_builtin_str_split, eval_builtin_stream_bool_predicate, eval_builtin_stream_introspection,
     eval_builtin_string_case, eval_builtin_string_compare, eval_builtin_string_position,
     eval_builtin_string_search, eval_builtin_strrev, eval_builtin_strstr, eval_builtin_substr,
-    eval_builtin_substr_replace, eval_builtin_symbols_call, eval_builtin_time_call, eval_builtin_trim_like,
-    eval_builtin_ucwords, eval_builtin_wordwrap,
+    eval_builtin_strval, eval_builtin_substr_replace, eval_builtin_symbols_call,
+    eval_builtin_time_call, eval_builtin_trim_like, eval_builtin_ucwords,
+    eval_builtin_wordwrap,
 };
 
 /// Direct expression-level dispatch hooks for migrated builtins.
@@ -76,8 +84,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Base64Encode,
     /// Dispatches `bin2hex(...)`.
     Bin2Hex,
-    /// Dispatches scalar cast builtins.
-    Cast,
+    /// Dispatches `boolval(...)`.
+    Boolval,
     /// Dispatches `ceil(...)`.
     Ceil,
     /// Dispatches `chr(...)`.
@@ -106,6 +114,46 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Floor,
     /// Dispatches `gettype(...)`.
     Gettype,
+    /// Dispatches `floatval(...)`.
+    Floatval,
+    /// Dispatches `intval(...)`.
+    Intval,
+    /// Dispatches `is_array(...)`.
+    IsArray,
+    /// Dispatches `is_bool(...)`.
+    IsBool,
+    /// Dispatches `is_double(...)`.
+    IsDouble,
+    /// Dispatches `is_finite(...)`.
+    IsFinite,
+    /// Dispatches `is_float(...)`.
+    IsFloat,
+    /// Dispatches `is_infinite(...)`.
+    IsInfinite,
+    /// Dispatches `is_int(...)`.
+    IsInt,
+    /// Dispatches `is_integer(...)`.
+    IsInteger,
+    /// Dispatches `is_iterable(...)`.
+    IsIterable,
+    /// Dispatches `is_long(...)`.
+    IsLong,
+    /// Dispatches `is_nan(...)`.
+    IsNan,
+    /// Dispatches `is_null(...)`.
+    IsNull,
+    /// Dispatches `is_numeric(...)`.
+    IsNumeric,
+    /// Dispatches `is_object(...)`.
+    IsObject,
+    /// Dispatches `is_real(...)`.
+    IsReal,
+    /// Dispatches `is_resource(...)`.
+    IsResource,
+    /// Dispatches `is_scalar(...)`.
+    IsScalar,
+    /// Dispatches `is_string(...)`.
+    IsString,
     /// Dispatches `grapheme_strrev(...)`.
     GraphemeStrrev,
     /// Dispatches gzip/zlib string builtins.
@@ -178,6 +226,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Strlen,
     /// Dispatches `str_repeat(...)`.
     StrRepeat,
+    /// Dispatches `strval(...)`.
+    Strval,
     /// Dispatches `strrev(...)`.
     Strrev,
     /// Dispatches `strstr(...)`.
@@ -192,8 +242,6 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Time,
     /// Dispatches trim-family builtins.
     TrimLike,
-    /// Dispatches scalar and container type predicates.
-    TypePredicate,
     /// Dispatches `ucwords(...)`.
     Ucwords,
     /// Dispatches `nl2br(...)`.
@@ -233,7 +281,7 @@ impl EvalDirectHook {
             Self::Base64Decode => eval_builtin_base64_decode(args, context, scope, values),
             Self::Base64Encode => eval_builtin_base64_encode(args, context, scope, values),
             Self::Bin2Hex => eval_builtin_bin2hex(args, context, scope, values),
-            Self::Cast => eval_builtin_cast(name, args, context, scope, values),
+            Self::Boolval => eval_builtin_boolval(args, context, scope, values),
             Self::Ceil => eval_builtin_ceil(args, context, scope, values),
             Self::Chr => eval_builtin_chr(args, context, scope, values),
             Self::Clamp => eval_builtin_clamp(args, context, scope, values),
@@ -248,6 +296,26 @@ impl EvalDirectHook {
             Self::Formatting => eval_builtin_formatting_call(name, args, context, scope, values),
             Self::Floor => eval_builtin_floor(args, context, scope, values),
             Self::Gettype => eval_builtin_gettype(args, context, scope, values),
+            Self::Floatval => eval_builtin_floatval(args, context, scope, values),
+            Self::Intval => eval_builtin_intval(args, context, scope, values),
+            Self::IsArray => eval_builtin_is_array(args, context, scope, values),
+            Self::IsBool => eval_builtin_is_bool(args, context, scope, values),
+            Self::IsDouble => eval_builtin_is_double(args, context, scope, values),
+            Self::IsFinite => eval_builtin_is_finite(args, context, scope, values),
+            Self::IsFloat => eval_builtin_is_float(args, context, scope, values),
+            Self::IsInfinite => eval_builtin_is_infinite(args, context, scope, values),
+            Self::IsInt => eval_builtin_is_int(args, context, scope, values),
+            Self::IsInteger => eval_builtin_is_integer(args, context, scope, values),
+            Self::IsIterable => eval_builtin_is_iterable(args, context, scope, values),
+            Self::IsLong => eval_builtin_is_long(args, context, scope, values),
+            Self::IsNan => eval_builtin_is_nan(args, context, scope, values),
+            Self::IsNull => eval_builtin_is_null(args, context, scope, values),
+            Self::IsNumeric => eval_builtin_is_numeric(args, context, scope, values),
+            Self::IsObject => eval_builtin_is_object(args, context, scope, values),
+            Self::IsReal => eval_builtin_is_real(args, context, scope, values),
+            Self::IsResource => eval_builtin_is_resource(args, context, scope, values),
+            Self::IsScalar => eval_builtin_is_scalar(args, context, scope, values),
+            Self::IsString => eval_builtin_is_string(args, context, scope, values),
             Self::GraphemeStrrev => eval_builtin_grapheme_strrev(args, context, scope, values),
             Self::Gzip => eval_builtin_gzip(name, args, context, scope, values),
             Self::HashAlgos => eval_builtin_hash_algos(args, values),
@@ -304,6 +372,7 @@ impl EvalDirectHook {
             Self::StrSplit => eval_builtin_str_split(args, context, scope, values),
             Self::Strlen => eval_builtin_strlen(args, context, scope, values),
             Self::StrRepeat => eval_builtin_str_repeat(args, context, scope, values),
+            Self::Strval => eval_builtin_strval(args, context, scope, values),
             Self::Strrev => eval_builtin_strrev(args, context, scope, values),
             Self::Strstr => eval_builtin_strstr(args, context, scope, values),
             Self::Substr => eval_builtin_substr(args, context, scope, values),
@@ -311,7 +380,6 @@ impl EvalDirectHook {
             Self::Symbols => eval_builtin_symbols_call(name, args, context, scope, values),
             Self::Time => eval_builtin_time_call(name, args, context, scope, values),
             Self::TrimLike => eval_builtin_trim_like(name, args, context, scope, values),
-            Self::TypePredicate => eval_builtin_type_predicate(name, args, context, scope, values),
             Self::Ucwords => eval_builtin_ucwords(args, context, scope, values),
             Self::Nl2br => eval_builtin_nl2br(args, context, scope, values),
             Self::Wordwrap => eval_builtin_wordwrap(args, context, scope, values),

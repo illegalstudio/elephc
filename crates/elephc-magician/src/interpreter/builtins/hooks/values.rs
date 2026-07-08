@@ -19,21 +19,29 @@ use super::super::{
     eval_array_mutating_values_result, eval_array_non_mutating_values_result,
     eval_array_pad_result, eval_array_rand_result, eval_array_reverse_result,
     eval_array_search_result, eval_array_slice_result, eval_array_unique_result,
-    eval_array_values_result,
-    eval_base64_decode_result, eval_base64_encode_result, eval_bin2hex_result, eval_cast_result,
-    eval_chr_result, eval_clamp_result, eval_core_values_result, eval_crc32_result,
-    eval_ctype_result, eval_filesystem_values_result, eval_float_binary_result, eval_float_pair_result,
-    eval_float_unary_result, eval_formatting_values_result, eval_gettype_result,
+    eval_array_values_result, eval_base64_decode_result, eval_base64_encode_result,
+    eval_bin2hex_result, eval_boolval_result, eval_chr_result, eval_clamp_result,
+    eval_core_values_result, eval_crc32_result, eval_ctype_result,
+    eval_filesystem_values_result, eval_float_binary_result, eval_float_pair_result,
+    eval_float_unary_result, eval_floatval_result, eval_formatting_values_result,
+    eval_gettype_result, eval_intval_result, eval_is_array_result, eval_is_bool_result,
+    eval_is_double_result, eval_is_finite_result, eval_is_float_result,
+    eval_is_infinite_result, eval_is_int_result, eval_is_integer_result,
+    eval_is_iterable_result, eval_is_long_result, eval_is_nan_result,
+    eval_is_null_result, eval_is_numeric_result, eval_is_object_result,
+    eval_is_real_result, eval_is_resource_result, eval_is_scalar_result,
+    eval_is_string_result,
     eval_grapheme_strrev_result, eval_gzip_result, eval_hash_equals_result,
     eval_hash_one_shot_result, eval_hex2bin_result, eval_html_entity_result, eval_intdiv_result,
     eval_json_values_result, eval_log_result, eval_min_max_result, eval_network_env_values_result,
-    eval_nl2br_result, eval_range_result, eval_regex_values_result, eval_settype_value_result,
+    eval_nl2br_result, eval_range_result, eval_regex_values_result, eval_settype_values_result,
     eval_slashes_result, eval_str_pad_result, eval_str_replace_result, eval_str_repeat_result,
     eval_str_split_result, eval_stream_bool_predicate_result, eval_stream_introspection_result,
     eval_string_case_result, eval_string_compare_result, eval_string_position_result,
-    eval_string_search_result, eval_strstr_result, eval_substr_replace_result, eval_substr_result,
-    eval_raw_memory_values_result, eval_symbols_values_result, eval_time_values_result, eval_trim_like_result,
-    eval_type_predicate_result, eval_ucwords_result, eval_url_decode_result, eval_url_encode_result,
+    eval_string_search_result, eval_strstr_result, eval_strval_result,
+    eval_substr_replace_result, eval_substr_result, eval_raw_memory_values_result,
+    eval_symbols_values_result, eval_time_values_result, eval_trim_like_result,
+    eval_ucwords_result, eval_url_decode_result, eval_url_encode_result,
     eval_wordwrap_result,
 };
 use super::arity::{one_arg, three_args, two_args};
@@ -79,8 +87,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Base64Encode,
     /// Dispatches `bin2hex(...)`.
     Bin2Hex,
-    /// Dispatches scalar cast builtins.
-    Cast,
+    /// Dispatches `boolval(...)`.
+    Boolval,
     /// Dispatches `ceil(...)`.
     Ceil,
     /// Dispatches `chr(...)`.
@@ -109,6 +117,46 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Floor,
     /// Dispatches `gettype(...)`.
     Gettype,
+    /// Dispatches `floatval(...)`.
+    Floatval,
+    /// Dispatches `intval(...)`.
+    Intval,
+    /// Dispatches `is_array(...)`.
+    IsArray,
+    /// Dispatches `is_bool(...)`.
+    IsBool,
+    /// Dispatches `is_double(...)`.
+    IsDouble,
+    /// Dispatches `is_finite(...)`.
+    IsFinite,
+    /// Dispatches `is_float(...)`.
+    IsFloat,
+    /// Dispatches `is_infinite(...)`.
+    IsInfinite,
+    /// Dispatches `is_int(...)`.
+    IsInt,
+    /// Dispatches `is_integer(...)`.
+    IsInteger,
+    /// Dispatches `is_iterable(...)`.
+    IsIterable,
+    /// Dispatches `is_long(...)`.
+    IsLong,
+    /// Dispatches `is_nan(...)`.
+    IsNan,
+    /// Dispatches `is_null(...)`.
+    IsNull,
+    /// Dispatches `is_numeric(...)`.
+    IsNumeric,
+    /// Dispatches `is_object(...)`.
+    IsObject,
+    /// Dispatches `is_real(...)`.
+    IsReal,
+    /// Dispatches `is_resource(...)`.
+    IsResource,
+    /// Dispatches `is_scalar(...)`.
+    IsScalar,
+    /// Dispatches `is_string(...)`.
+    IsString,
     /// Dispatches `grapheme_strrev(...)`.
     GraphemeStrrev,
     /// Dispatches gzip/zlib string builtins.
@@ -183,6 +231,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Strlen,
     /// Dispatches `str_repeat(...)`.
     StrRepeat,
+    /// Dispatches `strval(...)`.
+    Strval,
     /// Dispatches `strrev(...)`.
     Strrev,
     /// Dispatches `strstr(...)`.
@@ -197,8 +247,6 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Time,
     /// Dispatches trim-family builtins.
     TrimLike,
-    /// Dispatches scalar and container type predicates.
-    TypePredicate,
     /// Dispatches `ucwords(...)`.
     Ucwords,
     /// Dispatches `nl2br(...)`.
@@ -259,9 +307,7 @@ impl EvalValuesHook {
             Self::Base64Decode => one_arg(evaluated_args, values, eval_base64_decode_result),
             Self::Base64Encode => one_arg(evaluated_args, values, eval_base64_encode_result),
             Self::Bin2Hex => one_arg(evaluated_args, values, eval_bin2hex_result),
-            Self::Cast => one_arg(evaluated_args, values, |value, values| {
-                eval_cast_result(name, value, context, values)
-            }),
+            Self::Boolval => one_arg(evaluated_args, values, eval_boolval_result),
             Self::Ceil => one_arg(evaluated_args, values, |value, values| values.ceil(value)),
             Self::Chr => one_arg(evaluated_args, values, eval_chr_result),
             Self::Clamp => three_args(evaluated_args, values, eval_clamp_result),
@@ -288,6 +334,28 @@ impl EvalValuesHook {
             Self::Formatting => eval_formatting_values_result(name, evaluated_args, values),
             Self::Floor => one_arg(evaluated_args, values, |value, values| values.floor(value)),
             Self::Gettype => one_arg(evaluated_args, values, eval_gettype_result),
+            Self::Floatval => one_arg(evaluated_args, values, eval_floatval_result),
+            Self::Intval => one_arg(evaluated_args, values, eval_intval_result),
+            Self::IsArray => one_arg(evaluated_args, values, eval_is_array_result),
+            Self::IsBool => one_arg(evaluated_args, values, eval_is_bool_result),
+            Self::IsDouble => one_arg(evaluated_args, values, eval_is_double_result),
+            Self::IsFinite => one_arg(evaluated_args, values, eval_is_finite_result),
+            Self::IsFloat => one_arg(evaluated_args, values, eval_is_float_result),
+            Self::IsInfinite => one_arg(evaluated_args, values, eval_is_infinite_result),
+            Self::IsInt => one_arg(evaluated_args, values, eval_is_int_result),
+            Self::IsInteger => one_arg(evaluated_args, values, eval_is_integer_result),
+            Self::IsIterable => one_arg(evaluated_args, values, |value, values| {
+                eval_is_iterable_result(value, context, values)
+            }),
+            Self::IsLong => one_arg(evaluated_args, values, eval_is_long_result),
+            Self::IsNan => one_arg(evaluated_args, values, eval_is_nan_result),
+            Self::IsNull => one_arg(evaluated_args, values, eval_is_null_result),
+            Self::IsNumeric => one_arg(evaluated_args, values, eval_is_numeric_result),
+            Self::IsObject => one_arg(evaluated_args, values, eval_is_object_result),
+            Self::IsReal => one_arg(evaluated_args, values, eval_is_real_result),
+            Self::IsResource => one_arg(evaluated_args, values, eval_is_resource_result),
+            Self::IsScalar => one_arg(evaluated_args, values, eval_is_scalar_result),
+            Self::IsString => one_arg(evaluated_args, values, eval_is_string_result),
             Self::GraphemeStrrev => one_arg(evaluated_args, values, eval_grapheme_strrev_result),
             Self::Gzip => eval_gzip_result(name, evaluated_args, values),
             Self::HashAlgos => eval_hash_algos_values(evaluated_args, values),
@@ -327,7 +395,7 @@ impl EvalValuesHook {
             Self::Range => two_args(evaluated_args, values, eval_range_result),
             Self::Regex => eval_regex_values_result(name, evaluated_args, context, values),
             Self::RawMemory => eval_raw_memory_values_result(name, evaluated_args, context, values),
-            Self::Settype => two_args(evaluated_args, values, eval_settype_value_result),
+            Self::Settype => eval_settype_values_result(evaluated_args, values),
             Self::Slashes => one_arg(evaluated_args, values, |value, values| {
                 eval_slashes_result(name, value, values)
             }),
@@ -381,6 +449,9 @@ impl EvalValuesHook {
                 values.int(len)
             }
             Self::StrRepeat => two_args(evaluated_args, values, eval_str_repeat_result),
+            Self::Strval => one_arg(evaluated_args, values, |value, values| {
+                eval_strval_result(value, context, values)
+            }),
             Self::Strrev => one_arg(evaluated_args, values, |value, values| values.strrev(value)),
             Self::Strstr => match evaluated_args {
                 [haystack, needle] => eval_strstr_result(*haystack, *needle, false, values),
@@ -413,9 +484,6 @@ impl EvalValuesHook {
                 [value, mask] => eval_trim_like_result(name, *value, Some(*mask), values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::TypePredicate => one_arg(evaluated_args, values, |value, values| {
-                eval_type_predicate_result(name, value, context, values)
-            }),
             Self::Ucwords => match evaluated_args {
                 [value] => eval_ucwords_result(*value, None, values),
                 [value, separators] => eval_ucwords_result(*value, Some(*separators), values),

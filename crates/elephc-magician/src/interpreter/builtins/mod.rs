@@ -57,3 +57,4 @@ pub(super) use spl_autoload::*;
 pub(super) use strings::*;
 pub(super) use symbols::*;
 pub(super) use time::*;
+pub(super) use types::*;

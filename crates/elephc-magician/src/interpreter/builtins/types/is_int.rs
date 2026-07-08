@@ -1,16 +1,41 @@
 //! Purpose:
-//! Declarative eval registry entry for `is_int`.
+//! Eval registry entry and implementation for `is_int`.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::types`.
+//! - `crate::interpreter::builtins::hooks`.
 //!
 //! Key details:
-//! - Runtime behavior stays delegated to the existing type-predicate hook.
+//! - The predicate reads the runtime tag directly and returns a PHP boolean.
+
+use super::super::super::*;
 
 eval_builtin! {
     name: "is_int",
     area: Types,
     params: [value],
-    direct: TypePredicate,
-    values: TypePredicate,
+    direct: IsInt,
+    values: IsInt,
+}
+
+/// Evaluates PHP `is_int()` over one eval expression.
+pub(in crate::interpreter) fn eval_builtin_is_int(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_is_int_result(value, values)
+}
+
+/// Applies PHP `is_int()` to one already evaluated value.
+pub(in crate::interpreter) fn eval_is_int_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    values.bool_value(tag == EVAL_TAG_INT)
 }

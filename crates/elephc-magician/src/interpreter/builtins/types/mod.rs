@@ -1,12 +1,13 @@
 //! Purpose:
-//! Per-builtin declarations for scalar type and conversion functions migrated
-//! to the eval builtin registry.
+//! Per-builtin eval registry entries and implementations for scalar type and
+//! conversion functions.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins` module loading.
 //!
 //! Key details:
-//! - Leaf files register metadata through `eval_builtin!`.
+//! - Leaf files register metadata through `eval_builtin!` and own their
+//!   PHP-visible direct/by-value wrappers.
 
 mod boolval;
 mod floatval;
@@ -32,3 +33,28 @@ mod is_scalar;
 mod is_string;
 mod settype;
 mod strval;
+
+pub(in crate::interpreter) use boolval::*;
+pub(in crate::interpreter) use floatval::*;
+pub(in crate::interpreter) use gettype::*;
+pub(in crate::interpreter) use intval::*;
+pub(in crate::interpreter) use is_array::*;
+pub(in crate::interpreter) use is_bool::*;
+pub(in crate::interpreter) use is_double::*;
+pub(in crate::interpreter) use is_finite::*;
+pub(in crate::interpreter) use is_float::*;
+pub(in crate::interpreter) use is_infinite::*;
+pub(in crate::interpreter) use is_int::*;
+pub(in crate::interpreter) use is_integer::*;
+pub(in crate::interpreter) use is_iterable::*;
+pub(in crate::interpreter) use is_long::*;
+pub(in crate::interpreter) use is_nan::*;
+pub(in crate::interpreter) use is_null::*;
+pub(in crate::interpreter) use is_numeric::*;
+pub(in crate::interpreter) use is_object::*;
+pub(in crate::interpreter) use is_real::*;
+pub(in crate::interpreter) use is_resource::*;
+pub(in crate::interpreter) use is_scalar::*;
+pub(in crate::interpreter) use is_string::*;
+pub(in crate::interpreter) use settype::*;
+pub(in crate::interpreter) use strval::*;

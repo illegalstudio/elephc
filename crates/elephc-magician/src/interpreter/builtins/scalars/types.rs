@@ -1,71 +1,14 @@
 //! Purpose:
-//! Scalar casts, type names, object metadata, and type predicate builtins.
+//! Shared scalar type helpers plus class, object, and resource introspection builtins.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::scalars` re-exports.
 //!
 //! Key details:
-//! - Runtime cells remain opaque and all PHP coercions flow through `RuntimeValueOps`.
+//! - Runtime cells remain opaque and shared PHP coercions flow through
+//!   `RuntimeValueOps`.
 
 use super::super::super::*;
-use super::super::*;
-
-/// Evaluates PHP scalar cast builtins over one eval expression.
-pub(in crate::interpreter) fn eval_builtin_cast(
-    name: &str,
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [value] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let value = eval_expr(value, context, scope, values)?;
-    eval_cast_result(name, value, context, values)
-}
-
-/// Dispatches an already evaluated value through the matching PHP cast hook.
-pub(in crate::interpreter) fn eval_cast_result(
-    name: &str,
-    value: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    match name {
-        "intval" => values.cast_int(value),
-        "floatval" => values.cast_float(value),
-        "strval" => {
-            let value = eval_string_context_value(value, context, values)?;
-            values.cast_string(value)
-        }
-        "boolval" => values.cast_bool(value),
-        _ => Err(EvalStatus::UnsupportedConstruct),
-    }
-}
-
-/// Evaluates PHP's `gettype(...)` over one eval expression.
-pub(in crate::interpreter) fn eval_builtin_gettype(
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [value] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let value = eval_expr(value, context, scope, values)?;
-    eval_gettype_result(value, values)
-}
-
-/// Converts one boxed runtime tag into PHP's `gettype()` spelling.
-pub(in crate::interpreter) fn eval_gettype_result(
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let tag = values.type_tag(value)?;
-    values.string(eval_gettype_name(tag))
-}
 
 /// Evaluates PHP's `get_called_class()` against the current eval method scope.
 pub(in crate::interpreter) fn eval_builtin_get_called_class(
@@ -275,79 +218,6 @@ pub(in crate::interpreter) fn eval_gettype_name(tag: u64) -> &'static str {
         EVAL_TAG_NULL => "NULL",
         _ => "NULL",
     }
-}
-
-/// Evaluates PHP scalar/container type predicate builtins over one eval expression.
-pub(in crate::interpreter) fn eval_builtin_type_predicate(
-    name: &str,
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [value] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let value = eval_expr(value, context, scope, values)?;
-    eval_type_predicate_result(name, value, context, values)
-}
-
-/// Converts a concrete runtime tag into a PHP `is_*` predicate result.
-pub(in crate::interpreter) fn eval_type_predicate_result(
-    name: &str,
-    value: RuntimeCellHandle,
-    context: &ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let tag = values.type_tag(value)?;
-    let result = match name {
-        "is_int" | "is_integer" | "is_long" => tag == EVAL_TAG_INT,
-        "is_float" | "is_double" | "is_real" => tag == EVAL_TAG_FLOAT,
-        "is_string" => tag == EVAL_TAG_STRING,
-        "is_bool" => tag == EVAL_TAG_BOOL,
-        "is_null" => tag == EVAL_TAG_NULL,
-        "is_array" => matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC),
-        "is_iterable" => eval_is_iterable_value(tag, value, context, values)?,
-        "is_object" => tag == EVAL_TAG_OBJECT,
-        "is_resource" => tag == EVAL_TAG_RESOURCE,
-        "is_scalar" => matches!(
-            tag,
-            EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_STRING | EVAL_TAG_BOOL
-        ),
-        "is_nan" => eval_float_value(value, values)?.is_nan(),
-        "is_infinite" => eval_float_value(value, values)?.is_infinite(),
-        "is_finite" => eval_float_value(value, values)?.is_finite(),
-        "is_numeric" => {
-            tag == EVAL_TAG_INT
-                || tag == EVAL_TAG_FLOAT
-                || (tag == EVAL_TAG_STRING && eval_is_numeric_string(&values.string_bytes(value)?))
-        }
-        _ => return Err(EvalStatus::UnsupportedConstruct),
-    };
-    values.bool_value(result)
-}
-
-/// Returns PHP's `is_iterable()` result for arrays and Traversable-compatible objects.
-fn eval_is_iterable_value(
-    tag: u64,
-    value: RuntimeCellHandle,
-    context: &ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    if matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-        return Ok(true);
-    }
-    if tag != EVAL_TAG_OBJECT {
-        return Ok(false);
-    }
-    for target in ["Traversable", "Iterator", "IteratorAggregate"] {
-        if dynamic_object_is_a(value, target, false, context, values)?
-            .map_or_else(|| values.object_is_a(value, target, false), Ok)?
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 /// Matches the static backend's legacy ASCII numeric-string scan.
