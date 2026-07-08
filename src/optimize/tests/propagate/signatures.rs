@@ -209,3 +209,59 @@ fn test_function_variant_group_unions_variant_signatures() {
         );
     });
 }
+
+/// `propagate_args` substitutes constants into by-value positions but leaves
+/// by-ref positions untouched: they must stay lvalues for the backend to take
+/// the slot address (and for PHP validity).
+#[test]
+fn test_propagate_args_masks_by_ref_positions() {
+    let mut env = ConstantEnv::new();
+    env.insert("x".to_string(), ScalarValue::Int(5));
+    env.insert("y".to_string(), ScalarValue::Int(7));
+    let sig = vec![("a".to_string(), true), ("b".to_string(), false)];
+
+    let args = propagate_args(
+        vec![Expr::var("x"), Expr::var("y")],
+        Some(&env),
+        Some(&sig),
+    );
+
+    assert_eq!(args[0], Expr::var("x"), "by-ref position must stay an lvalue");
+    assert_eq!(args[1], Expr::int_lit(7), "by-value position substitutes");
+}
+
+/// Named arguments match by parameter name, not position.
+#[test]
+fn test_propagate_args_masks_named_by_ref_arguments() {
+    let mut env = ConstantEnv::new();
+    env.insert("x".to_string(), ScalarValue::Int(5));
+    env.insert("y".to_string(), ScalarValue::Int(7));
+    let sig = vec![("a".to_string(), true), ("b".to_string(), false)];
+
+    let named = |param: &str, var: &str| {
+        Expr::new(
+            ExprKind::NamedArg {
+                name: param.to_string(),
+                value: Box::new(Expr::var(var)),
+            },
+            Span::dummy(),
+        )
+    };
+    let args = propagate_args(
+        vec![named("b", "y"), named("a", "x")],
+        Some(&env),
+        Some(&sig),
+    );
+
+    let named_int = |param: &str, value: i64| {
+        Expr::new(
+            ExprKind::NamedArg {
+                name: param.to_string(),
+                value: Box::new(Expr::int_lit(value)),
+            },
+            Span::dummy(),
+        )
+    };
+    assert_eq!(args[0], named_int("b", 7), "by-value named argument substitutes");
+    assert_eq!(args[1], named("a", "x"), "by-ref named argument stays an lvalue");
+}

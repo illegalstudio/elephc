@@ -68,7 +68,6 @@ pub(crate) fn with_by_ref_signatures<R>(sigs: ByRefSignatures, f: impl FnOnce() 
 
 /// Returns the `(param name, is_by_ref)` list for a named function call: the
 /// user scan first, then the builtin registry. `None` means unknown symbol.
-#[cfg_attr(not(test), allow(dead_code))] // consumed by targeted invalidation (in progress)
 pub(crate) fn function_by_ref_params(name: &str) -> Option<Vec<(String, bool)>> {
     let user = ACTIVE_BY_REF_SIGNATURES.with(|slot| {
         slot.borrow()
@@ -88,7 +87,6 @@ pub(crate) fn function_by_ref_params(name: &str) -> Option<Vec<(String, bool)>> 
 
 /// Returns the unioned `(param name, is_by_ref)` list across every method with
 /// this name, or `None` when no declaration exists.
-#[cfg_attr(not(test), allow(dead_code))] // consumed by targeted invalidation (in progress)
 pub(crate) fn method_by_ref_params(name: &str) -> Option<Vec<(String, bool)>> {
     ACTIVE_BY_REF_SIGNATURES.with(|slot| {
         slot.borrow()

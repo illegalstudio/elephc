@@ -106,9 +106,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
         ExprKind::FunctionCall { name, args } => {
             let arg_env = (!function_call_effect(name.as_str()).has_side_effects).then_some(env);
+            let by_ref = function_by_ref_params(name.as_str());
             ExprKind::FunctionCall {
                 name,
-                args: propagate_args(args, arg_env),
+                args: propagate_args(args, arg_env, by_ref.as_deref()),
             }
         }
         ExprKind::ArrayLiteral(items) => {
@@ -199,7 +200,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             let arg_env = (!callable_alias_effect(&var).has_side_effects).then_some(env);
             ExprKind::ClosureCall {
                 var,
-                args: propagate_args(args, arg_env),
+                args: propagate_args(args, arg_env, None),
             }
         }
         ExprKind::ExprCall { callee, args } => {
@@ -207,17 +208,17 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             let arg_env = (!expr_call_effect(&callee).has_side_effects).then_some(env);
             ExprKind::ExprCall {
                 callee: Box::new(callee),
-                args: propagate_args(args, arg_env),
+                args: propagate_args(args, arg_env, None),
             }
         }
         ExprKind::ConstRef(name) => ExprKind::ConstRef(name),
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name,
-            args: propagate_args(args, None),
+            args: propagate_args(args, None, None),
         },
         ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
             name_expr: Box::new(propagate_expr(*name_expr, env)),
-            args: propagate_args(args, None),
+            args: propagate_args(args, None, None),
         },
         ExprKind::NewDynamicObject {
             class_name,
@@ -228,7 +229,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             class_name: Box::new(propagate_expr(*class_name, env)),
             fallback_class,
             required_parent,
-            args: propagate_args(args, None),
+            args: propagate_args(args, None, None),
         },
         ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
             object: Box::new(propagate_expr(*object, env)),
@@ -264,10 +265,11 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             let arg_env =
                 (!private_instance_method_call_effect(&object, &method).has_side_effects)
                     .then_some(env);
+            let by_ref = method_by_ref_params(&method);
             ExprKind::MethodCall {
                 object: Box::new(object),
                 method,
-                args: propagate_args(args, arg_env),
+                args: propagate_args(args, arg_env, by_ref.as_deref()),
             }
         }
         ExprKind::NullsafeMethodCall {
@@ -279,7 +281,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             ExprKind::NullsafeMethodCall {
                 object: Box::new(object),
                 method,
-                args: propagate_args(args, None),
+                args: propagate_args(args, None, None),
             }
         }
         ExprKind::StaticMethodCall {
@@ -289,10 +291,11 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         } => {
             let arg_env =
                 (!static_method_call_effect(&receiver, &method).has_side_effects).then_some(env);
+            let by_ref = method_by_ref_params(&method);
             ExprKind::StaticMethodCall {
                 receiver,
                 method,
-                args: propagate_args(args, arg_env),
+                args: propagate_args(args, arg_env, by_ref.as_deref()),
             }
         }
         ExprKind::FirstClassCallable(target) => {
@@ -313,7 +316,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
-            args: propagate_args(args, None),
+            args: propagate_args(args, None, None),
         },
         ExprKind::Yield { key, value } => ExprKind::Yield {
             key: key.map(|k| Box::new(propagate_expr(*k, env))),
@@ -361,16 +364,46 @@ pub(crate) fn propagate_callable_target(target: CallableTarget, env: &ConstantEn
 /// Applies constant propagation to a list of call arguments. When `env` is `Some`,
 /// propagates into all arguments normally. When `env` is `None` (side-effecting call),
 /// uses an empty environment so no constants are propagated into arguments.
-pub(crate) fn propagate_args(args: Vec<Expr>, env: Option<&ConstantEnv>) -> Vec<Expr> {
-    match env {
-        Some(env) => args.into_iter().map(|arg| propagate_expr(arg, env)).collect(),
-        None => {
-            let empty_env = HashMap::new();
-            args.into_iter()
-                .map(|arg| propagate_expr(arg, &empty_env))
-                .collect()
-        }
-    }
+///
+/// `by_ref` carries the callee's `(param name, is_by_ref)` signature when known:
+/// an argument sitting at a by-ref position is passed through untouched — it must
+/// stay an lvalue for the backend to take the slot address, so neither variable
+/// substitution nor folding may rewrite it.
+pub(crate) fn propagate_args(
+    args: Vec<Expr>,
+    env: Option<&ConstantEnv>,
+    by_ref: Option<&[(String, bool)]>,
+) -> Vec<Expr> {
+    let empty_env = HashMap::new();
+    let env = env.unwrap_or(&empty_env);
+    // Positional arguments cannot legally follow a spread, but if one does the
+    // positional cursor no longer matches the signature — treat everything
+    // after the spread as potentially by-ref when the callee has any.
+    let has_by_ref = by_ref.is_some_and(|sig| sig.iter().any(|(_, is_ref)| *is_ref));
+    let mut spread_seen = false;
+    args.into_iter()
+        .enumerate()
+        .map(|(position, arg)| {
+            let masked = match &arg.kind {
+                ExprKind::NamedArg { name, .. } => by_ref.is_some_and(|sig| {
+                    sig.iter().any(|(param, is_ref)| param == name && *is_ref)
+                }),
+                ExprKind::Spread(_) => {
+                    spread_seen = true;
+                    false
+                }
+                _ if spread_seen => has_by_ref,
+                _ => by_ref.is_some_and(|sig| {
+                    sig.get(position).is_some_and(|(_, is_ref)| *is_ref)
+                }),
+            };
+            if masked {
+                arg
+            } else {
+                propagate_expr(arg, env)
+            }
+        })
+        .collect()
 }
 
 /// Constructs an if/elseif/else statement from its components, performing local
