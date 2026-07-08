@@ -92,6 +92,34 @@ pub(in crate::interpreter) fn eval_number_format_result(
     values.string_bytes_value(&output)
 }
 
+/// Dispatches evaluated `number_format()` calls through the builtin leaf.
+pub(in crate::interpreter) fn eval_number_format_declared_values_result(
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match evaluated_args {
+        [value] => eval_number_format_result(*value, None, None, None, values),
+        [value, decimals] => {
+            eval_number_format_result(*value, Some(*decimals), None, None, values)
+        }
+        [value, decimals, decimal_separator] => eval_number_format_result(
+            *value,
+            Some(*decimals),
+            Some(*decimal_separator),
+            None,
+            values,
+        ),
+        [value, decimals, decimal_separator, thousands_separator] => eval_number_format_result(
+            *value,
+            Some(*decimals),
+            Some(*decimal_separator),
+            Some(*thousands_separator),
+            values,
+        ),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
 /// Produces PHP `number_format()` bytes for finite scalar values.
 pub(in crate::interpreter) fn eval_number_format_bytes(
     value: f64,

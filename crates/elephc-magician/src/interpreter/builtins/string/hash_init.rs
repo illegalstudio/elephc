@@ -5,7 +5,8 @@
 //! - `crate::interpreter::builtins::string`.
 //!
 //! Key details:
-//! - Runtime dispatch is declared here and implemented through the incremental hash-context hook.
+//! - Direct and evaluated-argument dispatch stay in this leaf.
+//! - Runtime resources are stored in the eval context stream table.
 //! - Optional HMAC parameters remain metadata-only for current eval behavior.
 
 use super::super::spec::EvalBuiltinDefaultValue;
@@ -49,6 +50,18 @@ pub(in crate::interpreter) fn eval_hash_init_result(
         Some(id) => values.resource(id),
         None => Err(EvalStatus::RuntimeFatal),
     }
+}
+
+/// Dispatches evaluated `hash_init()` calls through the builtin leaf.
+pub(in crate::interpreter) fn eval_hash_init_declared_values_result(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [algo] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    eval_hash_init_result(*algo, context, values)
 }
 
 /// Converts a runtime resource cell into eval's zero-based hash context id.

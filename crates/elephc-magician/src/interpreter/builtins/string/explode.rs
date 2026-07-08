@@ -5,7 +5,8 @@
 //! - `crate::interpreter::builtins::string`.
 //!
 //! Key details:
-//! - Runtime dispatch is declared here and implemented through the string split/join hook.
+//! - Direct and evaluated-argument dispatch stay in this leaf.
+//! - The current eval implementation supports the two-argument runtime form.
 
 use super::super::spec::EvalBuiltinDefaultValue;
 
@@ -54,6 +55,17 @@ pub(in crate::interpreter) fn eval_explode_result(
         index += 1;
     }
     eval_push_explode_segment(result, index, &string[start..], values)
+}
+
+/// Dispatches evaluated `explode()` calls through the builtin leaf.
+pub(in crate::interpreter) fn eval_explode_declared_values_result(
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [separator, string] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    eval_explode_result(*separator, *string, values)
 }
 
 /// Appends one split segment to an indexed `explode()` result array.

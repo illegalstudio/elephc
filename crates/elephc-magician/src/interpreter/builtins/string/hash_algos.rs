@@ -5,7 +5,8 @@
 //! - `crate::interpreter::builtins::string`.
 //!
 //! Key details:
-//! - Runtime dispatch is declared here and implemented through the static hash algorithm list helper.
+//! - Direct and evaluated-argument dispatch stay in this leaf.
+//! - The static string-array helper is shared by list-returning string builtins.
 
 eval_builtin! {
     name: "hash_algos",
@@ -33,6 +34,17 @@ pub(in crate::interpreter) fn eval_hash_algos_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_static_string_array_result(EVAL_HASH_ALGOS, values)
+}
+
+/// Dispatches evaluated `hash_algos()` calls through the builtin leaf.
+pub(in crate::interpreter) fn eval_hash_algos_declared_values_result(
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_hash_algos_result(values)
 }
 
 /// Builds one indexed PHP array from a static string slice.

@@ -5,7 +5,8 @@
 //! - `crate::interpreter::builtins::string`.
 //!
 //! Key details:
-//! - Runtime dispatch is declared here and implemented through the incremental hash-context hook.
+//! - Direct and evaluated-argument dispatch stay in this leaf.
+//! - Finalizing consumes the hash context resource from the eval stream table.
 
 use super::super::spec::EvalBuiltinDefaultValue;
 
@@ -53,4 +54,20 @@ pub(in crate::interpreter) fn eval_hash_final_result(
         .finalize_hash_context(id)
         .ok_or(EvalStatus::RuntimeFatal)?;
     super::hash::eval_format_digest_result(&raw, binary, values)
+}
+
+/// Dispatches evaluated `hash_final()` calls through the builtin leaf.
+pub(in crate::interpreter) fn eval_hash_final_declared_values_result(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match evaluated_args {
+        [hash_context] => eval_hash_final_result(*hash_context, false, context, values),
+        [hash_context, binary] => {
+            let binary = values.truthy(*binary)?;
+            eval_hash_final_result(*hash_context, binary, context, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }

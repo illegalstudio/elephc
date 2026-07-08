@@ -18,7 +18,6 @@ mod builtins;
 mod constant_eval;
 mod constants;
 mod control;
-mod core_builtins;
 mod dynamic_functions;
 mod expressions;
 mod include_exec;
@@ -60,7 +59,6 @@ use control::{
     EvalByRefBindingMode, EvalControl, EvalPredefinedConstant, EvalSprintfSpec,
     EvaluatedCallArg, EvaluatedCallable,
 };
-use core_builtins::*;
 use dynamic_functions::*;
 use expressions::*;
 use include_exec::*;

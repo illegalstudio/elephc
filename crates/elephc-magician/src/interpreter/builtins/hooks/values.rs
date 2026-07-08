@@ -15,9 +15,6 @@ use super::super::super::{
     ElephcEvalContext, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
 };
 use super::arity::{one_arg, three_args, two_args};
-use super::hash::{eval_hash_algos_values, eval_hash_context_values};
-use super::number_format::eval_number_format_values;
-use super::string_split_join::eval_string_split_join_values;
 
 /// Evaluated-argument dispatch hooks for migrated builtins.
 #[derive(Clone, Copy)]
@@ -410,8 +407,22 @@ impl EvalValuesHook {
                 "gzuncompress" => eval_gzuncompress_result(evaluated_args, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::HashAlgos => eval_hash_algos_values(evaluated_args, values),
-            Self::HashContext => eval_hash_context_values(name, evaluated_args, context, values),
+            Self::HashAlgos => eval_hash_algos_declared_values_result(evaluated_args, values),
+            Self::HashContext => match name {
+                "hash_copy" => {
+                    eval_hash_copy_declared_values_result(evaluated_args, context, values)
+                }
+                "hash_final" => {
+                    eval_hash_final_declared_values_result(evaluated_args, context, values)
+                }
+                "hash_init" => {
+                    eval_hash_init_declared_values_result(evaluated_args, context, values)
+                }
+                "hash_update" => {
+                    eval_hash_update_declared_values_result(evaluated_args, context, values)
+                }
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::HashEquals => two_args(evaluated_args, values, eval_hash_equals_result),
             Self::HashOneShot => match name {
                 "hash" => eval_hash_result(evaluated_args, values),
@@ -455,7 +466,9 @@ impl EvalValuesHook {
             Self::Min => eval_min_result(evaluated_args, values),
             Self::MtRand => eval_mt_rand_values_result(evaluated_args, values),
             Self::NetworkEnv => eval_network_env_values_result(name, evaluated_args, values),
-            Self::NumberFormat => eval_number_format_values(evaluated_args, values),
+            Self::NumberFormat => {
+                eval_number_format_declared_values_result(evaluated_args, values)
+            }
             Self::Ord => one_arg(evaluated_args, values, eval_ord_result),
             Self::Pi => {
                 if !evaluated_args.is_empty() {
@@ -538,7 +551,11 @@ impl EvalValuesHook {
                     _ => Err(EvalStatus::RuntimeFatal),
                 }
             }),
-            Self::StringSplitJoin => eval_string_split_join_values(name, evaluated_args, values),
+            Self::StringSplitJoin => match name {
+                "explode" => eval_explode_declared_values_result(evaluated_args, values),
+                "implode" => eval_implode_declared_values_result(evaluated_args, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::StreamBoolPredicate => one_arg(evaluated_args, values, |stream, values| {
                 match name {
                     "stream_is_local" => eval_stream_is_local_result(stream, values),

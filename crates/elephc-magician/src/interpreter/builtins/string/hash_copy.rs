@@ -5,7 +5,8 @@
 //! - `crate::interpreter::builtins::string`.
 //!
 //! Key details:
-//! - Runtime dispatch is declared here and implemented through the incremental hash-context hook.
+//! - Direct and evaluated-argument dispatch stay in this leaf.
+//! - Hash context resources are owned by the eval context stream table.
 
 eval_builtin! {
     name: "hash_copy",
@@ -42,4 +43,16 @@ pub(in crate::interpreter) fn eval_hash_copy_result(
         Some(copy_id) => values.resource(copy_id),
         None => Err(EvalStatus::RuntimeFatal),
     }
+}
+
+/// Dispatches evaluated `hash_copy()` calls through the builtin leaf.
+pub(in crate::interpreter) fn eval_hash_copy_declared_values_result(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [hash_context] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    eval_hash_copy_result(*hash_context, context, values)
 }

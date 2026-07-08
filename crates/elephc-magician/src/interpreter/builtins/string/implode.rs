@@ -5,7 +5,8 @@
 //! - `crate::interpreter::builtins::string`.
 //!
 //! Key details:
-//! - Runtime dispatch is declared here and implemented through the string split/join hook.
+//! - Direct and evaluated-argument dispatch stay in this leaf.
+//! - The current eval implementation supports the two-argument runtime form.
 
 use super::super::spec::EvalBuiltinDefaultValue;
 
@@ -57,4 +58,15 @@ pub(in crate::interpreter) fn eval_implode_result(
         output.extend_from_slice(&value);
     }
     values.string_bytes_value(&output)
+}
+
+/// Dispatches evaluated `implode()` calls through the builtin leaf.
+pub(in crate::interpreter) fn eval_implode_declared_values_result(
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [separator, array] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    eval_implode_result(*separator, *array, values)
 }
