@@ -19,7 +19,6 @@ mod class_get_attributes;
 mod class_implements;
 mod class_names;
 mod class_parents;
-mod class_relations;
 mod class_uses;
 mod dispatch;
 mod empty;
@@ -56,7 +55,7 @@ mod trait_exists;
 mod unset;
 
 pub(in crate::interpreter) use callable_probe::*;
-pub(in crate::interpreter) use class_relations::*;
 pub(in crate::interpreter) use dispatch::{eval_builtin_symbols_call, eval_symbols_values_result};
 pub(in crate::interpreter) use function_exists::eval_function_probe_exists;
+pub(in crate::interpreter) use is_a::dynamic_object_is_a;
 use super::*;

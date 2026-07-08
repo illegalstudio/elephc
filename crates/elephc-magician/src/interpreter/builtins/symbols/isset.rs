@@ -171,6 +171,6 @@ fn eval_array_access_object_matches(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let target_class = "ArrayAccess";
-    super::class_relations::dynamic_object_is_a(object, target_class, false, context, values)?
+    super::is_a::dynamic_object_is_a(object, target_class, false, context, values)?
         .map_or_else(|| values.object_is_a(object, target_class, false), Ok)
 }

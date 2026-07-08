@@ -1,11 +1,12 @@
 //! Purpose:
-//! Declarative eval registry entry for `is_subclass_of`.
+//! Eval registry entry for `is_subclass_of`.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::symbols`.
 //!
 //! Key details:
-//! - Runtime behavior stays delegated to the class-relation predicate helper.
+//! - Relationship semantics are shared with `is_a()` because PHP only changes
+//!   the self-match and default string-allowance rules.
 
 use super::super::spec::EvalBuiltinDefaultValue;
 
@@ -19,21 +20,21 @@ eval_builtin! {
 
 use super::super::super::*;
 
-/// Dispatches direct eval calls for the `is_subclass_of` symbol builtin through the area dispatcher.
+/// Evaluates direct `is_subclass_of(...)` calls through the `is_a` relation owner.
 pub(in crate::interpreter) fn eval_is_subclass_of_declared_call(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::class_relations::eval_builtin_is_a_relation("is_subclass_of", args, context, scope, values)
+    super::is_a::eval_builtin_is_a_relation("is_subclass_of", args, context, scope, values)
 }
 
-/// Dispatches evaluated-argument calls for the `is_subclass_of` symbol builtin through the area dispatcher.
+/// Evaluates materialized `is_subclass_of(...)` arguments through the `is_a` relation owner.
 pub(in crate::interpreter) fn eval_is_subclass_of_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::class_relations::eval_is_a_relation_result("is_subclass_of", evaluated_args, context, values)
+    super::is_a::eval_is_a_relation_result("is_subclass_of", evaluated_args, context, values)
 }
