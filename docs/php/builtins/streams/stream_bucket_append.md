@@ -1,6 +1,6 @@
 ---
 title: "stream_bucket_append()"
-description: "stream_bucket_append() — streams builtin supported by Elephc."
+description: "Appends a bucket to the brigade."
 sidebar:
   order: 334
 ---
@@ -11,7 +11,7 @@ sidebar:
 function stream_bucket_append(mixed $brigade, mixed $bucket): void
 ```
 
-`stream_bucket_append()` is a streams builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Appends a bucket to the brigade.
 
 **Parameters**:
 - `$brigade` (`mixed`)
@@ -26,4 +26,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `stream_bucket_append` is implemented in the compiler, see [the internals page](../../../internals/builtins/streams/stream_bucket_append.md).
 

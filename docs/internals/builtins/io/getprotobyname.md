@@ -2,15 +2,15 @@
 title: "getprotobyname() — internals"
 description: "Compiler internals for getprotobyname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 178
+  order: 180
 ---
 
 ## `getprotobyname()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3444](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3444) (`lower_getprotobyname`)
+- **Signature**: [`src/builtins/io/getprotobyname.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/getprotobyname.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3444](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3444) (`lower_getprotobyname`)
 - **Function symbol**: `lower_getprotobyname()`
 
 
@@ -36,4 +36,3 @@ function getprotobyname(string $protocol): mixed
 ## Cross-references
 
 - [User reference for `getprotobyname()`](../../../php/builtins/io/getprotobyname.md)
-

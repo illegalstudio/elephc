@@ -1,8 +1,8 @@
 ---
 title: "date_default_timezone_set()"
-description: "Lowers `date_default_timezone_set(timezoneId)` through the shared runtime helper."
+description: "Sets the default timezone."
 sidebar:
-  order: 86
+  order: 88
 ---
 
 ## date_default_timezone_set()
@@ -11,7 +11,7 @@ sidebar:
 function date_default_timezone_set(string $timezoneId): bool
 ```
 
-Lowers `date_default_timezone_set(timezoneId)` through the shared runtime helper.
+Sets the default timezone.
 
 **Parameters**:
 - `$timezoneId` (`string`)

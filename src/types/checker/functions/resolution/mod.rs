@@ -291,7 +291,7 @@ impl Checker {
                     }
                 }
                 if decl.ref_params.get(arg_idx).copied().unwrap_or(false)
-                    && !matches!(arg.kind, ExprKind::Variable(_))
+                    && !self.is_by_ref_argument_lvalue(arg, caller_env)?
                 {
                     let param_name = decl
                         .params
@@ -517,7 +517,7 @@ impl Checker {
                     .get(param_idx)
                     .copied()
                     .unwrap_or(false)
-                    && !matches!(arg.kind, ExprKind::Variable(_))
+                    && !self.is_by_ref_argument_lvalue(arg, caller_env)?
                 {
                     let param_name = effective_sig
                         .params

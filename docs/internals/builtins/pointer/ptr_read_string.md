@@ -2,15 +2,15 @@
 title: "ptr_read_string() — internals"
 description: "Compiler internals for ptr_read_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 296
+  order: 293
 ---
 
 ## `ptr_read_string()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/pointers.rs`:134](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/pointers.rs#L134) (`lower_ptr_read_string`)
+- **Signature**: [`src/builtins/pointers/ptr_read_string.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_read_string.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:134](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L134) (`lower_ptr_read_string`)
 - **Function symbol**: `lower_ptr_read_string()`
 
 
@@ -36,4 +36,3 @@ function ptr_read_string(pointer $pointer, int $length): string
 ## Cross-references
 
 - [User reference for `ptr_read_string()`](../../../php/builtins/pointer/ptr_read_string.md)
-

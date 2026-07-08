@@ -1,6 +1,6 @@
 ---
 title: "is_iterable()"
-description: "Lowers `is_iterable()` for concrete values and boxed Mixed payloads."
+description: "Checks whether a variable is iterable."
 sidebar:
   order: 424
 ---
@@ -11,7 +11,7 @@ sidebar:
 function is_iterable(mixed $value): bool
 ```
 
-Lowers `is_iterable()` for concrete values and boxed Mixed payloads.
+Checks whether a variable is iterable.
 
 **Parameters**:
 - `$value` (`mixed`)

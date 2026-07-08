@@ -9,14 +9,14 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:138](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L138) (`lower_array_fill_keys`)
+- **Signature**: [`src/builtins/array/array_fill_keys.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_fill_keys.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:139](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L139) (`lower_array_fill_keys`)
 - **Function symbol**: `lower_array_fill_keys()`
 
 
 ### Lowering notes
 
-- Lowers `array_fill_keys()` through the legacy hash-building runtime helpers.
+- Lowers `array_fill_keys()` through the hash-building runtime helpers.
 
 ## Runtime helpers
 
@@ -35,4 +35,3 @@ function array_fill_keys(array $keys, mixed $value): array
 ## Cross-references
 
 - [User reference for `array_fill_keys()`](../../../php/builtins/array/array_fill_keys.md)
-

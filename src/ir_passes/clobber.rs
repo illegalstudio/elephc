@@ -1,6 +1,6 @@
 //! Purpose:
 //! Classifies which EIR opcodes and terminators are "volatile-safe": their
-//! `codegen_ir` lowering emits no call and touches only the fixed result and
+//! `codegen` lowering emits no call and touches only the fixed result and
 //! scratch registers, never the caller-saved registers the allocator may hand
 //! out to non-call-crossing intervals.
 //!

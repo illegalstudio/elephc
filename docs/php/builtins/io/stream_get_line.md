@@ -1,22 +1,22 @@
 ---
 title: "stream_get_line()"
-description: "Lowers `stream_get_line(stream, length, ending?)`."
+description: "Gets line from stream resource up to a given delimiter."
 sidebar:
-  order: 201
+  order: 203
 ---
 
 ## stream_get_line()
 
 ```php
-function stream_get_line(resource $stream, int $length, string $ending): string
+function stream_get_line(resource $stream, int $length, string $ending = ''): string
 ```
 
-Lowers `stream_get_line(stream, length, ending?)`.
+Gets line from stream resource up to a given delimiter.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$length` (`int`)
-- `$ending` (`string`), optional
+- `$ending` (`string`), default `''`, optional
 
 **Returns**: `string`
 

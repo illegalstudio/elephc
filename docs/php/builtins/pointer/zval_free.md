@@ -1,6 +1,6 @@
 ---
 title: "zval_free()"
-description: "Lowers `zval_free(zval_ptr)` by invoking `__rt_zval_free` to release the zval"
+description: "Frees a PHP zval pointer allocated by `zval_pack`."
 sidebar:
   order: 300
 ---
@@ -8,13 +8,13 @@ sidebar:
 ## zval_free()
 
 ```php
-function zval_free(mixed $zval): void
+function zval_free(pointer $zval): void
 ```
 
-Lowers `zval_free(zval_ptr)` by invoking `__rt_zval_free` to release the zval
+Frees a PHP zval pointer allocated by `zval_pack`.
 
 **Parameters**:
-- `$zval` (`mixed`)
+- `$zval` (`pointer`)
 
 **Returns**: `void`
 

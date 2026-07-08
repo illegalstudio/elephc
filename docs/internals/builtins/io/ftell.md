@@ -2,15 +2,15 @@
 title: "ftell() — internals"
 description: "Compiler internals for ftell(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 172
+  order: 174
 ---
 
 ## `ftell()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3133](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3133) (`lower_ftell`)
+- **Signature**: [`src/builtins/io/ftell.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ftell.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3133](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3133) (`lower_ftell`)
 - **Function symbol**: `lower_ftell()`
 
 
@@ -36,4 +36,3 @@ function ftell(resource $stream): int
 ## Cross-references
 
 - [User reference for `ftell()`](../../../php/builtins/io/ftell.md)
-

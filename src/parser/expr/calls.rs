@@ -90,6 +90,7 @@ pub(super) fn parse_scoped_static_call(
         ))
     } else {
         let args = parse_args(tokens, pos, span)?;
+        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
         Ok(Expr::new(
             ExprKind::StaticMethodCall {
                 receiver,

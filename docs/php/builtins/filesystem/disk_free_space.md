@@ -1,8 +1,8 @@
 ---
 title: "disk_free_space()"
-description: "Lowers `disk_free_space(path)` through the shared disk-space runtime helper."
+description: "Returns available space on filesystem or disk partition."
 sidebar:
-  order: 104
+  order: 106
 ---
 
 ## disk_free_space()
@@ -11,7 +11,7 @@ sidebar:
 function disk_free_space(string $directory): float
 ```
 
-Lowers `disk_free_space(path)` through the shared disk-space runtime helper.
+Returns available space on filesystem or disk partition.
 
 **Parameters**:
 - `$directory` (`string`)

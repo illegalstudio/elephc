@@ -2,15 +2,15 @@
 title: "sleep() — internals"
 description: "Compiler internals for sleep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 315
+  order: 312
 ---
 
 ## `sleep()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:473](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L473) (`lower_sleep`)
+- **Signature**: [`src/builtins/system/sleep.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/sleep.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:473](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L473) (`lower_sleep`)
 - **Function symbol**: `lower_sleep()`
 
 
@@ -36,4 +36,3 @@ function sleep(int $seconds): int
 ## Cross-references
 
 - [User reference for `sleep()`](../../../php/builtins/process/sleep.md)
-

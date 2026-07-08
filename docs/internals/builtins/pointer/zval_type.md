@@ -2,22 +2,21 @@
 title: "zval_type() — internals"
 description: "Compiler internals for zval_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 305
+  order: 302
 ---
 
 ## `zval_type()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/pointers.rs`:620](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/pointers.rs#L620) (`lower_zval_type`)
+- **Signature**: [`src/builtins/pointers/zval_type.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_type.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:597](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L597) (`lower_zval_type`)
 - **Function symbol**: `lower_zval_type()`
 
 
 ### Lowering notes
 
-- Lowers `zval_type(zval_ptr)` by invoking `__rt_zval_type`, which returns the
-- PHP `IS_*` type byte as an integer.
+- Lowers `zval_type(zval_ptr)` by returning the PHP `IS_*` type byte.
 
 ## Runtime helpers
 
@@ -28,7 +27,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function zval_type(mixed $zval): int
+function zval_type(pointer $zval): int
 ```
 
 ## What the type checker enforces
@@ -38,4 +37,3 @@ function zval_type(mixed $zval): int
 ## Cross-references
 
 - [User reference for `zval_type()`](../../../php/builtins/pointer/zval_type.md)
-

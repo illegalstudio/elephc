@@ -2,15 +2,15 @@
 title: "is_file() — internals"
 description: "Compiler internals for is_file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 122
+  order: 124
 ---
 
 ## `is_file()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5592](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5592) (`lower_is_file`)
+- **Signature**: [`src/builtins/io/is_file.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_file.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5592](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5592) (`lower_is_file`)
 - **Function symbol**: `lower_is_file()`
 
 
@@ -38,4 +38,3 @@ function is_file(string $filename): bool
 ## Cross-references
 
 - [User reference for `is_file()`](../../../php/builtins/filesystem/is_file.md)
-

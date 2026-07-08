@@ -9,8 +9,8 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:81](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L81) (`lower_array_chunk`)
+- **Signature**: [`src/builtins/array/array_chunk.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_chunk.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:80](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L80) (`lower_array_chunk`)
 - **Function symbol**: `lower_array_chunk()`
 
 
@@ -25,14 +25,13 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function array_chunk(array $array, int $length, bool $preserve_keys): array
+function array_chunk(array $array, int $length): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
+- **Arity**: takes exactly 2 arguments.
 
 ## Cross-references
 
 - [User reference for `array_chunk()`](../../../php/builtins/array/array_chunk.md)
-

@@ -1,6 +1,6 @@
 ---
 title: "strrev()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Reverses a string."
 sidebar:
   order: 394
 ---
@@ -11,7 +11,7 @@ sidebar:
 function strrev(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Reverses a string.
 
 **Parameters**:
 - `$string` (`string`)

@@ -1,24 +1,24 @@
 ---
 title: "stream_select()"
-description: "Lowers `stream_select(read, write, except, seconds, microseconds?)`."
+description: "Runs the equivalent of the select() system call on the given arrays of streams."
 sidebar:
-  order: 208
+  order: 210
 ---
 
 ## stream_select()
 
 ```php
-function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds): int
+function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = 0): int
 ```
 
-Lowers `stream_select(read, write, except, seconds, microseconds?)`.
+Runs the equivalent of the select() system call on the given arrays of streams.
 
 **Parameters**:
 - `$read` (`array`), passed by reference
 - `$write` (`array`), passed by reference
 - `$except` (`array`), passed by reference
 - `$seconds` (`int`)
-- `$microseconds` (`int`), optional
+- `$microseconds` (`int`), default `0`, optional
 
 **Returns**: `int`
 

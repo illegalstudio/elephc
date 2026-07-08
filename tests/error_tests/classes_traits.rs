@@ -47,21 +47,6 @@ class C { use A, B; }
     );
 }
 
-/// Verifies that calling a protected trait method on an instance from outside the class
-/// hierarchy reports "Cannot access protected method".
-#[test]
-fn test_error_cannot_access_protected_trait_method_outside_class() {
-    expect_error(
-        r#"<?php
-trait A { public function foo() { return 1; } }
-class C { use A { A::foo as protected; } }
-$c = new C();
-echo $c->foo();
-"#,
-        "Cannot access protected method",
-    );
-}
-
 /// Verifies that circular trait composition (trait A uses B, B uses A) is detected
 /// and reported as an error.
 #[test]
@@ -89,24 +74,6 @@ $s = new Secret();
 echo $s->value;
 "#,
         "Cannot access protected property: Secret::value",
-    );
-}
-
-/// Verifies that accessing a protected method from outside the class hierarchy
-/// reports "Cannot access protected method: Secret::hidden".
-#[test]
-fn test_error_cannot_access_protected_method_outside_class() {
-    expect_error(
-        r#"<?php
-class Secret {
-    protected function hidden() {
-        return 7;
-    }
-}
-$s = new Secret();
-echo $s->hidden();
-"#,
-        "Cannot access protected method: Secret::hidden",
     );
 }
 

@@ -2,15 +2,15 @@
 title: "zval_pack() — internals"
 description: "Compiler internals for zval_pack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 304
+  order: 301
 ---
 
 ## `zval_pack()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/pointers.rs`:548](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/pointers.rs#L548) (`lower_zval_pack`)
+- **Signature**: [`src/builtins/pointers/zval_pack.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_pack.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:541](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L541) (`lower_zval_pack`)
 - **Function symbol**: `lower_zval_pack()`
 
 
@@ -24,8 +24,7 @@ sidebar:
 - (persisting strings, increfing array/object/mixed children), so that box is a
 - throwaway temporary that must be deep-released after the pack call or it leaks
 - one Mixed cell per call. When the operand is already Mixed/Union no box was
-- created — the operand's own live cell is passed through — so it must not be
-- freed here.
+- created, so the operand's own live cell must not be freed here.
 
 ## Runtime helpers
 
@@ -36,7 +35,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function zval_pack(mixed $value): mixed
+function zval_pack(mixed $value): pointer
 ```
 
 ## What the type checker enforces
@@ -46,4 +45,3 @@ function zval_pack(mixed $value): mixed
 ## Cross-references
 
 - [User reference for `zval_pack()`](../../../php/builtins/pointer/zval_pack.md)
-

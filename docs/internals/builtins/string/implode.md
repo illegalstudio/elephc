@@ -2,15 +2,15 @@
 title: "implode() — internals"
 description: "Compiler internals for implode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 366
+  order: 363
 ---
 
 ## `implode()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:192](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L192) (`lower_implode`)
+- **Signature**: [`src/builtins/string/implode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/implode.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:192](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L192) (`lower_implode`)
 - **Function symbol**: `lower_implode()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function implode(string $separator, array $array): string
+function implode(string $separator, array $array = null): string
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function implode(string $separator, array $array): string
 ## Cross-references
 
 - [User reference for `implode()`](../../../php/builtins/string/implode.md)
-

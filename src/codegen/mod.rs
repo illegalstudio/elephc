@@ -1,414 +1,241 @@
 //! Purpose:
-//! Coordinates assembly generation for complete programs and re-exports shared codegen helpers.
-//! Builds class metadata, emits user code, and assembles the runtime-facing sections.
+//! Canonical EIR-consuming assembly backend and public codegen facade.
+//! Lowers an EIR `Module` to target assembly while re-exporting shared ABI/runtime helpers.
 //!
 //! Called from:
-//! - `crate::pipeline::compile()` through `crate::codegen::generate()`
+//! - `crate::pipeline::compile()` after AST-to-EIR lowering and IR optimization.
 //!
 //! Key details:
-//! - Keeps frontend type metadata, runtime cache assumptions, and target-specific emission ordered before linking.
+//! - EIR is the compiler's codegen contract for emitted user assembly.
+//! - `crate::codegen_support` owns shared target, runtime, ABI, and metadata helpers.
 
-pub(crate) mod abi;
-pub(crate) mod builtins;
-pub(crate) mod cdylib;
-pub(crate) mod callable_descriptor;
-pub(crate) mod callable_dispatch;
-pub(crate) mod runtime_callable_invoker;
-mod callables;
-mod class_methods;
-mod property_init_thunks;
-/// Codegen context module.
-pub mod context;
-pub(crate) mod data_section;
-mod driver_support;
-pub(crate) mod emit;
-mod expr;
-mod ffi;
-mod fiber_sigs;
+mod block_emit;
+pub(crate) mod context;
+mod fibers;
+mod frame;
 mod function_variants;
-mod functions;
-pub(crate) mod interface_wrappers;
-mod main_emission;
-/// Platform module.
-pub mod platform;
-mod prescan;
-mod program_usage;
-pub(crate) mod reflection;
-pub(crate) mod runtime;
-mod runtime_features;
-pub(crate) mod sentinels;
-mod stmt;
-pub(crate) mod visibility;
+mod literal_defaults;
+pub(crate) mod lower_inst;
+mod lower_term;
+mod runtime_callable_invoker;
+pub mod value_placement;
+mod web;
 
-use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
-
-pub(crate) use functions::{emit_callback_wrapper, emit_extern_callback_trampoline};
-
-thread_local! {
-    /// Number of `spl_autoload_register` closure rules the autoload pass
-    /// extracted at compile time. Set via [`set_autoload_rule_count`]
-    /// before `generate` is called; read by `spl_autoload_functions()`
-    /// codegen to size the introspection array. Thread-local so
-    /// parallel test runs don't interfere.
-    static AUTOLOAD_RULE_COUNT: Cell<usize> = const { Cell::new(0) };
-    static DECLARED_CLASS_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    static DECLARED_INTERFACE_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    static DECLARED_TRAIT_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    static DECLARED_TRAIT_USES: RefCell<HashMap<String, Vec<String>>> = RefCell::new(HashMap::new());
-}
-
-/// Sets the number of autoload rules registered.
-pub fn set_autoload_rule_count(n: usize) {
-    AUTOLOAD_RULE_COUNT.with(|c| c.set(n));
-}
-
-/// Returns the number of autoload rules registered.
-pub fn autoload_rule_count() -> usize {
-    AUTOLOAD_RULE_COUNT.with(|c| c.get())
-}
-
-/// Stores the declaration order of classes, interfaces, and traits so that
-/// `declared_class_names()` / `declared_interface_names()` / `declared_trait_names()`
-/// can reproduce it for class-id ordering in user assembly.
-fn set_declared_name_order(classes: Vec<String>, interfaces: Vec<String>, traits: Vec<String>) {
-    DECLARED_CLASS_NAMES.with(|names| *names.borrow_mut() = classes);
-    DECLARED_INTERFACE_NAMES.with(|names| *names.borrow_mut() = interfaces);
-    DECLARED_TRAIT_NAMES.with(|names| *names.borrow_mut() = traits);
-}
-
-/// Prepares declaration-order registries shared by legacy and EIR introspection builtins.
-pub fn prepare_declared_name_order(
-    program: &Program,
-    classes: &HashMap<String, ClassInfo>,
-    interfaces: &HashMap<String, InterfaceInfo>,
-) {
-    let declared_trait_order = collect_declared_trait_names(program);
-    DECLARED_TRAIT_USES.with(|uses| *uses.borrow_mut() = collect_declared_trait_uses(program));
-    set_declared_name_order(
-        collect_declared_class_names(program, classes),
-        collect_declared_interface_names(program, interfaces),
-        declared_trait_order,
-    );
-}
-
-/// Returns the ordered list of class names declared in the program,
-/// including internal classes prepended by the compiler.
-pub(crate) fn declared_class_names() -> Vec<String> {
-    DECLARED_CLASS_NAMES.with(|names| names.borrow().clone())
-}
-
-/// Returns the ordered list of interface names declared in the program,
-/// including internal interfaces prepended by the compiler.
-pub(crate) fn declared_interface_names() -> Vec<String> {
-    DECLARED_INTERFACE_NAMES.with(|names| names.borrow().clone())
-}
-
-/// Returns the ordered list of trait names declared in the program,
-/// including internal traits prepended by the compiler.
-pub(crate) fn declared_trait_names() -> Vec<String> {
-    DECLARED_TRAIT_NAMES.with(|names| names.borrow().clone())
-}
-
-/// Provides the Declared trait uses helper used by the codegen module.
-pub(crate) fn declared_trait_uses(name: &str) -> Vec<String> {
-    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
-    DECLARED_TRAIT_USES.with(|uses| {
-        uses.borrow()
-            .iter()
-            .find(|(candidate, _)| {
-                crate::names::php_symbol_key(candidate.trim_start_matches('\\')) == key
-            })
-            .map(|(_, traits)| traits.clone())
-            .unwrap_or_default()
-    })
-}
-
-use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
-use crate::types::{
-    ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
-    PackedClassInfo, PhpType, TypeEnv,
+pub(crate) use crate::codegen_support::collect_constants;
+pub use crate::codegen_support::platform;
+pub use crate::codegen_support::sentinels::{set_null_repr, NullRepr};
+pub(crate) use crate::codegen_support::sentinels::{
+    NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
 };
-use class_methods::emit_class_methods;
-use property_init_thunks::emit_property_init_thunk;
-use data_section::DataSection;
-use driver_support::align16;
-use emit::Emitter;
-use interface_wrappers::emit_interface_return_wrappers;
-use main_emission::emit_main_and_finalize;
-pub(crate) use driver_support::{
-    emit_box_current_expr_value_as_mixed_for_container, emit_box_current_owned_value_as_mixed,
-    emit_box_current_value_as_mixed, emit_box_iterable_value_for_mixed_container,
-    emit_box_runtime_payload_as_mixed, emit_deferred_closures,
-    emit_write_current_string_stderr, emit_write_literal_stderr,
-    emit_normalized_hash_key, emit_release_pushed_refcounted_temp_after_array_push,
-    runtime_value_tag,
+pub(crate) use crate::codegen_support::{
+    abi, callable_descriptor, callable_dispatch, callable_invoker_args, cdylib, data_section, emit,
+    hash_crypto, interface_wrappers, phar_stream, reflection, runtime, sentinels, stream_filters,
+    tls, visibility,
 };
-pub(crate) use expr::arrays::emit_array_value_type_stamp;
-pub(crate) use functions::emit_fiber_wrapper;
-pub(crate) use sentinels::{NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL};
-pub use sentinels::{set_null_repr, NullRepr};
+pub(crate) use crate::codegen_support::{
+    autoload_rule_count, declared_class_names, declared_interface_names, declared_trait_names,
+    emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,
+    emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, emit_callback_wrapper,
+    emit_extern_callback_trampoline, emit_fiber_wrapper,
+    emit_release_pushed_refcounted_temp_after_array_push, emit_write_current_string_stderr,
+    emit_write_literal_stderr, runtime_value_tag,
+};
 #[allow(unused_imports)]
-pub use driver_support::{
+pub use crate::codegen_support::{
     generate_runtime, generate_runtime_with_features, generate_runtime_with_features_pic,
-};
-pub use runtime_features::{
     required_libraries_for_runtime_features, runtime_features_for_program_and_classes,
+    RuntimeFeatures,
 };
-pub use runtime_features::RuntimeFeatures;
-use platform::Target;
-pub(crate) use prescan::collect_constants;
+pub use crate::codegen_support::{prepare_declared_name_order, set_autoload_rule_count};
+
+use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::fmt;
+
+use crate::codegen::data_section::DataSection;
+use crate::codegen::emit::Emitter;
+use crate::codegen::platform::{Arch, Platform};
+use crate::exports::ExportedFunction;
+use crate::intrinsics::IntrinsicCall;
+use crate::ir::{Function, Immediate, Module, Op, ValueDef};
+use crate::names::{method_symbol, php_symbol_key, static_method_symbol};
+use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 
 /// Output artifact kind selected by the compiler's `--emit` flag.
 ///
-/// `Executable` (default) produces a standalone native binary with a `_main`
-/// entry point and a process-exit call at the end of top-level statements.
-///
-/// `Cdylib` produces a position-independent shared library (`.so` on Linux,
-/// `.dylib` on macOS) loadable via `dlopen(3)` and friends. Cdylib output has
-/// no `_main` entry, no implicit top-level execution at load time, and exposes
-/// PHP functions marked with `#[Export]` under their unmangled PHP names plus
-/// the `elephc_init` / `elephc_shutdown` / `elephc_last_error` / `elephc_free`
-/// lifecycle entry points for embedding hosts.
+/// `Executable` produces a standalone native binary with a process entry point.
+/// `Cdylib` produces a position-independent shared library with exported lifecycle hooks.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Emit {
     Executable,
     Cdylib,
 }
-use prescan::{collect_global_var_names, collect_static_vars};
-use program_usage::{
-    collect_required_class_names, collect_required_class_names_in_stmts,
-    program_has_dynamic_instanceof,
-};
 
-/// Generates user-code assembly for the target.
-/// Returns the raw assembly string.
-/// Generates the user assembly object for a checked and optimized program.
+/// Error returned by the Phase 04 IR backend while a required lowering path is missing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodegenIrError {
+    message: String,
+}
+
+impl CodegenIrError {
+    /// Creates an error for an EIR shape that is malformed or missing required metadata.
+    pub(super) fn invalid_module(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    /// Creates an error for an EIR opcode or backend option not lowered in Phase 04 yet.
+    pub(super) fn unsupported(message: impl Into<String>) -> Self {
+        Self {
+            message: format!("unsupported EIR backend feature: {}", message.into()),
+        }
+    }
+
+    /// Creates an error for a missing function-local table entry.
+    pub(super) fn missing_entry(kind: &str, raw: u32) -> Self {
+        Self {
+            message: format!("EIR backend missing {} with id {}", kind, raw),
+        }
+    }
+}
+
+impl fmt::Display for CodegenIrError {
+    /// Formats the backend error for CLI diagnostics.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl Error for CodegenIrError {}
+
+/// Result type returned by IR backend entry points.
+pub type Result<T> = std::result::Result<T, CodegenIrError>;
+
+/// Generates user-code assembly from a lowered EIR module.
 ///
-/// The returned assembly contains user functions, class metadata, `_main`, and
-/// user-specific data, but not the shared cached runtime object. When
-/// `requires_elephc_tls` is true, `_main` publishes the TLS staticlib entry
-/// points before user code runs so dynamic URL helpers can call through them.
-#[allow(clippy::too_many_arguments)]
-pub fn generate_user_asm(
-    program: &Program,
-    global_env: &TypeEnv,
-    functions: &HashMap<String, FunctionSig>,
-    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
-    callable_return_sigs: &HashMap<String, FunctionSig>,
-    callable_array_return_sigs: &HashMap<String, FunctionSig>,
-    interfaces: &HashMap<String, InterfaceInfo>,
-    classes: &HashMap<String, ClassInfo>,
-    enums: &HashMap<String, EnumInfo>,
-    packed_classes: &HashMap<String, PackedClassInfo>,
-    extern_functions: &HashMap<String, ExternFunctionSig>,
-    extern_classes: &HashMap<String, ExternClassInfo>,
-    extern_globals: &HashMap<String, PhpType>,
-    _heap_size: usize,
+/// The Phase 04 backend currently supports straight-line scalar main programs and
+/// returns explicit unsupported-feature errors for paths that are not lowered yet.
+#[allow(dead_code)]
+pub fn generate_user_asm_from_ir(
+    module: &Module,
     gc_stats: bool,
     heap_debug: bool,
-    target: Target,
+) -> Result<String> {
+    let exported_functions: HashMap<String, ExportedFunction> = HashMap::new();
+    generate_user_asm_from_ir_with_options(
+        module,
+        gc_stats,
+        heap_debug,
+        false,
+        Emit::Executable,
+        &exported_functions,
+        true,
+        false,
+    )
+}
+
+/// Generates user-code assembly from EIR using the same artifact options as the CLI pipeline.
+///
+/// `regalloc_linear` selects the linear-scan register allocator; when false the
+/// backend keeps every value on the stack (the `--regalloc=stack` fallback).
+///
+/// `web` restructures the process entry for `--web`: the top-level body becomes
+/// the C-callable `_elephc_web_handler` and the real entry point becomes a thin
+/// stub that calls `elephc_web_run`. When false the entry is byte-for-byte the
+/// normal exit-based main.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_user_asm_from_ir_with_options(
+    module: &Module,
+    gc_stats: bool,
+    heap_debug: bool,
     requires_elephc_tls: bool,
-    null_repr: NullRepr,
     emit: Emit,
-    exported_functions: &HashMap<String, crate::exports::ExportedFunction>,
-) -> String {
-    sentinels::set_null_repr(null_repr);
+    exported_functions: &HashMap<String, ExportedFunction>,
+    regalloc_linear: bool,
+    web: bool,
+) -> Result<String> {
     let mut emitter = match emit {
-        Emit::Cdylib => Emitter::new_pic(target),
-        Emit::Executable => Emitter::new(target),
+        Emit::Cdylib => Emitter::new_pic(module.target),
+        Emit::Executable => Emitter::new(module.target),
     };
-    if target.arch == platform::Arch::X86_64 {
+    if module.target.arch == Arch::X86_64 {
         emitter.emit_text_prelude();
     }
     let mut data = DataSection::new();
-
-    // Pre-scan for compile-time constants (const declarations and define() calls)
-    let global_constants = collect_constants(program, target.platform);
-
-    // Pre-scan for global variable names used in `global $var` statements across all functions
-    let all_global_var_names = collect_global_var_names(program);
-
-    // Pre-scan for static variable declarations across all functions
-    let all_static_vars = collect_static_vars(program, global_env);
-    let declared_trait_order = collect_declared_trait_names(program);
-    let declared_traits: HashSet<String> = declared_trait_order.iter().cloned().collect();
-    DECLARED_TRAIT_USES.with(|uses| *uses.borrow_mut() = collect_declared_trait_uses(program));
-    set_declared_name_order(
-        collect_declared_class_names(program, classes),
-        collect_declared_interface_names(program, interfaces),
-        declared_trait_order,
-    );
-
-    // Emit user-defined functions before _main (skip extern functions)
-    let function_variant_groups = function_variants::collect_function_variant_groups(program);
-    let function_variant_group_names: HashSet<String> =
-        function_variant_groups.keys().cloned().collect();
-    let fiber_return_sigs = fiber_sigs::collect_fiber_return_sigs(program);
-    for (name, sig) in functions {
-        if extern_functions.contains_key(name) {
-            continue; // extern functions have no body — they're linked from C
-        }
-        if function_variant_groups.contains_key(name) {
-            function_variants::emit_function_variant_dispatcher(&mut emitter, &mut data, name);
-            continue;
-        }
-        let body = program
-            .iter()
-            .find_map(|s| match &s.kind {
-                StmtKind::FunctionDecl { name: n, body, .. } if n == name => Some(body),
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("codegen bug: function '{}' declared in signatures but body not found in AST", name));
-
-        functions::emit_function(
-            &mut emitter, &mut data, name, sig, body, functions,
-            callable_param_sigs,
-            callable_return_sigs,
-            callable_array_return_sigs,
-            &fiber_return_sigs,
-            &function_variant_group_names,
-            &global_constants, &all_global_var_names, &all_static_vars,
-            interfaces,
-            &declared_traits,
-            Some(classes),
-            enums,
-            packed_classes,
-            extern_functions,
-            extern_classes,
-            extern_globals,
-        );
-    }
-
-    // Emit flattened class methods in class-id order for deterministic output.
-    // Filter classes to those visibly used by the program so that test asm
-    // stays compact; the filter must include every parent
-    // and implemented interface in the inheritance chain because vtables and
-    // interface_impl tables reference the inherited method symbols (e.g.
-    // JsonException's vtable points at _method_Exception_getmessage).
-    //
-    // The builtin throwable hierarchy is always included unconditionally
-    // because runtime helpers (e.g. __rt_json_throw_error) can raise
-    // JsonException objects whose class_id lands in the user-asm tables
-    // (parent_ids, vtable_ptrs, interface_ptrs). Without those slots
-    // populated, the catch-time inheritance walk in __rt_exception_matches
-    // sees a -1 parent for the thrown class and reports no match.
-    let emitted_class_names = if !program_has_dynamic_instanceof(program) {
-        Some(collect_emitted_class_names(program, classes))
-    } else {
-        None
-    };
-    let mut sorted_classes: Vec<(&String, &ClassInfo)> = classes
-        .iter()
-        .filter(|(class_name, _)| {
-            emitted_class_names
-                .as_ref()
-                .is_none_or(|declared| declared.contains(*class_name))
-        })
-        .collect();
-    sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
-    for (class_name, class_info) in sorted_classes {
-        emit_class_methods(
-            &mut emitter,
-            &mut data,
-            class_name,
-            class_info,
-            functions,
-            callable_param_sigs,
-            callable_return_sigs,
-            callable_array_return_sigs,
-            &fiber_return_sigs,
-            &function_variant_group_names,
-            &global_constants,
-            interfaces,
-            &declared_traits,
-            classes,
-            enums,
-            packed_classes,
-            extern_functions,
-            extern_classes,
-            extern_globals,
-        );
-        // Per-class property-default thunk (_class_propinit_<id>), invoked by
-        // __rt_new_by_name so new $var() / registered wrappers + filters get
-        // their declared property defaults. Same filtered/sorted class set as
-        // the method emission above and the _class_propinit_ptrs table.
-        emit_property_init_thunk(
-            &mut emitter,
-            &mut data,
-            class_name,
-            class_info,
-            functions,
-            callable_param_sigs,
-            callable_return_sigs,
-            &function_variant_group_names,
-            &global_constants,
-            interfaces,
-            &declared_traits,
-            classes,
-            enums,
-            packed_classes,
-            extern_functions,
-            extern_classes,
-            extern_globals,
-        );
-    }
-
-    emit_interface_return_wrappers(
+    block_emit::emit_module(
+        module,
         &mut emitter,
-        interfaces,
-        classes,
-        emitted_class_names.as_ref(),
-    );
-
-    // Cdylib emission appends C-ABI export trampolines and lifecycle symbols
-    // after user functions so each `_fn_<name>` target the trampolines branch
-    // into has already been emitted. Executable mode skips this step entirely.
-    if matches!(emit, Emit::Cdylib) {
-        let mut sorted_exports: Vec<&crate::exports::ExportedFunction> =
-            exported_functions.values().collect();
-        sorted_exports.sort_by(|a, b| a.name.cmp(&b.name));
-        cdylib::emit_cdylib_exports(&mut emitter, target, &sorted_exports);
-    }
-
-    let user_asm = emit_main_and_finalize(
-        emitter,
-        data,
-        program,
-        global_env,
-        functions,
-        callable_param_sigs,
-        callable_return_sigs,
-        callable_array_return_sigs,
-        &fiber_return_sigs,
-        &function_variant_group_names,
-        interfaces,
-        &declared_traits,
-        classes,
-        enums,
-        packed_classes,
-        extern_functions,
-        extern_classes,
-        extern_globals,
-        &global_constants,
-        &all_global_var_names,
-        &all_static_vars,
-        emitted_class_names.as_ref(),
+        &mut data,
         gc_stats,
         heap_debug,
         requires_elephc_tls,
         emit,
+        regalloc_linear,
+        web,
+    )?;
+    Ok(finalize_user_asm(
+        module,
+        emitter,
+        data,
+        emit,
+        exported_functions,
+    ))
+}
+
+/// Appends literal data and the minimal user-runtime metadata needed by linked helpers.
+fn finalize_user_asm(
+    module: &Module,
+    mut emitter: Emitter,
+    data: DataSection,
+    emit: Emit,
+    exported_functions: &HashMap<String, ExportedFunction>,
+) -> String {
+    let data_output = data.emit();
+    let empty_globals = HashSet::<String>::new();
+    let empty_static_vars = HashMap::<(String, String), PhpType>::new();
+    let user_functions = runtime_user_function_sigs(module);
+    let function_variant_groups = runtime_function_variant_groups(module);
+    let mut allowed_class_names = runtime_referenced_class_names(module);
+    if module_uses_dynamic_callable_lookup(module) {
+        allowed_class_names.extend(module.class_infos.keys().cloned());
+    }
+    let runtime_interfaces = runtime_referenced_interfaces(module, &allowed_class_names);
+    let runtime_classes = runtime_class_infos(module);
+    crate::codegen::interface_wrappers::emit_interface_return_wrappers(
+        &mut emitter,
+        &runtime_interfaces,
+        &runtime_classes,
+        Some(&allowed_class_names),
+    );
+    emit_intrinsic_method_wrappers(module, &mut emitter);
+    if matches!(emit, Emit::Cdylib) {
+        let mut sorted_exports: Vec<&ExportedFunction> = exported_functions.values().collect();
+        sorted_exports.sort_by(|a, b| a.name.cmp(&b.name));
+        crate::codegen::cdylib::emit_cdylib_exports(&mut emitter, module.target, &sorted_exports);
+    }
+    let user_data = runtime::emit_runtime_data_user(
+        &empty_globals,
+        &empty_static_vars,
+        &user_functions,
+        &function_variant_groups,
+        &runtime_interfaces,
+        &runtime_classes,
+        &module.enum_infos,
+        Some(&allowed_class_names),
     );
 
-    // ELF cdylibs hide every internal global so the artifact exports only its
-    // public ABI (lifecycle entry points + #[Export] trampolines). Without
-    // this, internal runtime state would be preemptible and two elephc modules
-    // loaded into one process would alias each other's globals. Mach-O uses
-    // two-level namespace binding, so macOS needs no directive.
-    if matches!(emit, Emit::Cdylib) && target.platform == platform::Platform::Linux {
-        let mut exported: std::collections::HashSet<String> = exported_functions
-            .keys()
-            .map(|name| target.extern_symbol(name))
+    let mut user_asm = emitter.output();
+    if !data_output.is_empty() {
+        user_asm.push('\n');
+        user_asm.push_str(&data_output);
+    }
+    user_asm.push('\n');
+    user_asm.push_str(&user_data);
+    if matches!(emit, Emit::Cdylib) && module.target.platform == Platform::Linux {
+        let mut exported: HashSet<String> = exported_functions
+            .values()
+            .map(|export| module.target.extern_symbol(&export.name))
             .collect();
         for lifecycle in [
             "elephc_init",
@@ -416,189 +243,289 @@ pub fn generate_user_asm(
             "elephc_last_error",
             "elephc_free",
         ] {
-            exported.insert(target.extern_symbol(lifecycle));
+            exported.insert(module.target.extern_symbol(lifecycle));
         }
-        return visibility::append_hidden_directives(&user_asm, &exported);
+        return crate::codegen::visibility::append_hidden_directives(&user_asm, &exported);
     }
     user_asm
 }
 
-/// Collects user-declared class and enum names from the program AST, merges them
-/// with internal class names, and returns the combined list in declaration order
-/// with internal names prepended and sorted.
-fn collect_declared_class_names(
-    program: &Program,
-    classes: &HashMap<String, ClassInfo>,
-) -> Vec<String> {
-    let mut user_names = Vec::new();
-    collect_program_declared_names(
-        program,
-        classes,
-        &mut HashSet::new(),
-        &mut user_names,
-        |stmt| match &stmt.kind {
-            StmtKind::ClassDecl { name, .. } | StmtKind::EnumDecl { name, .. } => {
-                Some(name.as_str())
-            }
-            _ => None,
-        },
-    );
-    prepend_internal_names(classes.keys(), &user_names)
-}
-
-/// Collects user-declared interface names from the program AST, merges them
-/// with internal interface names, and returns the combined list in declaration
-/// order with internal names prepended and sorted.
-fn collect_declared_interface_names(
-    program: &Program,
-    interfaces: &HashMap<String, InterfaceInfo>,
-) -> Vec<String> {
-    let mut user_names = Vec::new();
-    collect_program_declared_names(
-        program,
-        interfaces,
-        &mut HashSet::new(),
-        &mut user_names,
-        |stmt| match &stmt.kind {
-            StmtKind::InterfaceDecl { name, .. } => Some(name.as_str()),
-            _ => None,
-        },
-    );
-    prepend_internal_names(interfaces.keys(), &user_names)
-}
-
-/// Recursively collects user-declared trait names from the program AST,
-/// including those inside namespace blocks, and returns them in declaration order.
-fn collect_declared_trait_names(program: &Program) -> Vec<String> {
-    let mut names = Vec::new();
-    for stmt in program {
-        match &stmt.kind {
-            StmtKind::TraitDecl { name, .. } => {
-                names.push(name.clone());
-            }
-            StmtKind::NamespaceBlock { body, .. } => {
-                names.extend(collect_declared_trait_names(body));
-            }
-            _ => {}
-        }
-    }
-    names
-}
-
-/// Collects declared trait uses for the surrounding analysis or metadata result.
-fn collect_declared_trait_uses(program: &Program) -> HashMap<String, Vec<String>> {
-    let mut uses = HashMap::new();
-    for stmt in program {
-        match &stmt.kind {
-            StmtKind::TraitDecl {
-                name, trait_uses, ..
-            } => {
-                uses.insert(
-                    name.clone(),
-                    trait_uses
-                        .iter()
-                        .flat_map(|use_decl| {
-                            use_decl
-                                .trait_names
-                                .iter()
-                                .map(|trait_name| trait_name.as_str().to_string())
-                        })
-                        .collect(),
-                );
-            }
-            StmtKind::NamespaceBlock { body, .. } => {
-                uses.extend(collect_declared_trait_uses(body));
-            }
-            _ => {}
-        }
-    }
-    uses
-}
-
-/// Helper for collecting declared names of a specific AST statement kind.
-/// Walks the program (recursing into namespace blocks), asks the `pick` callback
-/// to extract a name from each statement, and outputs it only if it exists in
-/// `known` and hasn't been seen before (deduplicated by PHP symbol key).
-fn collect_program_declared_names<T>(
-    program: &Program,
-    known: &HashMap<String, T>,
-    seen: &mut HashSet<String>,
-    out: &mut Vec<String>,
-    pick: impl Copy + Fn(&crate::parser::ast::Stmt) -> Option<&str>,
-) {
-    for stmt in program {
-        match &stmt.kind {
-            StmtKind::NamespaceBlock { body, .. } => {
-                collect_program_declared_names(body, known, seen, out, pick);
-            }
-            _ => {
-                let Some(name) = pick(stmt) else {
-                    continue;
-                };
-                let key = crate::names::php_symbol_key(name);
-                let is_known = known.contains_key(name)
-                    || known.keys().any(|candidate| {
-                        crate::names::php_symbol_key(candidate.trim_start_matches('\\')) == key
-                    });
-                if is_known && seen.insert(key) {
-                    out.push(name.to_string());
-                }
-            }
-        }
-    }
-}
-
-/// Splits `known_names` into internal-only and user-declared by checking against
-/// `user_names` (matched by PHP symbol key), sorts the internal names, and
-/// appends the user names in their original order.
-fn prepend_internal_names<'a>(
-    known_names: impl Iterator<Item = &'a String>,
-    user_names: &[String],
-) -> Vec<String> {
-    let user_keys: HashSet<String> = user_names
+/// Returns user functions visible to runtime callable-name metadata.
+fn runtime_user_function_sigs(module: &Module) -> HashMap<String, FunctionSig> {
+    let mut functions = module
+        .functions
         .iter()
-        .map(|name| crate::names::php_symbol_key(name))
-        .collect();
-    let mut names: Vec<String> = known_names
-        .filter(|name| !is_internal_synthetic_class_name(name))
-        .filter(|name| !user_keys.contains(&crate::names::php_symbol_key(name)))
-        .cloned()
-        .collect();
-    names.sort();
-    names.extend(user_names.iter().cloned());
+        .filter(|function| !is_property_init_thunk_function(function))
+        .map(|function| (function.name.clone(), ir_function_sig(function)))
+        .collect::<HashMap<_, _>>();
+    for group in function_variants::collect_dispatch_groups(module) {
+        if let Some(function) = function_variants::variant_callee_for_group(module, &group.name) {
+            functions
+                .entry(group.name.clone())
+                .or_insert_with(|| ir_function_sig(function));
+        }
+    }
+    functions
+}
+
+/// Returns true for synthetic property-default init thunks, which are not PHP callables.
+fn is_property_init_thunk_function(function: &Function) -> bool {
+    function.name.starts_with("_class_propinit_")
+}
+
+/// Reconstructs callable metadata from an EIR function when no source signature is attached.
+fn ir_function_sig(function: &Function) -> FunctionSig {
+    if let Some(signature) = &function.signature {
+        return signature.clone();
+    }
+    FunctionSig {
+        params: function
+            .params
+            .iter()
+            .map(|param| (param.name.clone(), param.php_type.clone()))
+            .collect(),
+        defaults: vec![None; function.params.len()],
+        return_type: function.return_php_type.clone(),
+        declared_return: false,
+        by_ref_return: false,
+        ref_params: function.params.iter().map(|param| param.by_ref).collect(),
+        declared_params: vec![true; function.params.len()],
+        variadic: function
+            .params
+            .iter()
+            .find(|param| param.variadic)
+            .map(|param| param.name.clone()),
+        deprecation: None,
+    }
+}
+
+/// Returns include-variant public names that runtime callable lookup must check dynamically.
+fn runtime_function_variant_groups(module: &Module) -> HashSet<String> {
+    function_variants::collect_dispatch_groups(module)
+        .into_iter()
+        .map(|group| group.name)
+        .collect()
+}
+
+/// Returns true when runtime callable helpers need broad user callable metadata.
+fn module_uses_dynamic_callable_lookup(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .any(|function| function_uses_dynamic_callable_lookup(module, function))
+}
+
+/// Returns true when one function calls `is_callable()` on a runtime-shaped value.
+fn function_uses_dynamic_callable_lookup(module: &Module, function: &Function) -> bool {
+    function.instructions.iter().any(|inst| {
+        if !is_dynamic_callable_lookup_builtin(module, inst) || inst.operands.is_empty() {
+            return false;
+        }
+        let Some(value) = function.value(inst.operands[0]) else {
+            return false;
+        };
+        matches!(
+            value.php_type.codegen_repr(),
+            PhpType::Str
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_)
+                | PhpType::Mixed
+                | PhpType::Union(_)
+                | PhpType::Iterable
+        )
+    })
+}
+
+/// Returns true for an EIR builtin instruction that calls PHP `is_callable()`.
+fn is_dynamic_callable_lookup_builtin(module: &Module, inst: &crate::ir::Instruction) -> bool {
+    if inst.op != Op::BuiltinCall {
+        return false;
+    }
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return false;
+    };
+    let Some(name) = module.data.function_names.get(data.as_raw() as usize) else {
+        return false;
+    };
+    crate::names::php_symbol_key(name.trim_start_matches('\\')) == "is_callable"
+}
+
+/// Emits method-symbol wrappers for runtime-backed intrinsic class methods.
+fn emit_intrinsic_method_wrappers(module: &Module, emitter: &mut Emitter) {
+    for wrapper in intrinsic_method_wrapper_specs(module) {
+        let symbol = if wrapper.is_static {
+            static_method_symbol(&wrapper.class_name, &wrapper.method_key)
+        } else {
+            method_symbol(&wrapper.class_name, &wrapper.method_key)
+        };
+        emitter.label(&symbol);
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("b {}", wrapper.helper)); // tail-call the runtime helper using the method ABI arguments
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("jmp {}", wrapper.helper)); // tail-call the runtime helper using the method ABI arguments
+            }
+        }
+    }
+}
+
+/// Runtime-backed method wrapper that should be emitted as a PHP method symbol.
+struct IntrinsicMethodWrapper {
+    class_name: String,
+    method_key: String,
+    helper: &'static str,
+    is_static: bool,
+}
+
+/// Returns intrinsic instance/static methods that need method-symbol wrappers.
+fn intrinsic_method_wrapper_specs(module: &Module) -> Vec<IntrinsicMethodWrapper> {
+    let eir_methods = eir_class_method_keys(module);
+    let mut wrappers = Vec::new();
+    for (class_name, class_info) in &module.class_infos {
+        for method_key in class_info.methods.keys() {
+            let impl_class = class_info
+                .method_impl_classes
+                .get(method_key)
+                .map(String::as_str)
+                .unwrap_or(class_name.as_str());
+            if eir_methods.contains(&(impl_class.to_string(), method_key.clone(), false)) {
+                continue;
+            }
+            if let Some(helper) = IntrinsicCall::instance_method(impl_class, method_key)
+                .and_then(|intrinsic| intrinsic.runtime_helper())
+            {
+                wrappers.push(IntrinsicMethodWrapper {
+                    class_name: impl_class.to_string(),
+                    method_key: method_key.clone(),
+                    helper,
+                    is_static: false,
+                });
+            }
+        }
+        for method_key in class_info.static_methods.keys() {
+            let impl_class = class_info
+                .static_method_impl_classes
+                .get(method_key)
+                .map(String::as_str)
+                .unwrap_or(class_name.as_str());
+            if eir_methods.contains(&(impl_class.to_string(), method_key.clone(), true)) {
+                continue;
+            }
+            if let Some(helper) = IntrinsicCall::static_method(impl_class, method_key)
+                .and_then(|intrinsic| intrinsic.runtime_helper())
+            {
+                wrappers.push(IntrinsicMethodWrapper {
+                    class_name: impl_class.to_string(),
+                    method_key: method_key.clone(),
+                    helper,
+                    is_static: true,
+                });
+            }
+        }
+    }
+    wrappers.sort_by(|left, right| {
+        (&left.class_name, &left.method_key, left.is_static).cmp(&(
+            &right.class_name,
+            &right.method_key,
+            right.is_static,
+        ))
+    });
+    wrappers.dedup_by(|left, right| {
+        left.class_name == right.class_name
+            && left.method_key == right.method_key
+            && left.is_static == right.is_static
+    });
+    wrappers
+}
+
+/// Returns class metadata trimmed to method symbols emitted by the EIR backend.
+fn runtime_class_infos(module: &Module) -> HashMap<String, ClassInfo> {
+    let emitted_methods = emitted_class_method_keys(module);
+    let mut classes = module.class_infos.clone();
+    for class_info in classes.values_mut() {
+        class_info
+            .method_impl_classes
+            .retain(|method_name, impl_class| {
+                emitted_methods.contains(&(impl_class.clone(), method_name.clone(), false))
+            });
+        class_info
+            .static_method_impl_classes
+            .retain(|method_name, impl_class| {
+                emitted_methods.contains(&(impl_class.clone(), method_name.clone(), true))
+            });
+    }
+    classes
+}
+
+/// Returns classes that EIR object allocation or named `instanceof` can reference at runtime.
+fn runtime_referenced_class_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    if module_contains_generator(module) {
+        names.insert("Generator".to_string());
+    }
+    if module_uses_dynamic_instanceof(module) {
+        names.extend(dynamic_instanceof_class_names(module));
+    }
+    for class_name in referenced_static_property_class_names(module) {
+        if module.class_infos.contains_key(&class_name) {
+            names.insert(class_name);
+        }
+    }
+    for class_name in referenced_static_method_class_names(module) {
+        if module.class_infos.contains_key(&class_name) {
+            names.insert(class_name);
+        }
+    }
+    for class_name in referenced_class_data_names(module) {
+        if module.class_infos.contains_key(&class_name) {
+            names.insert(class_name);
+        }
+    }
+    for class_name in referenced_dynamic_object_new_class_names(module) {
+        if module.class_infos.contains_key(&class_name) {
+            names.insert(class_name);
+        }
+    }
+    for class_name in referenced_class_name_lookup_builtin_names(module) {
+        if module.class_infos.contains_key(&class_name) {
+            names.insert(class_name);
+        }
+    }
+    for class_name in referenced_stream_registration_class_names(module) {
+        if let Some(canonical) = canonical_module_class_name(module, &class_name) {
+            names.insert(canonical);
+        }
+    }
+    for class_name in referenced_scoped_constant_class_names(module) {
+        if module.class_infos.contains_key(&class_name) {
+            names.insert(class_name);
+        }
+    }
+    seed_runtime_throwable_class_names(module, &mut names);
+    seed_builtin_reflection_class_names(module, &mut names);
+    expand_class_dependencies(&mut names, &module.class_infos);
     names
 }
 
-/// Returns true when internal synthetic class name.
-fn is_internal_synthetic_class_name(name: &str) -> bool {
-    crate::names::php_symbol_key(name).starts_with("__elephc")
-}
-
-/// Returns the set of class names that should be emitted in the
-/// user-asm section. Starts from required classes, unconditionally includes
-/// the throwable hierarchy (needed by runtime JSON helpers), reflection
-/// classes, and attribute factories, then expands to cover the full
-/// inheritance and implementation dependency chain.
-fn collect_emitted_class_names(
-    program: &Program,
-    classes: &HashMap<String, ClassInfo>,
-) -> HashSet<String> {
-    let mut names = collect_required_class_names(program);
-    if names.contains("Fiber") {
+/// Adds builtin throwable classes that runtime helpers can materialize without EIR class references.
+fn seed_runtime_throwable_class_names(module: &Module, names: &mut HashSet<String>) {
+    if names.contains("Fiber") && module.class_infos.contains_key("FiberError") {
         names.insert("FiberError".to_string());
     }
-    // Seed the throwable hierarchy unconditionally: json_encode /
-    // json_decode / json_validate can throw JsonException at runtime
-    // through JSON_THROW_ON_ERROR even when user code only catches a
-    // wider type (e.g. `catch (Exception $e)`). Without these
-    // descriptors in the user-asm tables, the catch-time inheritance
-    // walk in __rt_exception_matches sees a -1 parent for the thrown
-    // class and reports no match.
-    for builtin in [
+    for class_name in [
         "Throwable",
         "Error",
         "TypeError",
         "ValueError",
+        "ArithmeticError",
         "Exception",
         "LogicException",
         "RuntimeException",
@@ -607,59 +534,816 @@ fn collect_emitted_class_names(
         "OutOfBoundsException",
         "OutOfRangeException",
     ] {
-        names.insert(builtin.to_string());
+        if module.class_infos.contains_key(class_name) {
+            names.insert(class_name.to_string());
+        }
     }
-    for builtin in [
+}
+
+/// Adds builtin reflection classes whose objects can be materialized by metadata helpers.
+fn seed_builtin_reflection_class_names(module: &Module, names: &mut HashSet<String>) {
+    for class_name in [
         "ReflectionAttribute",
         "ReflectionClass",
         "ReflectionMethod",
         "ReflectionProperty",
+        "ReflectionFunction",
+        "ReflectionParameter",
+        "ReflectionNamedType",
     ] {
-        names.insert(builtin.to_string());
-    }
-    for factory in reflection::collect_attribute_factories(classes) {
-        // Only resolvable attribute classes are emitted; non-class attributes
-        // are registered solely so `getArguments()` can return their arguments.
-        if factory.resolvable {
-            names.insert(factory.class_name);
+        if module.class_infos.contains_key(class_name) {
+            names.insert(class_name.to_string());
         }
     }
-    collect_dynamic_object_factory_classes(program, classes, &mut names);
-    expand_emitted_class_dependencies(&mut names, classes);
+}
+
+/// Returns true when any EIR function is emitted through the generator bridge.
+fn module_contains_generator(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .any(|function| function.flags.is_generator)
+}
+
+/// Returns interface metadata needed by named `instanceof` and emitted class metadata.
+fn runtime_referenced_interfaces(
+    module: &Module,
+    class_names: &HashSet<String>,
+) -> HashMap<String, InterfaceInfo> {
+    let mut names = HashSet::new();
+    if module_uses_dynamic_instanceof(module) {
+        names.extend(dynamic_instanceof_interface_names(module));
+    }
+    for class_name in referenced_class_data_names(module) {
+        if module.interface_infos.contains_key(&class_name) {
+            names.insert(class_name);
+        }
+    }
+    for class_name in class_names {
+        if let Some(class_info) = module.class_infos.get(class_name) {
+            names.extend(class_info.interfaces.iter().cloned());
+        }
+    }
+    expand_interface_dependencies(&mut names, &module.interface_infos);
+    names
+        .into_iter()
+        .filter_map(|name| {
+            module
+                .interface_infos
+                .get(&name)
+                .cloned()
+                .map(|info| (name, info))
+        })
+        .collect()
+}
+
+/// Returns whether any lowered EIR function uses dynamic `instanceof`.
+fn module_uses_dynamic_instanceof(module: &Module) -> bool {
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        if function
+            .instructions
+            .iter()
+            .any(|inst| matches!(inst.op, Op::InstanceOfDynamic))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns class names safe to include in dynamic lookup metadata for the current EIR slice.
+fn dynamic_instanceof_class_names(module: &Module) -> HashSet<String> {
+    module
+        .class_infos
+        .keys()
+        .filter(|name| class_metadata_supported_for_dynamic_instanceof(name, module))
+        .cloned()
+        .collect()
+}
+
+/// Returns interface names safe to include in dynamic lookup metadata for the current EIR slice.
+fn dynamic_instanceof_interface_names(module: &Module) -> HashSet<String> {
+    module
+        .interface_infos
+        .keys()
+        .filter(|name| {
+            interface_metadata_supported_for_dynamic_instanceof(name, &module.interface_infos)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Returns true when class metadata can be emitted for dynamic `instanceof` lookup.
+fn class_metadata_supported_for_dynamic_instanceof(class_name: &str, module: &Module) -> bool {
+    let emitted_methods = emitted_class_method_keys(module);
+    let mut seen = HashSet::new();
+    let mut current = Some(class_name);
+    while let Some(name) = current {
+        if !seen.insert(name.to_string()) {
+            return false;
+        }
+        let Some(class_info) = module.class_infos.get(name) else {
+            return false;
+        };
+        if !class_interfaces_supported_for_dynamic_instanceof(class_info, &module.interface_infos) {
+            return false;
+        }
+        if !class_method_symbols_supported(
+            class_info,
+            name,
+            false,
+            &class_info.vtable_methods,
+            &class_info.method_impl_classes,
+            &emitted_methods,
+        ) {
+            return false;
+        }
+        if !class_method_symbols_supported(
+            class_info,
+            name,
+            true,
+            &class_info.static_vtable_methods,
+            &class_info.static_method_impl_classes,
+            &emitted_methods,
+        ) {
+            return false;
+        }
+        current = class_info.parent.as_deref();
+    }
+    true
+}
+
+/// Returns class-method symbols emitted by the EIR backend.
+fn emitted_class_method_keys(module: &Module) -> HashSet<(String, String, bool)> {
+    let mut keys = eir_class_method_keys(module);
+    for wrapper in intrinsic_method_wrapper_specs(module) {
+        keys.insert((wrapper.class_name, wrapper.method_key, wrapper.is_static));
+    }
+    keys
+}
+
+/// Returns class-method symbols backed by actual lowered EIR functions.
+fn eir_class_method_keys(module: &Module) -> HashSet<(String, String, bool)> {
+    module
+        .class_methods
+        .iter()
+        .filter_map(|function| {
+            let (class_name, method_name) = function.name.rsplit_once("::")?;
+            Some((
+                class_name.to_string(),
+                crate::names::php_symbol_key(method_name),
+                function.flags.is_static,
+            ))
+        })
+        .collect()
+}
+
+/// Returns true when all vtable methods resolve to emitted EIR method symbols.
+fn class_method_symbols_supported(
+    class_info: &ClassInfo,
+    fallback_class: &str,
+    is_static: bool,
+    methods: &[String],
+    impl_classes: &HashMap<String, String>,
+    emitted_methods: &HashSet<(String, String, bool)>,
+) -> bool {
+    methods.iter().all(|method_name| {
+        let impl_class = impl_classes
+            .get(method_name)
+            .map(String::as_str)
+            .unwrap_or(fallback_class);
+        let key = (impl_class.to_string(), method_name.clone(), is_static);
+        emitted_methods.contains(&key)
+            || (!is_static
+                && class_info.methods.contains_key(method_name)
+                && emitted_methods.contains(&(impl_class.to_string(), method_name.clone(), false)))
+    })
+}
+
+/// Returns true when implemented interfaces do not require missing method wrappers.
+fn class_interfaces_supported_for_dynamic_instanceof(
+    class_info: &ClassInfo,
+    interfaces: &HashMap<String, InterfaceInfo>,
+) -> bool {
+    class_info
+        .interfaces
+        .iter()
+        .all(|name| interface_metadata_supported_for_dynamic_instanceof(name, interfaces))
+}
+
+/// Returns true when interface metadata does not require wrapper symbols missing from EIR output.
+fn interface_metadata_supported_for_dynamic_instanceof(
+    interface_name: &str,
+    interfaces: &HashMap<String, InterfaceInfo>,
+) -> bool {
+    let mut seen = HashSet::new();
+    let mut stack = vec![interface_name];
+    while let Some(name) = stack.pop() {
+        if !seen.insert(name.to_string()) {
+            continue;
+        }
+        let Some(interface_info) = interfaces.get(name) else {
+            return false;
+        };
+        if !interface_info.method_order.is_empty() {
+            return false;
+        }
+        stack.extend(interface_info.parents.iter().map(String::as_str));
+    }
+    true
+}
+
+/// Returns class names encoded in static property load/store immediates.
+fn referenced_static_property_class_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for inst in &function.instructions {
+            if !matches!(inst.op, Op::LoadStaticProperty | Op::StoreStaticProperty) {
+                continue;
+            }
+            let Some(Immediate::Data(data)) = inst.immediate else {
+                continue;
+            };
+            let Some(label) = module.data.strings.get(data.as_raw() as usize) else {
+                continue;
+            };
+            let Some((class_name, _)) = label.rsplit_once("::") else {
+                continue;
+            };
+            if let Some(class_name) =
+                resolve_static_property_metadata_class(module, function, class_name)
+            {
+                names.insert(class_name);
+            }
+            if class_name.trim_start_matches('\\') == "static" {
+                names.extend(redeclared_late_static_property_classes(
+                    module, function, label,
+                ));
+            }
+        }
+    }
     names
 }
 
-/// Repeatedly expands `names` by adding parent classes and all
-/// method-implementation classes (both instance and static) until a
-/// fixed point is reached, ensuring emitted vtables and interface
-/// tables are complete.
-fn expand_emitted_class_dependencies(
-    names: &mut HashSet<String>,
-    classes: &HashMap<String, ClassInfo>,
-) {
-    loop {
-        let mut changed = false;
-        let snapshot: Vec<String> = names.iter().cloned().collect();
-        for class_name in snapshot {
-            let Some(class_info) = classes.get(&class_name) else {
+/// Resolves lexical static-property receivers for runtime metadata collection.
+fn resolve_static_property_metadata_class(
+    module: &Module,
+    function: &Function,
+    class_name: &str,
+) -> Option<String> {
+    let class_name = class_name.trim_start_matches('\\');
+    match class_name {
+        "self" => current_function_class(function).map(str::to_string),
+        "parent" => {
+            let current = current_function_class(function)?;
+            module.class_infos.get(current)?.parent.clone()
+        }
+        "static" => current_function_class(function).map(str::to_string),
+        _ => Some(class_name.to_string()),
+    }
+}
+
+/// Returns descendant classes that redeclare a late-bound static property label.
+fn redeclared_late_static_property_classes(
+    module: &Module,
+    function: &Function,
+    label: &str,
+) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let Some(base_class) = current_function_class(function) else {
+        return names;
+    };
+    let Some((_, property)) = label.rsplit_once("::") else {
+        return names;
+    };
+    let Some(base_info) = module.class_infos.get(base_class) else {
+        return names;
+    };
+    let fallback_declaring_class = base_info
+        .static_property_declaring_classes
+        .get(property)
+        .map(String::as_str)
+        .unwrap_or(base_class);
+    for (class_name, class_info) in &module.class_infos {
+        if !is_same_or_descendant(module, class_name, base_class) {
+            continue;
+        }
+        let Some(declaring_class) = class_info.static_property_declaring_classes.get(property)
+        else {
+            continue;
+        };
+        if declaring_class != fallback_declaring_class {
+            names.insert(declaring_class.clone());
+        }
+    }
+    names
+}
+
+/// Returns class names encoded in static-method call immediates.
+fn referenced_static_method_class_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for inst in &function.instructions {
+            if !matches!(inst.op, Op::StaticMethodCall) {
+                continue;
+            }
+            let Some(Immediate::Data(data)) = inst.immediate else {
                 continue;
             };
-            if let Some(parent) = &class_info.parent {
+            let Some(label) = module.data.strings.get(data.as_raw() as usize) else {
+                continue;
+            };
+            let Some((class_name, _)) = label.rsplit_once("::") else {
+                continue;
+            };
+            if let Some(class_name) =
+                resolve_static_method_metadata_class(module, function, class_name)
+            {
+                names.insert(class_name);
+            }
+        }
+    }
+    names
+}
+
+/// Resolves lexical static-method receivers for runtime metadata collection.
+fn resolve_static_method_metadata_class(
+    module: &Module,
+    function: &Function,
+    class_name: &str,
+) -> Option<String> {
+    let class_name = class_name.trim_start_matches('\\');
+    match class_name {
+        "self" | "static" => current_function_class(function).map(str::to_string),
+        "parent" => {
+            let current = current_function_class(function)?;
+            module.class_infos.get(current)?.parent.clone()
+        }
+        _ => Some(class_name.to_string()),
+    }
+}
+
+/// Returns true when `class_name` is `ancestor` or one of its descendants.
+fn is_same_or_descendant(module: &Module, class_name: &str, ancestor: &str) -> bool {
+    let mut cursor = Some(class_name);
+    while let Some(name) = cursor {
+        if name == ancestor {
+            return true;
+        }
+        cursor = module
+            .class_infos
+            .get(name)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
+}
+
+/// Returns the class encoded in an EIR method function name.
+fn current_function_class(function: &Function) -> Option<&str> {
+    function
+        .name
+        .rsplit_once("::")
+        .map(|(class_name, _)| class_name)
+}
+
+/// Returns class-name data entries attached to runtime object metadata opcodes.
+fn referenced_class_data_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for inst in &function.instructions {
+            match inst.op {
+                Op::ObjectNew => {}
+                Op::InstanceOf if instance_of_value_needs_runtime_metadata(function, inst) => {}
+                Op::InstanceOf => continue,
+                _ => continue,
+            }
+            let Some(Immediate::Data(data)) = inst.immediate else {
+                continue;
+            };
+            if let Some(name) = module.data.class_names.get(data.as_raw() as usize) {
+                names.insert(name.clone());
+            }
+        }
+    }
+    names
+}
+
+/// Returns class metadata needed by dynamic object factories.
+fn referenced_dynamic_object_new_class_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for inst in &function.instructions {
+            if matches!(inst.op, Op::DynamicObjectNewMixed) {
+                names.extend(
+                    module
+                        .class_infos
+                        .keys()
+                        .filter(|class_name| is_dynamic_new_mixed_metadata_candidate(class_name))
+                        .cloned(),
+                );
+                continue;
+            }
+            if !matches!(inst.op, Op::DynamicObjectNew) {
+                continue;
+            }
+            let Some((fallback_class, required_parent)) =
+                dynamic_object_new_metadata_names(module, inst)
+            else {
+                continue;
+            };
+            names.insert(fallback_class.to_string());
+            names.insert(required_parent.to_string());
+            for class_name in module.class_infos.keys() {
+                if is_same_or_descendant(module, class_name, required_parent) {
+                    names.insert(class_name.clone());
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Returns true when generic `new $class` can emit static metadata for this class.
+fn is_dynamic_new_mixed_metadata_candidate(class_name: &str) -> bool {
+    if class_name.starts_with("__Elephc") {
+        return false;
+    }
+    if supported_dynamic_new_builtin_class_name(class_name) {
+        return true;
+    }
+    !known_dynamic_new_builtin_class_name(class_name)
+}
+
+/// Returns true for builtin classes with safe static allocation paths in generic dynamic new.
+fn supported_dynamic_new_builtin_class_name(class_name: &str) -> bool {
+    matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "arrayiterator"
+            | "arrayobject"
+            | "badfunctioncallexception"
+            | "badmethodcallexception"
+            | "callbackfilteriterator"
+            | "domainexception"
+            | "error"
+            | "exception"
+            | "fiber"
+            | "fibererror"
+            | "invalidargumentexception"
+            | "iteratoriterator"
+            | "jsonexception"
+            | "lengthexception"
+            | "logicexception"
+            | "outofboundsexception"
+            | "outofrangeexception"
+            | "overflowexception"
+            | "rangeexception"
+            | "recursivecallbackfilteriterator"
+            | "reflectionclass"
+            | "reflectionmethod"
+            | "reflectionproperty"
+            | "runtimeexception"
+            | "spldoublylinkedlist"
+            | "splfixedarray"
+            | "splqueue"
+            | "splstack"
+            | "typeerror"
+            | "underflowexception"
+            | "unexpectedvalueexception"
+            | "valueerror"
+            | "stdclass"
+    )
+}
+
+/// Returns true for builtin classes that generic dynamic new must not treat as user classes.
+fn known_dynamic_new_builtin_class_name(class_name: &str) -> bool {
+    matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "appenditerator"
+            | "arrayiterator"
+            | "arrayobject"
+            | "badfunctioncallexception"
+            | "badmethodcallexception"
+            | "cachingiterator"
+            | "callbackfilteriterator"
+            | "directoryiterator"
+            | "domainexception"
+            | "emptyiterator"
+            | "error"
+            | "exception"
+            | "fiber"
+            | "fibererror"
+            | "filesystemiterator"
+            | "filteriterator"
+            | "generator"
+            | "globiterator"
+            | "infiniteiterator"
+            | "internaliterator"
+            | "invalidargumentexception"
+            | "iteratoriterator"
+            | "jsonexception"
+            | "lengthexception"
+            | "limititerator"
+            | "logicexception"
+            | "multipleiterator"
+            | "norewinditerator"
+            | "outofboundsexception"
+            | "outofrangeexception"
+            | "overflowexception"
+            | "parentiterator"
+            | "phar"
+            | "phardata"
+            | "rangeexception"
+            | "recursivearrayiterator"
+            | "recursivecachingiterator"
+            | "recursivecallbackfilteriterator"
+            | "recursivedirectoryiterator"
+            | "recursivefilteriterator"
+            | "recursiveiteratoriterator"
+            | "recursiveregexiterator"
+            | "reflectionattribute"
+            | "reflectionclass"
+            | "reflectionmethod"
+            | "reflectionproperty"
+            | "regexiterator"
+            | "runtimeexception"
+            | "spldoublylinkedlist"
+            | "splfileinfo"
+            | "splfileobject"
+            | "splfixedarray"
+            | "splheap"
+            | "splmaxheap"
+            | "splminheap"
+            | "splobjectstorage"
+            | "splpriorityqueue"
+            | "splqueue"
+            | "splstack"
+            | "spltempfileobject"
+            | "typeerror"
+            | "underflowexception"
+            | "unexpectedvalueexception"
+            | "valueerror"
+            | "stdclass"
+    )
+}
+
+/// Parses the fallback and required-parent names from a dynamic object factory immediate.
+fn dynamic_object_new_metadata_names<'a>(
+    module: &'a Module,
+    inst: &crate::ir::Instruction,
+) -> Option<(&'a str, &'a str)> {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return None;
+    };
+    module
+        .data
+        .class_names
+        .get(data.as_raw() as usize)?
+        .split_once('|')
+        .map(|(fallback_class, required_parent)| {
+            (
+                fallback_class.trim_start_matches('\\'),
+                required_parent.trim_start_matches('\\'),
+            )
+        })
+}
+
+/// Returns static class names that can feed `get_class()`/`get_parent_class()` lookups.
+fn referenced_class_name_lookup_builtin_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for inst in &function.instructions {
+            if !matches!(inst.op, Op::BuiltinCall) || !is_class_name_lookup_builtin(module, inst) {
+                continue;
+            }
+            if inst.operands.is_empty() {
+                if let Some(class_name) = current_function_class(function) {
+                    names.insert(class_name.to_string());
+                }
+                continue;
+            }
+            for value in &inst.operands {
+                let Some(metadata) = function.value(*value) else {
+                    continue;
+                };
+                if let PhpType::Object(class_name) = metadata.php_type.codegen_repr() {
+                    names.insert(class_name.trim_start_matches('\\').to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Returns whether an instruction is a class-name lookup builtin call.
+fn is_class_name_lookup_builtin(module: &Module, inst: &crate::ir::Instruction) -> bool {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return false;
+    };
+    let Some(name) = module.data.function_names.get(data.as_raw() as usize) else {
+        return false;
+    };
+    matches!(
+        crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
+        "get_class" | "get_parent_class"
+    )
+}
+
+/// Returns class names passed as literals to stream wrapper/filter registration builtins.
+fn referenced_stream_registration_class_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for inst in &function.instructions {
+            if !matches!(inst.op, Op::BuiltinCall)
+                || !is_stream_registration_builtin(module, inst)
+                || inst.operands.len() < 2
+            {
+                continue;
+            }
+            if let Some(class_name) = const_string_value(module, function, inst.operands[1]) {
+                names.insert(class_name.trim_start_matches('\\').to_string());
+            }
+        }
+    }
+    names
+}
+
+/// Resolves a class name against module metadata using PHP case-insensitive class rules.
+fn canonical_module_class_name(module: &Module, class_name: &str) -> Option<String> {
+    let wanted = php_symbol_key(class_name.trim_start_matches('\\'));
+    module
+        .class_infos
+        .keys()
+        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == wanted)
+        .cloned()
+}
+
+/// Returns true for builtins whose literal class argument is consumed by runtime metadata.
+fn is_stream_registration_builtin(module: &Module, inst: &crate::ir::Instruction) -> bool {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return false;
+    };
+    let Some(name) = module.data.function_names.get(data.as_raw() as usize) else {
+        return false;
+    };
+    matches!(
+        crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
+        "stream_wrapper_register" | "stream_filter_register"
+    )
+}
+
+/// Returns the literal string payload produced by a `ConstStr` value.
+fn const_string_value<'a>(
+    module: &'a Module,
+    function: &'a Function,
+    value: crate::ir::ValueId,
+) -> Option<&'a str> {
+    let value_ref = function.value(value)?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return None;
+    };
+    let inst_ref = function.instruction(inst)?;
+    if inst_ref.op != Op::ConstStr {
+        return None;
+    }
+    let Some(Immediate::Data(data)) = inst_ref.immediate else {
+        return None;
+    };
+    module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .map(String::as_str)
+}
+
+/// Returns class-like receiver names encoded in scoped constant immediates.
+fn referenced_scoped_constant_class_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for inst in &function.instructions {
+            if !matches!(inst.op, Op::ScopedConstantGet) {
+                continue;
+            }
+            let Some(Immediate::Data(data)) = inst.immediate else {
+                continue;
+            };
+            let Some(label) = module.data.strings.get(data.as_raw() as usize) else {
+                continue;
+            };
+            let Some((class_name, _)) = label.rsplit_once("::") else {
+                continue;
+            };
+            names.insert(class_name.trim_start_matches('\\').to_string());
+        }
+    }
+    names
+}
+
+/// Returns whether an `instanceof` value can reach the runtime metadata matcher.
+fn instance_of_value_needs_runtime_metadata(
+    function: &crate::ir::Function,
+    inst: &crate::ir::Instruction,
+) -> bool {
+    let Some(value) = inst.operands.first() else {
+        return false;
+    };
+    function.value(*value).is_some_and(|metadata| {
+        matches!(
+            metadata.php_type.codegen_repr(),
+            PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+        )
+    })
+}
+
+/// Adds parent classes needed by runtime class-id tables.
+fn expand_class_dependencies(names: &mut HashSet<String>, classes: &HashMap<String, ClassInfo>) {
+    loop {
+        let mut changed = false;
+        let snapshot = names.iter().cloned().collect::<Vec<_>>();
+        for class_name in snapshot {
+            if let Some(parent) = classes
+                .get(&class_name)
+                .and_then(|class_info| class_info.parent.as_ref())
+            {
                 changed |= names.insert(parent.clone());
             }
-            for impl_class in class_info
-                .method_impl_classes
-                .values()
-                .chain(class_info.static_method_impl_classes.values())
-            {
-                changed |= names.insert(impl_class.clone());
-            }
-            let previous_len = names.len();
-            for method in &class_info.method_decls {
-                collect_dynamic_object_factory_classes(&method.body, classes, names);
-                collect_required_class_names_in_stmts(&method.body, names);
-            }
-            changed |= names.len() != previous_len;
         }
         if !changed {
             break;
@@ -667,397 +1351,23 @@ fn expand_emitted_class_dependencies(
     }
 }
 
-/// Adds every concrete class that an internal dynamic object factory can instantiate.
-fn collect_dynamic_object_factory_classes(
-    stmts: &[Stmt],
-    classes: &HashMap<String, ClassInfo>,
+/// Adds parent interfaces needed by runtime interface matching tables.
+fn expand_interface_dependencies(
     names: &mut HashSet<String>,
-) {
-    for stmt in stmts {
-        collect_dynamic_object_factory_classes_in_stmt(stmt, classes, names);
-    }
-}
-
-/// Adds dynamic factory class dependencies found in a statement.
-fn collect_dynamic_object_factory_classes_in_stmt(
-    stmt: &Stmt,
-    classes: &HashMap<String, ClassInfo>,
-    names: &mut HashSet<String>,
-) {
-    match &stmt.kind {
-        StmtKind::ClassDecl { methods, .. }
-        | StmtKind::TraitDecl { methods, .. }
-        | StmtKind::InterfaceDecl { methods, .. } => methods
-            .iter()
-            .for_each(|method| collect_dynamic_object_factory_classes(&method.body, classes, names)),
-        StmtKind::FunctionDecl { body, .. }
-        | StmtKind::Synthetic(body)
-        | StmtKind::NamespaceBlock { body, .. }
-        | StmtKind::IncludeOnceGuard { body, .. } => {
-            collect_dynamic_object_factory_classes(body, classes, names);
-        }
-        StmtKind::Try {
-            try_body,
-            catches,
-            finally_body,
-        } => {
-            collect_dynamic_object_factory_classes(try_body, classes, names);
-            for catch in catches {
-                collect_dynamic_object_factory_classes(&catch.body, classes, names);
-            }
-            if let Some(finally_body) = finally_body {
-                collect_dynamic_object_factory_classes(finally_body, classes, names);
-            }
-        }
-        StmtKind::IfDef {
-            then_body,
-            else_body,
-            ..
-        } => {
-            collect_dynamic_object_factory_classes(then_body, classes, names);
-            if let Some(else_body) = else_body {
-                collect_dynamic_object_factory_classes(else_body, classes, names);
-            }
-        }
-        StmtKind::If {
-            condition,
-            then_body,
-            elseif_clauses,
-            else_body,
-        } => {
-            collect_dynamic_object_factory_classes_in_expr(condition, classes, names);
-            collect_dynamic_object_factory_classes(then_body, classes, names);
-            for (condition, body) in elseif_clauses {
-                collect_dynamic_object_factory_classes_in_expr(condition, classes, names);
-                collect_dynamic_object_factory_classes(body, classes, names);
-            }
-            if let Some(else_body) = else_body {
-                collect_dynamic_object_factory_classes(else_body, classes, names);
-            }
-        }
-        StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
-            collect_dynamic_object_factory_classes_in_expr(condition, classes, names);
-            collect_dynamic_object_factory_classes(body, classes, names);
-        }
-        StmtKind::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            if let Some(init) = init {
-                collect_dynamic_object_factory_classes_in_stmt(init, classes, names);
-            }
-            if let Some(condition) = condition {
-                collect_dynamic_object_factory_classes_in_expr(condition, classes, names);
-            }
-            if let Some(update) = update {
-                collect_dynamic_object_factory_classes_in_stmt(update, classes, names);
-            }
-            collect_dynamic_object_factory_classes(body, classes, names);
-        }
-        StmtKind::Foreach { array, body, .. } => {
-            collect_dynamic_object_factory_classes_in_expr(array, classes, names);
-            collect_dynamic_object_factory_classes(body, classes, names);
-        }
-        StmtKind::Switch {
-            subject,
-            cases,
-            default,
-        } => {
-            collect_dynamic_object_factory_classes_in_expr(subject, classes, names);
-            for (patterns, body) in cases {
-                for pattern in patterns {
-                    collect_dynamic_object_factory_classes_in_expr(pattern, classes, names);
-                }
-                collect_dynamic_object_factory_classes(body, classes, names);
-            }
-            if let Some(default) = default {
-                collect_dynamic_object_factory_classes(default, classes, names);
-            }
-        }
-        StmtKind::Echo(expr)
-        | StmtKind::Throw(expr)
-        | StmtKind::ExprStmt(expr)
-        | StmtKind::ConstDecl { value: expr, .. }
-        | StmtKind::Assign { value: expr, .. }
-        | StmtKind::TypedAssign { value: expr, .. }
-        | StmtKind::StaticVar { init: expr, .. }
-        | StmtKind::ListUnpack { value: expr, .. }
-        | StmtKind::Return(Some(expr))
-        | StmtKind::ArrayPush { value: expr, .. }
-        | StmtKind::PropertyAssign { value: expr, .. }
-        | StmtKind::PropertyArrayPush { value: expr, .. }
-        | StmtKind::StaticPropertyAssign { value: expr, .. }
-        | StmtKind::StaticPropertyArrayPush { value: expr, .. } => {
-            collect_dynamic_object_factory_classes_in_expr(expr, classes, names);
-        }
-        StmtKind::ArrayAssign { index, value, .. }
-        | StmtKind::PropertyArrayAssign { index, value, .. }
-        | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
-            collect_dynamic_object_factory_classes_in_expr(index, classes, names);
-            collect_dynamic_object_factory_classes_in_expr(value, classes, names);
-        }
-        StmtKind::NestedArrayAssign { target, value } => {
-            collect_dynamic_object_factory_classes_in_expr(target, classes, names);
-            collect_dynamic_object_factory_classes_in_expr(value, classes, names);
-        }
-        _ => {}
-    }
-}
-
-/// Adds dynamic factory class dependencies found in an expression.
-fn collect_dynamic_object_factory_classes_in_expr(
-    expr: &Expr,
-    classes: &HashMap<String, ClassInfo>,
-    names: &mut HashSet<String>,
-) {
-    match &expr.kind {
-        ExprKind::NewDynamicObject {
-            class_name,
-            required_parent,
-            args,
-            ..
-        } => {
-            collect_dynamic_factory_descendants(required_parent.as_str(), classes, names);
-            collect_dynamic_object_factory_classes_in_expr(class_name, classes, names);
-            for arg in args {
-                collect_dynamic_object_factory_classes_in_expr(arg, classes, names);
-            }
-        }
-        ExprKind::BinaryOp { left, right, .. } => {
-            collect_dynamic_object_factory_classes_in_expr(left, classes, names);
-            collect_dynamic_object_factory_classes_in_expr(right, classes, names);
-        }
-        ExprKind::InstanceOf { value, target } => {
-            collect_dynamic_object_factory_classes_in_expr(value, classes, names);
-            if let crate::parser::ast::InstanceOfTarget::Expr(expr) = target {
-                collect_dynamic_object_factory_classes_in_expr(expr, classes, names);
-            }
-        }
-        ExprKind::Negate(expr)
-        | ExprKind::Not(expr)
-        | ExprKind::BitNot(expr)
-        | ExprKind::Throw(expr)
-        | ExprKind::ErrorSuppress(expr)
-        | ExprKind::Print(expr)
-        | ExprKind::Spread(expr)
-        | ExprKind::Cast { expr, .. }
-        | ExprKind::PtrCast { expr, .. } => {
-            collect_dynamic_object_factory_classes_in_expr(expr, classes, names);
-        }
-        ExprKind::NullCoalesce { value, default }
-        | ExprKind::ShortTernary { value, default } => {
-            collect_dynamic_object_factory_classes_in_expr(value, classes, names);
-            collect_dynamic_object_factory_classes_in_expr(default, classes, names);
-        }
-        ExprKind::Pipe { value, callable } => {
-            collect_dynamic_object_factory_classes_in_expr(value, classes, names);
-            collect_dynamic_object_factory_classes_in_expr(callable, classes, names);
-        }
-        ExprKind::Assignment {
-            target,
-            value,
-            result_target,
-            prelude,
-            ..
-        } => {
-            collect_dynamic_object_factory_classes(prelude, classes, names);
-            collect_dynamic_object_factory_classes_in_expr(target, classes, names);
-            collect_dynamic_object_factory_classes_in_expr(value, classes, names);
-            if let Some(result_target) = result_target {
-                collect_dynamic_object_factory_classes_in_expr(result_target, classes, names);
-            }
-        }
-        ExprKind::FunctionCall { args, .. }
-        | ExprKind::ClosureCall { args, .. }
-        | ExprKind::StaticMethodCall { args, .. }
-        | ExprKind::NewObject { args, .. }
-        | ExprKind::NewScopedObject { args, .. } => {
-            for arg in args {
-                collect_dynamic_object_factory_classes_in_expr(arg, classes, names);
-            }
-        }
-        ExprKind::NewDynamic { name_expr, args } => {
-            for class_name in expr::objects::supported_dynamic_new_builtin_class_names() {
-                if classes.contains_key(*class_name) {
-                    names.insert((*class_name).to_string());
-                }
-            }
-            collect_dynamic_object_factory_classes_in_expr(name_expr, classes, names);
-            for arg in args {
-                collect_dynamic_object_factory_classes_in_expr(arg, classes, names);
-            }
-        }
-        ExprKind::ExprCall { callee, args } => {
-            collect_dynamic_object_factory_classes_in_expr(callee, classes, names);
-            for arg in args {
-                collect_dynamic_object_factory_classes_in_expr(arg, classes, names);
-            }
-        }
-        ExprKind::ArrayLiteral(items) => {
-            for item in items {
-                collect_dynamic_object_factory_classes_in_expr(item, classes, names);
-            }
-        }
-        ExprKind::ArrayLiteralAssoc(items) => {
-            for (key, value) in items {
-                collect_dynamic_object_factory_classes_in_expr(key, classes, names);
-                collect_dynamic_object_factory_classes_in_expr(value, classes, names);
-            }
-        }
-        ExprKind::Match {
-            subject,
-            arms,
-            default,
-        } => {
-            collect_dynamic_object_factory_classes_in_expr(subject, classes, names);
-            for (patterns, value) in arms {
-                for pattern in patterns {
-                    collect_dynamic_object_factory_classes_in_expr(pattern, classes, names);
-                }
-                collect_dynamic_object_factory_classes_in_expr(value, classes, names);
-            }
-            if let Some(default) = default {
-                collect_dynamic_object_factory_classes_in_expr(default, classes, names);
-            }
-        }
-        ExprKind::ArrayAccess { array, index } => {
-            collect_dynamic_object_factory_classes_in_expr(array, classes, names);
-            collect_dynamic_object_factory_classes_in_expr(index, classes, names);
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            collect_dynamic_object_factory_classes_in_expr(condition, classes, names);
-            collect_dynamic_object_factory_classes_in_expr(then_expr, classes, names);
-            collect_dynamic_object_factory_classes_in_expr(else_expr, classes, names);
-        }
-        ExprKind::Closure { body, .. } => collect_dynamic_object_factory_classes(body, classes, names),
-        ExprKind::NamedArg { value, .. } => {
-            collect_dynamic_object_factory_classes_in_expr(value, classes, names);
-        }
-        ExprKind::PropertyAccess { object, .. }
-        | ExprKind::NullsafePropertyAccess { object, .. } => {
-            collect_dynamic_object_factory_classes_in_expr(object, classes, names);
-        }
-        ExprKind::DynamicPropertyAccess { object, property }
-        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
-            collect_dynamic_object_factory_classes_in_expr(object, classes, names);
-            collect_dynamic_object_factory_classes_in_expr(property, classes, names);
-        }
-        ExprKind::MethodCall { object, args, .. }
-        | ExprKind::NullsafeMethodCall { object, args, .. } => {
-            collect_dynamic_object_factory_classes_in_expr(object, classes, names);
-            for arg in args {
-                collect_dynamic_object_factory_classes_in_expr(arg, classes, names);
-            }
-        }
-        ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Method {
-            object,
-            ..
-        }) => collect_dynamic_object_factory_classes_in_expr(object, classes, names),
-        ExprKind::BufferNew { len, .. } => {
-            collect_dynamic_object_factory_classes_in_expr(len, classes, names);
-        }
-        ExprKind::Yield { key, value } => {
-            if let Some(key) = key {
-                collect_dynamic_object_factory_classes_in_expr(key, classes, names);
-            }
-            if let Some(value) = value {
-                collect_dynamic_object_factory_classes_in_expr(value, classes, names);
-            }
-        }
-        ExprKind::YieldFrom(inner) => {
-            collect_dynamic_object_factory_classes_in_expr(inner, classes, names);
-        }
-        _ => {}
-    }
-}
-
-/// Adds every known class that can satisfy an internal dynamic factory parent constraint.
-fn collect_dynamic_factory_descendants(
-    required_parent: &str,
-    classes: &HashMap<String, ClassInfo>,
-    names: &mut HashSet<String>,
-) {
-    for class_name in classes.keys() {
-        if emitted_class_descends_from(class_name, required_parent, classes) {
-            names.insert(class_name.clone());
-        }
-    }
-}
-
-/// Returns true if `class_name` is the required class or extends it.
-fn emitted_class_descends_from(
-    class_name: &str,
-    required_parent: &str,
-    classes: &HashMap<String, ClassInfo>,
-) -> bool {
-    let mut current = Some(class_name);
-    while let Some(name) = current {
-        if crate::names::php_symbol_key(name.trim_start_matches('\\'))
-            == crate::names::php_symbol_key(required_parent.trim_start_matches('\\'))
-        {
-            return true;
-        }
-        current = classes.get(name).and_then(|info| info.parent.as_deref());
-    }
-    false
-}
-
-/// Generates complete target assembly including runtime.
-/// Returns tuple of (user_asm, full_asm_with_runtime).
-#[allow(dead_code)]
-#[allow(clippy::too_many_arguments)]
-pub fn generate(
-    program: &Program,
-    global_env: &TypeEnv,
-    functions: &HashMap<String, FunctionSig>,
-    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
-    callable_return_sigs: &HashMap<String, FunctionSig>,
-    callable_array_return_sigs: &HashMap<String, FunctionSig>,
     interfaces: &HashMap<String, InterfaceInfo>,
-    classes: &HashMap<String, ClassInfo>,
-    enums: &HashMap<String, EnumInfo>,
-    packed_classes: &HashMap<String, PackedClassInfo>,
-    extern_functions: &HashMap<String, ExternFunctionSig>,
-    extern_classes: &HashMap<String, ExternClassInfo>,
-    extern_globals: &HashMap<String, PhpType>,
-    heap_size: usize,
-    gc_stats: bool,
-    heap_debug: bool,
-    target: Target,
-    requires_elephc_tls: bool,
-    null_repr: NullRepr,
-) -> (String, String) {
-    let user_asm = generate_user_asm(
-        program,
-        global_env,
-        functions,
-        callable_param_sigs,
-        callable_return_sigs,
-        callable_array_return_sigs,
-        interfaces,
-        classes,
-        enums,
-        packed_classes,
-        extern_functions,
-        extern_classes,
-        extern_globals,
-        heap_size,
-        gc_stats,
-        heap_debug,
-        target,
-        requires_elephc_tls,
-        null_repr,
-        Emit::Executable,
-        &HashMap::new(),
-    );
-    let runtime_features = runtime_features_for_program_and_classes(program, classes);
-    let runtime_asm = generate_runtime_with_features(heap_size, target, runtime_features);
-
-    (user_asm, runtime_asm)
+) {
+    loop {
+        let mut changed = false;
+        let snapshot = names.iter().cloned().collect::<Vec<_>>();
+        for interface_name in snapshot {
+            if let Some(interface_info) = interfaces.get(&interface_name) {
+                for parent in &interface_info.parents {
+                    changed |= names.insert(parent.clone());
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
 }

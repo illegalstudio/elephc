@@ -2,15 +2,15 @@
 title: "is_numeric() — internals"
 description: "Compiler internals for is_numeric(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 429
+  order: 426
 ---
 
 ## `is_numeric()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/is_numeric.rs`:22](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/is_numeric.rs#L22) (`lower_is_numeric`)
+- **Signature**: [`src/builtins/types/is_numeric.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_numeric.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/is_numeric.rs`:22](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/is_numeric.rs#L22) (`lower_is_numeric`)
 - **Function symbol**: `lower_is_numeric()`
 
 
@@ -35,4 +35,3 @@ function is_numeric(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_numeric()`](../../../php/builtins/type/is_numeric.md)
-

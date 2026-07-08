@@ -1,8 +1,8 @@
 ---
 title: "stream_resolve_include_path()"
-description: "Lowers `stream_resolve_include_path(filename)` as realpath-backed `string|false`."
+description: "Resolves filename against the include path."
 sidebar:
-  order: 207
+  order: 209
 ---
 
 ## stream_resolve_include_path()
@@ -11,7 +11,7 @@ sidebar:
 function stream_resolve_include_path(string $filename): mixed
 ```
 
-Lowers `stream_resolve_include_path(filename)` as realpath-backed `string|false`.
+Resolves filename against the include path.
 
 **Parameters**:
 - `$filename` (`string`)

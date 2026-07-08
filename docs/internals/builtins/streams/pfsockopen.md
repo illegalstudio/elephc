@@ -2,17 +2,21 @@
 title: "pfsockopen() — internals"
 description: "Compiler internals for pfsockopen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 336
+  order: 333
 ---
 
 ## `pfsockopen()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/io/pfsockopen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/pfsockopen.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3644](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3644) (`lower_fsockopen`)
+- **Function symbol**: `lower_fsockopen()`
 
+
+### Lowering notes
+
+- Lowers `fsockopen(host, port, errno?, errstr?, timeout?)`.
 
 ## Runtime helpers
 
@@ -21,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function pfsockopen(string $hostname, int $port, int $error_code, string $error_message, float $timeout): mixed
+function pfsockopen(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed
 ```
 
 ## What the type checker enforces
@@ -32,4 +36,3 @@ function pfsockopen(string $hostname, int $port, int $error_code, string $error_
 ## Cross-references
 
 - [User reference for `pfsockopen()`](../../../php/builtins/streams/pfsockopen.md)
-

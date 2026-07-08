@@ -41,6 +41,20 @@ fn argument_name_from_token(token: &Token) -> Option<String> {
     crate::parser::keyword_name::bareword_name_from_token(token)
 }
 
+/// Returns `span` with its end extended through the most recently consumed token
+/// (typically the closing `)` of an argument list). The start stays anchored, so
+/// diagnostics that point at the span's start position are unaffected.
+pub(crate) fn span_through_prev_token(
+    tokens: &[(Token, Span)],
+    pos: usize,
+    span: Span,
+) -> Span {
+    match pos.checked_sub(1).and_then(|idx| tokens.get(idx)) {
+        Some((_, prev)) => span.merge(*prev),
+        None => span,
+    }
+}
+
 /// Parse a comma-separated argument list. The opening `(` must already be consumed.
 /// Consumes through the closing `)`.
 pub(crate) fn parse_args(

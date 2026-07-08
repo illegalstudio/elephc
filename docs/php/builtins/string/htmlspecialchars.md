@@ -1,6 +1,6 @@
 ---
 title: "htmlspecialchars()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Converts the HTML special characters in a string into their entities."
 sidebar:
   order: 362
 ---
@@ -8,16 +8,13 @@ sidebar:
 ## htmlspecialchars()
 
 ```php
-function htmlspecialchars(string $string, int $flags, string $encoding, bool $double_encode): string
+function htmlspecialchars(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Converts the HTML special characters in a string into their entities.
 
 **Parameters**:
 - `$string` (`string`)
-- `$flags` (`int`)
-- `$encoding` (`string`)
-- `$double_encode` (`bool`)
 
 **Returns**: `string`
 

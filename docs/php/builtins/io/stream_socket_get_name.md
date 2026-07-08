@@ -1,8 +1,8 @@
 ---
 title: "stream_socket_get_name()"
-description: "Lowers `stream_socket_get_name(socket, remote)` and boxes `string|false`."
+description: "Retrieve the name of the local or remote sockets."
 sidebar:
-  order: 217
+  order: 219
 ---
 
 ## stream_socket_get_name()
@@ -11,7 +11,7 @@ sidebar:
 function stream_socket_get_name(resource $socket, bool $remote): mixed
 ```
 
-Lowers `stream_socket_get_name(socket, remote)` and boxes `string|false`.
+Retrieve the name of the local or remote sockets.
 
 **Parameters**:
 - `$socket` (`resource`)

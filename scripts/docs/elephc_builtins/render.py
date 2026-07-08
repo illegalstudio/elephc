@@ -521,7 +521,8 @@ def _do_render(repo: Path, registry_path: Path, user_dir: Path, internals_dir: P
         if internals_path.exists() and not force:
             skipped += 1
         else:
-            internals_path.write_text(render_internals(b, idx, repo), encoding="utf-8")
+            content = render_internals(b, idx, repo).rstrip() + "\n"
+            internals_path.write_text(content, encoding="utf-8")
             written += 1
 
     # Compiler-only builtin entries are tracked outside the PHP-visible catalog.

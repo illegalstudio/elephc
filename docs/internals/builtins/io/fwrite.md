@@ -2,15 +2,15 @@
 title: "fwrite() — internals"
 description: "Compiler internals for fwrite(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 174
+  order: 176
 ---
 
 ## `fwrite()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2838](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2838) (`lower_fwrite`)
+- **Signature**: [`src/builtins/io/fwrite.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fwrite.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2838](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2838) (`lower_fwrite`)
 - **Function symbol**: `lower_fwrite()`
 
 
@@ -26,14 +26,13 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function fwrite(resource $stream, string $data, int $length): int
+function fwrite(resource $stream, string $data): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
+- **Arity**: takes exactly 2 arguments.
 
 ## Cross-references
 
 - [User reference for `fwrite()`](../../../php/builtins/io/fwrite.md)
-

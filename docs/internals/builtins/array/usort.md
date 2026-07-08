@@ -2,15 +2,15 @@
 title: "usort() — internals"
 description: "Compiler internals for usort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 61
+  order: 63
 ---
 
 ## `usort()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1121](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1121) (`lower_usort`)
+- **Signature**: [`src/builtins/array/usort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/usort.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1124](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1124) (`lower_usort`)
 - **Function symbol**: `lower_usort()`
 
 
@@ -37,4 +37,3 @@ function usort(array $array, callable $callback): bool
 ## Cross-references
 
 - [User reference for `usort()`](../../../php/builtins/array/usort.md)
-

@@ -2,15 +2,15 @@
 title: "readdir() — internals"
 description: "Compiler internals for readdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 184
+  order: 186
 ---
 
 ## `readdir()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3557](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3557) (`lower_readdir`)
+- **Signature**: [`src/builtins/io/readdir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/readdir.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3557](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3557) (`lower_readdir`)
 - **Function symbol**: `lower_readdir()`
 
 
@@ -39,4 +39,3 @@ function readdir(resource $dir_handle): mixed
 ## Cross-references
 
 - [User reference for `readdir()`](../../../php/builtins/io/readdir.md)
-

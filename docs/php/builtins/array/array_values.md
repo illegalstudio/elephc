@@ -1,6 +1,6 @@
 ---
 title: "array_values()"
-description: "Lowers `array_values()` for indexed arrays as an alias or associative arrays as a new values array."
+description: "Returns all the values of an array, re-indexed numerically."
 sidebar:
   order: 44
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_values(array $array): array
 ```
 
-Lowers `array_values()` for indexed arrays as an alias or associative arrays as a new values array.
+Returns all the values of an array, re-indexed numerically.
 
 **Parameters**:
 - `$array` (`array`)

@@ -1,6 +1,6 @@
 ---
 title: "array_key_first()"
-description: "Lowers `array_key_first()` through the shared edge-key helper with selector `0`."
+description: "Gets the first key of an array."
 sidebar:
   order: 19
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_key_first(array $array): mixed
 ```
 
-Lowers `array_key_first()` through the shared edge-key helper with selector `0`.
+Gets the first key of an array.
 
 **Parameters**:
 - `$array` (`array`)

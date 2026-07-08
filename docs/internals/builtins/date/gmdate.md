@@ -2,15 +2,15 @@
 title: "gmdate() — internals"
 description: "Compiler internals for gmdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 88
+  order: 90
 ---
 
 ## `gmdate()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:33](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L33) (`lower_gmdate`)
+- **Signature**: [`src/builtins/system/gmdate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gmdate.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:33](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L33) (`lower_gmdate`)
 - **Function symbol**: `lower_gmdate()`
 
 
@@ -29,7 +29,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function gmdate(string $format, int $timestamp): string
+function gmdate(string $format, int $timestamp = null): string
 ```
 
 ## What the type checker enforces
@@ -39,4 +39,3 @@ function gmdate(string $format, int $timestamp): string
 ## Cross-references
 
 - [User reference for `gmdate()`](../../../php/builtins/date/gmdate.md)
-

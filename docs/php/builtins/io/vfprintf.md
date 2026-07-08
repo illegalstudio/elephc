@@ -1,8 +1,8 @@
 ---
 title: "vfprintf()"
-description: "Lowers `vfprintf(stream, format, values)` through `__rt_vsprintf` then fwrite."
+description: "Write a formatted string to a stream."
 sidebar:
-  order: 227
+  order: 229
 ---
 
 ## vfprintf()
@@ -11,7 +11,7 @@ sidebar:
 function vfprintf(resource $stream, string $format, array $values): int
 ```
 
-Lowers `vfprintf(stream, format, values)` through `__rt_vsprintf` then fwrite.
+Write a formatted string to a stream.
 
 **Parameters**:
 - `$stream` (`resource`)

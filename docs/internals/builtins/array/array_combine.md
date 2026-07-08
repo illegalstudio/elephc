@@ -9,14 +9,14 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:152](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L152) (`lower_array_combine`)
+- **Signature**: [`src/builtins/array/array_combine.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_combine.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:160](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L160) (`lower_array_combine`)
 - **Function symbol**: `lower_array_combine()`
 
 
 ### Lowering notes
 
-- Lowers `array_combine()` through the legacy hash-building runtime helpers.
+- Lowers `array_combine()` through the hash-building runtime helpers.
 
 ## Runtime helpers
 
@@ -35,4 +35,3 @@ function array_combine(array $keys, array $values): array
 ## Cross-references
 
 - [User reference for `array_combine()`](../../../php/builtins/array/array_combine.md)
-

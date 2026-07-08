@@ -2,17 +2,22 @@
 title: "__elephc_phar_decompress_archive() — internals"
 description: "Compiler internals for __elephc_phar_decompress_archive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 436
+  order: 435
 ---
 
 ## `__elephc_phar_decompress_archive()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/io/__elephc_phar_decompress_archive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_decompress_archive.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4135](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4135) (`lower_elephc_phar_decompress_archive`)
+- **Function symbol**: `lower_elephc_phar_decompress_archive()`
 
+
+### Lowering notes
+
+- Lowers `__elephc_phar_decompress_archive(src)` into the whole-archive decompression
+- bridge, returning the written destination path (or an empty string on failure).
 
 ## Runtime helpers
 
@@ -21,7 +26,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function __elephc_phar_decompress_archive(mixed $src): string
+function __elephc_phar_decompress_archive(string $src): string
 ```
 
 ## What the type checker enforces

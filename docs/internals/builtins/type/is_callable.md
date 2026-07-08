@@ -2,15 +2,15 @@
 title: "is_callable() — internals"
 description: "Compiler internals for is_callable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 424
+  order: 421
 ---
 
 ## `is_callable()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:848](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L848) (`lower_is_callable`)
+- **Signature**: [`src/builtins/types/is_callable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_callable.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:319](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L319) (`lower_is_callable`)
 - **Function symbol**: `lower_is_callable()`
 
 
@@ -28,15 +28,13 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function is_callable(mixed $value, bool $syntax_only = false, string $callable_name = null): bool
+function is_callable(mixed $value): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–3 arguments (2 optional).
-- **By-reference parameters**: `$callable_name`.
+- **Arity**: takes exactly 1 argument.
 
 ## Cross-references
 
 - [User reference for `is_callable()`](../../../php/builtins/type/is_callable.md)
-

@@ -2,15 +2,15 @@
 title: "link() — internals"
 description: "Compiler internals for link(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 129
+  order: 131
 ---
 
 ## `link()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5453](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5453) (`lower_link`)
+- **Signature**: [`src/builtins/io/link.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/link.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5453](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5453) (`lower_link`)
 - **Function symbol**: `lower_link()`
 
 
@@ -39,4 +39,3 @@ function link(string $target, string $link): bool
 ## Cross-references
 
 - [User reference for `link()`](../../../php/builtins/filesystem/link.md)
-

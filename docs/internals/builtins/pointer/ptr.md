@@ -2,15 +2,15 @@
 title: "ptr() — internals"
 description: "Compiler internals for ptr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 288
+  order: 285
 ---
 
 ## `ptr()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/pointers.rs`:25](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/pointers.rs#L25) (`lower_ptr`)
+- **Signature**: [`src/builtins/pointers/ptr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:25](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L25) (`lower_ptr`)
 - **Function symbol**: `lower_ptr()`
 
 
@@ -35,4 +35,3 @@ function ptr(mixed $value): mixed
 ## Cross-references
 
 - [User reference for `ptr()`](../../../php/builtins/pointer/ptr.md)
-

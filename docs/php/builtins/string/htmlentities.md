@@ -1,6 +1,6 @@
 ---
 title: "htmlentities()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Converts all applicable characters in a string into their HTML entities."
 sidebar:
   order: 361
 ---
@@ -8,16 +8,13 @@ sidebar:
 ## htmlentities()
 
 ```php
-function htmlentities(string $string, int $flags, string $encoding, bool $double_encode): string
+function htmlentities(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Converts all applicable characters in a string into their HTML entities.
 
 **Parameters**:
 - `$string` (`string`)
-- `$flags` (`int`)
-- `$encoding` (`string`)
-- `$double_encode` (`bool`)
 
 **Returns**: `string`
 

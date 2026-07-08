@@ -2,15 +2,15 @@
 title: "__elephc_phar_get_metadata() — internals"
 description: "Compiler internals for __elephc_phar_get_metadata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 438
+  order: 437
 ---
 
 ## `__elephc_phar_get_metadata()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3859](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3859) (`lower_elephc_phar_get_metadata`)
+- **Signature**: [`src/builtins/io/__elephc_phar_get_metadata.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_get_metadata.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3859](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3859) (`lower_elephc_phar_get_metadata`)
 - **Function symbol**: `lower_elephc_phar_get_metadata()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function __elephc_phar_get_metadata(mixed $filename): string
+function __elephc_phar_get_metadata(string $filename): string
 ```
 
 ## What the type checker enforces

@@ -9,8 +9,8 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1328](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1328) (`lower_array_replace`)
+- **Signature**: [`src/builtins/array/array_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_replace.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1340](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1340) (`lower_array_replace`)
 - **Function symbol**: `lower_array_replace()`
 
 
@@ -38,4 +38,3 @@ function array_replace(array $array, array $replacements): mixed
 ## Cross-references
 
 - [User reference for `array_replace()`](../../../php/builtins/array/array_replace.md)
-

@@ -2,15 +2,15 @@
 title: "is_iterable() — internals"
 description: "Compiler internals for is_iterable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 427
+  order: 424
 ---
 
 ## `is_iterable()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1318](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1318) (`lower_is_iterable`)
+- **Signature**: [`src/builtins/types/is_iterable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_iterable.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:794](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L794) (`lower_is_iterable`)
 - **Function symbol**: `lower_is_iterable()`
 
 
@@ -35,4 +35,3 @@ function is_iterable(mixed $value): bool
 ## Cross-references
 
 - [User reference for `is_iterable()`](../../../php/builtins/type/is_iterable.md)
-

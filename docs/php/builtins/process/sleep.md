@@ -1,6 +1,6 @@
 ---
 title: "sleep()"
-description: "Lowers `sleep(seconds)` through the target's C library symbol."
+description: "Delays execution for a number of seconds."
 sidebar:
   order: 312
 ---
@@ -11,7 +11,7 @@ sidebar:
 function sleep(int $seconds): int
 ```
 
-Lowers `sleep(seconds)` through the target's C library symbol.
+Delays execution for a number of seconds.
 
 **Parameters**:
 - `$seconds` (`int`)

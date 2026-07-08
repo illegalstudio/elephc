@@ -1,8 +1,8 @@
 ---
 title: "fgetc()"
-description: "Lowers `fgetc(stream)` and boxes the one-byte string or PHP false result."
+description: "Gets a character from the given file pointer."
 sidebar:
-  order: 156
+  order: 158
 ---
 
 ## fgetc()
@@ -11,7 +11,7 @@ sidebar:
 function fgetc(resource $stream): mixed
 ```
 
-Lowers `fgetc(stream)` and boxes the one-byte string or PHP false result.
+Gets a character from the given file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)

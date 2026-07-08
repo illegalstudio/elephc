@@ -1,6 +1,6 @@
 ---
 title: "ltrim()"
-description: "Lowers `trim()`/`ltrim()`/`rtrim()`/`chop()` for default and explicit masks."
+description: "Strips whitespace (or other characters) from the beginning of a string."
 sidebar:
   order: 369
 ---
@@ -8,14 +8,14 @@ sidebar:
 ## ltrim()
 
 ```php
-function ltrim(string $string, string $characters): string
+function ltrim(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string
 ```
 
-Lowers `trim()`/`ltrim()`/`rtrim()`/`chop()` for default and explicit masks.
+Strips whitespace (or other characters) from the beginning of a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$characters` (`string`), optional
+- `$characters` (`string`), default `' \n\r\t\x0b\x0c\x00'`, optional
 
 **Returns**: `string`
 

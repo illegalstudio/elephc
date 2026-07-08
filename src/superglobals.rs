@@ -5,7 +5,7 @@
 //!
 //! Called from:
 //! - `crate::types::checker` (seeding), `crate::ir_lower::context` (global
-//!   storage), `crate::codegen_ir::web` (per-request reset).
+//!   storage), `crate::codegen::web` (per-request reset).
 //!
 //! Key details:
 //! - These names use `_eir_global_*` symbol storage in EVERY scope (true

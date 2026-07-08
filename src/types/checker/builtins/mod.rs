@@ -8,15 +8,12 @@
 //! Key details:
 //! - Builtin names must flow through the catalog so case-insensitive lookup and namespace fallback stay coherent.
 
-mod arrays;
+pub(crate) mod arrays;
 mod callables;
 mod catalog;
-mod io;
+pub(crate) mod io;
 mod numeric;
-mod pointers;
-mod spl;
-mod strings;
-mod system;
+pub(crate) mod spl;
 
 use crate::errors::CompileError;
 use crate::parser::ast::Expr;
@@ -29,8 +26,11 @@ pub(crate) use catalog::{
     is_supported_builtin_function, supported_builtin_function_names,
 };
 pub(crate) use callables::{
-    callback_supports_complex_descriptor_env, check_preg_replace_callback_first_class_call,
-    runtime_callable_array_type,
+    array_element_type, array_filter_callback_dummy_args, callback_supports_complex_descriptor_env,
+    check_call_user_func, check_call_user_func_array,
+    check_callback_builtin_call, check_function_exists,
+    check_preg_replace_callback_first_class_call,
+    comparator_dummy_arg_for_elem, dummy_arg_for_array_scalar_elem, runtime_callable_array_type,
 };
 
 impl Checker {
@@ -45,7 +45,7 @@ impl Checker {
     ///
     /// No-op on non-macOS targets. Used for libraries that live in libc on
     /// Linux (glibc/musl) but need explicit linkage on macOS — e.g. `iconv`.
-    fn require_macos_builtin_library(&mut self, library: &str) {
+    pub(crate) fn require_macos_builtin_library(&mut self, library: &str) {
         if self.target_platform == crate::codegen::platform::Platform::MacOS
             && !self.required_libraries.iter().any(|lib| lib == library)
         {
@@ -82,28 +82,45 @@ impl Checker {
             args
         };
 
-        if let Some(result) = strings::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
+        // Registry-first: if the builtin is registered, use its spec to check arity
+        // and derive the return type (or call the spec's check hook for refined types).
+        // Falls through to the legacy per-area dispatch when the name is not registered.
+        if let Some(def) = crate::builtins::registry::lookup(name) {
+            crate::builtins::registry::check_arity(name, args.len(), span)?;
+            // Infer argument types unconditionally so that type-environment side effects
+            // (variable narrowing, undefined-variable diagnostics, etc.) fire for every
+            // registry builtin — including pure-data builtins that have no check hook.
+            // Check hooks may still inspect inferred types; they should not call
+            // infer_type again on the same args to avoid redundant inference.
+            //
+            // Exception: `lazy_check` builtins skip pre-inference so the check hook can
+            // control argument inference order (e.g., to supply object-element type hints
+            // to an unannotated closure before `infer_type` is called on it). These hooks
+            // are responsible for calling `infer_type` on each argument themselves.
+            if !def.spec.lazy_check {
+                for arg in args.iter() {
+                    self.infer_type(arg, env)?;
+                }
+            }
+            let ret = if let Some(check) = def.spec.check {
+                let mut cx = crate::builtins::spec::BuiltinCheckCtx {
+                    checker: self,
+                    name,
+                    args,
+                    span,
+                    env,
+                };
+                check(&mut cx)?
+            } else {
+                def.return_type.clone()
+            };
+            return Ok(Some(ret));
         }
+
         if let Some(result) = numeric::check_builtin(self, name, args, span, env)? {
             return Ok(Some(result));
         }
         if let Some(result) = arrays::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = callables::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = io::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = system::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = pointers::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = spl::check_builtin(self, name, args, span, env)? {
             return Ok(Some(result));
         }
         Ok(None)

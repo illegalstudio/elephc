@@ -2,15 +2,15 @@
 title: "stream_set_chunk_size() — internals"
 description: "Compiler internals for stream_set_chunk_size(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 210
+  order: 212
 ---
 
 ## `stream_set_chunk_size()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2194](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2194) (`lower_stream_set_chunk_size`)
+- **Signature**: [`src/builtins/io/stream_set_chunk_size.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_set_chunk_size.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2194](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2194) (`lower_stream_set_chunk_size`)
 - **Function symbol**: `lower_stream_set_chunk_size()`
 
 
@@ -35,4 +35,3 @@ function stream_set_chunk_size(resource $stream, int $size): int
 ## Cross-references
 
 - [User reference for `stream_set_chunk_size()`](../../../php/builtins/io/stream_set_chunk_size.md)
-

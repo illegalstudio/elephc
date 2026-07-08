@@ -2,15 +2,15 @@
 title: "fdiv() — internals"
 description: "Compiler internals for fdiv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 244
+  order: 246
 ---
 
 ## `fdiv()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/binary.rs`:60](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/binary.rs#L60) (`lower_fdiv`)
+- **Signature**: [`src/builtins/math/fdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/fdiv.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/binary.rs`:67](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/binary.rs#L67) (`lower_fdiv`)
 - **Function symbol**: `lower_fdiv()`
 
 
@@ -35,4 +35,3 @@ function fdiv(float $num1, float $num2): float
 ## Cross-references
 
 - [User reference for `fdiv()`](../../../php/builtins/math/fdiv.md)
-

@@ -1,6 +1,6 @@
 ---
 title: "is_scalar()"
-description: "Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed"
+description: "Checks whether a variable is a scalar."
 sidebar:
   order: 429
 ---
@@ -11,7 +11,7 @@ sidebar:
 function is_scalar(mixed $value): bool
 ```
 
-Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed
+Checks whether a variable is a scalar.
 
 **Parameters**:
 - `$value` (`mixed`)

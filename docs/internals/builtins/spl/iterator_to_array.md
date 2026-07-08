@@ -2,15 +2,15 @@
 title: "iterator_to_array() — internals"
 description: "Compiler internals for iterator_to_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 325
+  order: 322
 ---
 
 ## `iterator_to_array()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:265](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L265) (`lower_iterator_to_array`)
+- **Signature**: [`src/builtins/spl/iterator_to_array.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/iterator_to_array.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/spl.rs`:266](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/spl.rs#L266) (`lower_iterator_to_array`)
 - **Function symbol**: `lower_iterator_to_array()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function iterator_to_array(traversable $iterator, bool $preserve_keys): array
+function iterator_to_array(traversable $iterator, bool $preserve_keys = true): array
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function iterator_to_array(traversable $iterator, bool $preserve_keys): array
 ## Cross-references
 
 - [User reference for `iterator_to_array()`](../../../php/builtins/spl/iterator_to_array.md)
-

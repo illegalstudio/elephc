@@ -2,15 +2,15 @@
 title: "vprintf() — internals"
 description: "Compiler internals for vprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 409
+  order: 406
 ---
 
 ## `vprintf()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:530](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L530) (`lower_vprintf`)
+- **Signature**: [`src/builtins/string/vprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/vprintf.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:530](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L530) (`lower_vprintf`)
 - **Function symbol**: `lower_vprintf()`
 
 
@@ -36,4 +36,3 @@ function vprintf(string $format, array $values): int
 ## Cross-references
 
 - [User reference for `vprintf()`](../../../php/builtins/string/vprintf.md)
-

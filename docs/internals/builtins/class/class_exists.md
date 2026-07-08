@@ -2,17 +2,21 @@
 title: "class_exists() — internals"
 description: "Compiler internals for class_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 67
+  order: 69
 ---
 
 ## `class_exists()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/callables/class_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/class_exists.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:293](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L293) (`lower_class_like_exists`)
+- **Function symbol**: `lower_class_like_exists()`
 
+
+### Lowering notes
+
+- Lowers AOT class/interface/enum existence checks for literal names.
 
 ## Runtime helpers
 
@@ -21,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function class_exists(string $class, bool $autoload): bool
+function class_exists(string $class, bool $autoload = true): bool
 ```
 
 ## What the type checker enforces
@@ -31,4 +35,3 @@ function class_exists(string $class, bool $autoload): bool
 ## Cross-references
 
 - [User reference for `class_exists()`](../../../php/builtins/class/class_exists.md)
-

@@ -2,15 +2,15 @@
 title: "inet_ntop() — internals"
 description: "Compiler internals for inet_ntop(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 367
+  order: 364
 ---
 
 ## `inet_ntop()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:497](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L497) (`lower_inet`)
+- **Signature**: [`src/builtins/string/inet_ntop.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/inet_ntop.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:497](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L497) (`lower_inet`)
 - **Function symbol**: `lower_inet()`
 
 
@@ -36,4 +36,3 @@ function inet_ntop(string $ip): mixed
 ## Cross-references
 
 - [User reference for `inet_ntop()`](../../../php/builtins/string/inet_ntop.md)
-

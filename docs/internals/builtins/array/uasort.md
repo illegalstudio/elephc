@@ -2,21 +2,21 @@
 title: "uasort() — internals"
 description: "Compiler internals for uasort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 59
+  order: 61
 ---
 
 ## `uasort()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1131](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1131) (`lower_uasort`)
+- **Signature**: [`src/builtins/array/uasort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/uasort.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1134](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1134) (`lower_uasort`)
 - **Function symbol**: `lower_uasort()`
 
 
 ### Lowering notes
 
-- Lowers `uasort()` through the legacy user-sort helper for static comparators.
+- Lowers `uasort()` through the user-sort helper for static comparators.
 
 ## Runtime helpers
 
@@ -37,4 +37,3 @@ function uasort(array $array, callable $callback): bool
 ## Cross-references
 
 - [User reference for `uasort()`](../../../php/builtins/array/uasort.md)
-

@@ -2,15 +2,15 @@
 title: "fread() — internals"
 description: "Compiler internals for fread(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 167
+  order: 169
 ---
 
 ## `fread()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2816](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2816) (`lower_fread`)
+- **Signature**: [`src/builtins/io/fread.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fread.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2816](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2816) (`lower_fread`)
 - **Function symbol**: `lower_fread()`
 
 
@@ -36,4 +36,3 @@ function fread(resource $stream, int $length): string
 ## Cross-references
 
 - [User reference for `fread()`](../../../php/builtins/io/fread.md)
-

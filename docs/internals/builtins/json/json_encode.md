@@ -2,15 +2,15 @@
 title: "json_encode() — internals"
 description: "Compiler internals for json_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 229
+  order: 231
 ---
 
 ## `json_encode()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/json.rs`:52](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/json.rs#L52) (`lower_json_encode`)
+- **Signature**: [`src/builtins/system/json_encode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/json_encode.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/json.rs`:52](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/json.rs#L52) (`lower_json_encode`)
 - **Function symbol**: `lower_json_encode()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function json_encode(mixed $value, int $flags, int $depth): string
+function json_encode(mixed $value, int $flags = 0, int $depth = 512): string
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function json_encode(mixed $value, int $flags, int $depth): string
 ## Cross-references
 
 - [User reference for `json_encode()`](../../../php/builtins/json/json_encode.md)
-

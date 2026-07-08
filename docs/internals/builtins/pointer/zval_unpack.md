@@ -2,22 +2,21 @@
 title: "zval_unpack() — internals"
 description: "Compiler internals for zval_unpack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 306
+  order: 303
 ---
 
 ## `zval_unpack()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/pointers.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/pointers.rs#L610) (`lower_zval_unpack`)
+- **Signature**: [`src/builtins/pointers/zval_unpack.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_unpack.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L588) (`lower_zval_unpack`)
 - **Function symbol**: `lower_zval_unpack()`
 
 
 ### Lowering notes
 
-- Lowers `zval_unpack(zval_ptr)` by invoking `__rt_zval_unpack`, which returns a
-- boxed Mixed cell pointer for the recovered value.
+- Lowers `zval_unpack(zval_ptr)` by invoking `__rt_zval_unpack`.
 
 ## Runtime helpers
 
@@ -29,7 +28,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function zval_unpack(mixed $zval): mixed
+function zval_unpack(pointer $zval): mixed
 ```
 
 ## What the type checker enforces
@@ -39,4 +38,3 @@ function zval_unpack(mixed $zval): mixed
 ## Cross-references
 
 - [User reference for `zval_unpack()`](../../../php/builtins/pointer/zval_unpack.md)
-

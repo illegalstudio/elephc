@@ -1,21 +1,20 @@
 ---
 title: "rmdir()"
-description: "Lowers `rmdir(path)` through the target-aware runtime helper."
+description: "Removes a directory."
 sidebar:
-  order: 141
+  order: 143
 ---
 
 ## rmdir()
 
 ```php
-function rmdir(string $directory, mixed $context = null): bool
+function rmdir(string $directory): bool
 ```
 
-Lowers `rmdir(path)` through the target-aware runtime helper.
+Removes a directory.
 
 **Parameters**:
 - `$directory` (`string`)
-- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `bool`
 

@@ -1,6 +1,6 @@
 ---
 title: "str_pad()"
-description: "Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper."
+description: "Pads a string to a certain length with another string."
 sidebar:
   order: 384
 ---
@@ -8,16 +8,16 @@ sidebar:
 ## str_pad()
 
 ```php
-function str_pad(string $string, int $length, string $pad_string, int $pad_type): string
+function str_pad(string $string, int $length, string $pad_string = ' ', int $pad_type = 1): string
 ```
 
-Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper.
+Pads a string to a certain length with another string.
 
 **Parameters**:
 - `$string` (`string`)
 - `$length` (`int`)
-- `$pad_string` (`string`), optional
-- `$pad_type` (`int`), optional
+- `$pad_string` (`string`), default `' '`, optional
+- `$pad_type` (`int`), default `1`, optional
 
 **Returns**: `string`
 

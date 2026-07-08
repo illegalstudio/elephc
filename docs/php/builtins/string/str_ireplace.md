@@ -1,6 +1,6 @@
 ---
 title: "str_ireplace()"
-description: "str_ireplace() — string builtin supported by Elephc."
+description: "Case-insensitive version of str_replace()."
 sidebar:
   order: 383
 ---
@@ -8,18 +8,18 @@ sidebar:
 ## str_ireplace()
 
 ```php
-function str_ireplace(mixed $search, mixed $replace, mixed $subject, int $count): mixed
+function str_ireplace(string $search, string $replace, string $subject, int $count = null): string
 ```
 
-`str_ireplace()` is a string builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Case-insensitive version of str_replace().
 
 **Parameters**:
-- `$search` (`mixed`)
-- `$replace` (`mixed`)
-- `$subject` (`mixed`)
-- `$count` (`int`), passed by reference, optional
+- `$search` (`string`)
+- `$replace` (`string`)
+- `$subject` (`string`)
+- `$count` (`int`), default `null`, optional
 
-**Returns**: `mixed`
+**Returns**: `string`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -28,4 +28,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `str_ireplace` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/str_ireplace.md).
 

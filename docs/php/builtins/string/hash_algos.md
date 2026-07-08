@@ -1,6 +1,6 @@
 ---
 title: "hash_algos()"
-description: "Lowers `hash_algos()` through the runtime algorithm-list builder."
+description: "Returns an array of supported hashing algorithm names."
 sidebar:
   order: 352
 ---
@@ -11,7 +11,7 @@ sidebar:
 function hash_algos(): array
 ```
 
-Lowers `hash_algos()` through the runtime algorithm-list builder.
+Returns an array of supported hashing algorithm names.
 
 **Parameters**: none.
 

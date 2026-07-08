@@ -2,15 +2,15 @@
 title: "getservbyport() — internals"
 description: "Compiler internals for getservbyport(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 181
+  order: 183
 ---
 
 ## `getservbyport()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3517](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3517) (`lower_getservbyport`)
+- **Signature**: [`src/builtins/io/getservbyport.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/getservbyport.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3517](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3517) (`lower_getservbyport`)
 - **Function symbol**: `lower_getservbyport()`
 
 
@@ -36,4 +36,3 @@ function getservbyport(int $port, string $protocol): mixed
 ## Cross-references
 
 - [User reference for `getservbyport()`](../../../php/builtins/io/getservbyport.md)
-

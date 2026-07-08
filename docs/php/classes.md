@@ -94,8 +94,7 @@ Classes implementing `ArrayAccess` can use PHP subscript syntax:
 `unset($obj[$key])` dispatches to `offsetUnset()`.
 
 `Serializable` is intentionally not provided: it is deprecated since
-PHP 8.1. Use `__serialize` / `__unserialize` magic methods instead
-(when those land).
+PHP 8.1. Use the `__serialize` / `__unserialize` magic methods instead.
 
 ### Built-in SPL containers and storage iterators
 
@@ -219,6 +218,8 @@ final class InvoiceNumber {
 - `final` properties, which can be read normally but cannot be redeclared by subclasses
 - Static properties with `public static`, `protected static`, or `private static`, including typed static properties
 - `readonly class` makes all instance properties readonly; static properties stay mutable
+
+Statically-known access violations — calling a `private`/`protected` method from an inaccessible scope, or writing a `readonly` property outside its declaring constructor — raise a catchable `Error` exception at runtime, matching PHP. Without a `try`/`catch` handler the exception is a fatal uncaught exit.
 
 ```php
 <?php
@@ -694,6 +695,10 @@ echo Color::Red->value;          // 1
 echo Color::from(2) === Color::Green; // 1
 ```
 Pure and backed enums. Every case exposes the read-only `->name` property (the case identifier); backed cases also expose `->value`. Plus `::from()`, `::tryFrom()`, `::cases()`. Only `int` and `string` backing types.
+
+Like PHP, an `int`-backed enum's `::from()` / `::tryFrom()` accept a numeric string and coerce it to the integer backing value (`Color::from("2")` returns `Color::Green`). A numeric string with no matching case throws `ValueError`; a non-numeric string (e.g. `"x"`, `"1abc"`, `"0x1"`, `"INF"`, or `"NAN"`) throws `TypeError`, matching PHP's coercive typing.
+
+A dynamically-typed (`mixed`) argument — such as a `foreach` value or an untyped parameter — is also accepted and coerced on its runtime type: an integer or numeric string resolves (or throws `ValueError`), a float truncates, a bool/null coerces, and an array/object/resource/closure throws `TypeError` naming the given type (objects report `object` rather than the class name).
 
 ### Enum methods, constants, and interfaces
 

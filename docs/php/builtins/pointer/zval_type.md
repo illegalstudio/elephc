@@ -1,6 +1,6 @@
 ---
 title: "zval_type()"
-description: "Lowers `zval_type(zval_ptr)` by invoking `__rt_zval_type`, which returns the"
+description: "Returns the PHP zval type byte for a zval pointer."
 sidebar:
   order: 302
 ---
@@ -8,13 +8,13 @@ sidebar:
 ## zval_type()
 
 ```php
-function zval_type(mixed $zval): int
+function zval_type(pointer $zval): int
 ```
 
-Lowers `zval_type(zval_ptr)` by invoking `__rt_zval_type`, which returns the
+Returns the PHP zval type byte for a zval pointer.
 
 **Parameters**:
-- `$zval` (`mixed`)
+- `$zval` (`pointer`)
 
 **Returns**: `int`
 

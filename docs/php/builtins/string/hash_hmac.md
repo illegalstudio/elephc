@@ -1,6 +1,6 @@
 ---
 title: "hash_hmac()"
-description: "Lowers `hash_hmac(algo, data, key, binary?)` through the shared HMAC runtime dispatcher."
+description: "Generates a keyed hash value using the HMAC method."
 sidebar:
   order: 356
 ---
@@ -8,16 +8,16 @@ sidebar:
 ## hash_hmac()
 
 ```php
-function hash_hmac(string $algo, string $data, string $key, bool $binary): string
+function hash_hmac(string $algo, string $data, string $key, bool $binary = false): string
 ```
 
-Lowers `hash_hmac(algo, data, key, binary?)` through the shared HMAC runtime dispatcher.
+Generates a keyed hash value using the HMAC method.
 
 **Parameters**:
 - `$algo` (`string`)
 - `$data` (`string`)
 - `$key` (`string`)
-- `$binary` (`bool`), optional
+- `$binary` (`bool`), default `false`, optional
 
 **Returns**: `string`
 

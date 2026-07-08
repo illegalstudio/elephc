@@ -2,15 +2,15 @@
 title: "rsort() — internals"
 description: "Compiler internals for rsort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 56
+  order: 58
 ---
 
 ## `rsort()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1081](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1081) (`lower_rsort`)
+- **Signature**: [`src/builtins/array/rsort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/rsort.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1084](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1084) (`lower_rsort`)
 - **Function symbol**: `lower_rsort()`
 
 
@@ -32,15 +32,14 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function rsort(array $array, int $flags): bool
+function rsort(array $array): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes exactly 1 argument.
 - **By-reference parameters**: `$array`.
 
 ## Cross-references
 
 - [User reference for `rsort()`](../../../php/builtins/array/rsort.md)
-

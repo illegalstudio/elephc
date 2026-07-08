@@ -1,8 +1,8 @@
 ---
 title: "is_nan()"
-description: "Lowers `is_nan()` by checking whether the normalized float is unordered with itself."
+description: "Checks whether a float is NAN."
 sidebar:
-  order: 251
+  order: 253
 ---
 
 ## is_nan()
@@ -11,7 +11,7 @@ sidebar:
 function is_nan(float $num): bool
 ```
 
-Lowers `is_nan()` by checking whether the normalized float is unordered with itself.
+Checks whether a float is NAN.
 
 **Parameters**:
 - `$num` (`float`)

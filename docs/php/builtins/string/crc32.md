@@ -1,6 +1,6 @@
 ---
 title: "crc32()"
-description: "Lowers `crc32(string)` through the shared checksum runtime helper."
+description: "Calculates the CRC32 polynomial of a string."
 sidebar:
   order: 344
 ---
@@ -11,7 +11,7 @@ sidebar:
 function crc32(string $string): int
 ```
 
-Lowers `crc32(string)` through the shared checksum runtime helper.
+Calculates the CRC32 polynomial of a string.
 
 **Parameters**:
 - `$string` (`string`)

@@ -2,15 +2,15 @@
 title: "preg_replace() — internals"
 description: "Compiler internals for preg_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 320
+  order: 317
 ---
 
 ## `preg_replace()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/regex.rs`:65](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/regex.rs#L65) (`lower_preg_replace`)
+- **Signature**: [`src/builtins/system/preg_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_replace.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/regex.rs`:62](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/regex.rs#L62) (`lower_preg_replace`)
 - **Function symbol**: `lower_preg_replace()`
 
 
@@ -26,15 +26,13 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function preg_replace(string $pattern, string $replacement, string $subject, int $limit = -1, int $count = null): string
+function preg_replace(string $pattern, string $replacement, string $subject): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 3–5 arguments (2 optional).
-- **By-reference parameters**: `$count`.
+- **Arity**: takes exactly 3 arguments.
 
 ## Cross-references
 
 - [User reference for `preg_replace()`](../../../php/builtins/regex/preg_replace.md)
-

@@ -1,6 +1,6 @@
 ---
 title: "floatval()"
-description: "Lowers `floatval()` for concrete scalar operands."
+description: "Returns the float value of a variable."
 sidebar:
   order: 414
 ---
@@ -11,7 +11,7 @@ sidebar:
 function floatval(mixed $value): float
 ```
 
-Lowers `floatval()` for concrete scalar operands.
+Returns the float value of a variable.
 
 **Parameters**:
 - `$value` (`mixed`)

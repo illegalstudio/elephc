@@ -1,6 +1,6 @@
 ---
 title: "gzuncompress()"
-description: "Lowers `gzuncompress(data, max_length?)` and boxes zlib failures as PHP false."
+description: "Uncompress a compressed string."
 sidebar:
   order: 350
 ---
@@ -8,16 +8,16 @@ sidebar:
 ## gzuncompress()
 
 ```php
-function gzuncompress(string $data, int $max_length): string
+function gzuncompress(string $data, int $max_length = 0): mixed
 ```
 
-Lowers `gzuncompress(data, max_length?)` and boxes zlib failures as PHP false.
+Uncompress a compressed string.
 
 **Parameters**:
 - `$data` (`string`)
-- `$max_length` (`int`), optional
+- `$max_length` (`int`), default `0`, optional
 
-**Returns**: `string`
+**Returns**: `mixed`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

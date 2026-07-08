@@ -1,6 +1,6 @@
 ---
 title: "inet_pton()"
-description: "Lowers `inet_ntop()` and `inet_pton()` and boxes invalid-address results as PHP false."
+description: "Converts a human-readable IP address to its packed in_addr representation."
 sidebar:
   order: 365
 ---
@@ -11,7 +11,7 @@ sidebar:
 function inet_pton(string $ip): mixed
 ```
 
-Lowers `inet_ntop()` and `inet_pton()` and boxes invalid-address results as PHP false.
+Converts a human-readable IP address to its packed in_addr representation.
 
 **Parameters**:
 - `$ip` (`string`)

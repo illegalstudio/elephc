@@ -127,6 +127,28 @@ fn web_reset_clears_globals_between_runs() {
     assert!(r2.ends_with("x"), "second response body: {:?}", r2);
 }
 
+/// Verifies per-request reset of an ordinary global used through `global $g`.
+#[test]
+fn web_reset_clears_ordinary_global_alias_between_requests() {
+    let dir = make_test_dir("web_reset_global_alias");
+    let src = r#"<?php
+function write_global(): void { global $g; $g = 7; }
+function read_global(): int { global $g; return $g ?? 0; }
+if (isset($_GET["set"])) { write_global(); }
+echo read_global();
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/?set=1");
+    let r2 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("7"), "first response body: {:?}", r1);
+    assert!(r2.ends_with("0"), "second response leaked ordinary global: {:?}", r2);
+}
+
 /// Verifies per-request reset of a function static: each request must see
 /// the static re-initialized to 0, so each response ends with "1".
 #[test]

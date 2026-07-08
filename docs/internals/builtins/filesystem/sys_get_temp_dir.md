@@ -2,15 +2,15 @@
 title: "sys_get_temp_dir() — internals"
 description: "Compiler internals for sys_get_temp_dir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 145
+  order: 147
 ---
 
 ## `sys_get_temp_dir()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5403](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5403) (`lower_sys_get_temp_dir`)
+- **Signature**: [`src/builtins/io/sys_get_temp_dir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/sys_get_temp_dir.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5403](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5403) (`lower_sys_get_temp_dir`)
 - **Function symbol**: `lower_sys_get_temp_dir()`
 
 
@@ -36,4 +36,3 @@ function sys_get_temp_dir(): string
 ## Cross-references
 
 - [User reference for `sys_get_temp_dir()`](../../../php/builtins/filesystem/sys_get_temp_dir.md)
-

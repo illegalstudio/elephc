@@ -1,6 +1,6 @@
 ---
 title: "base64_encode()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Encodes binary data into a Base64 string."
 sidebar:
   order: 340
 ---
@@ -11,7 +11,7 @@ sidebar:
 function base64_encode(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Encodes binary data into a Base64 string.
 
 **Parameters**:
 - `$string` (`string`)

@@ -58,6 +58,8 @@ echo $without->profile?->name ?? "none";
 /// initialization" error for typed properties that are genuinely uninitialized,
 /// as opposed to explicitly set to null. Fixture: User with uninitialized
 /// typed property ?Profile $profile (no default, not set in __construct).
+/// After issue #339 the guard throws a catchable Error; without a try/catch
+/// the no-handler fast path still reports the specific fatal diagnostic.
 #[test]
 fn test_nullsafe_property_access_does_not_suppress_uninitialized_typed_property() {
     let err = compile_and_run_expect_failure(

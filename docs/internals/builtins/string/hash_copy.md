@@ -2,15 +2,15 @@
 title: "hash_copy() — internals"
 description: "Compiler internals for hash_copy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 356
+  order: 353
 ---
 
 ## `hash_copy()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:333](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L333) (`lower_hash_copy`)
+- **Signature**: [`src/builtins/string/hash_copy.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_copy.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:333](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L333) (`lower_hash_copy`)
 - **Function symbol**: `lower_hash_copy()`
 
 
@@ -39,4 +39,3 @@ function hash_copy(resource $context): mixed
 ## Cross-references
 
 - [User reference for `hash_copy()`](../../../php/builtins/string/hash_copy.md)
-

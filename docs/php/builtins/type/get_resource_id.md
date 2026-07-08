@@ -1,6 +1,6 @@
 ---
 title: "get_resource_id()"
-description: "Lowers `get_resource_id(resource)` by unboxing the native handle and making it one-based."
+description: "Returns an integer identifier for the given resource."
 sidebar:
   order: 415
 ---
@@ -11,7 +11,7 @@ sidebar:
 function get_resource_id(resource $resource): int
 ```
 
-Lowers `get_resource_id(resource)` by unboxing the native handle and making it one-based.
+Returns an integer identifier for the given resource.
 
 **Parameters**:
 - `$resource` (`resource`)

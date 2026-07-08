@@ -1,6 +1,6 @@
 ---
 title: "pclose()"
-description: "Lowers `pclose(handle)` and returns the child process status."
+description: "Closes process file pointer."
 sidebar:
   order: 308
 ---
@@ -11,7 +11,7 @@ sidebar:
 function pclose(resource $handle): int
 ```
 
-Lowers `pclose(handle)` and returns the child process status.
+Closes process file pointer.
 
 **Parameters**:
 - `$handle` (`resource`)

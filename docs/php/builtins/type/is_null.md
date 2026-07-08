@@ -1,6 +1,6 @@
 ---
 title: "is_null()"
-description: "is_null() — type builtin supported by Elephc."
+description: "Checks whether a variable is null."
 sidebar:
   order: 425
 ---
@@ -11,7 +11,7 @@ sidebar:
 function is_null(mixed $value): bool
 ```
 
-`is_null()` is a type builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Checks whether a variable is null.
 
 **Parameters**:
 - `$value` (`mixed`)
@@ -25,4 +25,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `is_null` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_null.md).
 

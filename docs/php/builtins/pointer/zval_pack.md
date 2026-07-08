@@ -1,6 +1,6 @@
 ---
 title: "zval_pack()"
-description: "Lowers `zval_pack(value)` by boxing the operand as a Mixed cell and invoking"
+description: "Packs an elephc runtime value into a heap-allocated PHP zval pointer."
 sidebar:
   order: 301
 ---
@@ -8,15 +8,15 @@ sidebar:
 ## zval_pack()
 
 ```php
-function zval_pack(mixed $value): mixed
+function zval_pack(mixed $value): pointer
 ```
 
-Lowers `zval_pack(value)` by boxing the operand as a Mixed cell and invoking
+Packs an elephc runtime value into a heap-allocated PHP zval pointer.
 
 **Parameters**:
 - `$value` (`mixed`)
 
-**Returns**: `mixed`
+**Returns**: `pointer`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,6 +1,6 @@
 ---
 title: "is_callable()"
-description: "Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers."
+description: "Checks whether a variable can be called as a function."
 sidebar:
   order: 421
 ---
@@ -8,15 +8,13 @@ sidebar:
 ## is_callable()
 
 ```php
-function is_callable(mixed $value, bool $syntax_only = false, string $callable_name = null): bool
+function is_callable(mixed $value): bool
 ```
 
-Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers.
+Checks whether a variable can be called as a function.
 
 **Parameters**:
 - `$value` (`mixed`)
-- `$syntax_only` (`bool`), default `false`, optional
-- `$callable_name` (`string`), passed by reference, default `null`, optional
 
 **Returns**: `bool`
 

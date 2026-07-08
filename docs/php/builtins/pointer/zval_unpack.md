@@ -1,6 +1,6 @@
 ---
 title: "zval_unpack()"
-description: "Lowers `zval_unpack(zval_ptr)` by invoking `__rt_zval_unpack`, which returns a"
+description: "Unpacks a PHP zval pointer into an owned elephc Mixed value."
 sidebar:
   order: 303
 ---
@@ -8,13 +8,13 @@ sidebar:
 ## zval_unpack()
 
 ```php
-function zval_unpack(mixed $zval): mixed
+function zval_unpack(pointer $zval): mixed
 ```
 
-Lowers `zval_unpack(zval_ptr)` by invoking `__rt_zval_unpack`, which returns a
+Unpacks a PHP zval pointer into an owned elephc Mixed value.
 
 **Parameters**:
-- `$zval` (`mixed`)
+- `$zval` (`pointer`)
 
 **Returns**: `mixed`
 

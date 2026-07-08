@@ -1,6 +1,6 @@
 ---
 title: "vprintf()"
-description: "Lowers `vprintf(format, values)` as `vsprintf()` followed by stdout emission."
+description: "Outputs a formatted string using an array of values."
 sidebar:
   order: 406
 ---
@@ -11,7 +11,7 @@ sidebar:
 function vprintf(string $format, array $values): int
 ```
 
-Lowers `vprintf(format, values)` as `vsprintf()` followed by stdout emission.
+Outputs a formatted string using an array of values.
 
 **Parameters**:
 - `$format` (`string`)

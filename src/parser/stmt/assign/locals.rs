@@ -17,7 +17,8 @@ use crate::span::Span;
 use super::super::params::parse_type_expr;
 use super::super::{expect_semicolon, expect_token};
 
-/// Handle ++$var; or --$var; as standalone statements.
+/// Handle ++$var; or --$var; as standalone statements. Also handles ++A::$x and --A::$x
+/// (prefix increment/decrement on static properties) by desugaring to a compound assignment.
 pub(in crate::parser::stmt) fn parse_incdec_stmt(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -25,6 +26,42 @@ pub(in crate::parser::stmt) fn parse_incdec_stmt(
 ) -> Result<Stmt, CompileError> {
     let is_increment = tokens[*pos].0 == Token::PlusPlus;
     *pos += 1;
+
+    let next_token = tokens.get(*pos).map(|(t, _)| t);
+    let is_scoped = matches!(
+        next_token,
+        Some(Token::Identifier(_)) | Some(Token::Self_) | Some(Token::Parent) | Some(Token::Static)
+    ) && tokens.get(*pos + 1).map(|(t, _)| t) == Some(&Token::DoubleColon)
+        && tokens.get(*pos + 2).map(|(t, _)| t).is_some_and(|t| matches!(t, Token::Variable(_)));
+
+    if is_scoped {
+        let lhs_expr = crate::parser::expr::parse_expr(tokens, pos)
+            .map_err(|_| CompileError::new(span, "Expected variable after '++'"))?;
+        expect_semicolon(tokens, pos)?;
+        let op = if is_increment {
+            crate::parser::ast::BinOp::Add
+        } else {
+            crate::parser::ast::BinOp::Sub
+        };
+        let one = Expr::new(ExprKind::IntLiteral(1), span);
+        let value = crate::parser::stmt::assign::compound::assignment_value(
+            lhs_expr.clone(),
+            crate::parser::stmt::assign::compound::AssignmentOperator::Compound(op),
+            one,
+            span,
+        );
+        if let ExprKind::StaticPropertyAccess { receiver, property } = lhs_expr.kind {
+            return Ok(Stmt::new(
+                StmtKind::StaticPropertyAssign {
+                    receiver,
+                    property,
+                    value,
+                },
+                span,
+            ));
+        }
+        return Err(CompileError::new(span, "Invalid increment target"));
+    }
 
     let name = match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Variable(n)) => n.clone(),

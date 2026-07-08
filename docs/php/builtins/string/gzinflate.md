@@ -1,6 +1,6 @@
 ---
 title: "gzinflate()"
-description: "Lowers `gzinflate(data, max_length?)` and boxes zlib failures as PHP false."
+description: "Inflate a deflated string."
 sidebar:
   order: 349
 ---
@@ -8,16 +8,16 @@ sidebar:
 ## gzinflate()
 
 ```php
-function gzinflate(string $data, int $max_length): string
+function gzinflate(string $data, int $max_length = 0): mixed
 ```
 
-Lowers `gzinflate(data, max_length?)` and boxes zlib failures as PHP false.
+Inflate a deflated string.
 
 **Parameters**:
 - `$data` (`string`)
-- `$max_length` (`int`), optional
+- `$max_length` (`int`), default `0`, optional
 
-**Returns**: `string`
+**Returns**: `mixed`
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

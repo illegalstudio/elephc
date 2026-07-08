@@ -2,15 +2,15 @@
 title: "__elephc_phar_get_stub() — internals"
 description: "Compiler internals for __elephc_phar_get_stub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 441
+  order: 440
 ---
 
 ## `__elephc_phar_get_stub()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3873](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3873) (`lower_elephc_phar_get_stub`)
+- **Signature**: [`src/builtins/io/__elephc_phar_get_stub.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_get_stub.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3873](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3873) (`lower_elephc_phar_get_stub`)
 - **Function symbol**: `lower_elephc_phar_get_stub()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function __elephc_phar_get_stub(mixed $filename): string
+function __elephc_phar_get_stub(string $filename): string
 ```
 
 ## What the type checker enforces

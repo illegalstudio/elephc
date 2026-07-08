@@ -2,15 +2,15 @@
 title: "strtotime() — internals"
 description: "Compiler internals for strtotime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 94
+  order: 96
 ---
 
 ## `strtotime()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:487](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L487) (`lower_strtotime`)
+- **Signature**: [`src/builtins/system/strtotime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/strtotime.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:487](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L487) (`lower_strtotime`)
 - **Function symbol**: `lower_strtotime()`
 
 
@@ -32,7 +32,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function strtotime(string $datetime, int $baseTimestamp): mixed
+function strtotime(string $datetime, int $baseTimestamp = null): mixed
 ```
 
 ## What the type checker enforces
@@ -42,4 +42,3 @@ function strtotime(string $datetime, int $baseTimestamp): mixed
 ## Cross-references
 
 - [User reference for `strtotime()`](../../../php/builtins/date/strtotime.md)
-

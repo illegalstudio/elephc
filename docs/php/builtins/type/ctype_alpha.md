@@ -1,6 +1,6 @@
 ---
 title: "ctype_alpha()"
-description: "Lowers `ctype_alpha(string)` by checking every byte against ASCII alpha ranges."
+description: "Checks if all characters in the string are alphabetic."
 sidebar:
   order: 411
 ---
@@ -11,7 +11,7 @@ sidebar:
 function ctype_alpha(string $text): bool
 ```
 
-Lowers `ctype_alpha(string)` by checking every byte against ASCII alpha ranges.
+Checks if all characters in the string are alphabetic.
 
 **Parameters**:
 - `$text` (`string`)

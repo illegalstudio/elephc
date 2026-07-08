@@ -134,6 +134,9 @@ fn parse_stmt_dispatch(
                 {
                     return Ok(stmt);
                 }
+                if let Some(stmt) = assign::try_parse_scoped_postfix_incdec(tokens, pos, span)? {
+                    return Ok(stmt);
+                }
                 let expr = parse_expr(tokens, pos)?;
                 expect_semicolon(tokens, pos)?;
                 Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
@@ -161,6 +164,9 @@ fn parse_stmt_dispatch(
                 if let Some(stmt) =
                     assign::try_parse_scoped_property_assignment(tokens, pos, span)?
                 {
+                    return Ok(stmt);
+                }
+                if let Some(stmt) = assign::try_parse_scoped_postfix_incdec(tokens, pos, span)? {
                     return Ok(stmt);
                 }
             }

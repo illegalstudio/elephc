@@ -2,15 +2,15 @@
 title: "time() — internals"
 description: "Compiler internals for time(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 95
+  order: 97
 ---
 
 ## `time()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:615](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L615) (`lower_time`)
+- **Signature**: [`src/builtins/system/time.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/time.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:615](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L615) (`lower_time`)
 - **Function symbol**: `lower_time()`
 
 
@@ -36,4 +36,3 @@ function time(): int
 ## Cross-references
 
 - [User reference for `time()`](../../../php/builtins/date/time.md)
-

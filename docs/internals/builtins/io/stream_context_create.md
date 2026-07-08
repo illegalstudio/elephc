@@ -2,15 +2,15 @@
 title: "stream_context_create() — internals"
 description: "Compiler internals for stream_context_create(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 189
+  order: 191
 ---
 
 ## `stream_context_create()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1064](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1064) (`lower_stream_context_create`)
+- **Signature**: [`src/builtins/io/stream_context_create.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_create.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1064](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1064) (`lower_stream_context_create`)
 - **Function symbol**: `lower_stream_context_create()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function stream_context_create(array $options, array $params): mixed
+function stream_context_create(array $options = null, array $params = null): mixed
 ```
 
 ## What the type checker enforces
@@ -35,4 +35,3 @@ function stream_context_create(array $options, array $params): mixed
 ## Cross-references
 
 - [User reference for `stream_context_create()`](../../../php/builtins/io/stream_context_create.md)
-

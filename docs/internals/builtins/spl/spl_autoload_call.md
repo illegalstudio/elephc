@@ -2,15 +2,15 @@
 title: "spl_autoload_call() — internals"
 description: "Compiler internals for spl_autoload_call(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 327
+  order: 324
 ---
 
 ## `spl_autoload_call()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:150](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L150) (`lower_spl_autoload_void`)
+- **Signature**: [`src/builtins/spl/spl_autoload_call.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_autoload_call.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/spl.rs`:151](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/spl.rs#L151) (`lower_spl_autoload_void`)
 - **Function symbol**: `lower_spl_autoload_void()`
 
 
@@ -35,4 +35,3 @@ function spl_autoload_call(string $class): void
 ## Cross-references
 
 - [User reference for `spl_autoload_call()`](../../../php/builtins/spl/spl_autoload_call.md)
-

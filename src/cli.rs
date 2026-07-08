@@ -15,14 +15,7 @@ pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 
 /// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--ir-backend] [--ast-backend] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] <source.php>";
-
-/// Backend selected for assembly generation after frontend and optimization passes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CodegenBackend {
-    Eir,
-    Ast,
-}
+pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--debug-info] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--with-CRATE] <source.php>";
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
@@ -32,13 +25,13 @@ pub(crate) struct CliConfig {
     pub(crate) gc_stats: bool,
     pub(crate) heap_debug: bool,
     pub(crate) emit_ir: bool,
-    pub(crate) backend: CodegenBackend,
     pub(crate) null_repr: crate::codegen::NullRepr,
     pub(crate) emit_asm: bool,
     pub(crate) emit: Emit,
     pub(crate) check_only: bool,
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
+    pub(crate) emit_debug_info: bool,
     pub(crate) regalloc_linear: bool,
     pub(crate) ir_opt: bool,
     pub(crate) target: Target,
@@ -47,6 +40,12 @@ pub(crate) struct CliConfig {
     pub(crate) extra_frameworks: Vec<String>,
     pub(crate) defines: HashSet<String>,
     pub(crate) web: bool,
+    /// Bridge crates the user force-enabled with `--with-<crate>` (short flag
+    /// names such as `"pdo"`). Each one force-links the matching staticlib and,
+    /// for crates with a PHP-surface prelude, forces that prelude's injection so
+    /// the API is available even when feature auto-detection would not trigger.
+    /// `--with-web` is folded into `web` instead, since it aliases `--web`.
+    pub(crate) with_crates: HashSet<String>,
 }
 
 /// Parse command-line arguments into a CliConfig struct.
@@ -60,14 +59,12 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut gc_stats = false;
     let mut heap_debug = false;
     let mut emit_ir = false;
-    let mut backend = CodegenBackend::Eir;
-    let mut explicit_ir_backend = false;
-    let mut explicit_ast_backend = false;
     let mut emit_asm = false;
     let mut emit = Emit::Executable;
     let mut check_only = false;
     let mut emit_timings = false;
     let mut emit_source_map = false;
+    let mut emit_debug_info = false;
     let mut filename_arg = None;
     let mut target = Target::detect_host();
     let mut extra_link_libs: Vec<String> = Vec::new();
@@ -75,6 +72,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut extra_frameworks: Vec<String> = Vec::new();
     let mut defines: HashSet<String> = HashSet::new();
     let mut web = false;
+    let mut with_crates: HashSet<String> = HashSet::new();
     let mut null_repr = match std::env::var("ELEPHC_NULL_REPR").as_deref() {
         Ok("tagged") => crate::codegen::NullRepr::Tagged,
         Ok("sentinel") => crate::codegen::NullRepr::Sentinel,
@@ -111,12 +109,6 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             heap_debug = true;
         } else if arg == "--emit-ir" {
             emit_ir = true;
-        } else if arg == "--ir-backend" {
-            explicit_ir_backend = true;
-            backend = CodegenBackend::Eir;
-        } else if arg == "--ast-backend" {
-            explicit_ast_backend = true;
-            backend = CodegenBackend::Ast;
         } else if arg == "--emit-asm" {
             emit_asm = true;
         } else if arg == "--emit" {
@@ -130,6 +122,8 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             emit_timings = true;
         } else if arg == "--source-map" {
             emit_source_map = true;
+        } else if arg == "--debug-info" {
+            emit_debug_info = true;
         } else if let Some(value) = arg.strip_prefix("--null-repr=") {
             null_repr = parse_null_repr(value);
         } else if let Some(value) = arg.strip_prefix("--regalloc=") {
@@ -173,6 +167,22 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             ));
         } else if arg == "--web" {
             web = true;
+        } else if let Some(name) = arg.strip_prefix("--with-") {
+            // `--with-web` aliases the full `--web` mode (it owns the program
+            // entry point); every other known crate is recorded for force-link
+            // and prelude forcing. An unknown crate name is a hard error so a
+            // typo never silently no-ops.
+            if name == "web" {
+                web = true;
+            } else if crate::linker::bridge_lib_for_flag(name).is_some() {
+                with_crates.insert(name.to_string());
+            } else {
+                fail(&format!(
+                    "Unknown crate for --with-{}: expected one of: {}",
+                    name,
+                    crate::linker::crate_flag_names().join(", ")
+                ));
+            }
         } else if arg.starts_with("--") {
             fail(&format!("Unknown flag: {}", arg));
         } else {
@@ -191,14 +201,6 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let output_modes = usize::from(emit_ir) + usize::from(emit_asm) + usize::from(check_only);
     if output_modes > 1 {
         fail("--emit-ir, --emit-asm, and --check are mutually exclusive");
-    }
-    if explicit_ir_backend && explicit_ast_backend {
-        fail("cannot use --ir-backend and --ast-backend together");
-    }
-    if explicit_ast_backend {
-        eprintln!(
-            "warning: --ast-backend is deprecated and will be removed in v0.26.0. The EIR backend is now the default. See docs/internals/the-ir.md for details."
-        );
     }
     if web && check_only {
         fail("--web cannot be combined with --check");
@@ -219,13 +221,13 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         gc_stats,
         heap_debug,
         emit_ir,
-        backend,
         null_repr,
         emit_asm,
         emit,
         check_only,
         emit_timings,
         emit_source_map,
+        emit_debug_info,
         regalloc_linear,
         ir_opt,
         target,
@@ -234,6 +236,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         extra_frameworks,
         defines,
         web,
+        with_crates,
     }
 }
 
@@ -400,5 +403,47 @@ mod tests {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = parse_args(&args);
         assert!(!config.web);
+    }
+
+    /// Verifies `--with-pdo` records the crate for force-link/prelude forcing
+    /// without touching the web mode.
+    #[test]
+    fn with_pdo_records_forced_crate() {
+        let args = vec!["elephc".into(), "--with-pdo".into(), "app.php".into()];
+        let config = parse_args(&args);
+        assert!(config.with_crates.contains("pdo"));
+        assert!(!config.web);
+    }
+
+    /// Verifies multiple `--with-<crate>` flags accumulate into the forced set.
+    #[test]
+    fn multiple_with_crates_accumulate() {
+        let args = vec![
+            "elephc".into(),
+            "--with-pdo".into(),
+            "--with-tls".into(),
+            "app.php".into(),
+        ];
+        let config = parse_args(&args);
+        assert!(config.with_crates.contains("pdo"));
+        assert!(config.with_crates.contains("tls"));
+    }
+
+    /// Verifies `--with-web` aliases `--web` (full web mode) instead of being
+    /// recorded as a plain force-link crate, since elephc_web owns the entry point.
+    #[test]
+    fn with_web_aliases_web_mode() {
+        let args = vec!["elephc".into(), "--with-web".into(), "app.php".into()];
+        let config = parse_args(&args);
+        assert!(config.web);
+        assert!(config.with_crates.is_empty());
+    }
+
+    /// Verifies the default has no forced crates so non-`--with` builds are unaffected.
+    #[test]
+    fn no_with_flag_defaults_empty() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        let config = parse_args(&args);
+        assert!(config.with_crates.is_empty());
     }
 }

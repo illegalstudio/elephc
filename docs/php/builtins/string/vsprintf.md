@@ -1,6 +1,6 @@
 ---
 title: "vsprintf()"
-description: "Lowers `vsprintf(format, values)` through the array-to-sprintf runtime bridge."
+description: "Returns a formatted string using an array of values."
 sidebar:
   order: 407
 ---
@@ -11,7 +11,7 @@ sidebar:
 function vsprintf(string $format, array $values): string
 ```
 
-Lowers `vsprintf(format, values)` through the array-to-sprintf runtime bridge.
+Returns a formatted string using an array of values.
 
 **Parameters**:
 - `$format` (`string`)

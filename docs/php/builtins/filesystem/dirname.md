@@ -1,21 +1,21 @@
 ---
 title: "dirname()"
-description: "Lowers `dirname(path, levels?)` through the target-aware runtime helper."
+description: "Returns a parent directory's path."
 sidebar:
-  order: 103
+  order: 105
 ---
 
 ## dirname()
 
 ```php
-function dirname(string $path, int $levels): string
+function dirname(string $path, int $levels = 1): string
 ```
 
-Lowers `dirname(path, levels?)` through the target-aware runtime helper.
+Returns a parent directory's path.
 
 **Parameters**:
 - `$path` (`string`)
-- `$levels` (`int`), optional
+- `$levels` (`int`), default `1`, optional
 
 **Returns**: `string`
 

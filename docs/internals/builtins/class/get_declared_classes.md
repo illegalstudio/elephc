@@ -2,17 +2,21 @@
 title: "get_declared_classes() — internals"
 description: "Compiler internals for get_declared_classes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 75
+  order: 77
 ---
 
 ## `get_declared_classes()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/callables/get_declared_classes.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/get_declared_classes.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:388](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L388) (`lower_get_declared_names`)
+- **Function symbol**: `lower_get_declared_names()`
 
+
+### Lowering notes
+
+- Lowers `get_declared_classes/interfaces/traits()` using the shared declaration registry.
 
 ## Runtime helpers
 
@@ -31,4 +35,3 @@ function get_declared_classes(): array
 ## Cross-references
 
 - [User reference for `get_declared_classes()`](../../../php/builtins/class/get_declared_classes.md)
-

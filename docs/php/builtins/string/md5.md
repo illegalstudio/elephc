@@ -1,6 +1,6 @@
 ---
 title: "md5()"
-description: "Lowers `md5(data, binary?)` through the shared crypto-backed runtime helper."
+description: "Calculates the MD5 hash of a string."
 sidebar:
   order: 370
 ---
@@ -8,14 +8,14 @@ sidebar:
 ## md5()
 
 ```php
-function md5(string $string, bool $binary): string
+function md5(string $string, bool $binary = false): string
 ```
 
-Lowers `md5(data, binary?)` through the shared crypto-backed runtime helper.
+Calculates the MD5 hash of a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$binary` (`bool`), optional
+- `$binary` (`bool`), default `false`, optional
 
 **Returns**: `string`
 
