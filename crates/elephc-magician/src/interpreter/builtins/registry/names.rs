@@ -100,7 +100,6 @@ pub(in crate::interpreter) const EVAL_PHP_VISIBLE_BUILTIN_FUNCTIONS: &[&str] = &
     "property_exists",
     "readline",
     "rsort",
-    "settype",
     "shuffle",
     "sort",
     "spl_autoload",

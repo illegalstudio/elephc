@@ -11,7 +11,6 @@
 mod arrays;
 mod core;
 mod filesystem;
-mod scalars;
 mod symbols;
 
 use super::eval_declared_builtin_values_call;
@@ -20,7 +19,6 @@ use super::super::super::*;
 use arrays::*;
 use core::*;
 use filesystem::*;
-use scalars::*;
 use symbols::*;
 
 /// Evaluates PHP-visible builtins when they are invoked through a dynamic callable name.
@@ -45,9 +43,6 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
     if let Some(result) =
         eval_raw_memory_builtin_with_values(name, evaluated_args, context, values)?
     {
-        return Ok(Some(result));
-    }
-    if let Some(result) = eval_scalars_builtin_with_values(name, evaluated_args, context, values)? {
         return Ok(Some(result));
     }
     if let Some(result) =

@@ -27,9 +27,6 @@ const EVAL_DYNAMIC_DISPATCH_SOURCES: &[&str] = &[
         "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/filesystem.rs"
     ),
     include_str!(
-        "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/scalars.rs"
-    ),
-    include_str!(
         "../crates/elephc-magician/src/interpreter/builtins/registry/dispatch/symbols.rs"
     ),
 ];
@@ -303,6 +300,7 @@ const EVAL_DECLARATIVE_REGISTRY_BUILTINS: &[&str] = &[
     "scandir",
     "sha1",
     "shell_exec",
+    "settype",
     "sin",
     "sinh",
     "sleep",

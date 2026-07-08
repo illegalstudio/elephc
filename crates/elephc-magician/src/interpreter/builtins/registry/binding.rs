@@ -146,7 +146,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "is_callable" => Some(&["value", "syntax_only", "callable_name"]),
         "buffer_new" => Some(&["length"]),
         "buffer_len" | "buffer_free" => Some(&["buffer"]),
-        "settype" => Some(&["var", "type"]),
         "get_called_class" => Some(&[]),
         "get_class" => Some(&["object"]),
         "get_class_methods" => Some(&["object_or_class"]),

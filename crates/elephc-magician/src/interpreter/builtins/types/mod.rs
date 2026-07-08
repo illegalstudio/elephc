@@ -30,4 +30,5 @@ mod is_real;
 mod is_resource;
 mod is_scalar;
 mod is_string;
+mod settype;
 mod strval;

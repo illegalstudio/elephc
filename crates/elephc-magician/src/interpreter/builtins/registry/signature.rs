@@ -64,8 +64,6 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
     let params = eval_builtin_param_names(name)?;
     Some(match name {
         "isset" | "unset" => variadic(params, &[]),
-        "settype" => fixed_by_ref(params, &["var"]),
-
         "class_alias" => optional(params, 2),
         "class_exists" | "interface_exists" | "trait_exists" | "enum_exists"
         | "class_implements" | "class_parents" | "class_uses" => optional(params, 1),

@@ -25,13 +25,13 @@ use super::super::{
     eval_grapheme_strrev_result, eval_gzip_result, eval_hash_equals_result,
     eval_hash_one_shot_result, eval_hex2bin_result, eval_html_entity_result, eval_intdiv_result,
     eval_json_values_result, eval_log_result, eval_min_max_result, eval_network_env_values_result,
-    eval_nl2br_result, eval_range_result, eval_regex_values_result, eval_slashes_result,
-    eval_str_pad_result, eval_str_replace_result, eval_str_repeat_result, eval_str_split_result,
-    eval_stream_bool_predicate_result, eval_stream_introspection_result, eval_string_case_result,
-    eval_string_compare_result, eval_string_position_result, eval_string_search_result,
-    eval_strstr_result, eval_substr_replace_result, eval_substr_result, eval_time_values_result,
-    eval_trim_like_result, eval_type_predicate_result, eval_ucwords_result, eval_url_decode_result,
-    eval_url_encode_result, eval_wordwrap_result,
+    eval_nl2br_result, eval_range_result, eval_regex_values_result, eval_settype_value_result,
+    eval_slashes_result, eval_str_pad_result, eval_str_replace_result, eval_str_repeat_result,
+    eval_str_split_result, eval_stream_bool_predicate_result, eval_stream_introspection_result,
+    eval_string_case_result, eval_string_compare_result, eval_string_position_result,
+    eval_string_search_result, eval_strstr_result, eval_substr_replace_result, eval_substr_result,
+    eval_time_values_result, eval_trim_like_result, eval_type_predicate_result, eval_ucwords_result,
+    eval_url_decode_result, eval_url_encode_result, eval_wordwrap_result,
 };
 use super::hash::{eval_hash_algos_values, eval_hash_context_values};
 use super::number_format::eval_number_format_values;
@@ -141,6 +141,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Range,
     /// Dispatches regex builtins.
     Regex,
+    /// Dispatches by-value `settype(...)` callable calls.
+    Settype,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
     Slashes,
     /// Dispatches `sqrt(...)`.
@@ -307,6 +309,7 @@ impl EvalValuesHook {
             },
             Self::Range => two_args(evaluated_args, values, eval_range_result),
             Self::Regex => eval_regex_values_result(name, evaluated_args, context, values),
+            Self::Settype => two_args(evaluated_args, values, eval_settype_value_result),
             Self::Slashes => one_arg(evaluated_args, values, |value, values| {
                 eval_slashes_result(name, value, values)
             }),

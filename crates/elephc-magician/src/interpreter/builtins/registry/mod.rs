@@ -374,6 +374,7 @@ mod tests {
             "scandir",
             "sha1",
             "shell_exec",
+            "settype",
             "sleep",
             "sprintf",
             "sscanf",
@@ -459,6 +460,14 @@ mod tests {
         assert_eq!(
             eval_declared_builtin_param_names("max"),
             Some(["value", "values"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("settype"),
+            Some(["var", "type"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_spec("settype").map(EvalBuiltinSpec::by_ref_param_names),
+            Some(["var"].as_slice())
         );
         for name in ["rand", "mt_rand", "random_int"] {
             assert_eq!(
