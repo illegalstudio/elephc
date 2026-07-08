@@ -92,12 +92,12 @@ fn eval_file_lines_array(
             continue;
         }
         result =
-            eval_array_set_indexed_bytes(result, line_index, &bytes[line_start..=index], values)?;
+            super::scandir::eval_array_set_indexed_bytes(result, line_index, &bytes[line_start..=index], values)?;
         line_start = index + 1;
         line_index += 1;
     }
     if line_start < bytes.len() {
-        result = eval_array_set_indexed_bytes(result, line_index, &bytes[line_start..], values)?;
+        result = super::scandir::eval_array_set_indexed_bytes(result, line_index, &bytes[line_start..], values)?;
     }
     Ok(result)
 }

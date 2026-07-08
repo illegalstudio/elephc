@@ -26,14 +26,54 @@ pub(in crate::interpreter) fn eval_umask_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::direct_dispatch::eval_builtin_filesystem_call_impl("umask", args, context, scope, values)
+    eval_builtin_umask(args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `umask` filesystem builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_umask_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
+    _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::values_dispatch::eval_filesystem_values_result_impl("umask", evaluated_args, context, values)
+    match evaluated_args {
+        [] => eval_umask_result(None, values),
+        [mask] => eval_umask_result(Some(*mask), values),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Evaluates PHP `umask($mask = null)` over an optional eval expression.
+pub(in crate::interpreter) fn eval_builtin_umask(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [] => eval_umask_result(None, values),
+        [mask] => {
+            let mask = eval_expr(mask, context, scope, values)?;
+            eval_umask_result(Some(mask), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Applies PHP `umask()` semantics and returns the previous mask.
+pub(in crate::interpreter) fn eval_umask_result(
+    mask: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let previous = match mask {
+        Some(mask) => {
+            let mask = eval_int_value(mask, values)? as u32;
+            unsafe { umask(mask) }
+        }
+        None => unsafe {
+            let current = umask(0);
+            umask(current);
+            current
+        },
+    };
+    values.int(i64::from(previous))
 }

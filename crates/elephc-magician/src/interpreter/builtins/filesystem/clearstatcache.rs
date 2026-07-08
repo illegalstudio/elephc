@@ -29,14 +29,33 @@ pub(in crate::interpreter) fn eval_clearstatcache_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::direct_dispatch::eval_builtin_filesystem_call_impl("clearstatcache", args, context, scope, values)
+    eval_builtin_clearstatcache(args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `clearstatcache` filesystem builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_clearstatcache_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
+    _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::values_dispatch::eval_filesystem_values_result_impl("clearstatcache", evaluated_args, context, values)
+    if evaluated_args.len() > 2 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    values.null()
+}
+
+/// Evaluates `clearstatcache(...)` as an ordered no-op in eval.
+pub(in crate::interpreter) fn eval_builtin_clearstatcache(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if args.len() > 2 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    for arg in args {
+        eval_expr(arg, context, scope, values)?;
+    }
+    values.null()
 }

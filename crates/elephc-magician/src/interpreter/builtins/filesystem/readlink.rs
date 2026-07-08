@@ -16,6 +16,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::stream_wrappers;
 
 /// Dispatches direct eval calls for the `readlink` filesystem builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_readlink_declared_call(
@@ -24,14 +25,46 @@ pub(in crate::interpreter) fn eval_readlink_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::direct_dispatch::eval_builtin_filesystem_call_impl("readlink", args, context, scope, values)
+    eval_builtin_readlink(args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `readlink` filesystem builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_readlink_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
+    _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::values_dispatch::eval_filesystem_values_result_impl("readlink", evaluated_args, context, values)
+    match evaluated_args {
+        [path] => eval_readlink_result(*path, values),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Evaluates PHP `readlink($path)` over one eval expression.
+pub(in crate::interpreter) fn eval_builtin_readlink(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [path] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let path = eval_expr(path, context, scope, values)?;
+    eval_readlink_result(path, values)
+}
+
+/// Reads one symbolic-link target string, or returns PHP false on failure.
+pub(in crate::interpreter) fn eval_readlink_result(
+    path: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(path, values)?;
+    let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
+        return values.bool_value(false);
+    };
+    match std::fs::read_link(path) {
+        Ok(target) => values.string(target.to_string_lossy().as_ref()),
+        Err(_) => values.bool_value(false),
+    }
 }

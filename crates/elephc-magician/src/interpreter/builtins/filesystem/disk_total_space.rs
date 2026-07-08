@@ -24,14 +24,17 @@ pub(in crate::interpreter) fn eval_disk_total_space_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::direct_dispatch::eval_builtin_filesystem_call_impl("disk_total_space", args, context, scope, values)
+    super::disk_free_space::eval_builtin_disk_space("disk_total_space", args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `disk_total_space` filesystem builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_disk_total_space_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
+    _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::values_dispatch::eval_filesystem_values_result_impl("disk_total_space", evaluated_args, context, values)
+    match evaluated_args {
+        [directory] => super::disk_free_space::eval_disk_space_result("disk_total_space", *directory, values),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }

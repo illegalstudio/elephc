@@ -2,8 +2,8 @@
 //! Dispatches path-based metadata changes to eval userspace stream wrappers.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::filesystem::ops` for `touch()`, `chmod()`,
-//!   `chown()`, and `chgrp()` when the path scheme is a registered wrapper.
+//! - `crate::interpreter::builtins::filesystem::touch`, `chmod`, and `chown`
+//!   builtin owners when the path scheme is a registered wrapper.
 //!
 //! Key details:
 //! - Mirrors the AOT stream-wrapper metadata options used by filesystem

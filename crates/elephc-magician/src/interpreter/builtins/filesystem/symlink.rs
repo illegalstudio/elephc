@@ -24,7 +24,7 @@ pub(in crate::interpreter) fn eval_symlink_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::direct_dispatch::eval_builtin_filesystem_call_impl("symlink", args, context, scope, values)
+    super::copy::eval_builtin_binary_path_bool("symlink", args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `symlink` filesystem builtin through the area dispatcher.
@@ -33,5 +33,8 @@ pub(in crate::interpreter) fn eval_symlink_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::values_dispatch::eval_filesystem_values_result_impl("symlink", evaluated_args, context, values)
+    match evaluated_args {
+        [from, to] => super::copy::eval_binary_path_bool_result("symlink", *from, *to, context, values),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }

@@ -249,7 +249,7 @@ fn eval_csv_fields_array(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut result = values.array_new(fields.len())?;
     for (index, field) in fields.iter().enumerate() {
-        result = eval_array_set_indexed_bytes(result, index, field, values)?;
+        result = super::super::scandir::eval_array_set_indexed_bytes(result, index, field, values)?;
     }
     Ok(result)
 }

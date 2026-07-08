@@ -2,8 +2,8 @@
 //! Dispatches path mutation builtins to eval userspace stream wrappers.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::filesystem::ops` for `unlink()`, `rename()`,
-//!   `mkdir()`, and `rmdir()` when the source path scheme is registered.
+//! - `crate::interpreter::builtins::filesystem::unlink`, `copy`, and `chdir`
+//!   builtin owners when the source path scheme is registered.
 //!
 //! Key details:
 //! - Path methods use a throwaway wrapper instance, matching the generated

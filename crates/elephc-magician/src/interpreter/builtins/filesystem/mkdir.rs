@@ -24,7 +24,7 @@ pub(in crate::interpreter) fn eval_mkdir_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::direct_dispatch::eval_builtin_filesystem_call_impl("mkdir", args, context, scope, values)
+    super::chdir::eval_builtin_unary_path_bool("mkdir", args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `mkdir` filesystem builtin through the area dispatcher.
@@ -33,5 +33,8 @@ pub(in crate::interpreter) fn eval_mkdir_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::values_dispatch::eval_filesystem_values_result_impl("mkdir", evaluated_args, context, values)
+    match evaluated_args {
+        [path] => super::chdir::eval_unary_path_bool_result("mkdir", *path, context, values),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }

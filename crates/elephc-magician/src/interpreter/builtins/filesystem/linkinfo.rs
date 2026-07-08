@@ -16,6 +16,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::stream_wrappers;
 
 /// Dispatches direct eval calls for the `linkinfo` filesystem builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_linkinfo_declared_call(
@@ -24,14 +25,47 @@ pub(in crate::interpreter) fn eval_linkinfo_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::direct_dispatch::eval_builtin_filesystem_call_impl("linkinfo", args, context, scope, values)
+    eval_builtin_linkinfo(args, context, scope, values)
 }
 
 /// Dispatches evaluated-argument calls for the `linkinfo` filesystem builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_linkinfo_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
+    _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::values_dispatch::eval_filesystem_values_result_impl("linkinfo", evaluated_args, context, values)
+    match evaluated_args {
+        [path] => eval_linkinfo_result(*path, values),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Evaluates PHP `linkinfo($path)` over one eval expression.
+pub(in crate::interpreter) fn eval_builtin_linkinfo(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [path] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let path = eval_expr(path, context, scope, values)?;
+    eval_linkinfo_result(path, values)
+}
+
+/// Returns one symlink metadata device id, or PHP's `-1` failure sentinel.
+pub(in crate::interpreter) fn eval_linkinfo_result(
+    path: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(path, values)?;
+    let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
+        return values.int(-1);
+    };
+    let dev = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => i64::try_from(metadata.dev()).map_err(|_| EvalStatus::RuntimeFatal)?,
+        Err(_) => -1,
+    };
+    values.int(dev)
 }

@@ -19,34 +19,6 @@ pub(in crate::interpreter::builtins::filesystem) fn eval_filesystem_path_values_
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
-        "chdir" | "mkdir" | "rmdir" => match evaluated_args {
-            [path] => eval_unary_path_bool_result(name, *path, context, values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "chmod" => match evaluated_args {
-            [filename, permissions] => eval_chmod_result(*filename, *permissions, context, values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "chown" | "chgrp" | "lchown" | "lchgrp" => match evaluated_args {
-            [filename, principal] => {
-                eval_chown_like_result(name, *filename, *principal, context, values)?
-            }
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "clearstatcache" => {
-            if evaluated_args.len() > 2 {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            values.null()?
-        }
-        "copy" | "link" | "rename" | "symlink" => match evaluated_args {
-            [from, to] => eval_binary_path_bool_result(name, *from, *to, context, values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "disk_free_space" | "disk_total_space" => match evaluated_args {
-            [directory] => eval_disk_space_result(name, *directory, values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
         "file_exists" | "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable"
         | "is_writable" | "is_writeable" => match evaluated_args {
             [filename] => eval_file_probe_result(name, *filename, context, values)?,
@@ -76,14 +48,6 @@ pub(in crate::interpreter::builtins::filesystem) fn eval_filesystem_path_values_
             [] => eval_getcwd_result(values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
-        "glob" => match evaluated_args {
-            [pattern] => eval_glob_result(*pattern, values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "linkinfo" => match evaluated_args {
-            [path] => eval_linkinfo_result(*path, values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
         "opendir" => match evaluated_args {
             [directory] => eval_opendir_result(*directory, context, values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
@@ -100,20 +64,12 @@ pub(in crate::interpreter::builtins::filesystem) fn eval_filesystem_path_values_
             [dir_handle] => eval_unary_directory_result(name, *dir_handle, context, values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
-        "readlink" => match evaluated_args {
-            [path] => eval_readlink_result(*path, values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
         "realpath_cache_get" => match evaluated_args {
             [] => eval_realpath_cache_get_result(values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         "realpath_cache_size" => match evaluated_args {
             [] => eval_realpath_cache_size_result(values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "scandir" => match evaluated_args {
-            [directory] => eval_scandir_result(*directory, values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         "stat" | "lstat" => match evaluated_args {
@@ -124,31 +80,8 @@ pub(in crate::interpreter::builtins::filesystem) fn eval_filesystem_path_values_
             [] => eval_sys_get_temp_dir_result(values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
-        "tempnam" => match evaluated_args {
-            [directory, prefix] => eval_tempnam_result(*directory, *prefix, values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
         "tmpfile" => match evaluated_args {
             [] => eval_tmpfile_result(context, values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "touch" => match evaluated_args {
-            [filename] => eval_touch_result(*filename, None, None, context, values)?,
-            [filename, mtime] => {
-                eval_touch_result(*filename, Some(*mtime), None, context, values)?
-            }
-            [filename, mtime, atime] => {
-                eval_touch_result(*filename, Some(*mtime), Some(*atime), context, values)?
-            }
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "umask" => match evaluated_args {
-            [] => eval_umask_result(None, values)?,
-            [mask] => eval_umask_result(Some(*mask), values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "unlink" => match evaluated_args {
-            [filename] => eval_unlink_result(*filename, context, values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         _ => return Ok(None),
