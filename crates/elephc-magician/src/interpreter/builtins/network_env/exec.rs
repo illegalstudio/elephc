@@ -1,19 +1,41 @@
 //! Purpose:
-//! Implements eval-side shell process builtins backed by the host `/bin/sh`.
-//! Capturing and passthrough variants share one command runner so return-value
-//! behavior stays aligned with elephc's current native backend contract.
+//! Eval registry entry and implementation for `exec` plus shared shell runner helpers.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::network_env` direct and callable dispatch.
+//! - `crate::interpreter::builtins::network_env` direct and by-value dispatch.
 //!
 //! Key details:
-//! - `exec()` and `shell_exec()` return captured stdout as a PHP string.
-//! - `system()` echoes captured stdout and returns an empty string; `passthru()`
-//!   echoes captured stdout and returns null.
+//! - `shell_exec`, `system`, and `passthru` call the runner owned by this file.
 
 use std::process::Command;
 
-use super::super::super::*;
+use super::*;
+
+eval_builtin! {
+    name: "exec",
+    area: NetworkEnv,
+    params: [command],
+    direct: NetworkEnv,
+    values: NetworkEnv,
+}
+
+/// Evaluates `exec($command)` over one eval expression.
+pub(in crate::interpreter) fn eval_builtin_exec(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_builtin_process_command("exec", args, context, scope, values)
+}
+
+/// Evaluates already materialized `exec()` command arguments.
+pub(in crate::interpreter) fn eval_exec_result(
+    command: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_process_command_result("exec", command, values)
+}
 
 /// Evaluates one eval process-control builtin over a command expression.
 pub(in crate::interpreter) fn eval_builtin_process_command(

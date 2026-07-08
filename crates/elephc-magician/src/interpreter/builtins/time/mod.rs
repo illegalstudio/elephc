@@ -28,7 +28,6 @@ mod microtime;
 mod mktime;
 mod sleep;
 mod strtotime;
-mod system;
 mod time;
 mod usleep;
 
@@ -48,7 +47,6 @@ pub(in crate::interpreter) use microtime::*;
 pub(in crate::interpreter) use mktime::*;
 pub(in crate::interpreter) use sleep::*;
 pub(in crate::interpreter) use strtotime::*;
-pub(in crate::interpreter) use system::*;
 pub(in crate::interpreter) use time::*;
 pub(in crate::interpreter) use usleep::*;
 
