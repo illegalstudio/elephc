@@ -1,26 +1,48 @@
 //! Purpose:
-//! Implements eval gzip/zlib string builtins.
-//! Covers zlib-wrapped `gzcompress`/`gzuncompress` and raw-DEFLATE
-//! `gzdeflate`/`gzinflate` using Rust-side compression helpers.
+//! Declarative eval registry entry for `gzcompress`.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::strings` re-exports used by call dispatch.
+//! - `crate::interpreter::builtins::string`.
 //!
 //! Key details:
-//! - Decompression failures return PHP false, matching the compiler backend's
-//!   string-or-false observable contract.
+//! - Runtime dispatch is declared here and implemented through the gzip/zlib hook.
 
-use std::io::{Read, Write};
+use super::super::spec::EvalBuiltinDefaultValue;
 
+eval_builtin! {
+    name: "gzcompress",
+    area: String,
+    params: [data, level = EvalBuiltinDefaultValue::Int(-1)],
+    direct: Gzip,
+    values: Gzip,
+}
+
+use super::super::super::*;
 use flate2::read::{DeflateDecoder, ZlibDecoder};
 use flate2::write::{DeflateEncoder, ZlibEncoder};
 use flate2::Compression;
+use std::io::{Read, Write};
 
-use super::super::super::*;
-use super::super::*;
+/// Evaluates PHP `gzcompress(...)` over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_gzcompress(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    super::gzcompress::eval_builtin_gzip_named("gzcompress", args, context, scope, values)
+}
 
-/// Evaluates one gzip/zlib string builtin over eval expressions.
-pub(in crate::interpreter) fn eval_builtin_gzip(
+/// Applies PHP `gzcompress(...)` to already evaluated arguments.
+pub(in crate::interpreter) fn eval_gzcompress_result(
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    super::gzcompress::eval_gzip_named_result("gzcompress", evaluated_args, values)
+}
+
+/// Evaluates a named gzip/zlib builtin over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_gzip_named(
     name: &str,
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -31,11 +53,11 @@ pub(in crate::interpreter) fn eval_builtin_gzip(
     for arg in args {
         evaluated_args.push(eval_expr(arg, context, scope, values)?);
     }
-    eval_gzip_result(name, &evaluated_args, values)
+    eval_gzip_named_result(name, &evaluated_args, values)
 }
 
 /// Dispatches one materialized gzip/zlib builtin call.
-pub(in crate::interpreter) fn eval_gzip_result(
+pub(in crate::interpreter) fn eval_gzip_named_result(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
     values: &mut impl RuntimeValueOps,

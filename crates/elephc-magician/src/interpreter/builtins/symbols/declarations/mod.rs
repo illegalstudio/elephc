@@ -211,3 +211,21 @@ pub(in crate::interpreter) fn eval_symbols_values_result(
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
+
+/// Evaluates PHP `spl_classes()` with no arguments.
+pub(in crate::interpreter) fn eval_builtin_spl_classes(
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_spl_classes_result(values)
+}
+
+/// Builds the static class-name list returned by eval `spl_classes()`.
+pub(in crate::interpreter) fn eval_spl_classes_result(
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_static_string_array_result(EVAL_SPL_CLASS_NAMES, values)
+}

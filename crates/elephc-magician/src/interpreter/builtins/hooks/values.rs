@@ -10,57 +10,9 @@
 //!   parameter order.
 //! - Runtime-cell coercions stay in the existing builtin result helpers.
 
+use super::super::*;
 use super::super::super::{
-    eval_count_result, eval_ord_result, ElephcEvalContext, EvalStatus, RuntimeCellHandle,
-    RuntimeValueOps,
-};
-use super::super::{
-    eval_abs_result, eval_acos_result, eval_array_aggregate_result, eval_array_flip_result,
-    eval_array_keys_result,
-    eval_array_mutating_values_result, eval_array_non_mutating_values_result,
-    eval_array_pad_result, eval_array_rand_result, eval_array_reverse_result,
-    eval_array_search_result, eval_array_slice_result, eval_array_unique_result,
-    eval_array_values_result, eval_asin_result, eval_atan2_result, eval_atan_result,
-    eval_base64_decode_result, eval_base64_encode_result,
-    eval_bin2hex_result, eval_boolval_result, eval_ceil_result, eval_chr_result,
-    eval_clamp_result, eval_cos_result, eval_cosh_result, eval_deg2rad_result,
-    eval_core_values_result, eval_crc32_result, eval_ctype_result,
-    eval_exp_result, eval_fdiv_result, eval_filesystem_values_result, eval_floatval_result,
-    eval_floor_result, eval_fmod_result,
-    eval_gettype_result, eval_hypot_result, eval_intdiv_result, eval_intval_result,
-    eval_is_array_result, eval_is_bool_result,
-    eval_is_double_result, eval_is_finite_result, eval_is_float_result,
-    eval_is_infinite_result, eval_is_int_result, eval_is_integer_result,
-    eval_is_iterable_result, eval_is_long_result, eval_is_nan_result,
-    eval_is_null_result, eval_is_numeric_result, eval_is_object_result,
-    eval_is_real_result, eval_is_resource_result, eval_is_scalar_result,
-    eval_is_string_result,
-    eval_grapheme_strrev_result, eval_gzip_result, eval_hash_equals_result,
-    eval_hash_one_shot_result, eval_hex2bin_result, eval_html_entity_result,
-    eval_json_decode_values_result, eval_json_encode_values_result, eval_json_last_error_msg_result,
-    eval_json_last_error_result, eval_json_validate_values_result, eval_log2_result,
-    eval_log10_result, eval_log_result, eval_max_result, eval_min_result,
-    eval_mt_rand_values_result, eval_network_env_values_result, eval_nl2br_result,
-    eval_pi_result, eval_pow_result, eval_preg_match_all_values_result, eval_preg_match_values_result,
-    eval_preg_replace_callback_values_result, eval_preg_replace_values_result,
-    eval_preg_split_values_result, eval_printf_result, eval_rad2deg_result, eval_rand_values_result,
-    eval_random_int_values_result, eval_range_result, eval_round_result, eval_settype_values_result,
-    eval_sin_result, eval_sinh_result, eval_slashes_result, eval_sprintf_result, eval_sqrt_result,
-    eval_sscanf_values_result,
-    eval_str_pad_result, eval_str_replace_result, eval_str_repeat_result,
-    eval_str_split_result, eval_stream_bool_predicate_result, eval_stream_introspection_result,
-    eval_string_case_result, eval_string_compare_result, eval_string_position_result,
-    eval_string_search_result, eval_strstr_result, eval_strval_result,
-    eval_substr_replace_result, eval_substr_result, eval_buffer_free_values_result,
-    eval_buffer_len_values_result, eval_buffer_new_values_result, eval_ptr_get_values_result,
-    eval_ptr_is_null_values_result, eval_ptr_null_values_result, eval_ptr_offset_values_result,
-    eval_ptr_read16_values_result, eval_ptr_read32_values_result, eval_ptr_read8_values_result,
-    eval_ptr_read_string_values_result, eval_ptr_set_values_result, eval_ptr_sizeof_values_result,
-    eval_ptr_values_result, eval_ptr_write16_values_result, eval_ptr_write32_values_result,
-    eval_ptr_write8_values_result, eval_ptr_write_string_values_result, eval_symbols_values_result,
-    eval_tan_result, eval_tanh_result, eval_time_values_result, eval_trim_like_result,
-    eval_ucwords_result, eval_url_decode_result, eval_url_encode_result, eval_vprintf_result,
-    eval_vsprintf_result, eval_wordwrap_result,
+    eval_count_result, ElephcEvalContext, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
 };
 use super::arity::{one_arg, three_args, two_args};
 use super::hash::{eval_hash_algos_values, eval_hash_context_values};
@@ -435,8 +387,12 @@ impl EvalValuesHook {
             Self::Cos => one_arg(evaluated_args, values, eval_cos_result),
             Self::Cosh => one_arg(evaluated_args, values, eval_cosh_result),
             Self::Crc32 => one_arg(evaluated_args, values, eval_crc32_result),
-            Self::Ctype => one_arg(evaluated_args, values, |value, values| {
-                eval_ctype_result(name, value, values)
+            Self::Ctype => one_arg(evaluated_args, values, |value, values| match name {
+                "ctype_alnum" => eval_ctype_alnum_result(value, values),
+                "ctype_alpha" => eval_ctype_alpha_result(value, values),
+                "ctype_digit" => eval_ctype_digit_result(value, values),
+                "ctype_space" => eval_ctype_space_result(value, values),
+                _ => Err(EvalStatus::RuntimeFatal),
             }),
             Self::Deg2rad => one_arg(evaluated_args, values, eval_deg2rad_result),
             Self::Exp => one_arg(evaluated_args, values, eval_exp_result),
@@ -469,14 +425,30 @@ impl EvalValuesHook {
             Self::IsScalar => one_arg(evaluated_args, values, eval_is_scalar_result),
             Self::IsString => one_arg(evaluated_args, values, eval_is_string_result),
             Self::GraphemeStrrev => one_arg(evaluated_args, values, eval_grapheme_strrev_result),
-            Self::Gzip => eval_gzip_result(name, evaluated_args, values),
+            Self::Gzip => match name {
+                "gzcompress" => eval_gzcompress_result(evaluated_args, values),
+                "gzdeflate" => eval_gzdeflate_result(evaluated_args, values),
+                "gzinflate" => eval_gzinflate_result(evaluated_args, values),
+                "gzuncompress" => eval_gzuncompress_result(evaluated_args, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::HashAlgos => eval_hash_algos_values(evaluated_args, values),
             Self::HashContext => eval_hash_context_values(name, evaluated_args, context, values),
             Self::HashEquals => two_args(evaluated_args, values, eval_hash_equals_result),
-            Self::HashOneShot => eval_hash_one_shot_result(name, evaluated_args, values),
+            Self::HashOneShot => match name {
+                "hash" => eval_hash_result(evaluated_args, values),
+                "hash_file" => eval_hash_file_result(evaluated_args, values),
+                "hash_hmac" => eval_hash_hmac_result(evaluated_args, values),
+                "md5" => eval_md5_result(evaluated_args, values),
+                "sha1" => eval_sha1_result(evaluated_args, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Hex2Bin => one_arg(evaluated_args, values, eval_hex2bin_result),
-            Self::HtmlEntity => one_arg(evaluated_args, values, |value, values| {
-                eval_html_entity_result(name, value, values)
+            Self::HtmlEntity => one_arg(evaluated_args, values, |value, values| match name {
+                "html_entity_decode" => eval_html_entity_decode_result(value, values),
+                "htmlentities" => eval_htmlentities_result(value, values),
+                "htmlspecialchars" => eval_htmlspecialchars_result(value, values),
+                _ => Err(EvalStatus::RuntimeFatal),
             }),
             Self::Intdiv => two_args(evaluated_args, values, eval_intdiv_result),
             Self::JsonDecode => eval_json_decode_values_result(evaluated_args, context, values),
@@ -552,33 +524,61 @@ impl EvalValuesHook {
             Self::Settype => eval_settype_values_result(evaluated_args, values),
             Self::Sin => one_arg(evaluated_args, values, eval_sin_result),
             Self::Sinh => one_arg(evaluated_args, values, eval_sinh_result),
-            Self::Slashes => one_arg(evaluated_args, values, |value, values| {
-                eval_slashes_result(name, value, values)
+            Self::Slashes => one_arg(evaluated_args, values, |value, values| match name {
+                "addslashes" => eval_addslashes_result(value, values),
+                "stripslashes" => eval_stripslashes_result(value, values),
+                _ => Err(EvalStatus::RuntimeFatal),
             }),
             Self::Sprintf => eval_sprintf_result(evaluated_args, values),
             Self::Sqrt => one_arg(evaluated_args, values, eval_sqrt_result),
             Self::Sscanf => eval_sscanf_values_result(evaluated_args, values),
-            Self::StringCase => one_arg(evaluated_args, values, |value, values| {
-                eval_string_case_result(name, value, values)
+            Self::StringCase => one_arg(evaluated_args, values, |value, values| match name {
+                "lcfirst" => eval_lcfirst_result(value, values),
+                "strtolower" => eval_strtolower_result(value, values),
+                "strtoupper" => eval_strtoupper_result(value, values),
+                "ucfirst" => eval_ucfirst_result(value, values),
+                _ => Err(EvalStatus::RuntimeFatal),
             }),
             Self::StringCompare => two_args(evaluated_args, values, |left, right, values| {
-                eval_string_compare_result(name, left, right, values)
+                match name {
+                    "strcasecmp" => eval_strcasecmp_result(left, right, values),
+                    "strcmp" => eval_strcmp_result(left, right, values),
+                    _ => Err(EvalStatus::RuntimeFatal),
+                }
             }),
             Self::StringPosition => two_args(evaluated_args, values, |haystack, needle, values| {
-                eval_string_position_result(name, haystack, needle, values)
+                match name {
+                    "strpos" => eval_strpos_result(haystack, needle, values),
+                    "strrpos" => eval_strrpos_result(haystack, needle, values),
+                    _ => Err(EvalStatus::RuntimeFatal),
+                }
             }),
             Self::StringSearch => two_args(evaluated_args, values, |haystack, needle, values| {
-                eval_string_search_result(name, haystack, needle, values)
+                match name {
+                    "str_contains" => eval_str_contains_result(haystack, needle, values),
+                    "str_ends_with" => eval_str_ends_with_result(haystack, needle, values),
+                    "str_starts_with" => eval_str_starts_with_result(haystack, needle, values),
+                    _ => Err(EvalStatus::RuntimeFatal),
+                }
             }),
             Self::StringSplitJoin => eval_string_split_join_values(name, evaluated_args, values),
             Self::StreamBoolPredicate => one_arg(evaluated_args, values, |stream, values| {
-                eval_stream_bool_predicate_result(name, stream, values)
+                match name {
+                    "stream_is_local" => eval_stream_is_local_result(stream, values),
+                    "stream_supports_lock" => eval_stream_supports_lock_result(stream, values),
+                    _ => Err(EvalStatus::RuntimeFatal),
+                }
             }),
             Self::StreamIntrospection => {
                 if !evaluated_args.is_empty() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                eval_stream_introspection_result(name, context, values)
+                match name {
+                    "stream_get_filters" => eval_stream_get_filters_result(context, values),
+                    "stream_get_transports" => eval_stream_get_transports_result(context, values),
+                    "stream_get_wrappers" => eval_stream_get_wrappers_result(context, values),
+                    _ => Err(EvalStatus::RuntimeFatal),
+                }
             }
             Self::StrPad => match evaluated_args {
                 [value, length] => eval_str_pad_result(*value, *length, None, None, values),
@@ -590,9 +590,19 @@ impl EvalValuesHook {
                 }
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::StrReplace => three_args(evaluated_args, values, |search, replace, subject, values| {
-                eval_str_replace_result(name, search, replace, subject, values)
-            }),
+            Self::StrReplace => {
+                three_args(evaluated_args, values, |search, replace, subject, values| {
+                    match name {
+                        "str_ireplace" => {
+                            eval_str_ireplace_result(search, replace, subject, values)
+                        }
+                        "str_replace" => {
+                            eval_str_replace_result(name, search, replace, subject, values)
+                        }
+                        _ => Err(EvalStatus::RuntimeFatal),
+                    }
+                })
+            }
             Self::StrSplit => match evaluated_args {
                 [value] => eval_str_split_result(*value, None, values),
                 [value, length] => eval_str_split_result(*value, Some(*length), values),
@@ -610,7 +620,7 @@ impl EvalValuesHook {
             Self::Strval => one_arg(evaluated_args, values, |value, values| {
                 eval_strval_result(value, context, values)
             }),
-            Self::Strrev => one_arg(evaluated_args, values, |value, values| values.strrev(value)),
+            Self::Strrev => one_arg(evaluated_args, values, eval_strrev_result),
             Self::Strstr => match evaluated_args {
                 [haystack, needle] => eval_strstr_result(*haystack, *needle, false, values),
                 [haystack, needle, before_needle] => {
@@ -639,9 +649,15 @@ impl EvalValuesHook {
             Self::Tan => one_arg(evaluated_args, values, eval_tan_result),
             Self::Tanh => one_arg(evaluated_args, values, eval_tanh_result),
             Self::Time => eval_time_values_result(name, evaluated_args, context, values),
-            Self::TrimLike => match evaluated_args {
-                [value] => eval_trim_like_result(name, *value, None, values),
-                [value, mask] => eval_trim_like_result(name, *value, Some(*mask), values),
+            Self::TrimLike => match (name, evaluated_args) {
+                ("chop", [value]) => eval_chop_result(*value, None, values),
+                ("chop", [value, mask]) => eval_chop_result(*value, Some(*mask), values),
+                ("ltrim", [value]) => eval_ltrim_result(*value, None, values),
+                ("ltrim", [value, mask]) => eval_ltrim_result(*value, Some(*mask), values),
+                ("rtrim", [value]) => eval_rtrim_result(*value, None, values),
+                ("rtrim", [value, mask]) => eval_rtrim_result(*value, Some(*mask), values),
+                ("trim", [value]) => eval_trim_result(*value, None, values),
+                ("trim", [value, mask]) => eval_trim_result(*value, Some(*mask), values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::Ucwords => match evaluated_args {
@@ -674,11 +690,15 @@ impl EvalValuesHook {
                 ),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::UrlDecode => one_arg(evaluated_args, values, |value, values| {
-                eval_url_decode_result(name, value, values)
+            Self::UrlDecode => one_arg(evaluated_args, values, |value, values| match name {
+                "rawurldecode" => eval_rawurldecode_result(value, values),
+                "urldecode" => eval_urldecode_result(value, values),
+                _ => Err(EvalStatus::RuntimeFatal),
             }),
-            Self::UrlEncode => one_arg(evaluated_args, values, |value, values| {
-                eval_url_encode_result(name, value, values)
+            Self::UrlEncode => one_arg(evaluated_args, values, |value, values| match name {
+                "rawurlencode" => eval_rawurlencode_result(value, values),
+                "urlencode" => eval_urlencode_result(value, values),
+                _ => Err(EvalStatus::RuntimeFatal),
             }),
         }
     }

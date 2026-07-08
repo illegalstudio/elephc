@@ -1,40 +1,44 @@
 //! Purpose:
-//! CRC32 and one-shot hash digest builtins.
+//! Declarative eval registry entry for `hash`.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::strings` re-exports.
+//! - `crate::interpreter::builtins::string`.
 //!
 //! Key details:
-//! - Runtime cells remain opaque and string bytes are obtained through `RuntimeValueOps`.
+//! - Runtime dispatch is declared here and implemented through the one-shot hash hook.
+
+use super::super::spec::EvalBuiltinDefaultValue;
+
+eval_builtin! {
+    name: "hash",
+    area: String,
+    params: [algo, data, binary = EvalBuiltinDefaultValue::Bool(false)],
+    direct: HashOneShot,
+    values: HashOneShot,
+}
 
 use super::super::super::*;
-use super::super::*;
 
-/// Evaluates PHP `crc32(...)` over one eval string expression.
-pub(in crate::interpreter) fn eval_builtin_crc32(
+/// Evaluates PHP `hash(...)` over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_hash(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [value] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let value = eval_expr(value, context, scope, values)?;
-    eval_crc32_result(value, values)
+    super::hash::eval_builtin_hash_one_shot_named("hash", args, context, scope, values)
 }
 
-/// Computes PHP's non-negative CRC-32 integer over one converted byte string.
-pub(in crate::interpreter) fn eval_crc32_result(
-    value: RuntimeCellHandle,
+/// Applies PHP `hash(...)` to already evaluated arguments.
+pub(in crate::interpreter) fn eval_hash_result(
+    evaluated_args: &[RuntimeCellHandle],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let bytes = values.string_bytes(value)?;
-    values.int(i64::from(eval_crc32_bytes(&bytes)))
+    super::hash::eval_hash_one_shot_named_result("hash", evaluated_args, values)
 }
 
-/// Evaluates one-shot PHP hash digest builtins over eval expressions.
-pub(in crate::interpreter) fn eval_builtin_hash_one_shot(
+/// Evaluates a named one-shot PHP hash builtin over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_hash_one_shot_named(
     name: &str,
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -45,11 +49,11 @@ pub(in crate::interpreter) fn eval_builtin_hash_one_shot(
     for arg in args {
         evaluated_args.push(eval_expr(arg, context, scope, values)?);
     }
-    eval_hash_one_shot_result(name, &evaluated_args, values)
+    eval_hash_one_shot_named_result(name, &evaluated_args, values)
 }
 
 /// Computes the result for one-shot PHP hash digest builtins from evaluated args.
-pub(in crate::interpreter) fn eval_hash_one_shot_result(
+pub(in crate::interpreter) fn eval_hash_one_shot_named_result(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
     values: &mut impl RuntimeValueOps,
@@ -80,7 +84,7 @@ pub(in crate::interpreter) fn eval_hash_one_shot_result(
                 [algo, filename, binary] => (*algo, *filename, values.truthy(*binary)?),
                 _ => return Err(EvalStatus::RuntimeFatal),
             };
-            eval_hash_file_result(algo, filename, binary, values)
+            super::hash_file::eval_hash_file_digest_result(algo, filename, binary, values)
         }
         "hash_hmac" => {
             let (algo, data, key, binary) = match evaluated_args {
@@ -91,24 +95,9 @@ pub(in crate::interpreter) fn eval_hash_one_shot_result(
             let algo = values.string_bytes(algo)?;
             let data = values.string_bytes(data)?;
             let key = values.string_bytes(key)?;
-            eval_hash_hmac_result(&algo, &data, &key, binary, values)
+            super::hash_hmac::eval_hash_hmac_digest_result(&algo, &data, &key, binary, values)
         }
         _ => Err(EvalStatus::UnsupportedConstruct),
-    }
-}
-
-/// Reads a local file and returns its PHP hash digest or false when it cannot be read.
-pub(in crate::interpreter) fn eval_hash_file_result(
-    algo: RuntimeCellHandle,
-    filename: RuntimeCellHandle,
-    binary: bool,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let algo = values.string_bytes(algo)?;
-    let path = eval_path_string(filename, values)?;
-    match std::fs::read(path) {
-        Ok(data) => eval_hash_digest_result(&algo, &data, binary, values),
-        Err(_) => values.bool_value(false),
     }
 }
 
@@ -123,18 +112,6 @@ pub(in crate::interpreter) fn eval_hash_digest_result(
     eval_format_digest_result(&raw, binary, values)
 }
 
-/// Computes a one-shot raw HMAC digest and formats it as PHP hex or raw bytes.
-pub(in crate::interpreter) fn eval_hash_hmac_result(
-    algo: &[u8],
-    data: &[u8],
-    key: &[u8],
-    binary: bool,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let raw = eval_crypto_hmac(algo, data, key)?;
-    eval_format_digest_result(&raw, binary, values)
-}
-
 /// Calls the elephc-crypto one-shot hash ABI and returns the raw digest bytes.
 pub(in crate::interpreter) fn eval_crypto_hash(
     algo: &[u8],
@@ -145,27 +122,6 @@ pub(in crate::interpreter) fn eval_crypto_hash(
         elephc_crypto::elephc_crypto_hash(
             algo.as_ptr(),
             algo.len(),
-            data.as_ptr(),
-            data.len(),
-            output.as_mut_ptr(),
-        )
-    };
-    eval_crypto_digest_bytes(len, &output)
-}
-
-/// Calls the elephc-crypto one-shot HMAC ABI and returns the raw digest bytes.
-pub(in crate::interpreter) fn eval_crypto_hmac(
-    algo: &[u8],
-    data: &[u8],
-    key: &[u8],
-) -> Result<Vec<u8>, EvalStatus> {
-    let mut output = [0_u8; 64];
-    let len = unsafe {
-        elephc_crypto::elephc_crypto_hmac(
-            algo.as_ptr(),
-            algo.len(),
-            key.as_ptr(),
-            key.len(),
             data.as_ptr(),
             data.len(),
             output.as_mut_ptr(),
@@ -195,5 +151,5 @@ pub(in crate::interpreter) fn eval_format_digest_result(
     if binary {
         return values.string_bytes_value(raw);
     }
-    values.string(&eval_lower_hex_bytes(raw))
+    values.string(&super::bin2hex::eval_lower_hex_bytes(raw))
 }

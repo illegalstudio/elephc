@@ -9,57 +9,10 @@
 //! - Direct hooks preserve source-order evaluation in existing builtin helpers.
 //! - Hook variants remain static metadata referenced from per-builtin files.
 
+use super::super::*;
 use super::super::super::{
-    eval_builtin_base64_decode, eval_builtin_base64_encode, eval_builtin_bin2hex,
-    eval_builtin_chr, eval_builtin_count,
-    eval_builtin_crc32, eval_builtin_ctype, eval_builtin_explode, eval_builtin_gzip,
-    eval_builtin_hash_algos, eval_builtin_hash_copy, eval_builtin_hash_final,
-    eval_builtin_hash_init, eval_builtin_hash_one_shot, eval_builtin_hash_update,
-    eval_builtin_hex2bin, eval_builtin_implode, eval_builtin_number_format, eval_builtin_ord,
-    eval_builtin_printf, eval_builtin_slashes, eval_builtin_sprintf, eval_builtin_sscanf,
-    eval_builtin_str_repeat, eval_builtin_strlen, eval_builtin_vprintf, eval_builtin_vsprintf,
-    eval_builtin_url_decode, eval_builtin_url_encode, ElephcEvalContext, ElephcEvalScope,
-    EvalExpr, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
-};
-use super::super::{
-    eval_builtin_abs, eval_builtin_acos, eval_builtin_array_aggregate, eval_builtin_array_call,
-    eval_builtin_array_flip, eval_builtin_array_key_exists, eval_builtin_array_keys,
-    eval_builtin_array_pad, eval_builtin_array_rand, eval_builtin_array_reverse,
-    eval_builtin_array_search, eval_builtin_array_slice, eval_builtin_array_unique,
-    eval_builtin_array_values, eval_builtin_asin, eval_builtin_atan, eval_builtin_atan2,
-    eval_builtin_boolval, eval_builtin_ceil, eval_builtin_clamp, eval_builtin_core_call,
-    eval_builtin_cos, eval_builtin_cosh, eval_builtin_deg2rad, eval_builtin_exp,
-    eval_builtin_fdiv, eval_builtin_filesystem_call, eval_builtin_floatval,
-    eval_builtin_floor, eval_builtin_fmod, eval_builtin_gettype, eval_builtin_hypot,
-    eval_builtin_intdiv, eval_builtin_intval, eval_builtin_is_array, eval_builtin_is_bool,
-    eval_builtin_is_double, eval_builtin_is_finite, eval_builtin_is_float,
-    eval_builtin_is_infinite, eval_builtin_is_int, eval_builtin_is_integer,
-    eval_builtin_is_iterable, eval_builtin_is_long, eval_builtin_is_nan,
-    eval_builtin_is_null, eval_builtin_is_numeric, eval_builtin_is_object,
-    eval_builtin_is_real, eval_builtin_is_resource, eval_builtin_is_scalar,
-    eval_builtin_is_string, eval_builtin_log, eval_builtin_log2, eval_builtin_log10,
-    eval_builtin_grapheme_strrev, eval_builtin_hash_equals, eval_builtin_html_entity,
-    eval_builtin_json_decode, eval_builtin_json_encode, eval_builtin_json_last_error,
-    eval_builtin_json_last_error_msg, eval_builtin_json_validate, eval_builtin_max,
-    eval_builtin_min, eval_builtin_mt_rand, eval_builtin_network_env_call, eval_builtin_nl2br,
-    eval_builtin_pi, eval_builtin_pow, eval_builtin_rad2deg, eval_builtin_rand,
-    eval_builtin_random_int, eval_builtin_range, eval_builtin_round,
-    eval_builtin_preg_match, eval_builtin_preg_match_all, eval_builtin_preg_replace,
-    eval_builtin_preg_replace_callback, eval_builtin_preg_split, eval_builtin_buffer_free,
-    eval_builtin_buffer_len, eval_builtin_buffer_new, eval_builtin_ptr, eval_builtin_ptr_get,
-    eval_builtin_ptr_is_null, eval_builtin_ptr_null, eval_builtin_ptr_offset,
-    eval_builtin_ptr_read16, eval_builtin_ptr_read32, eval_builtin_ptr_read8,
-    eval_builtin_ptr_read_string, eval_builtin_ptr_set, eval_builtin_ptr_sizeof,
-    eval_builtin_ptr_write16, eval_builtin_ptr_write32, eval_builtin_ptr_write8,
-    eval_builtin_ptr_write_string, eval_builtin_sin, eval_builtin_sinh, eval_builtin_str_pad,
-    eval_builtin_str_replace, eval_builtin_str_split,
-    eval_builtin_stream_bool_predicate, eval_builtin_stream_introspection,
-    eval_builtin_string_case, eval_builtin_string_compare, eval_builtin_string_position,
-    eval_builtin_string_search, eval_builtin_strrev, eval_builtin_strstr, eval_builtin_substr,
-    eval_builtin_strval, eval_builtin_substr_replace, eval_builtin_symbols_call,
-    eval_builtin_tan, eval_builtin_tanh, eval_builtin_time_call, eval_builtin_trim_like,
-    eval_builtin_ucwords,
-    eval_builtin_wordwrap,
+    eval_builtin_count, ElephcEvalContext, ElephcEvalScope, EvalExpr, EvalStatus,
+    RuntimeCellHandle, RuntimeValueOps,
 };
 
 /// Direct expression-level dispatch hooks for migrated builtins.
@@ -401,7 +354,13 @@ impl EvalDirectHook {
             Self::Cos => eval_builtin_cos(args, context, scope, values),
             Self::Cosh => eval_builtin_cosh(args, context, scope, values),
             Self::Crc32 => eval_builtin_crc32(args, context, scope, values),
-            Self::Ctype => eval_builtin_ctype(name, args, context, scope, values),
+            Self::Ctype => match name {
+                "ctype_alnum" => eval_builtin_ctype_alnum(args, context, scope, values),
+                "ctype_alpha" => eval_builtin_ctype_alpha(args, context, scope, values),
+                "ctype_digit" => eval_builtin_ctype_digit(args, context, scope, values),
+                "ctype_space" => eval_builtin_ctype_space(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Deg2rad => eval_builtin_deg2rad(args, context, scope, values),
             Self::Exp => eval_builtin_exp(args, context, scope, values),
             Self::Fdiv => eval_builtin_fdiv(args, context, scope, values),
@@ -431,7 +390,13 @@ impl EvalDirectHook {
             Self::IsScalar => eval_builtin_is_scalar(args, context, scope, values),
             Self::IsString => eval_builtin_is_string(args, context, scope, values),
             Self::GraphemeStrrev => eval_builtin_grapheme_strrev(args, context, scope, values),
-            Self::Gzip => eval_builtin_gzip(name, args, context, scope, values),
+            Self::Gzip => match name {
+                "gzcompress" => eval_builtin_gzcompress(args, context, scope, values),
+                "gzdeflate" => eval_builtin_gzdeflate(args, context, scope, values),
+                "gzinflate" => eval_builtin_gzinflate(args, context, scope, values),
+                "gzuncompress" => eval_builtin_gzuncompress(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::HashAlgos => eval_builtin_hash_algos(args, values),
             Self::HashContext => match name {
                 "hash_copy" => eval_builtin_hash_copy(args, context, scope, values),
@@ -441,9 +406,23 @@ impl EvalDirectHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::HashEquals => eval_builtin_hash_equals(args, context, scope, values),
-            Self::HashOneShot => eval_builtin_hash_one_shot(name, args, context, scope, values),
+            Self::HashOneShot => match name {
+                "hash" => eval_builtin_hash(args, context, scope, values),
+                "hash_file" => eval_builtin_hash_file(args, context, scope, values),
+                "hash_hmac" => eval_builtin_hash_hmac(args, context, scope, values),
+                "md5" => eval_builtin_md5(args, context, scope, values),
+                "sha1" => eval_builtin_sha1(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Hex2Bin => eval_builtin_hex2bin(args, context, scope, values),
-            Self::HtmlEntity => eval_builtin_html_entity(name, args, context, scope, values),
+            Self::HtmlEntity => match name {
+                "html_entity_decode" => {
+                    eval_builtin_html_entity_decode(args, context, scope, values)
+                }
+                "htmlentities" => eval_builtin_htmlentities(args, context, scope, values),
+                "htmlspecialchars" => eval_builtin_htmlspecialchars(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Intdiv => eval_builtin_intdiv(args, context, scope, values),
             Self::JsonDecode => eval_builtin_json_decode(args, context, scope, values),
             Self::JsonEncode => eval_builtin_json_encode(args, context, scope, values),
@@ -494,29 +473,63 @@ impl EvalDirectHook {
             Self::PtrWriteString => eval_builtin_ptr_write_string(args, context, scope, values),
             Self::Sin => eval_builtin_sin(args, context, scope, values),
             Self::Sinh => eval_builtin_sinh(args, context, scope, values),
-            Self::Slashes => eval_builtin_slashes(name, args, context, scope, values),
+            Self::Slashes => match name {
+                "addslashes" => eval_builtin_addslashes(args, context, scope, values),
+                "stripslashes" => eval_builtin_stripslashes(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Sqrt => super::super::math::eval_builtin_sqrt(args, context, scope, values),
             Self::Sprintf => eval_builtin_sprintf(args, context, scope, values),
             Self::Sscanf => eval_builtin_sscanf(args, context, scope, values),
-            Self::StringCase => eval_builtin_string_case(name, args, context, scope, values),
-            Self::StringCompare => eval_builtin_string_compare(name, args, context, scope, values),
-            Self::StringPosition => {
-                eval_builtin_string_position(name, args, context, scope, values)
-            }
-            Self::StringSearch => eval_builtin_string_search(name, args, context, scope, values),
+            Self::StringCase => match name {
+                "lcfirst" => eval_builtin_lcfirst(args, context, scope, values),
+                "strtolower" => eval_builtin_strtolower(args, context, scope, values),
+                "strtoupper" => eval_builtin_strtoupper(args, context, scope, values),
+                "ucfirst" => eval_builtin_ucfirst(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
+            Self::StringCompare => match name {
+                "strcasecmp" => eval_builtin_strcasecmp(args, context, scope, values),
+                "strcmp" => eval_builtin_strcmp(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
+            Self::StringPosition => match name {
+                "strpos" => eval_builtin_strpos(args, context, scope, values),
+                "strrpos" => eval_builtin_strrpos(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
+            Self::StringSearch => match name {
+                "str_contains" => eval_builtin_str_contains(args, context, scope, values),
+                "str_ends_with" => eval_builtin_str_ends_with(args, context, scope, values),
+                "str_starts_with" => eval_builtin_str_starts_with(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::StringSplitJoin => match name {
                 "explode" => eval_builtin_explode(args, context, scope, values),
                 "implode" => eval_builtin_implode(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::StreamBoolPredicate => {
-                eval_builtin_stream_bool_predicate(name, args, context, scope, values)
-            }
-            Self::StreamIntrospection => {
-                eval_builtin_stream_introspection(name, args, context, values)
-            }
+            Self::StreamBoolPredicate => match name {
+                "stream_is_local" => eval_builtin_stream_is_local(args, context, scope, values),
+                "stream_supports_lock" => {
+                    eval_builtin_stream_supports_lock(args, context, scope, values)
+                }
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
+            Self::StreamIntrospection => match name {
+                "stream_get_filters" => eval_builtin_stream_get_filters(args, context, values),
+                "stream_get_transports" => {
+                    eval_builtin_stream_get_transports(args, context, values)
+                }
+                "stream_get_wrappers" => eval_builtin_stream_get_wrappers(args, context, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::StrPad => eval_builtin_str_pad(args, context, scope, values),
-            Self::StrReplace => eval_builtin_str_replace(name, args, context, scope, values),
+            Self::StrReplace => match name {
+                "str_ireplace" => eval_builtin_str_ireplace(args, context, scope, values),
+                "str_replace" => eval_builtin_str_replace(name, args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::StrSplit => eval_builtin_str_split(args, context, scope, values),
             Self::Strlen => eval_builtin_strlen(args, context, scope, values),
             Self::StrRepeat => eval_builtin_str_repeat(args, context, scope, values),
@@ -529,14 +542,28 @@ impl EvalDirectHook {
             Self::Tan => eval_builtin_tan(args, context, scope, values),
             Self::Tanh => eval_builtin_tanh(args, context, scope, values),
             Self::Time => eval_builtin_time_call(name, args, context, scope, values),
-            Self::TrimLike => eval_builtin_trim_like(name, args, context, scope, values),
+            Self::TrimLike => match name {
+                "chop" => eval_builtin_chop(args, context, scope, values),
+                "ltrim" => eval_builtin_ltrim(args, context, scope, values),
+                "rtrim" => eval_builtin_rtrim(args, context, scope, values),
+                "trim" => eval_builtin_trim(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Ucwords => eval_builtin_ucwords(args, context, scope, values),
             Self::Vprintf => eval_builtin_vprintf(args, context, scope, values),
             Self::Vsprintf => eval_builtin_vsprintf(args, context, scope, values),
             Self::Nl2br => eval_builtin_nl2br(args, context, scope, values),
             Self::Wordwrap => eval_builtin_wordwrap(args, context, scope, values),
-            Self::UrlDecode => eval_builtin_url_decode(name, args, context, scope, values),
-            Self::UrlEncode => eval_builtin_url_encode(name, args, context, scope, values),
+            Self::UrlDecode => match name {
+                "rawurldecode" => eval_builtin_rawurldecode(args, context, scope, values),
+                "urldecode" => eval_builtin_urldecode(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
+            Self::UrlEncode => match name {
+                "rawurlencode" => eval_builtin_rawurlencode(args, context, scope, values),
+                "urlencode" => eval_builtin_urlencode(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
         }
     }
 }
