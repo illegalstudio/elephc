@@ -48,6 +48,29 @@ fn test_self_typed_variadic_param() {
     assert_eq!(out, "abc");
 }
 
+/// Regression: a `self`-typed VARIADIC parameter on an ENUM method must be rewritten to the
+/// enum name like regular parameters and return types. The enum schema path uses its own
+/// relative-type substitution, which previously skipped the variadic-param type.
+#[test]
+fn test_enum_self_typed_variadic_param() {
+    let out = compile_and_run(
+        "<?php
+        enum Suit: string {
+            case Hearts = 'H';
+            case Spades = 'S';
+            case Clubs = 'C';
+            public static function join(self ...$suits): string {
+                $buf = '';
+                foreach ($suits as $s) { $buf .= $s->value; }
+                return $buf;
+            }
+        }
+        echo Suit::join(Suit::Hearts, Suit::Spades, Suit::Clubs);
+        ",
+    );
+    assert_eq!(out, "HSC");
+}
+
 /// Verifies that a `static` return type returns a late-bound instance via `new static()`.
 #[test]
 fn test_static_return_type() {

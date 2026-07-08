@@ -363,25 +363,17 @@ fn substitute_relative_class_types_in_flattened(classes: &mut [FlattenedClass]) 
     }
 }
 
-/// Rewrites the relative class types `self`/`static`/`parent` in each method's parameter,
-/// variadic-parameter, and return type annotations to `self_class`/`parent`. Shared by class
-/// and interface processing.
+/// Rewrites `self`/`static`/`parent` type annotations on a slice of methods by delegating to
+/// `ClassMethod::substitute_relative_class_types`. Used for:
+/// - user classes (after trait/inheritance flattening)
+/// - interfaces
+/// - enums (to prepare method bodies for checking)
 fn substitute_relative_class_types_in_methods(
     methods: &mut [ClassMethod],
     self_class: &str,
     parent: Option<&str>,
 ) {
     for method in methods.iter_mut() {
-        for (_, type_ann, _, _) in method.params.iter_mut() {
-            if let Some(ty) = type_ann.as_mut() {
-                *ty = ty.substitute_relative_class_types(self_class, parent);
-            }
-        }
-        if let Some(ret) = method.return_type.as_mut() {
-            *ret = ret.substitute_relative_class_types(self_class, parent);
-        }
-        if let Some(variadic_ty) = method.variadic_type.as_mut() {
-            *variadic_ty = variadic_ty.substitute_relative_class_types(self_class, parent);
-        }
+        method.substitute_relative_class_types(self_class, parent);
     }
 }
