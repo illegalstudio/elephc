@@ -62,7 +62,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::StringLiteral(value) => ExprKind::StringLiteral(value),
         ExprKind::IntLiteral(value) => ExprKind::IntLiteral(value),
         ExprKind::FloatLiteral(value) => ExprKind::FloatLiteral(value),
-        ExprKind::Variable(name) => match env.get(&name) {
+        ExprKind::Variable(name) => match env.get(&name).and_then(PropagatedValue::as_scalar) {
+            // Only scalar facts substitute at variable reads; an array fact
+            // must keep the variable (materializing the literal would break
+            // by-ref argument passing and duplicate the allocation).
             Some(value) => value.clone().into_expr_kind(),
             None => ExprKind::Variable(name),
         },
@@ -146,10 +149,26 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
                 .collect(),
             default: default.map(|expr| Box::new(propagate_expr(*expr, env))),
         },
-        ExprKind::ArrayAccess { array, index } => ExprKind::ArrayAccess {
-            array: Box::new(propagate_expr(*array, env)),
-            index: Box::new(propagate_expr(*index, env)),
-        },
+        ExprKind::ArrayAccess { array, index } => {
+            let array = propagate_expr(*array, env);
+            let index = propagate_expr(*index, env);
+            // A variable carrying an array-literal fact folds constant-index
+            // reads through the same helper as inline literals. Fact elements
+            // are all scalar literals, so a successful fold always yields a
+            // scalar; a miss (unknown index, out of range) keeps the runtime
+            // access and its warning behavior.
+            if let ExprKind::Variable(name) = &array.kind {
+                if let Some(PropagatedValue::ArrayLit(fact)) = env.get(name) {
+                    if let Some(kind) = try_fold_array_access(fact, &index) {
+                        return fold_expr(Expr { kind, span });
+                    }
+                }
+            }
+            ExprKind::ArrayAccess {
+                array: Box::new(array),
+                index: Box::new(index),
+            }
+        }
         ExprKind::Ternary {
             condition,
             then_expr,

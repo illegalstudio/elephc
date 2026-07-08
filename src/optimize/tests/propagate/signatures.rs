@@ -216,8 +216,8 @@ fn test_function_variant_group_unions_variant_signatures() {
 #[test]
 fn test_propagate_args_masks_by_ref_positions() {
     let mut env = ConstantEnv::new();
-    env.insert("x".to_string(), ScalarValue::Int(5));
-    env.insert("y".to_string(), ScalarValue::Int(7));
+    env.insert("x".to_string(), PropagatedValue::Scalar(ScalarValue::Int(5)));
+    env.insert("y".to_string(), PropagatedValue::Scalar(ScalarValue::Int(7)));
     let sig = vec![("a".to_string(), true), ("b".to_string(), false)];
 
     let args = propagate_args(
@@ -234,8 +234,8 @@ fn test_propagate_args_masks_by_ref_positions() {
 #[test]
 fn test_propagate_args_masks_named_by_ref_arguments() {
     let mut env = ConstantEnv::new();
-    env.insert("x".to_string(), ScalarValue::Int(5));
-    env.insert("y".to_string(), ScalarValue::Int(7));
+    env.insert("x".to_string(), PropagatedValue::Scalar(ScalarValue::Int(5)));
+    env.insert("y".to_string(), PropagatedValue::Scalar(ScalarValue::Int(7)));
     let sig = vec![("a".to_string(), true), ("b".to_string(), false)];
 
     let named = |param: &str, var: &str| {

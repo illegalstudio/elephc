@@ -29,7 +29,22 @@ pub(super) fn env_after_scalar_assign(mut env: ConstantEnv, name: &str, value: &
         return env;
     }
     if let Some(value) = assigned_scalar_value(value) {
-        env.insert(name.to_string(), value);
+        env.insert(name.to_string(), PropagatedValue::Scalar(value));
+    } else if let Some(fact) = assigned_array_fact(value) {
+        env.insert(name.to_string(), PropagatedValue::ArrayLit(fact));
+    } else if let ExprKind::Variable(source) = &value.kind {
+        // `$b = $a` snapshots the value (PHP arrays are COW value-semantics),
+        // so the source's fact — if any — is copied, not aliased. Scalars
+        // never reach this arm: a scalar-fact variable was already substituted
+        // by `propagate_expr`.
+        match env.get(source).cloned() {
+            Some(fact) => {
+                env.insert(name.to_string(), fact);
+            }
+            None => {
+                env.remove(name);
+            }
+        }
     } else {
         env.remove(name);
     }
@@ -53,11 +68,26 @@ pub(super) fn env_after_list_unpack(mut env: ConstantEnv, vars: &[String], value
         env.remove(var);
     }
 
-    if let ExprKind::ArrayLiteral(items) = &value.kind {
-        for (var, item) in vars.iter().zip(items.iter()) {
-            if let Some(value) = assigned_scalar_value(item) {
-                env.insert(var.clone(), value);
-            }
+    // Unpack element facts from an inline literal, or from the value's array
+    // fact when it is a variable (`list($x, $y) = $a` reads a COW snapshot).
+    let literal = match &value.kind {
+        ExprKind::ArrayLiteral(_) => Some(value),
+        ExprKind::Variable(source) => match env.get(source) {
+            Some(PropagatedValue::ArrayLit(fact)) => Some(fact),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(ExprKind::ArrayLiteral(items)) = literal.map(|expr| &expr.kind) {
+        let facts: Vec<(String, ScalarValue)> = vars
+            .iter()
+            .zip(items.iter())
+            .filter_map(|(var, item)| {
+                assigned_scalar_value(item).map(|value| (var.clone(), value))
+            })
+            .collect();
+        for (var, value) in facts {
+            env.insert(var, PropagatedValue::Scalar(value));
         }
     }
 

@@ -90,8 +90,30 @@ pub fn prune_constant_control_flow(program: Program) -> Program {
     )
 }
 
-/// Eliminates code with no observable side effects.
-type ConstantEnv = HashMap<String, ScalarValue>;
+/// A fact the propagation environment records for a local variable.
+#[derive(Debug, Clone, PartialEq)]
+enum PropagatedValue {
+    /// An immutable scalar constant, substitutable at variable reads.
+    Scalar(ScalarValue),
+    /// A qualifying array literal (all keys and values scalar literals, size
+    /// capped). Never substituted at plain variable reads — only consumed by
+    /// array-access folding. Sound to copy on `$b = $a` because PHP array
+    /// assignment has value semantics (COW).
+    ArrayLit(Expr),
+}
+
+impl PropagatedValue {
+    /// Returns the scalar payload, if this fact is a scalar constant.
+    fn as_scalar(&self) -> Option<&ScalarValue> {
+        match self {
+            PropagatedValue::Scalar(value) => Some(value),
+            PropagatedValue::ArrayLit(_) => None,
+        }
+    }
+}
+
+/// Maps local names to propagated facts during constant propagation.
+type ConstantEnv = HashMap<String, PropagatedValue>;
 /// Eliminates dead code for this module.
 pub fn eliminate_dead_code(program: Program) -> Program {
     let (function_effects, static_method_effects, private_instance_method_effects) =
