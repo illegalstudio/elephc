@@ -1198,10 +1198,22 @@ fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits a path-specific epilogue for one user-function return terminator.
+///
+/// Pops this frame's exception-cleanup activation record first, mirroring the shared
+/// epilogue (`emit_function_epilogue`): a function that pushed a record must remove it
+/// on every normal-return path, not only when it branches to the shared epilogue label.
+/// Without this pop, a `Terminator::Return` would leave the record on `_exc_call_frame_top`,
+/// so a later `throw`/`exit` in the same request would unwind into the stale record and
+/// re-run its cleanup callback — which releases the full owned-local set including the
+/// returned value (`include_returned = true`), prematurely freeing the object the caller
+/// now owns (e.g. a `new Exception` handed to `throw`). The pop is a no-op unless a record
+/// was pushed, and touches only scratch registers, so the already-loaded return value
+/// survives.
 pub(super) fn emit_function_return_epilogue(
     ctx: &mut FunctionContext<'_>,
     skip_return_slot: Option<LocalSlotId>,
 ) {
+    emit_activation_record_pop(ctx);
     emit_function_local_epilogue_cleanup(ctx, skip_return_slot);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
