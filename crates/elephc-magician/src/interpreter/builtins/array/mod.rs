@@ -60,5 +60,7 @@ mod uasort;
 mod uksort;
 mod usort;
 
+pub(in crate::interpreter) use array_keys::*;
+pub(in crate::interpreter) use array_values::*;
 pub(in crate::interpreter) use mutating::*;
 pub(in crate::interpreter) use non_mutating::*;

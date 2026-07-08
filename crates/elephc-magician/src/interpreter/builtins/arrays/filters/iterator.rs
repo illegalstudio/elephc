@@ -10,7 +10,6 @@
 
 use super::super::super::super::*;
 use super::super::super::*;
-use super::*;
 
 /// Evaluates PHP `iterator_apply()` for eval-supported Traversable object inputs.
 pub(in crate::interpreter) fn eval_builtin_iterator_apply(
@@ -176,7 +175,7 @@ pub(in crate::interpreter) fn eval_iterator_to_array_result(
     if preserve_keys {
         return eval_array_copy_preserve_keys(iterator, values);
     }
-    eval_array_projection_result("array_values", iterator, values)
+    eval_array_values_result(iterator, values)
 }
 
 /// Copies one array-like eval value while preserving iteration keys and order.

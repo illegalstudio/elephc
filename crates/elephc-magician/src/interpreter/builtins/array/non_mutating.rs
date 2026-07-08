@@ -43,7 +43,7 @@ pub(in crate::interpreter) fn eval_builtin_array_call(
 }
 
 /// Dispatches evaluated non-mutating array and iterator calls from declarative specs.
-pub(in crate::interpreter) fn eval_array_values_result(
+pub(in crate::interpreter) fn eval_array_non_mutating_values_result(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
     context: &mut ElephcEvalContext,

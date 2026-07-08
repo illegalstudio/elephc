@@ -23,6 +23,11 @@
   paths for language constructs and by-ref/source-sensitive calls.
 - [x] Phase 3: update agent/contributor documentation if the workflow for adding
   eval builtins changes.
+- [x] Phase 4: convert `array_keys` and `array_values` so each builtin home file
+  contains both its `eval_builtin!` declaration and its PHP-visible
+  implementation.
+- [ ] Phase 4: merge the remaining declaration-only builtin home files with
+  their PHP-visible direct/by-value implementations, area by area.
 
 ## Goal
 
@@ -101,11 +106,13 @@ Each builtin home file should contain:
 - a direct-call wrapper over `EvalExpr` arguments, when needed;
 - a dynamic/by-value wrapper over `RuntimeCellHandle`, when needed;
 - a mutating/by-ref wrapper, if the builtin can write into caller storage;
-- delegation to shared helpers when multiple builtins use the same algorithm.
+- the PHP-visible builtin implementation for that entry.
 
-Shared helpers must not become generic buckets. If a helper exceeds 500 LoC but
-has one clear scope, its preamble must explain why keeping it cohesive is better
-than splitting it mechanically.
+Shared helpers are still allowed for non-PHP-visible common algorithms, but they
+must not be a separate per-builtin implementation file with a declaration-only
+home file forwarding into it. If a helper exceeds 500 LoC but has one clear
+scope, its preamble must explain why keeping it cohesive is better than splitting
+it mechanically.
 
 ## Phase 1: Declarative Registry Without a Big Bang
 
@@ -222,10 +229,31 @@ Phase 3 completion notes:
   adding eval builtins still follows the existing one-home-file plus area
   `mod.rs` wiring model established by the declarative registry.
 
+## Phase 4: Merge Declarations with Implementations
+
+After Phase 3, several builtins still had a home file that only registered
+metadata and then delegated to an implementation helper elsewhere. That is no
+longer the target model.
+
+For each migrated builtin:
+
+- keep the `eval_builtin!` declaration in the builtin home file;
+- move the PHP-visible direct wrapper into that same file;
+- move the PHP-visible evaluated-argument/result wrapper into that same file;
+- keep shared helper modules only when they represent a real common algorithm,
+  not a one-builtin implementation hidden away from the declaration;
+- remove old `declarations/` folders and declaration-only files as each area is
+  migrated.
+
+The pilot conversion moved `array_keys` and `array_values` into this stricter
+shape and deleted the old shared projection implementation file.
+
 ## Acceptance Criteria
 
 - Adding an eval builtin requires one home file and at most area `mod.rs` wiring,
   not edits to four separate manual tables.
+- A migrated builtin's home file is not declaration-only when
+  `elephc-magician` owns that builtin's implementation.
 - `elephc_magician::builtin_metadata` is derived from the registry and stays
   aligned with parity tests.
 - Parity tests compare the static registry and eval registry, not string

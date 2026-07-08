@@ -25,10 +25,11 @@ use super::super::super::{
     EvalExpr, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
 };
 use super::super::{
-    eval_builtin_abs, eval_builtin_array_aggregate, eval_builtin_array_flip,
-    eval_builtin_array_call, eval_builtin_array_key_exists, eval_builtin_array_pad,
-    eval_builtin_array_projection, eval_builtin_array_rand, eval_builtin_array_reverse,
+    eval_builtin_abs, eval_builtin_array_aggregate, eval_builtin_array_call,
+    eval_builtin_array_flip, eval_builtin_array_key_exists, eval_builtin_array_keys,
+    eval_builtin_array_pad, eval_builtin_array_rand, eval_builtin_array_reverse,
     eval_builtin_array_search, eval_builtin_array_slice, eval_builtin_array_unique,
+    eval_builtin_array_values,
     eval_builtin_cast, eval_builtin_core_call, eval_builtin_filesystem_call,
     eval_builtin_grapheme_strrev, eval_builtin_hash_equals, eval_builtin_html_entity,
     eval_builtin_json_call, eval_builtin_network_env_call, eval_builtin_nl2br, eval_builtin_range,
@@ -55,8 +56,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     ArrayKeyExists,
     /// Dispatches `array_pad(...)`.
     ArrayPad,
-    /// Dispatches `array_keys(...)` and `array_values(...)`.
-    ArrayProjection,
+    /// Dispatches `array_keys(...)`.
+    ArrayKeys,
     /// Dispatches `array_rand(...)`.
     ArrayRand,
     /// Dispatches `array_reverse(...)`.
@@ -67,6 +68,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     ArraySlice,
     /// Dispatches `array_unique(...)`.
     ArrayUnique,
+    /// Dispatches `array_values(...)`.
+    ArrayValues,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
     /// Dispatches `base64_encode(...)`.
@@ -220,12 +223,13 @@ impl EvalDirectHook {
             Self::ArrayFlip => eval_builtin_array_flip(args, context, scope, values),
             Self::ArrayKeyExists => eval_builtin_array_key_exists(args, context, scope, values),
             Self::ArrayPad => eval_builtin_array_pad(args, context, scope, values),
-            Self::ArrayProjection => eval_builtin_array_projection(name, args, context, scope, values),
+            Self::ArrayKeys => eval_builtin_array_keys(args, context, scope, values),
             Self::ArrayRand => eval_builtin_array_rand(args, context, scope, values),
             Self::ArrayReverse => eval_builtin_array_reverse(args, context, scope, values),
             Self::ArraySearch => eval_builtin_array_search(name, args, context, scope, values),
             Self::ArraySlice => eval_builtin_array_slice(args, context, scope, values),
             Self::ArrayUnique => eval_builtin_array_unique(args, context, scope, values),
+            Self::ArrayValues => eval_builtin_array_values(args, context, scope, values),
             Self::Base64Decode => eval_builtin_base64_decode(args, context, scope, values),
             Self::Base64Encode => eval_builtin_base64_encode(args, context, scope, values),
             Self::Bin2Hex => eval_builtin_bin2hex(args, context, scope, values),
