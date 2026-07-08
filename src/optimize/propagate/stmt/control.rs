@@ -149,6 +149,14 @@ pub(super) fn propagate_foreach_stmt(
 ) -> (Stmt, ConstantEnv) {
     let mut loop_env = safe_foreach_env(&env, &array, key_var.as_deref(), &value_var, &body);
     if value_by_ref {
+        // Writes through the by-ref value var mutate the array without a
+        // visible local write — including after the loop, through the value
+        // var's lingering alias to the last element — so the array root must
+        // never carry a fact again. The value var itself needs no mark: its
+        // own value facts stay accurate.
+        if let Some(root) = lvalue_root(&array) {
+            super::mark_reference_volatile(root);
+        }
         if let ExprKind::Variable(array_name) = &array.kind {
             loop_env.remove(array_name);
         }

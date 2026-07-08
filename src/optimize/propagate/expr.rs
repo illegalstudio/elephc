@@ -171,18 +171,25 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             captures,
             capture_refs,
             by_ref_return,
-        } => ExprKind::Closure {
-            params: propagate_params(params),
-            variadic,
-            variadic_type,
-            return_type,
-            body: propagate_block(body, captured_constant_env(&captures, &capture_refs, env)).0,
-            is_arrow,
-            is_static,
-            captures,
-            capture_refs,
-            by_ref_return,
-        },
+        } => {
+            // A by-ref capture aliases the outer variable: any later invocation of
+            // the closure can rewrite it, so it must never carry a constant.
+            for name in &capture_refs {
+                super::stmt::mark_reference_volatile(name);
+            }
+            ExprKind::Closure {
+                params: propagate_params(params),
+                variadic,
+                variadic_type,
+                return_type,
+                body: propagate_block(body, captured_constant_env(&captures, &capture_refs, env)).0,
+                is_arrow,
+                is_static,
+                captures,
+                capture_refs,
+                by_ref_return,
+            }
+        }
         ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
             name,
             value: Box::new(propagate_expr(*value, env)),

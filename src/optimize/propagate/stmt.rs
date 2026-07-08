@@ -43,14 +43,14 @@ pub(crate) fn reset_reference_volatile() {
 }
 
 /// Marks `name` as bound by reference, disabling constant propagation for it.
-fn mark_reference_volatile(name: &str) {
+pub(in crate::optimize) fn mark_reference_volatile(name: &str) {
     REFERENCE_VOLATILE.with(|cell| {
         cell.borrow_mut().insert(name.to_string());
     });
 }
 
 /// Returns true when `name` is bound by reference and must not carry a propagated constant.
-pub(super) fn is_reference_volatile(name: &str) -> bool {
+pub(in crate::optimize) fn is_reference_volatile(name: &str) -> bool {
     REFERENCE_VOLATILE.with(|cell| cell.borrow().contains(name))
 }
 
@@ -115,11 +115,13 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             (Stmt::new(StmtKind::Assign { name, value }, span), std::mem::take(&mut next_env))
         }
         StmtKind::RefAssign { target, source } => {
-            // The target — and a plain-variable source — alias one storage cell; either
-            // side can change the other's value invisibly, so neither may carry a constant.
+            // The target — and the local at the root of the source lvalue — alias one
+            // storage cell; either side can change the other's value invisibly, so
+            // neither may carry a constant. `$t = &$a[0]` exposes `$a`'s storage the
+            // same way a plain-variable source exposes that variable.
             mark_reference_volatile(&target);
-            if let ExprKind::Variable(source_name) = &source.kind {
-                mark_reference_volatile(source_name);
+            if let Some(root) = lvalue_root(&source) {
+                mark_reference_volatile(root);
             }
             (
                 Stmt::new(StmtKind::RefAssign { target, source }, span),
@@ -304,13 +306,19 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             )
         }
         StmtKind::Global { vars } => {
+            // A global-bound local aliases global storage: any callee can rewrite it
+            // without a visible local write, so it must never carry a constant.
             let mut next_env = env;
             for var in &vars {
+                mark_reference_volatile(var);
                 next_env.remove(var);
             }
             (Stmt::new(StmtKind::Global { vars }, span), next_env)
         }
         StmtKind::StaticVar { name, init } => {
+            // A static-bound local aliases the function's shared static cell: a
+            // recursive call can rewrite it, so it must never carry a constant.
+            mark_reference_volatile(&name);
             let init = propagate_expr(init, &env);
             let mut next_env = env;
             next_env.remove(&name);

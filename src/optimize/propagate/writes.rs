@@ -476,6 +476,19 @@ pub(crate) fn merge_write_sets<const N: usize>(sets: [HashSet<String>; N]) -> Op
     Some(merged)
 }
 
+/// Returns the local variable at the root of an lvalue expression, if any:
+/// a plain variable, an array-access chain over one, or a named-argument
+/// wrapper around one. Property and static-property lvalues have no local
+/// root (writing through them mutates heap state, not a caller local).
+pub(crate) fn lvalue_root(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Variable(name) => Some(name),
+        ExprKind::ArrayAccess { array, .. } => lvalue_root(array),
+        ExprKind::NamedArg { value, .. } => lvalue_root(value),
+        _ => None,
+    }
+}
+
 /// Extracts variable names from the arguments of an `unset()` call for tracking which variables
 /// are being removed from scope. Returns `None` if any argument is not a simple variable.
 pub(crate) fn unset_target_names(expr: &Expr) -> Option<HashSet<String>> {
