@@ -11,41 +11,45 @@
 
 use super::super::super::{
     eval_builtin_base64_decode, eval_builtin_base64_encode, eval_builtin_bin2hex,
-    eval_builtin_ceil, eval_builtin_chr, eval_builtin_clamp, eval_builtin_count,
-    eval_builtin_crc32, eval_builtin_ctype, eval_builtin_explode, eval_builtin_float_binary,
-    eval_builtin_float_pair, eval_builtin_float_unary, eval_builtin_floor,
-    eval_builtin_formatting_call, eval_builtin_gzip, eval_builtin_hash_algos,
+    eval_builtin_chr, eval_builtin_count,
+    eval_builtin_crc32, eval_builtin_ctype, eval_builtin_explode, eval_builtin_formatting_call, eval_builtin_gzip, eval_builtin_hash_algos,
     eval_builtin_hash_copy, eval_builtin_hash_final, eval_builtin_hash_init,
     eval_builtin_hash_one_shot, eval_builtin_hash_update, eval_builtin_hex2bin,
-    eval_builtin_implode, eval_builtin_intdiv, eval_builtin_log, eval_builtin_min_max,
-    eval_builtin_number_format, eval_builtin_ord, eval_builtin_pi, eval_builtin_pow,
-    eval_builtin_rand, eval_builtin_random_int, eval_builtin_round, eval_builtin_slashes,
-    eval_builtin_sqrt, eval_builtin_str_repeat, eval_builtin_strlen,
+    eval_builtin_implode, eval_builtin_number_format, eval_builtin_ord, eval_builtin_slashes,
+    eval_builtin_str_repeat, eval_builtin_strlen,
     eval_builtin_url_decode, eval_builtin_url_encode, ElephcEvalContext, ElephcEvalScope,
     EvalExpr, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
 };
 use super::super::{
-    eval_builtin_abs, eval_builtin_array_aggregate, eval_builtin_array_call,
+    eval_builtin_abs, eval_builtin_acos, eval_builtin_array_aggregate, eval_builtin_array_call,
     eval_builtin_array_flip, eval_builtin_array_key_exists, eval_builtin_array_keys,
     eval_builtin_array_pad, eval_builtin_array_rand, eval_builtin_array_reverse,
     eval_builtin_array_search, eval_builtin_array_slice, eval_builtin_array_unique,
-    eval_builtin_array_values, eval_builtin_boolval, eval_builtin_core_call,
-    eval_builtin_filesystem_call, eval_builtin_floatval, eval_builtin_gettype,
-    eval_builtin_intval, eval_builtin_is_array, eval_builtin_is_bool,
+    eval_builtin_array_values, eval_builtin_asin, eval_builtin_atan, eval_builtin_atan2,
+    eval_builtin_boolval, eval_builtin_ceil, eval_builtin_clamp, eval_builtin_core_call,
+    eval_builtin_cos, eval_builtin_cosh, eval_builtin_deg2rad, eval_builtin_exp,
+    eval_builtin_fdiv, eval_builtin_filesystem_call, eval_builtin_floatval,
+    eval_builtin_floor, eval_builtin_fmod, eval_builtin_gettype, eval_builtin_hypot,
+    eval_builtin_intdiv, eval_builtin_intval, eval_builtin_is_array, eval_builtin_is_bool,
     eval_builtin_is_double, eval_builtin_is_finite, eval_builtin_is_float,
     eval_builtin_is_infinite, eval_builtin_is_int, eval_builtin_is_integer,
     eval_builtin_is_iterable, eval_builtin_is_long, eval_builtin_is_nan,
     eval_builtin_is_null, eval_builtin_is_numeric, eval_builtin_is_object,
     eval_builtin_is_real, eval_builtin_is_resource, eval_builtin_is_scalar,
-    eval_builtin_is_string,
+    eval_builtin_is_string, eval_builtin_log, eval_builtin_log2, eval_builtin_log10,
     eval_builtin_grapheme_strrev, eval_builtin_hash_equals, eval_builtin_html_entity,
-    eval_builtin_json_call, eval_builtin_network_env_call, eval_builtin_nl2br, eval_builtin_range,
-    eval_builtin_raw_memory_call, eval_builtin_regex_call, eval_builtin_str_pad, eval_builtin_str_replace,
-    eval_builtin_str_split, eval_builtin_stream_bool_predicate, eval_builtin_stream_introspection,
+    eval_builtin_json_call, eval_builtin_max, eval_builtin_min, eval_builtin_mt_rand,
+    eval_builtin_network_env_call, eval_builtin_nl2br, eval_builtin_pi, eval_builtin_pow,
+    eval_builtin_rad2deg, eval_builtin_rand, eval_builtin_random_int, eval_builtin_range,
+    eval_builtin_round,
+    eval_builtin_raw_memory_call, eval_builtin_regex_call, eval_builtin_sin, eval_builtin_sinh,
+    eval_builtin_str_pad, eval_builtin_str_replace, eval_builtin_str_split,
+    eval_builtin_stream_bool_predicate, eval_builtin_stream_introspection,
     eval_builtin_string_case, eval_builtin_string_compare, eval_builtin_string_position,
     eval_builtin_string_search, eval_builtin_strrev, eval_builtin_strstr, eval_builtin_substr,
     eval_builtin_strval, eval_builtin_substr_replace, eval_builtin_symbols_call,
-    eval_builtin_time_call, eval_builtin_trim_like, eval_builtin_ucwords,
+    eval_builtin_tan, eval_builtin_tanh, eval_builtin_time_call, eval_builtin_trim_like,
+    eval_builtin_ucwords,
     eval_builtin_wordwrap,
 };
 
@@ -102,12 +106,28 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Ctype,
     /// Dispatches filesystem and path builtins.
     Filesystem,
-    /// Dispatches binary floating-point builtins.
-    FloatBinary,
-    /// Dispatches paired floating-point builtins.
-    FloatPair,
-    /// Dispatches unary floating-point builtins.
-    FloatUnary,
+    /// Dispatches `acos(...)`.
+    Acos,
+    /// Dispatches `asin(...)`.
+    Asin,
+    /// Dispatches `atan(...)`.
+    Atan,
+    /// Dispatches `atan2(...)`.
+    Atan2,
+    /// Dispatches `cos(...)`.
+    Cos,
+    /// Dispatches `cosh(...)`.
+    Cosh,
+    /// Dispatches `deg2rad(...)`.
+    Deg2rad,
+    /// Dispatches `exp(...)`.
+    Exp,
+    /// Dispatches `fdiv(...)`.
+    Fdiv,
+    /// Dispatches `fmod(...)`.
+    Fmod,
+    /// Dispatches `hypot(...)`.
+    Hypot,
     /// Dispatches printf-family formatting builtins.
     Formatting,
     /// Dispatches `floor(...)`.
@@ -176,8 +196,14 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Json,
     /// Dispatches `log(...)`.
     Log,
-    /// Dispatches `min(...)` and `max(...)`.
-    MinMax,
+    /// Dispatches `log2(...)`.
+    Log2,
+    /// Dispatches `log10(...)`.
+    Log10,
+    /// Dispatches `max(...)`.
+    Max,
+    /// Dispatches `min(...)`.
+    Min,
     /// Dispatches network, host, environment, and process builtins.
     NetworkEnv,
     /// Dispatches `number_format(...)`.
@@ -188,8 +214,14 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Pi,
     /// Dispatches `pow(...)`.
     Pow,
-    /// Dispatches random-number builtins.
-    Random,
+    /// Dispatches `mt_rand(...)`.
+    MtRand,
+    /// Dispatches `rad2deg(...)`.
+    Rad2deg,
+    /// Dispatches `rand(...)`.
+    Rand,
+    /// Dispatches `random_int(...)`.
+    RandomInt,
     /// Dispatches `round(...)`.
     Round,
     /// Dispatches `range(...)`.
@@ -200,6 +232,10 @@ pub(in crate::interpreter) enum EvalDirectHook {
     RawMemory,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
     Slashes,
+    /// Dispatches `sin(...)`.
+    Sin,
+    /// Dispatches `sinh(...)`.
+    Sinh,
     /// Dispatches `sqrt(...)`.
     Sqrt,
     /// Dispatches string ASCII case-conversion builtins.
@@ -238,6 +274,10 @@ pub(in crate::interpreter) enum EvalDirectHook {
     SubstrReplace,
     /// Dispatches symbol, class metadata, SPL, and language-construct probes.
     Symbols,
+    /// Dispatches `tan(...)`.
+    Tan,
+    /// Dispatches `tanh(...)`.
+    Tanh,
     /// Dispatches date, time, and sleep builtins.
     Time,
     /// Dispatches trim-family builtins.
@@ -266,6 +306,7 @@ impl EvalDirectHook {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         match self {
             Self::Abs => eval_builtin_abs(args, context, scope, values),
+            Self::Acos => eval_builtin_acos(args, context, scope, values),
             Self::ArrayAggregate => eval_builtin_array_aggregate(name, args, context, scope, values),
             Self::Array => eval_builtin_array_call(name, args, context, scope, values),
             Self::ArrayFlip => eval_builtin_array_flip(args, context, scope, values),
@@ -278,6 +319,9 @@ impl EvalDirectHook {
             Self::ArraySlice => eval_builtin_array_slice(args, context, scope, values),
             Self::ArrayUnique => eval_builtin_array_unique(args, context, scope, values),
             Self::ArrayValues => eval_builtin_array_values(args, context, scope, values),
+            Self::Asin => eval_builtin_asin(args, context, scope, values),
+            Self::Atan => eval_builtin_atan(args, context, scope, values),
+            Self::Atan2 => eval_builtin_atan2(args, context, scope, values),
             Self::Base64Decode => eval_builtin_base64_decode(args, context, scope, values),
             Self::Base64Encode => eval_builtin_base64_encode(args, context, scope, values),
             Self::Bin2Hex => eval_builtin_bin2hex(args, context, scope, values),
@@ -287,15 +331,19 @@ impl EvalDirectHook {
             Self::Clamp => eval_builtin_clamp(args, context, scope, values),
             Self::Count => eval_builtin_count(args, context, scope, values),
             Self::Core => eval_builtin_core_call(name, args, context, scope, values),
+            Self::Cos => eval_builtin_cos(args, context, scope, values),
+            Self::Cosh => eval_builtin_cosh(args, context, scope, values),
             Self::Crc32 => eval_builtin_crc32(args, context, scope, values),
             Self::Ctype => eval_builtin_ctype(name, args, context, scope, values),
+            Self::Deg2rad => eval_builtin_deg2rad(args, context, scope, values),
+            Self::Exp => eval_builtin_exp(args, context, scope, values),
+            Self::Fdiv => eval_builtin_fdiv(args, context, scope, values),
             Self::Filesystem => eval_builtin_filesystem_call(name, args, context, scope, values),
-            Self::FloatBinary => eval_builtin_float_binary(name, args, context, scope, values),
-            Self::FloatPair => eval_builtin_float_pair(name, args, context, scope, values),
-            Self::FloatUnary => eval_builtin_float_unary(name, args, context, scope, values),
+            Self::Fmod => eval_builtin_fmod(args, context, scope, values),
             Self::Formatting => eval_builtin_formatting_call(name, args, context, scope, values),
             Self::Floor => eval_builtin_floor(args, context, scope, values),
             Self::Gettype => eval_builtin_gettype(args, context, scope, values),
+            Self::Hypot => eval_builtin_hypot(args, context, scope, values),
             Self::Floatval => eval_builtin_floatval(args, context, scope, values),
             Self::Intval => eval_builtin_intval(args, context, scope, values),
             Self::IsArray => eval_builtin_is_array(args, context, scope, values),
@@ -333,23 +381,27 @@ impl EvalDirectHook {
             Self::Intdiv => eval_builtin_intdiv(args, context, scope, values),
             Self::Json => eval_builtin_json_call(name, args, context, scope, values),
             Self::Log => eval_builtin_log(args, context, scope, values),
-            Self::MinMax => eval_builtin_min_max(name, args, context, scope, values),
+            Self::Log2 => eval_builtin_log2(args, context, scope, values),
+            Self::Log10 => eval_builtin_log10(args, context, scope, values),
+            Self::Max => eval_builtin_max(args, context, scope, values),
+            Self::Min => eval_builtin_min(args, context, scope, values),
+            Self::MtRand => eval_builtin_mt_rand(args, context, scope, values),
             Self::NetworkEnv => eval_builtin_network_env_call(name, args, context, scope, values),
             Self::NumberFormat => eval_builtin_number_format(args, context, scope, values),
             Self::Ord => eval_builtin_ord(args, context, scope, values),
             Self::Pi => eval_builtin_pi(args, values),
             Self::Pow => eval_builtin_pow(args, context, scope, values),
-            Self::Random => match name {
-                "rand" | "mt_rand" => eval_builtin_rand(args, context, scope, values),
-                "random_int" => eval_builtin_random_int(args, context, scope, values),
-                _ => Err(EvalStatus::RuntimeFatal),
-            },
+            Self::Rad2deg => eval_builtin_rad2deg(args, context, scope, values),
+            Self::Rand => eval_builtin_rand(args, context, scope, values),
+            Self::RandomInt => eval_builtin_random_int(args, context, scope, values),
             Self::Round => eval_builtin_round(args, context, scope, values),
             Self::Range => eval_builtin_range(args, context, scope, values),
             Self::Regex => eval_builtin_regex_call(name, args, context, scope, values),
             Self::RawMemory => eval_builtin_raw_memory_call(name, args, context, scope, values),
+            Self::Sin => eval_builtin_sin(args, context, scope, values),
+            Self::Sinh => eval_builtin_sinh(args, context, scope, values),
             Self::Slashes => eval_builtin_slashes(name, args, context, scope, values),
-            Self::Sqrt => eval_builtin_sqrt(args, context, scope, values),
+            Self::Sqrt => super::super::math::eval_builtin_sqrt(args, context, scope, values),
             Self::StringCase => eval_builtin_string_case(name, args, context, scope, values),
             Self::StringCompare => eval_builtin_string_compare(name, args, context, scope, values),
             Self::StringPosition => {
@@ -378,6 +430,8 @@ impl EvalDirectHook {
             Self::Substr => eval_builtin_substr(args, context, scope, values),
             Self::SubstrReplace => eval_builtin_substr_replace(args, context, scope, values),
             Self::Symbols => eval_builtin_symbols_call(name, args, context, scope, values),
+            Self::Tan => eval_builtin_tan(args, context, scope, values),
+            Self::Tanh => eval_builtin_tanh(args, context, scope, values),
             Self::Time => eval_builtin_time_call(name, args, context, scope, values),
             Self::TrimLike => eval_builtin_trim_like(name, args, context, scope, values),
             Self::Ucwords => eval_builtin_ucwords(args, context, scope, values),

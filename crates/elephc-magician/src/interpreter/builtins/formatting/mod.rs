@@ -1,5 +1,5 @@
 //! Purpose:
-//! Groups numeric formatting, printf-family, scanf, and math wrapper eval builtins.
+//! Groups numeric formatting, printf-family, and scanf eval builtins.
 //! Submodules are split by builtin family and shared formatting helpers.
 //!
 //! Called from:
@@ -12,7 +12,6 @@
 mod common;
 mod declarations;
 mod dispatch;
-mod math;
 mod number_format;
 mod printf;
 mod sprintf_format;
@@ -20,7 +19,6 @@ mod sscanf;
 
 pub(in crate::interpreter) use common::*;
 pub(in crate::interpreter) use dispatch::*;
-pub(in crate::interpreter) use math::*;
 pub(in crate::interpreter) use number_format::*;
 pub(in crate::interpreter) use printf::*;
 pub(in crate::interpreter) use sprintf_format::*;

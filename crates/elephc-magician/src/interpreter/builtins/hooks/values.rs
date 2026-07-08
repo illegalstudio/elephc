@@ -15,16 +15,20 @@ use super::super::super::{
     RuntimeValueOps,
 };
 use super::super::{
-    eval_array_aggregate_result, eval_array_flip_result, eval_array_keys_result,
+    eval_abs_result, eval_acos_result, eval_array_aggregate_result, eval_array_flip_result,
+    eval_array_keys_result,
     eval_array_mutating_values_result, eval_array_non_mutating_values_result,
     eval_array_pad_result, eval_array_rand_result, eval_array_reverse_result,
     eval_array_search_result, eval_array_slice_result, eval_array_unique_result,
-    eval_array_values_result, eval_base64_decode_result, eval_base64_encode_result,
-    eval_bin2hex_result, eval_boolval_result, eval_chr_result, eval_clamp_result,
+    eval_array_values_result, eval_asin_result, eval_atan2_result, eval_atan_result,
+    eval_base64_decode_result, eval_base64_encode_result,
+    eval_bin2hex_result, eval_boolval_result, eval_ceil_result, eval_chr_result,
+    eval_clamp_result, eval_cos_result, eval_cosh_result, eval_deg2rad_result,
     eval_core_values_result, eval_crc32_result, eval_ctype_result,
-    eval_filesystem_values_result, eval_float_binary_result, eval_float_pair_result,
-    eval_float_unary_result, eval_floatval_result, eval_formatting_values_result,
-    eval_gettype_result, eval_intval_result, eval_is_array_result, eval_is_bool_result,
+    eval_exp_result, eval_fdiv_result, eval_filesystem_values_result, eval_floatval_result,
+    eval_floor_result, eval_fmod_result, eval_formatting_values_result,
+    eval_gettype_result, eval_hypot_result, eval_intdiv_result, eval_intval_result,
+    eval_is_array_result, eval_is_bool_result,
     eval_is_double_result, eval_is_finite_result, eval_is_float_result,
     eval_is_infinite_result, eval_is_int_result, eval_is_integer_result,
     eval_is_iterable_result, eval_is_long_result, eval_is_nan_result,
@@ -32,22 +36,26 @@ use super::super::{
     eval_is_real_result, eval_is_resource_result, eval_is_scalar_result,
     eval_is_string_result,
     eval_grapheme_strrev_result, eval_gzip_result, eval_hash_equals_result,
-    eval_hash_one_shot_result, eval_hex2bin_result, eval_html_entity_result, eval_intdiv_result,
-    eval_json_values_result, eval_log_result, eval_min_max_result, eval_network_env_values_result,
-    eval_nl2br_result, eval_range_result, eval_regex_values_result, eval_settype_values_result,
-    eval_slashes_result, eval_str_pad_result, eval_str_replace_result, eval_str_repeat_result,
+    eval_hash_one_shot_result, eval_hex2bin_result, eval_html_entity_result,
+    eval_json_values_result, eval_log2_result, eval_log10_result, eval_log_result,
+    eval_max_result, eval_min_result, eval_mt_rand_values_result,
+    eval_network_env_values_result, eval_nl2br_result, eval_pi_result, eval_pow_result,
+    eval_rad2deg_result, eval_rand_values_result, eval_random_int_values_result,
+    eval_range_result, eval_regex_values_result, eval_round_result, eval_settype_values_result,
+    eval_sin_result, eval_sinh_result, eval_slashes_result, eval_sqrt_result,
+    eval_str_pad_result, eval_str_replace_result, eval_str_repeat_result,
     eval_str_split_result, eval_stream_bool_predicate_result, eval_stream_introspection_result,
     eval_string_case_result, eval_string_compare_result, eval_string_position_result,
     eval_string_search_result, eval_strstr_result, eval_strval_result,
     eval_substr_replace_result, eval_substr_result, eval_raw_memory_values_result,
-    eval_symbols_values_result, eval_time_values_result, eval_trim_like_result,
+    eval_symbols_values_result, eval_tan_result, eval_tanh_result, eval_time_values_result,
+    eval_trim_like_result,
     eval_ucwords_result, eval_url_decode_result, eval_url_encode_result,
     eval_wordwrap_result,
 };
 use super::arity::{one_arg, three_args, two_args};
 use super::hash::{eval_hash_algos_values, eval_hash_context_values};
 use super::number_format::eval_number_format_values;
-use super::random::eval_random_values;
 use super::string_split_join::eval_string_split_join_values;
 
 /// Evaluated-argument dispatch hooks for migrated builtins.
@@ -105,12 +113,28 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Ctype,
     /// Dispatches filesystem and path builtins.
     Filesystem,
-    /// Dispatches binary floating-point builtins.
-    FloatBinary,
-    /// Dispatches paired floating-point builtins.
-    FloatPair,
-    /// Dispatches unary floating-point builtins.
-    FloatUnary,
+    /// Dispatches `acos(...)`.
+    Acos,
+    /// Dispatches `asin(...)`.
+    Asin,
+    /// Dispatches `atan(...)`.
+    Atan,
+    /// Dispatches `atan2(...)`.
+    Atan2,
+    /// Dispatches `cos(...)`.
+    Cos,
+    /// Dispatches `cosh(...)`.
+    Cosh,
+    /// Dispatches `deg2rad(...)`.
+    Deg2rad,
+    /// Dispatches `exp(...)`.
+    Exp,
+    /// Dispatches `fdiv(...)`.
+    Fdiv,
+    /// Dispatches `fmod(...)`.
+    Fmod,
+    /// Dispatches `hypot(...)`.
+    Hypot,
     /// Dispatches printf-family formatting builtins.
     Formatting,
     /// Dispatches `floor(...)`.
@@ -179,8 +203,14 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Json,
     /// Dispatches `log(...)`.
     Log,
-    /// Dispatches `min(...)` and `max(...)`.
-    MinMax,
+    /// Dispatches `log2(...)`.
+    Log2,
+    /// Dispatches `log10(...)`.
+    Log10,
+    /// Dispatches `max(...)`.
+    Max,
+    /// Dispatches `min(...)`.
+    Min,
     /// Dispatches network, host, environment, and process builtins.
     NetworkEnv,
     /// Dispatches `number_format(...)`.
@@ -191,8 +221,14 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Pi,
     /// Dispatches `pow(...)`.
     Pow,
-    /// Dispatches random-number builtins.
-    Random,
+    /// Dispatches `mt_rand(...)`.
+    MtRand,
+    /// Dispatches `rad2deg(...)`.
+    Rad2deg,
+    /// Dispatches `rand(...)`.
+    Rand,
+    /// Dispatches `random_int(...)`.
+    RandomInt,
     /// Dispatches `round(...)`.
     Round,
     /// Dispatches `range(...)`.
@@ -205,6 +241,10 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Settype,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
     Slashes,
+    /// Dispatches `sin(...)`.
+    Sin,
+    /// Dispatches `sinh(...)`.
+    Sinh,
     /// Dispatches `sqrt(...)`.
     Sqrt,
     /// Dispatches string ASCII case-conversion builtins.
@@ -243,6 +283,10 @@ pub(in crate::interpreter) enum EvalValuesHook {
     SubstrReplace,
     /// Dispatches symbol, class metadata, SPL, and language-construct probes.
     Symbols,
+    /// Dispatches `tan(...)`.
+    Tan,
+    /// Dispatches `tanh(...)`.
+    Tanh,
     /// Dispatches date, time, and sleep builtins.
     Time,
     /// Dispatches trim-family builtins.
@@ -269,7 +313,8 @@ impl EvalValuesHook {
         values: &mut impl RuntimeValueOps,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         match self {
-            Self::Abs => one_arg(evaluated_args, values, |value, values| values.abs(value)),
+            Self::Abs => one_arg(evaluated_args, values, eval_abs_result),
+            Self::Acos => one_arg(evaluated_args, values, eval_acos_result),
             Self::ArrayAggregate => one_arg(evaluated_args, values, |array, values| {
                 eval_array_aggregate_result(name, array, values)
             }),
@@ -304,11 +349,14 @@ impl EvalValuesHook {
             },
             Self::ArrayUnique => one_arg(evaluated_args, values, eval_array_unique_result),
             Self::ArrayValues => one_arg(evaluated_args, values, eval_array_values_result),
+            Self::Asin => one_arg(evaluated_args, values, eval_asin_result),
+            Self::Atan => one_arg(evaluated_args, values, eval_atan_result),
+            Self::Atan2 => two_args(evaluated_args, values, eval_atan2_result),
             Self::Base64Decode => one_arg(evaluated_args, values, eval_base64_decode_result),
             Self::Base64Encode => one_arg(evaluated_args, values, eval_base64_encode_result),
             Self::Bin2Hex => one_arg(evaluated_args, values, eval_bin2hex_result),
             Self::Boolval => one_arg(evaluated_args, values, eval_boolval_result),
-            Self::Ceil => one_arg(evaluated_args, values, |value, values| values.ceil(value)),
+            Self::Ceil => one_arg(evaluated_args, values, eval_ceil_result),
             Self::Chr => one_arg(evaluated_args, values, eval_chr_result),
             Self::Clamp => three_args(evaluated_args, values, eval_clamp_result),
             Self::Count => match evaluated_args {
@@ -317,23 +365,21 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::Core => eval_core_values_result(name, evaluated_args, context, values),
+            Self::Cos => one_arg(evaluated_args, values, eval_cos_result),
+            Self::Cosh => one_arg(evaluated_args, values, eval_cosh_result),
             Self::Crc32 => one_arg(evaluated_args, values, eval_crc32_result),
             Self::Ctype => one_arg(evaluated_args, values, |value, values| {
                 eval_ctype_result(name, value, values)
             }),
+            Self::Deg2rad => one_arg(evaluated_args, values, eval_deg2rad_result),
+            Self::Exp => one_arg(evaluated_args, values, eval_exp_result),
+            Self::Fdiv => two_args(evaluated_args, values, eval_fdiv_result),
             Self::Filesystem => eval_filesystem_values_result(name, evaluated_args, context, values),
-            Self::FloatBinary => two_args(evaluated_args, values, |left, right, values| {
-                eval_float_binary_result(name, left, right, values)
-            }),
-            Self::FloatPair => two_args(evaluated_args, values, |left, right, values| {
-                eval_float_pair_result(name, left, right, values)
-            }),
-            Self::FloatUnary => one_arg(evaluated_args, values, |value, values| {
-                eval_float_unary_result(name, value, values)
-            }),
+            Self::Floor => one_arg(evaluated_args, values, eval_floor_result),
+            Self::Fmod => two_args(evaluated_args, values, eval_fmod_result),
             Self::Formatting => eval_formatting_values_result(name, evaluated_args, values),
-            Self::Floor => one_arg(evaluated_args, values, |value, values| values.floor(value)),
             Self::Gettype => one_arg(evaluated_args, values, eval_gettype_result),
+            Self::Hypot => two_args(evaluated_args, values, eval_hypot_result),
             Self::Floatval => one_arg(evaluated_args, values, eval_floatval_result),
             Self::Intval => one_arg(evaluated_args, values, eval_intval_result),
             Self::IsArray => one_arg(evaluated_args, values, eval_is_array_result),
@@ -373,7 +419,11 @@ impl EvalValuesHook {
                 [num, base] => eval_log_result(*num, Some(*base), values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::MinMax => eval_min_max_result(name, evaluated_args, values),
+            Self::Log2 => one_arg(evaluated_args, values, eval_log2_result),
+            Self::Log10 => one_arg(evaluated_args, values, eval_log10_result),
+            Self::Max => eval_max_result(evaluated_args, values),
+            Self::Min => eval_min_result(evaluated_args, values),
+            Self::MtRand => eval_mt_rand_values_result(evaluated_args, values),
             Self::NetworkEnv => eval_network_env_values_result(name, evaluated_args, values),
             Self::NumberFormat => eval_number_format_values(evaluated_args, values),
             Self::Ord => one_arg(evaluated_args, values, eval_ord_result),
@@ -381,25 +431,27 @@ impl EvalValuesHook {
                 if !evaluated_args.is_empty() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                values.float(std::f64::consts::PI)
+                eval_pi_result(values)
             }
-            Self::Pow => two_args(evaluated_args, values, |left, right, values| {
-                values.pow(left, right)
-            }),
-            Self::Random => eval_random_values(name, evaluated_args, values),
+            Self::Pow => two_args(evaluated_args, values, eval_pow_result),
+            Self::Rad2deg => one_arg(evaluated_args, values, eval_rad2deg_result),
+            Self::Rand => eval_rand_values_result(evaluated_args, values),
+            Self::RandomInt => eval_random_int_values_result(evaluated_args, values),
             Self::Round => match evaluated_args {
-                [value] => values.round(*value, None),
-                [value, precision] => values.round(*value, Some(*precision)),
+                [value] => eval_round_result(*value, None, values),
+                [value, precision] => eval_round_result(*value, Some(*precision), values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::Range => two_args(evaluated_args, values, eval_range_result),
             Self::Regex => eval_regex_values_result(name, evaluated_args, context, values),
             Self::RawMemory => eval_raw_memory_values_result(name, evaluated_args, context, values),
             Self::Settype => eval_settype_values_result(evaluated_args, values),
+            Self::Sin => one_arg(evaluated_args, values, eval_sin_result),
+            Self::Sinh => one_arg(evaluated_args, values, eval_sinh_result),
             Self::Slashes => one_arg(evaluated_args, values, |value, values| {
                 eval_slashes_result(name, value, values)
             }),
-            Self::Sqrt => one_arg(evaluated_args, values, |value, values| values.sqrt(value)),
+            Self::Sqrt => one_arg(evaluated_args, values, eval_sqrt_result),
             Self::StringCase => one_arg(evaluated_args, values, |value, values| {
                 eval_string_case_result(name, value, values)
             }),
@@ -478,6 +530,8 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::Symbols => eval_symbols_values_result(name, evaluated_args, context, values),
+            Self::Tan => one_arg(evaluated_args, values, eval_tan_result),
+            Self::Tanh => one_arg(evaluated_args, values, eval_tanh_result),
             Self::Time => eval_time_values_result(name, evaluated_args, context, values),
             Self::TrimLike => match evaluated_args {
                 [value] => eval_trim_like_result(name, *value, None, values),

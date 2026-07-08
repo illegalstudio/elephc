@@ -12,7 +12,6 @@ mod arity;
 mod direct;
 mod hash;
 mod number_format;
-mod random;
 mod string_split_join;
 mod values;
 

@@ -1,5 +1,5 @@
 //! Purpose:
-//! Small scalar string wrappers such as sqrt, strrev, and chr.
+//! Small scalar string wrappers such as strrev and chr.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::strings` re-exports.
@@ -9,20 +9,6 @@
 
 use super::super::super::*;
 use super::super::*;
-
-/// Evaluates PHP's `sqrt(...)` over one eval expression.
-pub(in crate::interpreter) fn eval_builtin_sqrt(
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [value] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let value = eval_expr(value, context, scope, values)?;
-    values.sqrt(value)
-}
 
 /// Evaluates PHP's `strrev(...)` over one eval expression.
 pub(in crate::interpreter) fn eval_builtin_strrev(
