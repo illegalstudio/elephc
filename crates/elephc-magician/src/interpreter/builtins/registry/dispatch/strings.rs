@@ -69,12 +69,6 @@ pub(in crate::interpreter) fn eval_strings_builtin_with_values(
             };
             eval_hash_update_result(*hash_context, *data, context, values)?
         }
-        "stream_is_local" | "stream_supports_lock" => {
-            let [stream] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_stream_bool_predicate_result(name, *stream, values)?
-        }
         _ => return Ok(None),
     };
     Ok(Some(result))

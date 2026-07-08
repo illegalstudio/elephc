@@ -28,9 +28,10 @@ use super::super::{
     eval_builtin_filesystem_call, eval_builtin_grapheme_strrev, eval_builtin_hash_equals,
     eval_builtin_html_entity, eval_builtin_json_call, eval_builtin_nl2br, eval_builtin_range,
     eval_builtin_regex_call, eval_builtin_str_pad, eval_builtin_str_replace, eval_builtin_str_split,
-    eval_builtin_string_case, eval_builtin_string_compare, eval_builtin_string_position,
-    eval_builtin_string_search, eval_builtin_strrev, eval_builtin_strstr, eval_builtin_substr,
-    eval_builtin_substr_replace, eval_builtin_time_call, eval_builtin_trim_like,
+    eval_builtin_stream_bool_predicate, eval_builtin_stream_introspection, eval_builtin_string_case,
+    eval_builtin_string_compare, eval_builtin_string_position, eval_builtin_string_search,
+    eval_builtin_strrev, eval_builtin_strstr, eval_builtin_substr, eval_builtin_substr_replace,
+    eval_builtin_time_call, eval_builtin_trim_like,
     eval_builtin_ucwords, eval_builtin_wordwrap,
 };
 
@@ -133,6 +134,10 @@ pub(in crate::interpreter) enum EvalDirectHook {
     StringPosition,
     /// Dispatches string search predicate builtins.
     StringSearch,
+    /// Dispatches stream boolean predicate builtins.
+    StreamBoolPredicate,
+    /// Dispatches stream introspection list builtins.
+    StreamIntrospection,
     /// Dispatches `str_pad(...)`.
     StrPad,
     /// Dispatches `str_replace(...)` and `str_ireplace(...)`.
@@ -230,6 +235,12 @@ impl EvalDirectHook {
                 eval_builtin_string_position(name, args, context, scope, values)
             }
             Self::StringSearch => eval_builtin_string_search(name, args, context, scope, values),
+            Self::StreamBoolPredicate => {
+                eval_builtin_stream_bool_predicate(name, args, context, scope, values)
+            }
+            Self::StreamIntrospection => {
+                eval_builtin_stream_introspection(name, args, context, values)
+            }
             Self::StrPad => eval_builtin_str_pad(args, context, scope, values),
             Self::StrReplace => eval_builtin_str_replace(name, args, context, scope, values),
             Self::StrSplit => eval_builtin_str_split(args, context, scope, values),

@@ -7551,12 +7551,18 @@ $call_transports = call_user_func_array("stream_get_transports", []);
 echo $call_transports[11] . ":";
 $call_filters = call_user_func_array("stream_get_filters", []);
 echo $call_filters[13] . ":";
-echo function_exists("stream_get_wrappers"); echo function_exists("stream_get_transports"); echo function_exists("stream_get_filters");');
+$tmp = tmpfile();
+echo stream_is_local("php://memory") ? "local" : "bad"; echo ":";
+echo stream_supports_lock($tmp) ? "lock" : "bad"; echo ":";
+echo call_user_func("stream_is_local", "file://tmp") ? "calllocal" : "bad"; echo ":";
+echo call_user_func_array("stream_supports_lock", ["stream" => $tmp]) ? "calllock" : "bad"; echo ":";
+echo function_exists("stream_get_wrappers"); echo function_exists("stream_get_transports"); echo function_exists("stream_get_filters");
+echo function_exists("stream_is_local"); echo function_exists("stream_supports_lock");');
 "#,
     );
     assert_eq!(
         out,
-        "11:file:https:12:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:111"
+        "11:file:https:12:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:local:lock:calllocal:calllock:11111"
     );
 }
 

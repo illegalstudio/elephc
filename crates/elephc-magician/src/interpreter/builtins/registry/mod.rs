@@ -308,7 +308,12 @@ mod tests {
             "scandir",
             "sleep",
             "stat",
+            "stream_get_filters",
+            "stream_get_transports",
+            "stream_get_wrappers",
+            "stream_is_local",
             "stream_resolve_include_path",
+            "stream_supports_lock",
             "str_contains",
             "str_pad",
             "str_replace",
@@ -636,6 +641,26 @@ mod tests {
         assert_eq!(
             eval_declared_builtin_param_names("tmpfile"),
             Some([].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_get_wrappers"),
+            Some([].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_get_transports"),
+            Some([].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_get_filters"),
+            Some([].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_is_local"),
+            Some(["stream"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("stream_supports_lock"),
+            Some(["stream"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_default_value("touch", 1),

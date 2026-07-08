@@ -26,9 +26,10 @@ use super::super::{
     eval_json_values_result, eval_log_result, eval_min_max_result, eval_nl2br_result,
     eval_number_format_result, eval_range_result, eval_regex_values_result, eval_slashes_result,
     eval_str_pad_result, eval_str_replace_result, eval_str_repeat_result, eval_str_split_result,
-    eval_string_case_result, eval_string_compare_result, eval_string_position_result,
-    eval_string_search_result, eval_strstr_result, eval_substr_replace_result,
-    eval_substr_result, eval_time_values_result, eval_trim_like_result,
+    eval_stream_bool_predicate_result, eval_stream_introspection_result, eval_string_case_result,
+    eval_string_compare_result, eval_string_position_result, eval_string_search_result,
+    eval_strstr_result, eval_substr_replace_result, eval_substr_result, eval_time_values_result,
+    eval_trim_like_result,
     eval_type_predicate_result, eval_ucwords_result, eval_url_decode_result, eval_url_encode_result,
     eval_wordwrap_result,
 };
@@ -132,6 +133,10 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StringPosition,
     /// Dispatches string search predicate builtins.
     StringSearch,
+    /// Dispatches stream boolean predicate builtins.
+    StreamBoolPredicate,
+    /// Dispatches stream introspection list builtins.
+    StreamIntrospection,
     /// Dispatches `str_pad(...)`.
     StrPad,
     /// Dispatches `str_replace(...)` and `str_ireplace(...)`.
@@ -310,6 +315,15 @@ impl EvalValuesHook {
             Self::StringSearch => two_args(evaluated_args, values, |haystack, needle, values| {
                 eval_string_search_result(name, haystack, needle, values)
             }),
+            Self::StreamBoolPredicate => one_arg(evaluated_args, values, |stream, values| {
+                eval_stream_bool_predicate_result(name, stream, values)
+            }),
+            Self::StreamIntrospection => {
+                if !evaluated_args.is_empty() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                eval_stream_introspection_result(name, context, values)
+            }
             Self::StrPad => match evaluated_args {
                 [value, length] => eval_str_pad_result(*value, *length, None, None, values),
                 [value, length, pad_string] => {

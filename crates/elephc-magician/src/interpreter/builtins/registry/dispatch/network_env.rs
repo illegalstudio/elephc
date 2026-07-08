@@ -15,7 +15,7 @@ use super::super::super::*;
 pub(in crate::interpreter) fn eval_network_env_builtin_with_values(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
+    _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
@@ -107,12 +107,6 @@ pub(in crate::interpreter) fn eval_network_env_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_putenv_result(*assignment, values)?
-        }
-        "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => {
-            if !evaluated_args.is_empty() {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            eval_stream_introspection_result(name, context, values)?
         }
         "long2ip" => {
             let [value] = evaluated_args else {

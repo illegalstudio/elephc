@@ -1675,12 +1675,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         }
         "sscanf" => eval_builtin_sscanf(args, context, scope, values),
         "sprintf" | "printf" => eval_builtin_sprintf_like(name, args, context, scope, values),
-        "stream_is_local" | "stream_supports_lock" => {
-            eval_builtin_stream_bool_predicate(name, args, context, scope, values)
-        }
-        "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => {
-            eval_builtin_stream_introspection(name, args, context, values)
-        }
         "stream_copy_to_stream" => eval_builtin_stream_copy_to_stream(args, context, scope, values),
         "stream_context_create" => eval_builtin_stream_context_create(args, context, scope, values),
         "stream_context_get_default" => {

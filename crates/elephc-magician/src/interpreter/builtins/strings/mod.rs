@@ -9,6 +9,7 @@
 //! - Helpers stay scoped to the eval interpreter and preserve PHP-visible runtime behavior.
 
 mod ctype;
+mod declarations;
 mod grapheme_strrev;
 mod gzip;
 mod hash;
