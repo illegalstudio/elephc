@@ -49,12 +49,6 @@ pub(in crate::interpreter::builtins::filesystem) fn eval_filesystem_stream_value
                 eval_flock_result(evaluated_args[0], evaluated_args[1], context, values)?;
             values.bool_value(success)?
         }
-        "fopen" => {
-            if !(2..=4).contains(&evaluated_args.len()) {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            eval_fopen_result(evaluated_args[0], evaluated_args[1], context, values)?
-        }
         "fprintf" => {
             let Some((stream, rest)) = evaluated_args.split_first() else {
                 return Err(EvalStatus::RuntimeFatal);

@@ -15,7 +15,7 @@ use super::*;
 pub(in crate::interpreter::builtins::filesystem) fn eval_filesystem_path_values_result(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
+    _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
@@ -36,10 +36,6 @@ pub(in crate::interpreter::builtins::filesystem) fn eval_filesystem_path_values_
         },
         "sys_get_temp_dir" => match evaluated_args {
             [] => eval_sys_get_temp_dir_result(values)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "tmpfile" => match evaluated_args {
-            [] => eval_tmpfile_result(context, values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         _ => return Ok(None),

@@ -166,7 +166,6 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call_impl(
             eval_builtin_unary_stream(name, args, context, scope, values)
         }
         "fnmatch" => eval_builtin_fnmatch(args, context, scope, values),
-        "fopen" => eval_builtin_fopen(args, context, scope, values),
         "fprintf" => eval_builtin_fprintf(args, context, scope, values),
         "fputcsv" => eval_builtin_fputcsv(args, context, scope, values),
         "fread" => eval_builtin_fread(args, context, scope, values),
@@ -236,7 +235,6 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call_impl(
             eval_builtin_stream_wrapper_registry(name, args, context, scope, values)
         }
         "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
-        "tmpfile" => eval_builtin_tmpfile(args, context, values),
         "vfprintf" => eval_builtin_vfprintf(args, context, scope, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }

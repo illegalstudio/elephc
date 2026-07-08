@@ -19,13 +19,11 @@ mod common;
 mod csv_format;
 mod flock;
 mod metadata;
-mod open;
 
 pub(in crate::interpreter) use common::*;
 pub(in crate::interpreter) use csv_format::*;
 pub(in crate::interpreter) use flock::*;
 pub(in crate::interpreter) use metadata::*;
-pub(in crate::interpreter) use open::*;
 
 /// Evaluates one unary stream builtin over an eval expression.
 pub(in crate::interpreter) fn eval_builtin_unary_stream(
