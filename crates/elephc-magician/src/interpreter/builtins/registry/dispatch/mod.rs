@@ -11,7 +11,6 @@
 mod arrays;
 mod core;
 mod filesystem;
-mod network_env;
 mod scalars;
 mod symbols;
 
@@ -21,7 +20,6 @@ use super::super::super::*;
 use arrays::*;
 use core::*;
 use filesystem::*;
-use network_env::*;
 use scalars::*;
 use symbols::*;
 
@@ -54,11 +52,6 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
     }
     if let Some(result) =
         eval_date_procedural_alias_with_values(name, evaluated_args, context, values)?
-    {
-        return Ok(Some(result));
-    }
-    if let Some(result) =
-        eval_network_env_builtin_with_values(name, evaluated_args, context, values)?
     {
         return Ok(Some(result));
     }

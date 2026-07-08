@@ -1576,9 +1576,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "defined" => eval_builtin_defined(args, context, scope, values),
         "die" | "exit" => eval_builtin_exit(args, context, scope, values),
         "empty" => eval_builtin_empty(args, context, scope, values),
-        "exec" | "shell_exec" | "system" | "passthru" => {
-            eval_builtin_process_command(name, args, context, scope, values)
-        }
         "eval" => eval_nested_eval(args, context, scope, values),
         "fgetcsv" => eval_builtin_fgetcsv(args, context, scope, values),
         "fopen" => eval_builtin_fopen(args, context, scope, values),
@@ -1589,13 +1586,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(name, args, context, scope, values)
         }
-        "gethostbyaddr" => eval_builtin_gethostbyaddr(args, context, scope, values),
-        "gethostbyname" => eval_builtin_gethostbyname(args, context, scope, values),
-        "gethostname" => eval_builtin_gethostname(args, values),
-        "getprotobyname" => eval_builtin_getprotobyname(args, context, scope, values),
-        "getprotobynumber" => eval_builtin_getprotobynumber(args, context, scope, values),
-        "getservbyname" => eval_builtin_getservbyname(args, context, scope, values),
-        "getservbyport" => eval_builtin_getservbyport(args, context, scope, values),
         "get_called_class" => eval_builtin_get_called_class(args, context, values),
         "get_class" => eval_builtin_get_class(args, context, scope, values),
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
@@ -1605,15 +1595,9 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "get_resource_id" | "get_resource_type" => {
             eval_builtin_resource_introspection(name, args, context, scope, values)
         }
-        "getenv" => eval_builtin_getenv(args, context, scope, values),
-        "inet_ntop" => eval_builtin_inet_ntop(args, context, scope, values),
-        "inet_pton" => eval_builtin_inet_pton(args, context, scope, values),
         "iterator_apply" => eval_builtin_iterator_apply(args, context, scope, values),
         "iterator_count" => eval_builtin_iterator_count(args, context, scope, values),
         "iterator_to_array" => eval_builtin_iterator_to_array(args, context, scope, values),
-        "ip2long" => eval_builtin_ip2long(args, context, scope, values),
-        "php_uname" => eval_builtin_php_uname(args, context, scope, values),
-        "phpversion" => eval_builtin_phpversion(args, values),
         "buffer_free" | "buffer_len" | "buffer_new" | "ptr" | "ptr_get" | "ptr_is_null"
         | "ptr_null" | "ptr_offset" | "ptr_read8" | "ptr_read16" | "ptr_read32"
         | "ptr_read_string" | "ptr_set" | "ptr_sizeof" | "ptr_write8" | "ptr_write16"
@@ -1621,7 +1605,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_raw_memory(name, args, context, scope, values)
         }
         "print_r" => eval_builtin_print_r(args, context, scope, values),
-        "putenv" => eval_builtin_putenv(args, context, scope, values),
         "readline" => eval_builtin_readline(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
         "spl_autoload_register" | "spl_autoload_unregister" => {
@@ -1694,7 +1677,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_stream_socket_recvfrom(args, context, scope, values)
         }
         "stream_socket_pair" => eval_builtin_stream_socket_pair(args, context, scope, values),
-        "long2ip" => eval_builtin_long2ip(args, context, scope, values),
         "unset" => eval_builtin_unset(args, context, scope, values),
         "var_dump" => eval_builtin_var_dump(args, context, scope, values),
         "vfprintf" => eval_builtin_vfprintf(args, context, scope, values),

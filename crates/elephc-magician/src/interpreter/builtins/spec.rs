@@ -28,6 +28,8 @@ pub(in crate::interpreter) enum EvalArea {
     Json,
     /// Numeric and mathematical builtins.
     Math,
+    /// Network, host, environment, and process builtins.
+    NetworkEnv,
     /// PCRE-style regex builtins.
     Regex,
     /// String-processing builtins.

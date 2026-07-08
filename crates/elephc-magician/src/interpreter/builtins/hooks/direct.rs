@@ -30,12 +30,13 @@ use super::super::{
     eval_builtin_array_rand, eval_builtin_array_reverse, eval_builtin_array_search,
     eval_builtin_array_slice, eval_builtin_array_unique, eval_builtin_cast,
     eval_builtin_filesystem_call, eval_builtin_grapheme_strrev, eval_builtin_hash_equals,
-    eval_builtin_html_entity, eval_builtin_json_call, eval_builtin_nl2br, eval_builtin_range,
-    eval_builtin_regex_call, eval_builtin_str_pad, eval_builtin_str_replace, eval_builtin_str_split,
-    eval_builtin_stream_bool_predicate, eval_builtin_stream_introspection, eval_builtin_string_case,
-    eval_builtin_string_compare, eval_builtin_string_position, eval_builtin_string_search,
-    eval_builtin_strrev, eval_builtin_strstr, eval_builtin_substr, eval_builtin_substr_replace,
-    eval_builtin_time_call, eval_builtin_trim_like,
+    eval_builtin_html_entity, eval_builtin_json_call, eval_builtin_network_env_call,
+    eval_builtin_nl2br, eval_builtin_range, eval_builtin_regex_call, eval_builtin_str_pad,
+    eval_builtin_str_replace, eval_builtin_str_split, eval_builtin_stream_bool_predicate,
+    eval_builtin_stream_introspection, eval_builtin_string_case, eval_builtin_string_compare,
+    eval_builtin_string_position, eval_builtin_string_search, eval_builtin_strrev,
+    eval_builtin_strstr, eval_builtin_substr, eval_builtin_substr_replace, eval_builtin_time_call,
+    eval_builtin_trim_like,
     eval_builtin_ucwords, eval_builtin_wordwrap,
 };
 
@@ -122,6 +123,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Log,
     /// Dispatches `min(...)` and `max(...)`.
     MinMax,
+    /// Dispatches network, host, environment, and process builtins.
+    NetworkEnv,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches `ord(...)`.
@@ -249,6 +252,7 @@ impl EvalDirectHook {
             Self::Json => eval_builtin_json_call(name, args, context, scope, values),
             Self::Log => eval_builtin_log(args, context, scope, values),
             Self::MinMax => eval_builtin_min_max(name, args, context, scope, values),
+            Self::NetworkEnv => eval_builtin_network_env_call(name, args, context, scope, values),
             Self::NumberFormat => eval_builtin_number_format(args, context, scope, values),
             Self::Ord => eval_builtin_ord(args, context, scope, values),
             Self::Pi => eval_builtin_pi(args, values),

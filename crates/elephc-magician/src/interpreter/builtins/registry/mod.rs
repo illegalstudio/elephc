@@ -222,6 +222,7 @@ mod tests {
             "dirname",
             "disk_free_space",
             "disk_total_space",
+            "exec",
             "explode",
             "file",
             "file_exists",
@@ -254,6 +255,14 @@ mod tests {
             "fwrite",
             "getdate",
             "getcwd",
+            "getenv",
+            "gethostbyaddr",
+            "gethostbyname",
+            "gethostname",
+            "getprotobyname",
+            "getprotobynumber",
+            "getservbyname",
+            "getservbyport",
             "gettype",
             "gmdate",
             "gmmktime",
@@ -278,6 +287,8 @@ mod tests {
             "hrtime",
             "http_response_code",
             "implode",
+            "inet_ntop",
+            "inet_pton",
             "intval",
             "is_array",
             "is_bool",
@@ -304,6 +315,7 @@ mod tests {
             "is_string",
             "is_writable",
             "is_writeable",
+            "ip2long",
             "json_decode",
             "json_encode",
             "json_last_error",
@@ -315,6 +327,7 @@ mod tests {
             "linkinfo",
             "localtime",
             "log",
+            "long2ip",
             "lstat",
             "microtime",
             "md5",
@@ -327,6 +340,9 @@ mod tests {
             "opendir",
             "pathinfo",
             "pclose",
+            "passthru",
+            "php_uname",
+            "phpversion",
             "popen",
             "printf",
             "preg_match",
@@ -334,6 +350,7 @@ mod tests {
             "preg_replace",
             "preg_replace_callback",
             "preg_split",
+            "putenv",
             "rand",
             "random_int",
             "range",
@@ -350,6 +367,7 @@ mod tests {
             "rmdir",
             "scandir",
             "sha1",
+            "shell_exec",
             "sleep",
             "sprintf",
             "sscanf",
@@ -378,6 +396,7 @@ mod tests {
             "strrev",
             "strtotime",
             "substr",
+            "system",
             "symlink",
             "sys_get_temp_dir",
             "tempnam",
@@ -517,6 +536,26 @@ mod tests {
         assert_eq!(
             eval_declared_builtin_default_value("http_response_code", 0),
             Some(EvalBuiltinDefaultValue::Int(0))
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("php_uname"),
+            Some(["mode"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("php_uname", 0),
+            Some(EvalBuiltinDefaultValue::String("a"))
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("phpversion"),
+            Some([].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("getenv"),
+            Some(["name"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("getservbyname"),
+            Some(["service", "protocol"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("getdate"),
