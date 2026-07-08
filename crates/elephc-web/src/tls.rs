@@ -275,19 +275,27 @@ mod tests {
 
     use super::*;
 
+    /// Per-process counter guaranteeing unique temp PEM filenames across
+    /// parallel test threads: the nanosecond timestamp alone collides when two
+    /// tests call this helper in the same nanosecond, and one thread's cleanup
+    /// then deletes the other's cert mid-read.
+    static TLS_TEST_FILE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     /// Writes a runtime-generated self-signed cert+key to unique temp PEM files and
     /// returns their paths. Nothing is committed: the files live under the system
     /// temp dir. Panics on any generation/IO failure (a broken test environment).
     fn write_temp_cert_key() -> (std::path::PathBuf, std::path::PathBuf) {
         let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
             .expect("rcgen must generate a self-signed cert");
-        let id = std::time::SystemTime::now()
+        let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
+        let seq = TLS_TEST_FILE_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let id = format!("{nanos}_{seq}");
         let dir = std::env::temp_dir();
-        let cert_path = dir.join(format!("elephc_web_tls_test_cert_{}.pem", id));
-        let key_path = dir.join(format!("elephc_web_tls_test_key_{}.pem", id));
+        let cert_path = dir.join(format!("elephc_web_tls_test_cert_{id}.pem"));
+        let key_path = dir.join(format!("elephc_web_tls_test_key_{id}.pem"));
         std::fs::write(&cert_path, cert.cert.pem()).expect("write cert pem");
         std::fs::write(&key_path, cert.key_pair.serialize_pem()).expect("write key pem");
         (cert_path, key_path)
