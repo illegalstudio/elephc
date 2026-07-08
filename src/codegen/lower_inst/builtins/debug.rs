@@ -79,26 +79,32 @@ pub(crate) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 /// final branch on the stored mode boxes the result as `Mixed`: the finalized
 /// capture string (tag 1) in return mode, or PHP's `true` (tag 3) in echo mode —
 /// the call's static result type is `Mixed` because the value shape depends on the
-/// runtime flag. `__rt_pr_finish` resets the mode and offset; the echo branch
-/// leaves them untouched (the stored flag was zero).
+/// runtime flag. A missing flag operand (first-class-callable wrappers lower the
+/// one-argument form with a `Mixed` result type) defaults to echo mode, matching
+/// PHP's `$return = false`. `__rt_pr_finish` resets the mode and offset; the echo
+/// branch leaves them untouched (the stored flag was zero).
 fn lower_print_r_runtime_flag(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     value: ValueId,
 ) -> Result<()> {
-    let flag = expect_operand(inst, 1)?;
     ctx.emitter.blank();
     ctx.emitter.comment("print_r(value, $flag) — runtime-selected mode");
     // -- reset the capture offset, then store the flag as the capture mode --
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
     abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_print_r_off", 0);
-    let flag_ty = ctx.load_value_to_reg(flag, result_reg)?;
-    if !matches!(flag_ty.codegen_repr(), PhpType::Bool | PhpType::Int) {
-        return Err(CodegenIrError::unsupported(format!(
-            "print_r $return flag for PHP type {:?}",
-            flag_ty
-        )));
+    match inst.operands.get(1).copied() {
+        Some(flag) => {
+            let flag_ty = ctx.load_value_to_reg(flag, result_reg)?;
+            if !matches!(flag_ty.codegen_repr(), PhpType::Bool | PhpType::Int) {
+                return Err(CodegenIrError::unsupported(format!(
+                    "print_r $return flag for PHP type {:?}",
+                    flag_ty
+                )));
+            }
+        }
+        None => abi::emit_load_int_immediate(ctx.emitter, result_reg, 0),
     }
     abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_print_r_mode", 0);
     // -- render the value; the write indirection consults the mode per write --
