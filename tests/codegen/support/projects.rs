@@ -44,6 +44,8 @@ fn generate_project_asm(
         &exported_functions,
         regalloc_linear,
         false,
+        false,
+        false,
     )
     .expect("EIR backend codegen failed for project fixture");
     let runtime_features = ir_module.required_runtime_features;
