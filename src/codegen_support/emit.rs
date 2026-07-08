@@ -248,15 +248,21 @@ impl Emitter {
 
     // ── Platform-aware entry point ───────────────────────────────────
 
-    /// Emit the program entry point label: `_main` (macOS) or `main` (Linux).
-    pub fn entry_label(&mut self) {
+    /// Returns the program entry point symbol: `_main` (macOS) or `main` (Linux).
+    pub fn entry_symbol(&self) -> &'static str {
         match self.target.arch {
             Arch::AArch64 => match self.platform {
-                Platform::MacOS => self.label_global("_main"),
-                Platform::Linux => self.label_global("main"),
+                Platform::MacOS => "_main",
+                Platform::Linux => "main",
             },
-            Arch::X86_64 => self.label_global("main"),
+            Arch::X86_64 => "main",
         }
+    }
+
+    /// Emit the program entry point label: `_main` (macOS) or `main` (Linux).
+    pub fn entry_label(&mut self) {
+        let symbol = self.entry_symbol();
+        self.label_global(symbol);
     }
 }
 

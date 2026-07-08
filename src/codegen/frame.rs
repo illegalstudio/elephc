@@ -35,7 +35,7 @@ const FRAME_FOOTER_BYTES: usize = 16;
 /// process-entry stub when it materializes the handler address for
 /// `elephc_web_run`. Keeping it as one constant guarantees the label and the
 /// reference never drift.
-const WEB_HANDLER_SYMBOL: &str = "_elephc_web_handler";
+pub(super) const WEB_HANDLER_SYMBOL: &str = "_elephc_web_handler";
 
 /// Complete fixed frame layout for spill slots, addressable locals, and the
 /// callee-saved registers the register allocator decided to use.
