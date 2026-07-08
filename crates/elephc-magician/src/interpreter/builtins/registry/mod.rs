@@ -321,6 +321,7 @@ mod tests {
             "min",
             "mkdir",
             "mktime",
+            "mt_rand",
             "nl2br",
             "number_format",
             "opendir",
@@ -333,6 +334,8 @@ mod tests {
             "preg_replace",
             "preg_replace_callback",
             "preg_split",
+            "rand",
+            "random_int",
             "range",
             "rawurlencode",
             "readdir",
@@ -432,6 +435,13 @@ mod tests {
             eval_declared_builtin_param_names("max"),
             Some(["value", "values"].as_slice())
         );
+        for name in ["rand", "mt_rand", "random_int"] {
+            assert_eq!(
+                eval_declared_builtin_param_names(name),
+                Some(["min", "max"].as_slice()),
+                "{name} should declare min/max parameters"
+            );
+        }
         assert_eq!(
             eval_declared_builtin_param_names("number_format"),
             Some(

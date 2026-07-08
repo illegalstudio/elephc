@@ -25,8 +25,8 @@ use super::super::{
     eval_grapheme_strrev_result, eval_gzip_result, eval_hash_equals_result,
     eval_hash_one_shot_result, eval_hex2bin_result, eval_html_entity_result, eval_intdiv_result,
     eval_json_values_result, eval_log_result, eval_min_max_result, eval_nl2br_result,
-    eval_number_format_result, eval_range_result, eval_regex_values_result, eval_slashes_result,
-    eval_str_pad_result, eval_str_replace_result, eval_str_repeat_result, eval_str_split_result,
+    eval_range_result, eval_regex_values_result, eval_slashes_result, eval_str_pad_result,
+    eval_str_replace_result, eval_str_repeat_result, eval_str_split_result,
     eval_stream_bool_predicate_result, eval_stream_introspection_result, eval_string_case_result,
     eval_string_compare_result, eval_string_position_result, eval_string_search_result,
     eval_strstr_result, eval_substr_replace_result, eval_substr_result, eval_time_values_result,
@@ -34,6 +34,8 @@ use super::super::{
     eval_url_encode_result, eval_wordwrap_result,
 };
 use super::hash::{eval_hash_algos_values, eval_hash_context_values};
+use super::number_format::eval_number_format_values;
+use super::random::eval_random_values;
 use super::string_split_join::eval_string_split_join_values;
 
 /// Evaluated-argument dispatch hooks for migrated builtins.
@@ -127,6 +129,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Pi,
     /// Dispatches `pow(...)`.
     Pow,
+    /// Dispatches random-number builtins.
+    Random,
     /// Dispatches `round(...)`.
     Round,
     /// Dispatches `range(...)`.
@@ -278,29 +282,7 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::MinMax => eval_min_max_result(name, evaluated_args, values),
-            Self::NumberFormat => match evaluated_args {
-                [value] => eval_number_format_result(*value, None, None, None, values),
-                [value, decimals] => {
-                    eval_number_format_result(*value, Some(*decimals), None, None, values)
-                }
-                [value, decimals, decimal_separator] => eval_number_format_result(
-                    *value,
-                    Some(*decimals),
-                    Some(*decimal_separator),
-                    None,
-                    values,
-                ),
-                [value, decimals, decimal_separator, thousands_separator] => {
-                    eval_number_format_result(
-                        *value,
-                        Some(*decimals),
-                        Some(*decimal_separator),
-                        Some(*thousands_separator),
-                        values,
-                    )
-                }
-                _ => Err(EvalStatus::RuntimeFatal),
-            },
+            Self::NumberFormat => eval_number_format_values(evaluated_args, values),
             Self::Ord => one_arg(evaluated_args, values, eval_ord_result),
             Self::Pi => {
                 if !evaluated_args.is_empty() {
@@ -311,6 +293,7 @@ impl EvalValuesHook {
             Self::Pow => two_args(evaluated_args, values, |left, right, values| {
                 values.pow(left, right)
             }),
+            Self::Random => eval_random_values(name, evaluated_args, values),
             Self::Round => match evaluated_args {
                 [value] => values.round(*value, None),
                 [value, precision] => values.round(*value, Some(*precision)),

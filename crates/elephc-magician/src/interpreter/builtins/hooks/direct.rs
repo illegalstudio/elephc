@@ -19,10 +19,10 @@ use super::super::super::{
     eval_builtin_hash_one_shot, eval_builtin_hash_update, eval_builtin_hex2bin,
     eval_builtin_implode, eval_builtin_intdiv, eval_builtin_log, eval_builtin_min_max,
     eval_builtin_number_format, eval_builtin_ord, eval_builtin_pi, eval_builtin_pow,
-    eval_builtin_round, eval_builtin_slashes, eval_builtin_sqrt, eval_builtin_str_repeat,
-    eval_builtin_strlen, eval_builtin_type_predicate, eval_builtin_url_decode,
-    eval_builtin_url_encode, ElephcEvalContext, ElephcEvalScope, EvalExpr, EvalStatus,
-    RuntimeCellHandle, RuntimeValueOps,
+    eval_builtin_rand, eval_builtin_random_int, eval_builtin_round, eval_builtin_slashes,
+    eval_builtin_sqrt, eval_builtin_str_repeat, eval_builtin_strlen, eval_builtin_type_predicate,
+    eval_builtin_url_decode, eval_builtin_url_encode, ElephcEvalContext, ElephcEvalScope,
+    EvalExpr, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
 };
 use super::super::{
     eval_builtin_abs, eval_builtin_array_aggregate, eval_builtin_array_flip,
@@ -130,6 +130,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Pi,
     /// Dispatches `pow(...)`.
     Pow,
+    /// Dispatches random-number builtins.
+    Random,
     /// Dispatches `round(...)`.
     Round,
     /// Dispatches `range(...)`.
@@ -251,6 +253,11 @@ impl EvalDirectHook {
             Self::Ord => eval_builtin_ord(args, context, scope, values),
             Self::Pi => eval_builtin_pi(args, values),
             Self::Pow => eval_builtin_pow(args, context, scope, values),
+            Self::Random => match name {
+                "rand" | "mt_rand" => eval_builtin_rand(args, context, scope, values),
+                "random_int" => eval_builtin_random_int(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Round => eval_builtin_round(args, context, scope, values),
             Self::Range => eval_builtin_range(args, context, scope, values),
             Self::Regex => eval_builtin_regex_call(name, args, context, scope, values),

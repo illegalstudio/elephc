@@ -1622,8 +1622,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         }
         "print_r" => eval_builtin_print_r(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
-        "rand" | "mt_rand" => eval_builtin_rand(args, context, scope, values),
-        "random_int" => eval_builtin_random_int(args, context, scope, values),
         "readline" => eval_builtin_readline(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
         "spl_autoload_register" | "spl_autoload_unregister" => {

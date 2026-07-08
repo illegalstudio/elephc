@@ -216,7 +216,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "print_r" => Some(&["value", "return"]),
         "var_dump" => Some(&["value", "values"]),
         "putenv" => Some(&["assignment"]),
-        "rand" | "mt_rand" | "random_int" => Some(&["min", "max"]),
         "readline" => Some(&["prompt"]),
         "spl_autoload_register" => Some(&["callback", "throw", "prepend"]),
         "spl_autoload_unregister" => Some(&["callback"]),
