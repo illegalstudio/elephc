@@ -253,6 +253,126 @@ echo gettype($w);
     assert_eq!(out, "integer|NULL");
 }
 
+/// Tests that a null arm survives a return with an inferred type: the checker
+/// must infer a nullable merge (like the lowered temp) instead of dropping the
+/// null arm and coercing its value to the other arm's type.
+#[test]
+fn test_match_null_and_string_arms_inferred_return_keeps_null() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n) {
+    return match($n) {
+        0 => null,
+        default => "s",
+    };
+}
+echo gettype(pick(0)), "|", gettype(pick(1));
+"#,
+    );
+    assert_eq!(out, "NULL|string");
+}
+
+/// Tests the mirror arm order with an int value arm: the inferred return type
+/// must stay nullable so the null default is not coerced to int 0.
+#[test]
+fn test_match_int_and_null_default_inferred_return_keeps_null() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n) {
+    return match($n) {
+        0 => 7,
+        default => null,
+    };
+}
+echo gettype(pick(0)), "|", gettype(pick(1));
+"#,
+    );
+    assert_eq!(out, "integer|NULL");
+}
+
+/// Tests that heterogeneous arm values survive being consumed (not just type
+/// probed): a corrupted boxed payload with a correct tag would pass the
+/// gettype tests but fail here.
+#[test]
+fn test_match_heterogeneous_arm_values_consumed() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n): mixed {
+    return match($n) {
+        0 => "s",
+        default => 7,
+    };
+}
+echo pick(0), "|", pick(1);
+"#,
+    );
+    assert_eq!(out, "s|7");
+}
+
+/// Tests that float and int match arms keep their own types and values: the
+/// (Int, Float) pair must widen to Mixed, not unify to float.
+#[test]
+fn test_match_float_and_int_arms_preserve_types_and_values() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n) {
+    return match($n) {
+        0 => 6.5,
+        default => 8,
+    };
+}
+echo gettype(pick(0)), "|", gettype(pick(1)), "|", pick(0), "|", pick(1);
+"#,
+    );
+    assert_eq!(out, "double|integer|6.5|8");
+}
+
+/// Tests a heterogeneous match nested as another match's arm result: the
+/// inner match must contribute its merged (Mixed) type to the outer merge
+/// instead of a scalar-biased syntactic fallback re-introducing the #488
+/// fatal cast for nested arms.
+#[test]
+fn test_match_nested_heterogeneous_match_arm() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n): mixed {
+    return match($n) {
+        0 => match(0) {
+            0 => new stdClass(),
+            default => 1,
+        },
+        default => "s",
+    };
+}
+echo gettype(pick(0)), "|", gettype(pick(1));
+"#,
+    );
+    assert_eq!(out, "object|string");
+}
+
+/// Pins the documented int/bool arm-merge incompatibility (see "Known
+/// incompatibilities with PHP" in docs/php/types.md): int and bool arms share
+/// one runtime representation, so both arms observe it — PHP would print
+/// "integer|boolean" here. If this test starts failing with PHP's output, the
+/// incompatibility got fixed: update the docs entry alongside.
+#[test]
+fn test_match_int_and_bool_arms_merge_documented_divergence() {
+    let out = compile_and_run(
+        r#"<?php
+$r = match($argc) {
+    1 => 42,
+    default => true,
+};
+$w = match($argc) {
+    99 => 42,
+    default => true,
+};
+echo gettype($r), "|", gettype($w);
+"#,
+    );
+    assert_eq!(out, "boolean|boolean");
+}
+
 /// Tests that heterogeneous scalar match arms stay heap-balanced: the boxed
 /// per-arm values and the hidden Mixed temp must release cleanly.
 #[test]

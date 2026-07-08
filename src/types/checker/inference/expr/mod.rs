@@ -135,14 +135,14 @@ impl Checker {
                     for c in conditions {
                         self.infer_type(c, env)?;
                     }
-                    let ty = self.infer_type(result, env)?;
+                    let ty = self.match_arm_result_type(result, env)?;
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(acc, ty),
                         None => ty,
                     });
                 }
                 if let Some(d) = default {
-                    let ty = self.infer_type(d, env)?;
+                    let ty = self.match_arm_result_type(d, env)?;
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(acc, ty),
                         None => ty,
@@ -699,6 +699,21 @@ impl Checker {
             .unwrap_or(PhpType::Mixed)
     }
 
+    /// Infers a match arm result type for arm merging. Throw arms produce no
+    /// value, so their checker type (`Void`, shared with `null`) is normalized
+    /// to `Never` here: the merge must distinguish "arm never yields" (defer
+    /// to the other arms) from "arm yields null" (keep the merge nullable).
+    fn match_arm_result_type(
+        &mut self,
+        result: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let ty = self.infer_type(result, env)?;
+        if matches!(result.kind, ExprKind::Throw(_)) {
+            return Ok(PhpType::Never);
+        }
+        Ok(ty)
+    }
 }
 
 /// Returns `true` if `index` is a valid string offset index for a string receiver.
@@ -716,19 +731,41 @@ fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
 }
 
 /// Merges two match arm result types: identical arms keep their type,
-/// `Never`-typed arms (`throw`) and `Void`-typed arms (checker `null`) defer
-/// to the other arm's type, and any other heterogeneous pair widens to
-/// `Mixed` so each arm's runtime value survives instead of being coerced to
-/// the first arm's type.
+/// `Never`-typed arms (`throw`, normalized at the call site) defer to the
+/// other arm's type, `Void`-typed arms (checker `null`) keep the merge
+/// nullable so the null arm's value survives return-type-driven coercion
+/// (mirroring the lowered temp's nullable-aware merge), and any other
+/// heterogeneous pair widens to `Mixed` so each arm's runtime value survives
+/// instead of being coerced to the first arm's type.
 fn merge_match_arm_result_type(acc: PhpType, next: PhpType) -> PhpType {
     if acc == next {
         return acc;
     }
-    if matches!(acc, PhpType::Void | PhpType::Never) {
+    if acc == PhpType::Never {
         return next;
     }
-    if matches!(next, PhpType::Void | PhpType::Never) {
+    if next == PhpType::Never {
         return acc;
     }
+    if acc == PhpType::Void {
+        return nullable_match_arm_type(next);
+    }
+    if next == PhpType::Void {
+        return nullable_match_arm_type(acc);
+    }
     PhpType::Mixed
+}
+
+/// Widens a match arm type to also admit PHP null, for merges where another
+/// arm is a `null` literal.
+fn nullable_match_arm_type(ty: PhpType) -> PhpType {
+    match ty {
+        PhpType::Mixed => PhpType::Mixed,
+        PhpType::Union(members) if members.contains(&PhpType::Void) => PhpType::Union(members),
+        PhpType::Union(mut members) => {
+            members.push(PhpType::Void);
+            PhpType::Union(members)
+        }
+        other => PhpType::Union(vec![other, PhpType::Void]),
+    }
 }
