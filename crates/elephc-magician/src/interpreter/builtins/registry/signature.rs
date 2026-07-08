@@ -75,12 +75,6 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
 
         "fprintf" | "fscanf" => variadic(params, &[]),
 
-        "array_pop" | "array_shift" => fixed_by_ref(params, &["array"]),
-        "sort" | "rsort" | "shuffle" | "natsort" | "natcasesort" | "asort" | "arsort"
-        | "ksort" | "krsort" => fixed_by_ref(params, &["array"]),
-        "array_push" | "array_unshift" => variadic(params, &["array"]),
-        "array_splice" => optional_by_ref(params, 2, &["array"]),
-        "array_walk" | "usort" | "uksort" | "uasort" => fixed_by_ref(params, &["array"]),
         "fopen" | "fputcsv" => optional(params, 2),
         "flock" => optional_by_ref(params, 2, &["would_block"]),
         "fgetcsv" => optional(params, 1),
@@ -129,8 +123,6 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("is_callable", 1) => Bool(false),
         ("is_callable", 2) => Null,
         ("readline", 0) => Null,
-        ("array_splice", 2) => Null,
-        ("array_splice", 3) => EmptyArray,
         ("fopen", 2) => Bool(false),
         ("fopen", 3) => Null,
         ("flock", 2) => Null,
@@ -166,14 +158,6 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
 /// Builds fixed-arity signature shape.
 fn fixed(params: &[&'static str]) -> EvalBuiltinSignatureShape {
     shape(params.len(), 0, None, &[])
-}
-
-/// Builds fixed-arity signature shape with by-reference parameters.
-fn fixed_by_ref(
-    params: &[&'static str],
-    by_ref_params: &'static [&'static str],
-) -> EvalBuiltinSignatureShape {
-    shape(params.len(), 0, None, by_ref_params)
 }
 
 /// Builds trailing-default signature shape.

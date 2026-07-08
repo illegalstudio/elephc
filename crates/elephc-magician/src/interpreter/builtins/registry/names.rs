@@ -14,14 +14,6 @@ use super::{eval_declared_builtin_exists, eval_declared_builtin_function_names};
 
 /// PHP-visible builtin names implemented by the eval interpreter.
 pub(in crate::interpreter) const EVAL_PHP_VISIBLE_BUILTIN_FUNCTIONS: &[&str] = &[
-    "array_pop",
-    "array_push",
-    "array_shift",
-    "array_splice",
-    "array_unshift",
-    "array_walk",
-    "arsort",
-    "asort",
     "buffer_free",
     "buffer_len",
     "buffer_new",
@@ -59,11 +51,7 @@ pub(in crate::interpreter) const EVAL_PHP_VISIBLE_BUILTIN_FUNCTIONS: &[&str] = &
     "is_callable",
     "is_subclass_of",
     "isset",
-    "krsort",
-    "ksort",
     "method_exists",
-    "natcasesort",
-    "natsort",
     "pfsockopen",
     "ptr",
     "ptr_get",
@@ -82,9 +70,6 @@ pub(in crate::interpreter) const EVAL_PHP_VISIBLE_BUILTIN_FUNCTIONS: &[&str] = &
     "ptr_write_string",
     "property_exists",
     "readline",
-    "rsort",
-    "shuffle",
-    "sort",
     "spl_autoload",
     "spl_autoload_call",
     "spl_autoload_extensions",
@@ -123,10 +108,7 @@ pub(in crate::interpreter) const EVAL_PHP_VISIBLE_BUILTIN_FUNCTIONS: &[&str] = &
     "stream_wrapper_restore",
     "stream_wrapper_unregister",
     "trait_exists",
-    "uasort",
-    "uksort",
     "unset",
-    "usort",
     "vfprintf",
 ];
 

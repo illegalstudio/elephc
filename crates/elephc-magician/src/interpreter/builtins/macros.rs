@@ -77,6 +77,38 @@ macro_rules! eval_builtin {
     (
         name: $name:literal,
         area: $area:ident,
+        params: [$($param:ident $(: $mode:ident)? $(= $default:expr)?),* $(,)?],
+        variadic: $variadic:ident,
+        by_ref: [$($by_ref:ident),* $(,)?],
+        direct: none,
+        values: $values:ident $(,)?
+    ) => {
+        inventory::submit! {
+            $crate::interpreter::builtins::spec::EvalBuiltinSpec {
+                name: $name,
+                area: $crate::interpreter::builtins::spec::EvalArea::$area,
+                param_names: &[$(eval_builtin!(@name_str $param),)* eval_builtin!(@name_str $variadic)],
+                params: &[
+                    $(
+                        $crate::interpreter::builtins::spec::EvalParamSpec {
+                            name: eval_builtin!(@name_str $param),
+                            default: eval_builtin!(@default $($default)?),
+                            by_ref: eval_builtin!(@param_by_ref $($mode)?),
+                        },
+                    )*
+                ],
+                variadic: Some(eval_builtin!(@name_str $variadic)),
+                by_ref_params: &[$(eval_builtin!(@name_str $by_ref)),*],
+                required_param_count: None,
+                direct: None,
+                values: Some($crate::interpreter::builtins::spec::EvalValuesHook::$values),
+            }
+        }
+    };
+
+    (
+        name: $name:literal,
+        area: $area:ident,
         params: [$($param:ident $(= $default:expr)?),* $(,)?],
         variadic: $variadic:ident,
         direct: $direct:ident,

@@ -212,9 +212,17 @@ mod tests {
             "array_intersect_key",
             "array_map",
             "array_merge",
+            "array_pop",
+            "array_push",
             "array_reduce",
             "array_reverse",
+            "array_shift",
+            "array_splice",
             "array_sum",
+            "array_unshift",
+            "array_walk",
+            "arsort",
+            "asort",
             "basename",
             "boolval",
             "base64_encode",
@@ -343,6 +351,8 @@ mod tests {
             "json_last_error",
             "json_last_error_msg",
             "json_validate",
+            "krsort",
+            "ksort",
             "lchgrp",
             "lchown",
             "link",
@@ -357,6 +367,8 @@ mod tests {
             "mkdir",
             "mktime",
             "mt_rand",
+            "natcasesort",
+            "natsort",
             "nl2br",
             "number_format",
             "opendir",
@@ -392,7 +404,9 @@ mod tests {
             "sha1",
             "shell_exec",
             "settype",
+            "shuffle",
             "sleep",
+            "sort",
             "sprintf",
             "sscanf",
             "stat",
@@ -429,9 +443,12 @@ mod tests {
             "touch",
             "trim",
             "strval",
+            "uasort",
+            "uksort",
             "umask",
             "unlink",
             "usleep",
+            "usort",
             "var_dump",
             "vprintf",
             "vsprintf",
@@ -506,6 +523,26 @@ mod tests {
         assert_eq!(
             eval_declared_builtin_default_value("iterator_to_array", 1),
             Some(EvalBuiltinDefaultValue::Bool(true))
+        );
+        assert_eq!(
+            eval_declared_builtin_spec("array_pop").map(EvalBuiltinSpec::by_ref_param_names),
+            Some(["array"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_param_names("array_push"),
+            Some(["array", "values"].as_slice())
+        );
+        assert_eq!(
+            eval_builtin_signature_shape("array_push").map(|shape| shape.variadic),
+            Some(Some("values"))
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("array_splice", 2),
+            Some(EvalBuiltinDefaultValue::Null)
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("array_splice", 3),
+            Some(EvalBuiltinDefaultValue::EmptyArray)
         );
         assert_eq!(
             eval_declared_builtin_param_names("settype"),

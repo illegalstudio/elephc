@@ -8,14 +8,12 @@
 //! - Each child dispatcher handles already evaluated runtime-cell arguments for one
 //!   builtin family and returns `Ok(None)` when the name is outside its domain.
 
-mod arrays;
 mod filesystem;
 mod symbols;
 
 use super::eval_declared_builtin_values_call;
 use super::super::super::*;
 
-use arrays::*;
 use filesystem::*;
 use symbols::*;
 
@@ -30,9 +28,6 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
         return Ok(Some(result));
     }
 
-    if let Some(result) = eval_arrays_builtin_with_values(name, evaluated_args, context, values)? {
-        return Ok(Some(result));
-    }
     if let Some(result) =
         eval_filesystem_builtin_with_values(name, evaluated_args, context, values)?
     {

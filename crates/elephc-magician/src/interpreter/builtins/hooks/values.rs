@@ -18,7 +18,7 @@ use super::super::{
     eval_array_aggregate_result, eval_array_flip_result, eval_array_pad_result,
     eval_array_projection_result, eval_array_rand_result, eval_array_reverse_result,
     eval_array_search_result, eval_array_slice_result, eval_array_unique_result,
-    eval_array_values_result,
+    eval_array_mutating_values_result, eval_array_values_result,
     eval_base64_decode_result, eval_base64_encode_result, eval_bin2hex_result, eval_cast_result,
     eval_chr_result, eval_clamp_result, eval_core_values_result, eval_crc32_result,
     eval_ctype_result, eval_filesystem_values_result, eval_float_binary_result, eval_float_pair_result,
@@ -48,6 +48,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     ArrayAggregate,
     /// Dispatches non-mutating array and iterator builtins.
     Array,
+    /// Dispatches by-value calls for mutating array builtins.
+    ArrayMutating,
     /// Dispatches `array_flip(...)`.
     ArrayFlip,
     /// Dispatches `array_key_exists(...)`.
@@ -215,6 +217,9 @@ impl EvalValuesHook {
                 eval_array_aggregate_result(name, array, values)
             }),
             Self::Array => eval_array_values_result(name, evaluated_args, context, values),
+            Self::ArrayMutating => {
+                eval_array_mutating_values_result(name, evaluated_args, context, values)
+            }
             Self::ArrayFlip => one_arg(evaluated_args, values, eval_array_flip_result),
             Self::ArrayKeyExists => two_args(evaluated_args, values, |key, array, values| {
                 values.array_key_exists(key, array)

@@ -124,12 +124,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
     }
 
     match name {
-        "array_walk" => Some(&["array", "callback"]),
-        "uasort" | "uksort" | "usort" => Some(&["array", "callback"]),
-        "array_pop" | "array_shift" | "arsort" | "asort" | "krsort" | "ksort"
-        | "natcasesort" | "natsort" | "rsort" | "shuffle" | "sort" => Some(&["array"]),
-        "array_push" | "array_unshift" => Some(&["array", "values"]),
-        "array_splice" => Some(&["array", "offset", "length", "replacement"]),
         "empty" => Some(&["value"]),
         "is_callable" => Some(&["value", "syntax_only", "callable_name"]),
         "buffer_new" => Some(&["length"]),
