@@ -2,13 +2,25 @@
 //! Implements eval support for PHP `sscanf()` and its small scanning subset.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::formatting` re-exports.
+//! - `crate::interpreter::builtins::hooks`.
 //!
 //! Key details:
 //! - Only the currently supported `%d`, `%f`, `%s`, and `%%` subset is parsed;
 //!   extra output variables are evaluated for side effects and ignored.
+//! - This file owns registry metadata, direct dispatch, by-value dispatch, and
+//!   the scanning implementation.
 
 use super::super::super::*;
+
+eval_builtin! {
+    name: "sscanf",
+    area: Formatting,
+    params: [string, format],
+    variadic: vars,
+    direct: Sscanf,
+    values: Sscanf,
+}
+
 
 /// Evaluates direct positional `sscanf()` calls in source order.
 pub(in crate::interpreter) fn eval_builtin_sscanf(
@@ -26,6 +38,18 @@ pub(in crate::interpreter) fn eval_builtin_sscanf(
         eval_expr(arg, context, scope, values)?;
     }
     eval_sscanf_result(input, format, values)
+}
+
+
+/// Dispatches by-value `sscanf()` calls after argument binding.
+pub(in crate::interpreter) fn eval_sscanf_values_result(
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [input, format, ..] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    eval_sscanf_result(*input, *format, values)
 }
 
 /// Parses one string through the eval `sscanf()` subset and returns an indexed array.

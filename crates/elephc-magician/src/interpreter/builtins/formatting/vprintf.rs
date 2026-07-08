@@ -1,26 +1,25 @@
 //! Purpose:
-//! Eval registry entry and implementation for `printf`.
+//! Eval registry entry and implementation for `vprintf`.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::hooks`.
 //!
 //! Key details:
-//! - `printf()` reuses `sprintf` byte formatting, echoes the result, and returns
-//!   the emitted byte count.
+//! - `vprintf()` reuses `sprintf` byte formatting and `vsprintf` argument-array
+//!   expansion, then echoes the result and returns its byte count.
 
 use super::super::super::*;
 
 eval_builtin! {
-    name: "printf",
+    name: "vprintf",
     area: Formatting,
-    params: [format],
-    variadic: values,
-    direct: Printf,
-    values: Printf,
+    params: [format, values],
+    direct: Vprintf,
+    values: Vprintf,
 }
 
-/// Evaluates direct positional `printf()` calls in source order.
-pub(in crate::interpreter) fn eval_builtin_printf(
+/// Evaluates direct positional `vprintf()` calls in source order.
+pub(in crate::interpreter) fn eval_builtin_vprintf(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
@@ -30,19 +29,20 @@ pub(in crate::interpreter) fn eval_builtin_printf(
     for arg in args {
         evaluated_args.push(eval_expr(arg, context, scope, values)?);
     }
-    eval_printf_result(&evaluated_args, values)
+    eval_vprintf_result(&evaluated_args, values)
 }
 
-/// Formats `printf()` arguments, echoes the result, and returns its byte count.
-pub(in crate::interpreter) fn eval_printf_result(
+/// Formats `vprintf()` array arguments, echoes the result, and returns its byte count.
+pub(in crate::interpreter) fn eval_vprintf_result(
     evaluated_args: &[RuntimeCellHandle],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let Some((format, format_args)) = evaluated_args.split_first() else {
+    let [format, array] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
     let format = values.string_bytes(*format)?;
-    let output = super::sprintf::eval_sprintf_bytes(&format, format_args, values)?;
+    let format_args = super::vsprintf::eval_sprintf_argument_array_values(*array, values)?;
+    let output = super::sprintf::eval_sprintf_bytes(&format, &format_args, values)?;
     let len = i64::try_from(output.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
     let output = values.string_bytes_value(&output)?;
     values.echo(output)?;

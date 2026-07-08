@@ -26,7 +26,7 @@ use super::super::{
     eval_clamp_result, eval_cos_result, eval_cosh_result, eval_deg2rad_result,
     eval_core_values_result, eval_crc32_result, eval_ctype_result,
     eval_exp_result, eval_fdiv_result, eval_filesystem_values_result, eval_floatval_result,
-    eval_floor_result, eval_fmod_result, eval_formatting_values_result,
+    eval_floor_result, eval_fmod_result,
     eval_gettype_result, eval_hypot_result, eval_intdiv_result, eval_intval_result,
     eval_is_array_result, eval_is_bool_result,
     eval_is_double_result, eval_is_finite_result, eval_is_float_result,
@@ -41,10 +41,10 @@ use super::super::{
     eval_json_last_error_result, eval_json_validate_values_result, eval_log2_result,
     eval_log10_result, eval_log_result, eval_max_result, eval_min_result,
     eval_mt_rand_values_result, eval_network_env_values_result, eval_nl2br_result,
-    eval_pi_result, eval_pow_result, eval_rad2deg_result, eval_rand_values_result,
+    eval_pi_result, eval_pow_result, eval_printf_result, eval_rad2deg_result, eval_rand_values_result,
     eval_random_int_values_result, eval_range_result, eval_regex_values_result, eval_round_result,
     eval_settype_values_result, eval_sin_result, eval_sinh_result, eval_slashes_result,
-    eval_sqrt_result,
+    eval_sprintf_result, eval_sqrt_result, eval_sscanf_values_result,
     eval_str_pad_result, eval_str_replace_result, eval_str_repeat_result,
     eval_str_split_result, eval_stream_bool_predicate_result, eval_stream_introspection_result,
     eval_string_case_result, eval_string_compare_result, eval_string_position_result,
@@ -52,8 +52,8 @@ use super::super::{
     eval_substr_replace_result, eval_substr_result, eval_raw_memory_values_result,
     eval_symbols_values_result, eval_tan_result, eval_tanh_result, eval_time_values_result,
     eval_trim_like_result,
-    eval_ucwords_result, eval_url_decode_result, eval_url_encode_result,
-    eval_wordwrap_result,
+    eval_ucwords_result, eval_url_decode_result, eval_url_encode_result, eval_vprintf_result,
+    eval_vsprintf_result, eval_wordwrap_result,
 };
 use super::arity::{one_arg, three_args, two_args};
 use super::hash::{eval_hash_algos_values, eval_hash_context_values};
@@ -137,8 +137,16 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Fmod,
     /// Dispatches `hypot(...)`.
     Hypot,
-    /// Dispatches printf-family formatting builtins.
-    Formatting,
+    /// Dispatches `printf(...)`.
+    Printf,
+    /// Dispatches `sprintf(...)`.
+    Sprintf,
+    /// Dispatches `sscanf(...)`.
+    Sscanf,
+    /// Dispatches `vprintf(...)`.
+    Vprintf,
+    /// Dispatches `vsprintf(...)`.
+    Vsprintf,
     /// Dispatches `floor(...)`.
     Floor,
     /// Dispatches `gettype(...)`.
@@ -387,7 +395,6 @@ impl EvalValuesHook {
             Self::Filesystem => eval_filesystem_values_result(name, evaluated_args, context, values),
             Self::Floor => one_arg(evaluated_args, values, eval_floor_result),
             Self::Fmod => two_args(evaluated_args, values, eval_fmod_result),
-            Self::Formatting => eval_formatting_values_result(name, evaluated_args, values),
             Self::Gettype => one_arg(evaluated_args, values, eval_gettype_result),
             Self::Hypot => two_args(evaluated_args, values, eval_hypot_result),
             Self::Floatval => one_arg(evaluated_args, values, eval_floatval_result),
@@ -457,6 +464,7 @@ impl EvalValuesHook {
                 }
                 eval_pi_result(values)
             }
+            Self::Printf => eval_printf_result(evaluated_args, values),
             Self::Pow => two_args(evaluated_args, values, eval_pow_result),
             Self::Rad2deg => one_arg(evaluated_args, values, eval_rad2deg_result),
             Self::Rand => eval_rand_values_result(evaluated_args, values),
@@ -475,7 +483,9 @@ impl EvalValuesHook {
             Self::Slashes => one_arg(evaluated_args, values, |value, values| {
                 eval_slashes_result(name, value, values)
             }),
+            Self::Sprintf => eval_sprintf_result(evaluated_args, values),
             Self::Sqrt => one_arg(evaluated_args, values, eval_sqrt_result),
+            Self::Sscanf => eval_sscanf_values_result(evaluated_args, values),
             Self::StringCase => one_arg(evaluated_args, values, |value, values| {
                 eval_string_case_result(name, value, values)
             }),
@@ -567,6 +577,8 @@ impl EvalValuesHook {
                 [value, separators] => eval_ucwords_result(*value, Some(*separators), values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::Vprintf => eval_vprintf_result(evaluated_args, values),
+            Self::Vsprintf => eval_vsprintf_result(evaluated_args, values),
             Self::Nl2br => match evaluated_args {
                 [value] => eval_nl2br_result(*value, true, values),
                 [value, use_xhtml] => {

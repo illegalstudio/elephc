@@ -10,16 +10,19 @@
 //!   behavior through `RuntimeValueOps`.
 
 mod common;
-mod declarations;
-mod dispatch;
 mod number_format;
 mod printf;
+mod sprintf;
 mod sprintf_format;
 mod sscanf;
+mod vprintf;
+mod vsprintf;
 
 pub(in crate::interpreter) use common::*;
-pub(in crate::interpreter) use dispatch::*;
 pub(in crate::interpreter) use number_format::*;
 pub(in crate::interpreter) use printf::*;
+pub(in crate::interpreter) use sprintf::*;
 pub(in crate::interpreter) use sprintf_format::*;
 pub(in crate::interpreter) use sscanf::*;
+pub(in crate::interpreter) use vprintf::*;
+pub(in crate::interpreter) use vsprintf::*;

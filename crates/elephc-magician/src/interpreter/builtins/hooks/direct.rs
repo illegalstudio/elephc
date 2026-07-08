@@ -12,11 +12,12 @@
 use super::super::super::{
     eval_builtin_base64_decode, eval_builtin_base64_encode, eval_builtin_bin2hex,
     eval_builtin_chr, eval_builtin_count,
-    eval_builtin_crc32, eval_builtin_ctype, eval_builtin_explode, eval_builtin_formatting_call, eval_builtin_gzip, eval_builtin_hash_algos,
-    eval_builtin_hash_copy, eval_builtin_hash_final, eval_builtin_hash_init,
-    eval_builtin_hash_one_shot, eval_builtin_hash_update, eval_builtin_hex2bin,
-    eval_builtin_implode, eval_builtin_number_format, eval_builtin_ord, eval_builtin_slashes,
-    eval_builtin_str_repeat, eval_builtin_strlen,
+    eval_builtin_crc32, eval_builtin_ctype, eval_builtin_explode, eval_builtin_gzip,
+    eval_builtin_hash_algos, eval_builtin_hash_copy, eval_builtin_hash_final,
+    eval_builtin_hash_init, eval_builtin_hash_one_shot, eval_builtin_hash_update,
+    eval_builtin_hex2bin, eval_builtin_implode, eval_builtin_number_format, eval_builtin_ord,
+    eval_builtin_printf, eval_builtin_slashes, eval_builtin_sprintf, eval_builtin_sscanf,
+    eval_builtin_str_repeat, eval_builtin_strlen, eval_builtin_vprintf, eval_builtin_vsprintf,
     eval_builtin_url_decode, eval_builtin_url_encode, ElephcEvalContext, ElephcEvalScope,
     EvalExpr, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
 };
@@ -129,8 +130,16 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Fmod,
     /// Dispatches `hypot(...)`.
     Hypot,
-    /// Dispatches printf-family formatting builtins.
-    Formatting,
+    /// Dispatches `printf(...)`.
+    Printf,
+    /// Dispatches `sprintf(...)`.
+    Sprintf,
+    /// Dispatches `sscanf(...)`.
+    Sscanf,
+    /// Dispatches `vprintf(...)`.
+    Vprintf,
+    /// Dispatches `vsprintf(...)`.
+    Vsprintf,
     /// Dispatches `floor(...)`.
     Floor,
     /// Dispatches `gettype(...)`.
@@ -349,7 +358,6 @@ impl EvalDirectHook {
             Self::Fdiv => eval_builtin_fdiv(args, context, scope, values),
             Self::Filesystem => eval_builtin_filesystem_call(name, args, context, scope, values),
             Self::Fmod => eval_builtin_fmod(args, context, scope, values),
-            Self::Formatting => eval_builtin_formatting_call(name, args, context, scope, values),
             Self::Floor => eval_builtin_floor(args, context, scope, values),
             Self::Gettype => eval_builtin_gettype(args, context, scope, values),
             Self::Hypot => eval_builtin_hypot(args, context, scope, values),
@@ -403,6 +411,7 @@ impl EvalDirectHook {
             Self::NumberFormat => eval_builtin_number_format(args, context, scope, values),
             Self::Ord => eval_builtin_ord(args, context, scope, values),
             Self::Pi => eval_builtin_pi(args, values),
+            Self::Printf => eval_builtin_printf(args, context, scope, values),
             Self::Pow => eval_builtin_pow(args, context, scope, values),
             Self::Rad2deg => eval_builtin_rad2deg(args, context, scope, values),
             Self::Rand => eval_builtin_rand(args, context, scope, values),
@@ -415,6 +424,8 @@ impl EvalDirectHook {
             Self::Sinh => eval_builtin_sinh(args, context, scope, values),
             Self::Slashes => eval_builtin_slashes(name, args, context, scope, values),
             Self::Sqrt => super::super::math::eval_builtin_sqrt(args, context, scope, values),
+            Self::Sprintf => eval_builtin_sprintf(args, context, scope, values),
+            Self::Sscanf => eval_builtin_sscanf(args, context, scope, values),
             Self::StringCase => eval_builtin_string_case(name, args, context, scope, values),
             Self::StringCompare => eval_builtin_string_compare(name, args, context, scope, values),
             Self::StringPosition => {
@@ -448,6 +459,8 @@ impl EvalDirectHook {
             Self::Time => eval_builtin_time_call(name, args, context, scope, values),
             Self::TrimLike => eval_builtin_trim_like(name, args, context, scope, values),
             Self::Ucwords => eval_builtin_ucwords(args, context, scope, values),
+            Self::Vprintf => eval_builtin_vprintf(args, context, scope, values),
+            Self::Vsprintf => eval_builtin_vsprintf(args, context, scope, values),
             Self::Nl2br => eval_builtin_nl2br(args, context, scope, values),
             Self::Wordwrap => eval_builtin_wordwrap(args, context, scope, values),
             Self::UrlDecode => eval_builtin_url_decode(name, args, context, scope, values),
