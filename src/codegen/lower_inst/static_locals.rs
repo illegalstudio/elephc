@@ -121,7 +121,7 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
     let source_ty = ctx.load_value_to_result(value)?;
-    let mut loaded_ty = source_ty.codegen_repr();
+    let loaded_ty = source_ty.codegen_repr();
     // Narrow Mixed to Int when the static local slot is Int-typed.
     if matches!(slot.php_type.codegen_repr(), PhpType::Int)
         && matches!(loaded_ty, PhpType::Mixed)
@@ -139,7 +139,6 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
         ctx.load_value_to_result(value)?;
         abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        loaded_ty = PhpType::Int;
     }
     box_current_result_for_static_slot(ctx, &slot, value, &source_ty)?;
     let store_ty = slot.php_type.codegen_repr();

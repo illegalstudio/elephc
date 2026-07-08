@@ -29,7 +29,6 @@ pub fn emit_enable_heap_debug_flag(emitter: &mut Emitter) {
 }
 
 /// Copy the current frame pointer into the destination scratch register.
-#[cfg(test)]
 pub fn emit_copy_frame_pointer(emitter: &mut Emitter, dest: &str) {
     emitter.instruction(&format!(
         "mov {}, {}",
