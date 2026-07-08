@@ -176,3 +176,4 @@ pub(in crate::interpreter) use user_wrapper_stat::*;
 pub(in crate::interpreter) use user_wrapper_streams::*;
 pub(in crate::interpreter) use direct_dispatch::eval_builtin_filesystem_call;
 pub(in crate::interpreter) use values_dispatch::eval_filesystem_values_result;
+pub(in crate::interpreter) use flock::{eval_builtin_flock, eval_flock_result};

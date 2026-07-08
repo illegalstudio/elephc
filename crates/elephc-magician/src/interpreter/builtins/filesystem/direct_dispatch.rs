@@ -160,11 +160,7 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call_impl(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "basename" => super::basename::eval_basename_declared_call(args, context, scope, values),
-        "fgetcsv" => eval_builtin_fgetcsv(args, context, scope, values),
         "fnmatch" => eval_builtin_fnmatch(args, context, scope, values),
-        "fprintf" => eval_builtin_fprintf(args, context, scope, values),
-        "fputcsv" => eval_builtin_fputcsv(args, context, scope, values),
-        "fscanf" => eval_builtin_fscanf(args, context, scope, values),
         "readline" => eval_builtin_readline(args, context, scope, values),
         "realpath_cache_get" => eval_builtin_realpath_cache_get(args, values),
         "realpath_cache_size" => eval_builtin_realpath_cache_size(args, values),
@@ -224,7 +220,6 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call_impl(
             eval_builtin_stream_wrapper_registry(name, args, context, scope, values)
         }
         "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
-        "vfprintf" => eval_builtin_vfprintf(args, context, scope, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

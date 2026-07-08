@@ -19,59 +19,6 @@ pub(in crate::interpreter::builtins::filesystem) fn eval_filesystem_stream_value
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
-        "fgetcsv" => match evaluated_args {
-            [stream] => eval_fgetcsv_result(*stream, None, None, context, values)?,
-            [stream, length] => {
-                eval_fgetcsv_result(*stream, Some(*length), None, context, values)?
-            }
-            [stream, length, separator] => {
-                eval_fgetcsv_result(*stream, Some(*length), Some(*separator), context, values)?
-            }
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "flock" => {
-            if !(2..=3).contains(&evaluated_args.len()) {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            if evaluated_args.len() >= 3 {
-                values.warning(
-                    "flock(): Argument #3 ($would_block) must be passed by reference, value given",
-                )?;
-            }
-            let (success, _) =
-                eval_flock_result(evaluated_args[0], evaluated_args[1], context, values)?;
-            values.bool_value(success)?
-        }
-        "fprintf" => {
-            let Some((stream, rest)) = evaluated_args.split_first() else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            let Some((format, format_args)) = rest.split_first() else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_fprintf_result(*stream, *format, format_args, context, values)?
-        }
-        "fputcsv" => match evaluated_args {
-            [stream, fields] => eval_fputcsv_result(*stream, *fields, None, None, context, values)?,
-            [stream, fields, separator] => {
-                eval_fputcsv_result(*stream, *fields, Some(*separator), None, context, values)?
-            }
-            [stream, fields, separator, enclosure] => eval_fputcsv_result(
-                *stream,
-                *fields,
-                Some(*separator),
-                Some(*enclosure),
-                context,
-                values,
-            )?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "fscanf" => {
-            if evaluated_args.len() < 2 {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            eval_fscanf_result(evaluated_args[0], evaluated_args[1], context, values)?
-        }
         "fsockopen" | "pfsockopen" => {
             if !(2..=5).contains(&evaluated_args.len()) {
                 return Err(EvalStatus::RuntimeFatal);
@@ -295,12 +242,6 @@ pub(in crate::interpreter::builtins::filesystem) fn eval_filesystem_stream_value
         }
         "stream_wrapper_register" | "stream_wrapper_unregister" | "stream_wrapper_restore" => {
             eval_stream_wrapper_registry_result(name, evaluated_args, context, values)?
-        }
-        "vfprintf" => {
-            let [stream, format, array] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_vfprintf_result(*stream, *format, *array, context, values)?
         }
         _ => return Ok(None),
     };
