@@ -87,7 +87,10 @@ extern "C" {
         cpuset: *const CpuSet,
     ) -> libc::c_int;
     /// Reads the CPU affinity mask of the process `pid` (`0` = caller) into
-    /// `cpuset`. Used only by the round-trip unit test.
+    /// `cpuset`. Used only by the round-trip unit test, so gated to `test` to
+    /// avoid a `dead_code` warning in the non-test lib build (the CI builds the
+    /// lib without `--cfg test` when linking it into integration-test binaries).
+    #[cfg(test)]
     fn sched_getaffinity(
         pid: libc::pid_t,
         cpusetsize: libc::size_t,
@@ -96,8 +99,9 @@ extern "C" {
 }
 
 /// Returns whether CPU `cpu` is set in `set` (zero-indexed). Manual equivalent
-/// of glibc's `CPU_IS(cpu, &set)` macro.
-#[cfg(target_os = "linux")]
+/// of glibc's `CPU_IS(cpu, &set)` macro. Used only by the round-trip unit test,
+/// so gated to `test` to avoid a `dead_code` warning in the non-test lib build.
+#[cfg(all(target_os = "linux", test))]
 fn cpu_is_set(cpu: usize, set: &CpuSet) -> bool {
     let word = cpu / CPU_WORD_BITS;
     let bit = cpu % CPU_WORD_BITS;
