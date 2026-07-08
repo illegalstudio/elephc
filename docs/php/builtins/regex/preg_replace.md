@@ -2,7 +2,7 @@
 title: "preg_replace()"
 description: "Performs a regular expression search and replace."
 sidebar:
-  order: 313
+  order: 317
 ---
 
 ## preg_replace()

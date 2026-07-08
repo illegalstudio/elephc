@@ -2,7 +2,7 @@
 title: "str_replace()"
 description: "Replaces all occurrences of a search string with a replacement string."
 sidebar:
-  order: 382
+  order: 386
 ---
 
 ## str_replace()

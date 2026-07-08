@@ -205,6 +205,30 @@ fn refine_first_class_callable_sig(name: &str, sig: &mut FunctionSig) {
                 *callback_ty = PhpType::Callable;
             }
         }
+        "zval_pack" => {
+            if let Some((_, value_ty)) = sig.params.get_mut(0) {
+                *value_ty = PhpType::Mixed;
+            }
+            sig.return_type = PhpType::Pointer(None);
+        }
+        "zval_unpack" => {
+            if let Some((_, zval_ty)) = sig.params.get_mut(0) {
+                *zval_ty = PhpType::Pointer(None);
+            }
+            sig.return_type = PhpType::Mixed;
+        }
+        "zval_type" => {
+            if let Some((_, zval_ty)) = sig.params.get_mut(0) {
+                *zval_ty = PhpType::Pointer(None);
+            }
+            sig.return_type = PhpType::Int;
+        }
+        "zval_free" => {
+            if let Some((_, zval_ty)) = sig.params.get_mut(0) {
+                *zval_ty = PhpType::Pointer(None);
+            }
+            sig.return_type = PhpType::Void;
+        }
         _ => {}
     }
 }

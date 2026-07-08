@@ -2,7 +2,7 @@
 title: "explode() — internals"
 description: "Compiler internals for explode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 341
+  order: 345
 ---
 
 ## `explode()` — internals

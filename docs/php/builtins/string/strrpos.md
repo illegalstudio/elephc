@@ -2,7 +2,7 @@
 title: "strrpos()"
 description: "Finds the numeric position of the last occurrence of a substring."
 sidebar:
-  order: 391
+  order: 395
 ---
 
 ## strrpos()

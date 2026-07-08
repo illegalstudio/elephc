@@ -19186,5 +19186,173 @@
     },
     "slug": "wordwrap",
     "sub_area": "String"
+  },
+  {
+    "area": "Pointer",
+    "canonical_name": "zval_free",
+    "description": "Frees a PHP zval pointer allocated by `zval_pack`.",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen/lower_inst/builtins/pointers.rs",
+      "codegen_function": "lower_zval_free",
+      "codegen_line": 606,
+      "notes": [
+        "Lowers `zval_free(zval_ptr)` by releasing the zval block and owned children."
+      ],
+      "runtime_helpers": [
+        "__rt_zval_free"
+      ],
+      "sig_arm": null,
+      "sig_file": "src/builtins/pointers/zval_free.rs",
+      "sig_line": null
+    },
+    "name": "zval_free",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zval",
+          "optional": false,
+          "type": "pointer"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "slug": "zval_free",
+    "sub_area": "Pointer"
+  },
+  {
+    "area": "Pointer",
+    "canonical_name": "zval_pack",
+    "description": "Packs an elephc runtime value into a heap-allocated PHP zval pointer.",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen/lower_inst/builtins/pointers.rs",
+      "codegen_function": "lower_zval_pack",
+      "codegen_line": 541,
+      "notes": [
+        "Lowers `zval_pack(value)` by boxing the operand as a Mixed cell and invoking",
+        "`__rt_zval_pack`, which returns a pointer to a freshly allocated 16-byte zval.",
+        "`__rt_zval_pack` only reads the `(tag, lo, hi)` triple out of the boxed Mixed",
+        "cell; it never retains or frees that cell. When the operand was not already",
+        "Mixed/Union, `emit_box_current_value_as_mixed` allocated a fresh owned box",
+        "(persisting strings, increfing array/object/mixed children), so that box is a",
+        "throwaway temporary that must be deep-released after the pack call or it leaks",
+        "one Mixed cell per call. When the operand is already Mixed/Union no box was",
+        "created, so the operand's own live cell must not be freed here."
+      ],
+      "runtime_helpers": [
+        "__rt_mixed_free_deep",
+        "__rt_zval_pack"
+      ],
+      "sig_arm": null,
+      "sig_file": "src/builtins/pointers/zval_pack.rs",
+      "sig_line": null
+    },
+    "name": "zval_pack",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "pointer",
+      "variadic": null
+    },
+    "slug": "zval_pack",
+    "sub_area": "Pointer"
+  },
+  {
+    "area": "Pointer",
+    "canonical_name": "zval_type",
+    "description": "Returns the PHP zval type byte for a zval pointer.",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen/lower_inst/builtins/pointers.rs",
+      "codegen_function": "lower_zval_type",
+      "codegen_line": 597,
+      "notes": [
+        "Lowers `zval_type(zval_ptr)` by returning the PHP `IS_*` type byte."
+      ],
+      "runtime_helpers": [
+        "__rt_zval_free",
+        "__rt_zval_type"
+      ],
+      "sig_arm": null,
+      "sig_file": "src/builtins/pointers/zval_type.rs",
+      "sig_line": null
+    },
+    "name": "zval_type",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zval",
+          "optional": false,
+          "type": "pointer"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "zval_type",
+    "sub_area": "Pointer"
+  },
+  {
+    "area": "Pointer",
+    "canonical_name": "zval_unpack",
+    "description": "Unpacks a PHP zval pointer into an owned elephc Mixed value.",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen/lower_inst/builtins/pointers.rs",
+      "codegen_function": "lower_zval_unpack",
+      "codegen_line": 588,
+      "notes": [
+        "Lowers `zval_unpack(zval_ptr)` by invoking `__rt_zval_unpack`."
+      ],
+      "runtime_helpers": [
+        "__rt_zval_free",
+        "__rt_zval_type",
+        "__rt_zval_unpack"
+      ],
+      "sig_arm": null,
+      "sig_file": "src/builtins/pointers/zval_unpack.rs",
+      "sig_line": null
+    },
+    "name": "zval_unpack",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "zval",
+          "optional": false,
+          "type": "pointer"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "zval_unpack",
+    "sub_area": "Pointer"
   }
 ]

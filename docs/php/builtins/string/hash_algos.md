@@ -2,7 +2,7 @@
 title: "hash_algos()"
 description: "Returns an array of supported hashing algorithm names."
 sidebar:
-  order: 348
+  order: 352
 ---
 
 ## hash_algos()

@@ -21,6 +21,7 @@ use super::pointers;
 use super::spl;
 use super::strings;
 use super::system;
+use super::zval;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::RuntimeFeatures;
 
@@ -511,6 +512,18 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     pointers::emit_cstr_to_str(emitter);
     pointers::emit_ptr_read_string(emitter);
     pointers::emit_ptr_write_string(emitter);
+
+    // zval pack/unpack bridge runtime functions
+    zval::emit_zval_string_new(emitter);
+    zval::emit_zval_djbx33a(emitter);
+    zval::emit_zval_pack(emitter);
+    zval::emit_zval_pack_array_packed(emitter);
+    zval::emit_zval_pack_array_hash(emitter);
+    zval::emit_zval_unpack(emitter);
+    zval::emit_zval_unpack_array(emitter);
+    zval::emit_zval_type(emitter);
+    zval::emit_zval_free_array(emitter);
+    zval::emit_zval_free(emitter);
 
     // Fiber runtime functions (cooperative coroutines)
     fibers::emit_fiber_alloc_stack(emitter);

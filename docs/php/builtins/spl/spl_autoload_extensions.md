@@ -2,7 +2,7 @@
 title: "spl_autoload_extensions()"
 description: "Register and return default file extensions for spl_autoload."
 sidebar:
-  order: 321
+  order: 325
 ---
 
 ## spl_autoload_extensions()

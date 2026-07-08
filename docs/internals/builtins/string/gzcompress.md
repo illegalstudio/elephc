@@ -2,7 +2,7 @@
 title: "gzcompress() — internals"
 description: "Compiler internals for gzcompress(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 343
+  order: 347
 ---
 
 ## `gzcompress()` — internals

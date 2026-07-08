@@ -123,4 +123,3 @@ tokens:
 - `@block name=<eir_block>` names the EIR basic block of the next label line.
 - `@src line=<L> col=<C> [end=<EL>:<EC>] [op=<opcode>] [origin=<pass>]`
   precedes the assembly of one EIR instruction.
-

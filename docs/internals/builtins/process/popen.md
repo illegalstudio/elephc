@@ -2,7 +2,7 @@
 title: "popen() — internals"
 description: "Compiler internals for popen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 305
+  order: 309
 ---
 
 ## `popen()` — internals

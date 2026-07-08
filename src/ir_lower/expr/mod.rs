@@ -1801,25 +1801,35 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     };
     if is_extern {
         let data = ctx.intern_function_name(canonical);
-        return ctx.emit_value(
+        let call = ctx.emit_value(
             Op::ExternCall,
-            operands,
+            operands.clone(),
             Some(Immediate::Data(data)),
             php_type,
             Op::ExternCall.default_effects(),
             Some(expr.span),
         );
+        // Plain extern calls release owned argument temporaries the same way method
+        // and builtin calls do, so a fresh owned temporary passed as an argument is
+        // not leaked once per call. The alias guard keeps a pass-through result alive.
+        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), expr.span);
+        return call;
     }
     if is_user_function {
         let data = ctx.intern_function_name(canonical);
-        return ctx.emit_value(
+        let call = ctx.emit_value(
             Op::Call,
-            operands,
+            operands.clone(),
             Some(Immediate::Data(data)),
             php_type,
             effects_lookup::user_call_effects(canonical),
             Some(expr.span),
         );
+        // Plain user calls release owned argument temporaries the same way method and
+        // builtin calls do. The alias guard keeps a passthrough result (e.g. a function
+        // that returns its own array argument typed `iterable`) from being freed.
+        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), expr.span);
+        return call;
     }
     emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span)
 }
@@ -6013,6 +6023,10 @@ fn pointer_builtin_return_type(
                 _ => Some(PhpType::Pointer(None)),
             }
         }
+        "zval_pack" => Some(PhpType::Pointer(None)),
+        "zval_unpack" => Some(PhpType::Mixed),
+        "zval_type" => Some(PhpType::Int),
+        "zval_free" => Some(PhpType::Void),
         _ => None,
     }
 }
@@ -9171,6 +9185,17 @@ fn call_result_may_alias_arg(
             PhpType::AssocArray { .. },
             PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Iterable,
         ) => true,
+        // `iterable` is a supertype of arrays and Traversable objects, so a
+        // function can accept one container shape and return the same payload
+        // typed as `iterable` (e.g. `function id(iterable $x): iterable`
+        // returning an array argument). Treat container/iterable pairings in
+        // either direction as a possible alias so the shared payload is not
+        // released while the callee still returns it.
+        (
+            PhpType::Iterable,
+            PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_),
+        ) => true,
+        (PhpType::Array(_) | PhpType::Object(_), PhpType::Iterable) => true,
         (PhpType::Str, PhpType::Str) => true,
         (PhpType::Callable, PhpType::Callable) => true,
         (PhpType::Buffer(_), PhpType::Buffer(_)) => true,

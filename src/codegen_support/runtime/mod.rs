@@ -26,6 +26,8 @@ mod strings;
 /// Standard PHP library constants, functions, and classes.
 pub(crate) mod spl;
 mod system;
+/// zval pack/unpack bridge helpers (elephc values ↔ PHP zval structs).
+mod zval;
 
 pub(crate) use data::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (symbols, constants, type metadata).

@@ -2,7 +2,7 @@
 title: "is_callable()"
 description: "Checks whether a variable can be called as a function."
 sidebar:
-  order: 417
+  order: 421
 ---
 
 ## is_callable()

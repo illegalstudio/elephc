@@ -978,6 +978,10 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     "ptr_write16": ["pointer", "int"],
     "ptr_write32": ["pointer", "int"],
     "ptr_write_string": ["pointer", "string"],
+    "zval_pack": ["mixed"],
+    "zval_unpack": ["pointer"],
+    "zval_type": ["pointer"],
+    "zval_free": ["pointer"],
     "buffer_new": ["int"],
     "buffer_free": ["buffer"],
     "buffer_len": ["buffer"],
@@ -1137,6 +1141,10 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     "ptr_write16": ["pointer", "int"],
     "ptr_write32": ["pointer", "int"],
     "ptr_write_string": ["pointer", "string"],
+    "zval_pack": ["mixed"],
+    "zval_unpack": ["pointer"],
+    "zval_type": ["pointer"],
+    "zval_free": ["pointer"],
 }
 
 
@@ -1263,6 +1271,10 @@ RETURN_TYPE_OVERRIDES: Dict[str, str] = {
     "vprintf": "int",
     "vsprintf": "string",
     "iterator_apply": "int",
+    "zval_pack": "pointer",
+    "zval_unpack": "mixed",
+    "zval_type": "int",
+    "zval_free": "void",
 }
 
 

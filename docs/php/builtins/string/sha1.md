@@ -2,7 +2,7 @@
 title: "sha1()"
 description: "Calculates the SHA-1 hash of a string."
 sidebar:
-  order: 374
+  order: 378
 ---
 
 ## sha1()

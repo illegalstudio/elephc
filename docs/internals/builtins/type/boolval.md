@@ -2,7 +2,7 @@
 title: "boolval() — internals"
 description: "Compiler internals for boolval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 405
+  order: 409
 ---
 
 ## `boolval()` — internals

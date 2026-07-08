@@ -2,7 +2,7 @@
 title: "htmlspecialchars() — internals"
 description: "Compiler internals for htmlspecialchars(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 358
+  order: 362
 ---
 
 ## `htmlspecialchars()` — internals

@@ -2,7 +2,7 @@
 title: "str_ends_with() — internals"
 description: "Compiler internals for str_ends_with(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 378
+  order: 382
 ---
 
 ## `str_ends_with()` — internals

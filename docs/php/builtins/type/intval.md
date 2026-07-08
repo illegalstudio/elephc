@@ -2,7 +2,7 @@
 title: "intval()"
 description: "Returns the integer value of a variable."
 sidebar:
-  order: 414
+  order: 418
 ---
 
 ## intval()

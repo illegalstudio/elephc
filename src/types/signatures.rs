@@ -657,6 +657,8 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
         }
         "ptr_write_string" => Some(fixed(&["pointer", "string"])),
         "ptr_sizeof" => Some(fixed(&["type"])),
+        "zval_pack" => Some(fixed(&["value"])),
+        "zval_unpack" | "zval_type" | "zval_free" => Some(fixed(&["zval"])),
         "buffer_new" => Some(fixed(&["length"])),
         "buffer_len" | "buffer_free" => Some(fixed(&["buffer"])),
         _ => None,
@@ -1010,6 +1012,26 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             name,
             &[PhpType::Pointer(None), PhpType::Str],
             PhpType::Int,
+        )),
+        "zval_pack" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed],
+            PhpType::Pointer(None),
+        )),
+        "zval_unpack" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None)],
+            PhpType::Mixed,
+        )),
+        "zval_type" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None)],
+            PhpType::Int,
+        )),
+        "zval_free" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None)],
+            PhpType::Void,
         )),
         _ => None,
     }

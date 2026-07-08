@@ -2,7 +2,7 @@
 title: "chop()"
 description: "Alias of rtrim: strips whitespace (or other characters) from the end of a string."
 sidebar:
-  order: 338
+  order: 342
 ---
 
 ## chop()
