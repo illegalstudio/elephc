@@ -1597,12 +1597,8 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "fopen" => eval_builtin_fopen(args, context, scope, values),
         "fputcsv" => eval_builtin_fputcsv(args, context, scope, values),
         "fprintf" => eval_builtin_fprintf(args, context, scope, values),
-        "fread" => eval_builtin_fread(args, context, scope, values),
         "fsockopen" | "pfsockopen" => eval_builtin_fsockopen(args, context, scope, values),
         "fscanf" => eval_builtin_fscanf(args, context, scope, values),
-        "fseek" => eval_builtin_fseek(args, context, scope, values),
-        "ftruncate" => eval_builtin_ftruncate(args, context, scope, values),
-        "fwrite" => eval_builtin_fwrite(args, context, scope, values),
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(name, args, context, scope, values)
         }
@@ -1675,7 +1671,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         }
         "sscanf" => eval_builtin_sscanf(args, context, scope, values),
         "sprintf" | "printf" => eval_builtin_sprintf_like(name, args, context, scope, values),
-        "stream_copy_to_stream" => eval_builtin_stream_copy_to_stream(args, context, scope, values),
         "stream_context_create" => eval_builtin_stream_context_create(args, context, scope, values),
         "stream_context_get_default" => {
             eval_builtin_stream_context_get_default(args, context, scope, values)
@@ -1730,8 +1725,6 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_stream_socket_recvfrom(args, context, scope, values)
         }
         "stream_socket_pair" => eval_builtin_stream_socket_pair(args, context, scope, values),
-        "stream_get_contents" => eval_builtin_stream_get_contents(args, context, scope, values),
-        "stream_get_line" => eval_builtin_stream_get_line(args, context, scope, values),
         "long2ip" => eval_builtin_long2ip(args, context, scope, values),
         "unset" => eval_builtin_unset(args, context, scope, values),
         "var_dump" => eval_builtin_var_dump(args, context, scope, values),

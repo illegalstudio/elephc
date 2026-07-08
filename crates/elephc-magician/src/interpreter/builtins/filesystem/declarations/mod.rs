@@ -37,6 +37,10 @@ mod fileperms;
 mod filesize;
 mod filetype;
 mod fnmatch;
+mod fread;
+mod fseek;
+mod ftruncate;
+mod fwrite;
 mod getcwd;
 mod glob;
 mod is_dir;
@@ -67,6 +71,9 @@ mod rewinddir;
 mod rmdir;
 mod scandir;
 mod stat;
+mod stream_copy_to_stream;
+mod stream_get_contents;
+mod stream_get_line;
 mod stream_isatty;
 mod stream_resolve_include_path;
 mod stream_set_blocking;
@@ -119,6 +126,10 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call(
         "filesize" => eval_builtin_filesize(args, context, scope, values),
         "filetype" => eval_builtin_filetype(args, context, scope, values),
         "fnmatch" => eval_builtin_fnmatch(args, context, scope, values),
+        "fread" => eval_builtin_fread(args, context, scope, values),
+        "fseek" => eval_builtin_fseek(args, context, scope, values),
+        "ftruncate" => eval_builtin_ftruncate(args, context, scope, values),
+        "fwrite" => eval_builtin_fwrite(args, context, scope, values),
         "getcwd" => eval_builtin_getcwd(args, values),
         "glob" => eval_builtin_glob(args, context, scope, values),
         "linkinfo" => eval_builtin_linkinfo(args, context, scope, values),
@@ -136,6 +147,9 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call(
         "realpath_cache_size" => eval_builtin_realpath_cache_size(args, values),
         "scandir" => eval_builtin_scandir(args, context, scope, values),
         "stat" | "lstat" => eval_builtin_stat_array(name, args, context, scope, values),
+        "stream_copy_to_stream" => eval_builtin_stream_copy_to_stream(args, context, scope, values),
+        "stream_get_contents" => eval_builtin_stream_get_contents(args, context, scope, values),
+        "stream_get_line" => eval_builtin_stream_get_line(args, context, scope, values),
         "stream_resolve_include_path" => {
             eval_builtin_stream_resolve_include_path(args, context, scope, values)
         }
@@ -239,6 +253,25 @@ pub(in crate::interpreter) fn eval_filesystem_values_result(
             }
             _ => Err(EvalStatus::RuntimeFatal),
         },
+        "fread" => match evaluated_args {
+            [stream, length] => eval_fread_result(*stream, *length, context, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "fseek" => match evaluated_args {
+            [stream, offset] => eval_fseek_result(*stream, *offset, None, context, values),
+            [stream, offset, whence] => {
+                eval_fseek_result(*stream, *offset, Some(*whence), context, values)
+            }
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "ftruncate" => match evaluated_args {
+            [stream, size] => eval_ftruncate_result(*stream, *size, context, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "fwrite" => match evaluated_args {
+            [stream, data] => eval_fwrite_result(*stream, *data, context, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
         "getcwd" => match evaluated_args {
             [] => eval_getcwd_result(values),
             _ => Err(EvalStatus::RuntimeFatal),
@@ -298,6 +331,42 @@ pub(in crate::interpreter) fn eval_filesystem_values_result(
         },
         "stat" | "lstat" => match evaluated_args {
             [filename] => eval_stat_array_result(name, *filename, context, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "stream_copy_to_stream" => match evaluated_args {
+            [from, to] => eval_stream_copy_to_stream_result(*from, *to, None, None, context, values),
+            [from, to, length] => {
+                eval_stream_copy_to_stream_result(*from, *to, Some(*length), None, context, values)
+            }
+            [from, to, length, offset] => eval_stream_copy_to_stream_result(
+                *from,
+                *to,
+                Some(*length),
+                Some(*offset),
+                context,
+                values,
+            ),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "stream_get_contents" => match evaluated_args {
+            [stream] => eval_stream_get_contents_result(*stream, None, None, context, values),
+            [stream, length] => {
+                eval_stream_get_contents_result(*stream, Some(*length), None, context, values)
+            }
+            [stream, length, offset] => eval_stream_get_contents_result(
+                *stream,
+                Some(*length),
+                Some(*offset),
+                context,
+                values,
+            ),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "stream_get_line" => match evaluated_args {
+            [stream, length] => eval_stream_get_line_result(*stream, *length, None, context, values),
+            [stream, length, ending] => {
+                eval_stream_get_line_result(*stream, *length, Some(*ending), context, values)
+            }
             _ => Err(EvalStatus::RuntimeFatal),
         },
         "stream_resolve_include_path" => match evaluated_args {

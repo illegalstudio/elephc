@@ -93,12 +93,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             )?;
             values.bool_value(success)?
         }
-        "fread" => {
-            let [stream, length] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_fread_result(*stream, *length, context, values)?
-        }
         "fsockopen" | "pfsockopen" => {
             if !(2..=5).contains(&evaluated_args.len()) {
                 return Err(EvalStatus::RuntimeFatal);
@@ -112,25 +106,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             }
             eval_fscanf_result(evaluated_args[0], evaluated_args[1], context, values)?
         }
-        "fseek" => match evaluated_args {
-            [stream, offset] => eval_fseek_result(*stream, *offset, None, context, values)?,
-            [stream, offset, whence] => {
-                eval_fseek_result(*stream, *offset, Some(*whence), context, values)?
-            }
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "ftruncate" => {
-            let [stream, size] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_ftruncate_result(*stream, *size, context, values)?
-        }
-        "fwrite" => {
-            let [stream, data] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_fwrite_result(*stream, *data, context, values)?
-        }
         "readline" => {
             if evaluated_args.len() > 1 {
                 return Err(EvalStatus::RuntimeFatal);
@@ -138,23 +113,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             let prompt = evaluated_args.first().copied();
             eval_readline_result(prompt, values)?
         }
-        "stream_copy_to_stream" => match evaluated_args {
-            [from, to] => {
-                eval_stream_copy_to_stream_result(*from, *to, None, None, context, values)?
-            }
-            [from, to, length] => {
-                eval_stream_copy_to_stream_result(*from, *to, Some(*length), None, context, values)?
-            }
-            [from, to, length, offset] => eval_stream_copy_to_stream_result(
-                *from,
-                *to,
-                Some(*length),
-                Some(*offset),
-                context,
-                values,
-            )?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
         "stream_context_create" => match evaluated_args {
             [] => eval_stream_context_create_result(None, context, values)?,
             [options] => eval_stream_context_create_result(Some(*options), context, values)?,
@@ -336,29 +294,6 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_stream_socket_pair_result(context, values)?
         }
-        "stream_get_contents" => match evaluated_args {
-            [stream] => eval_stream_get_contents_result(*stream, None, None, context, values)?,
-            [stream, length] => {
-                eval_stream_get_contents_result(*stream, Some(*length), None, context, values)?
-            }
-            [stream, length, offset] => eval_stream_get_contents_result(
-                *stream,
-                Some(*length),
-                Some(*offset),
-                context,
-                values,
-            )?,
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
-        "stream_get_line" => match evaluated_args {
-            [stream, length] => {
-                eval_stream_get_line_result(*stream, *length, None, context, values)?
-            }
-            [stream, length, ending] => {
-                eval_stream_get_line_result(*stream, *length, Some(*ending), context, values)?
-            }
-            _ => return Err(EvalStatus::RuntimeFatal),
-        },
         "vfprintf" => {
             let [stream, format, array] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);

@@ -193,11 +193,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
             Some(&["hostname", "port", "error_code", "error_message", "timeout"])
         }
         "flock" => Some(&["stream", "operation", "would_block"]),
-        "fread" => Some(&["stream", "length"]),
         "fscanf" => Some(&["stream", "format", "vars"]),
-        "fseek" => Some(&["stream", "offset", "whence"]),
-        "ftruncate" => Some(&["stream", "size"]),
-        "fwrite" => Some(&["stream", "data"]),
         "function_exists" => Some(&["function"]),
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => Some(&[]),
         "gethostbyaddr" => Some(&["ip"]),
@@ -261,7 +257,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "stream_bucket_make_writeable" => Some(&["brigade"]),
         "stream_bucket_new" => Some(&["stream", "buffer"]),
         "stream_bucket_append" | "stream_bucket_prepend" => Some(&["brigade", "bucket"]),
-        "stream_copy_to_stream" => Some(&["from", "to", "length", "offset"]),
         "stream_context_create" => Some(&["options", "params"]),
         "stream_context_get_default" => Some(&["options"]),
         "stream_context_get_options" | "stream_context_get_params" => Some(&["context"]),
@@ -275,8 +270,6 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
             Some(&["stream", "filtername", "read_write", "params"])
         }
         "stream_filter_remove" => Some(&["stream_filter"]),
-        "stream_get_contents" => Some(&["stream", "length", "offset"]),
-        "stream_get_line" => Some(&["stream", "length", "ending"]),
         "stream_select" => Some(&["read", "write", "except", "seconds", "microseconds"]),
         "stream_socket_server" | "stream_socket_client" => Some(&["address"]),
         "stream_socket_accept" => Some(&["socket", "timeout", "peer_name"]),

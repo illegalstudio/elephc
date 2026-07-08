@@ -109,11 +109,9 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "print_r" => optional(params, 1),
         "var_dump" => variadic(params, &[]),
 
-        "fopen" | "fseek" | "fputcsv" => optional(params, 2),
+        "fopen" | "fputcsv" => optional(params, 2),
         "flock" => optional_by_ref(params, 2, &["would_block"]),
         "fgetcsv" => optional(params, 1),
-        "stream_get_contents" => optional(params, 1),
-        "stream_copy_to_stream" => optional(params, 2),
         "stream_socket_accept" => optional_by_ref(params, 1, &["peer_name"]),
         "fsockopen" | "pfsockopen" => {
             optional_by_ref(params, 2, &["error_code", "error_message"])
@@ -121,8 +119,9 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
         "stream_wrapper_register" | "stream_socket_enable_crypto" => optional(params, 2),
         "stream_context_create" | "stream_context_get_default" => optional(params, 0),
         "stream_context_set_option" => optional(params, 2),
-        "stream_get_line" | "stream_socket_sendto"
-        | "stream_filter_append" | "stream_filter_prepend" => optional(params, 2),
+        "stream_socket_sendto" | "stream_filter_append" | "stream_filter_prepend" => {
+            optional(params, 2)
+        }
         "stream_select" => optional_by_ref(params, 4, &["read", "write", "except"]),
         "stream_socket_recvfrom" => optional_by_ref(params, 2, &["address"]),
 
@@ -188,15 +187,10 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("fopen", 2) => Bool(false),
         ("fopen", 3) => Null,
         ("flock", 2) => Null,
-        ("fseek", 2) => Int(0),
         ("fgetcsv", 1) => Null,
         ("fgetcsv", 2) => String(","),
         ("fputcsv", 2) => String(","),
         ("fputcsv", 3) => String("\""),
-        ("stream_get_contents", 1) => Null,
-        ("stream_get_contents", 2) => Int(-1),
-        ("stream_copy_to_stream", 2) => Null,
-        ("stream_copy_to_stream", 3) => Int(-1),
         ("stream_socket_accept", 1 | 2) => Null,
         ("fsockopen" | "pfsockopen", 2 | 3 | 4) => Null,
         ("stream_wrapper_register", 2) => Int(0),
@@ -204,7 +198,6 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("stream_context_create", 0 | 1) => Null,
         ("stream_context_get_default", 0) => Null,
         ("stream_context_set_option", 2 | 3) => Null,
-        ("stream_get_line", 2) => String(""),
         ("stream_select", 4) => Int(0),
         ("stream_socket_sendto", 2) => Int(0),
         ("stream_socket_sendto", 3) => String(""),
