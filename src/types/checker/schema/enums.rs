@@ -18,21 +18,6 @@ use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, FunctionSig
 use super::super::Checker;
 use super::validation::build_method_sig;
 
-/// Clones an enum method with `self`/`static` type hints rewritten to the enum itself. Enums
-/// have no parent, so `parent` is left unresolved (and rejected later if it surfaces).
-fn substitute_enum_relative_types(method: &ClassMethod, enum_name: &str) -> ClassMethod {
-    let mut method = method.clone();
-    for (_, type_ann, _, _) in method.params.iter_mut() {
-        if let Some(ty) = type_ann.as_mut() {
-            *ty = ty.substitute_relative_class_types(enum_name, None);
-        }
-    }
-    if let Some(return_type) = method.return_type.as_mut() {
-        *return_type = return_type.substitute_relative_class_types(enum_name, None);
-    }
-    method
-}
-
 /// Propagates concrete return types from overrides to their abstract parent declarations.
 ///
 /// Iterates classes in reverse class-ID order so that subclasses override before their parents.
@@ -364,7 +349,11 @@ pub(crate) fn insert_enum_metadata(
     let mut method_declaring_classes = HashMap::new();
     let mut method_impl_classes = HashMap::new();
     for method in user_methods {
-        let method = substitute_enum_relative_types(method, name);
+        // Clone + rewrite self/static on this enum method (enums have no parent).
+        // Must happen before build_method_sig because bare "self" is rejected later.
+        let mut method = method.clone();
+        method.substitute_relative_class_types(name, None);
+
         let sig = build_method_sig(checker, &method)?;
         let key = php_symbol_key(&method.name);
         if method.is_static {
