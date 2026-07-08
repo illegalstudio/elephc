@@ -8,11 +8,11 @@
   per-builtin layout and derive metadata from that registry.
 - [x] Phase 1: update parity tests to query the registry instead of searching
   dispatcher string literals for migrated builtins.
-- [ ] Phase 2: migrate already implemented magician builtins area by area while
+- [x] Phase 2: migrate already implemented magician builtins area by area while
   keeping fallback to existing dispatchers until each area is complete.
-- [ ] Phase 2: remove duplicate manual tables for names, signatures, defaults,
+- [x] Phase 2: remove duplicate manual tables for names, signatures, defaults,
   by-ref parameters, and dispatch in migrated areas.
-- [ ] Phase 2: keep ordinary files below 500 LoC, leaving exceptions only for
+- [x] Phase 2: keep ordinary files below 500 LoC, leaving exceptions only for
   cohesive single-scope helpers documented in their module preambles.
 - [ ] Phase 3: split remaining large builtin files (`symbols.rs`,
   `filesystem/streams.rs`, `class_metadata/oop_introspection.rs`,
@@ -167,6 +167,11 @@ For each area:
 During Phase 2, a hybrid system is acceptable: the new registry for migrated
 areas, manual dispatchers for areas not yet migrated. Duplicating metadata for a
 migrated builtin is not acceptable.
+
+Phase 2 completion leaves the procedural date/time alias fallback explicit in
+`registry/dispatch/mod.rs`. Eval cannot run the static name-resolver rewrite
+before runtime dispatch, so aliases such as date/time procedural names remain an
+eval-only runtime bridge rather than duplicated builtin metadata.
 
 ## Phase 3: Large-File Cleanup and Legacy Path Removal
 
