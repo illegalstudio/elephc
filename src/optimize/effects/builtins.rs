@@ -29,7 +29,7 @@
 /// are excluded because they read/write the shared `_json_last_error` runtime symbol.
 /// Pointer memory helpers (`ptr_read16`, `ptr_write16`, `ptr_read_string`, `ptr_write_string`)
 /// are excluded because raw memory access can null-dereference or fatal.
-pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
+pub(in crate::optimize) fn is_pure_non_throwing_builtin(name: &str) -> bool {
     matches!(
         name,
         "strlen"

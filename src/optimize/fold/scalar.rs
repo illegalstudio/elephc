@@ -74,6 +74,35 @@ pub(in crate::optimize) fn assigned_scalar_value(expr: &Expr) -> Option<ScalarVa
     })
 }
 
+/// Upper bound on array-literal fact size: facts are cloned into propagation
+/// environments and across control-flow merges, so oversized literals simply
+/// carry no fact.
+pub(in crate::optimize) const MAX_ARRAY_FACT_ELEMENTS: usize = 64;
+
+/// Extracts a qualifying array-literal fact from an assignment RHS: an indexed
+/// or associative literal whose keys and values are all scalar literals, at
+/// most `MAX_ARRAY_FACT_ELEMENTS` entries. The returned clone feeds
+/// `try_fold_array_access` at constant-index reads of the assigned variable.
+pub(in crate::optimize) fn assigned_array_fact(expr: &Expr) -> Option<Expr> {
+    match &expr.kind {
+        ExprKind::ArrayLiteral(items)
+            if items.len() <= MAX_ARRAY_FACT_ELEMENTS
+                && items.iter().all(|item| scalar_value(item).is_some()) =>
+        {
+            Some(expr.clone())
+        }
+        ExprKind::ArrayLiteralAssoc(items)
+            if items.len() <= MAX_ARRAY_FACT_ELEMENTS
+                && items
+                    .iter()
+                    .all(|(key, value)| scalar_value(key).is_some() && scalar_value(value).is_some()) =>
+        {
+            Some(expr.clone())
+        }
+        _ => None,
+    }
+}
+
 /// Returns `Some(true)` if two scalar expressions are strictly equal (===), `Some(false)` if not,
 /// or `None` if either operand is not a scalar literal.
 pub(in crate::optimize) fn strict_eq(left: &Expr, right: &Expr) -> Option<bool> {
