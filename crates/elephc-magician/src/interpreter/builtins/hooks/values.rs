@@ -51,9 +51,14 @@ use super::super::{
     eval_str_split_result, eval_stream_bool_predicate_result, eval_stream_introspection_result,
     eval_string_case_result, eval_string_compare_result, eval_string_position_result,
     eval_string_search_result, eval_strstr_result, eval_strval_result,
-    eval_substr_replace_result, eval_substr_result, eval_raw_memory_values_result,
-    eval_symbols_values_result, eval_tan_result, eval_tanh_result, eval_time_values_result,
-    eval_trim_like_result,
+    eval_substr_replace_result, eval_substr_result, eval_buffer_free_values_result,
+    eval_buffer_len_values_result, eval_buffer_new_values_result, eval_ptr_get_values_result,
+    eval_ptr_is_null_values_result, eval_ptr_null_values_result, eval_ptr_offset_values_result,
+    eval_ptr_read16_values_result, eval_ptr_read32_values_result, eval_ptr_read8_values_result,
+    eval_ptr_read_string_values_result, eval_ptr_set_values_result, eval_ptr_sizeof_values_result,
+    eval_ptr_values_result, eval_ptr_write16_values_result, eval_ptr_write32_values_result,
+    eval_ptr_write8_values_result, eval_ptr_write_string_values_result, eval_symbols_values_result,
+    eval_tan_result, eval_tanh_result, eval_time_values_result, eval_trim_like_result,
     eval_ucwords_result, eval_url_decode_result, eval_url_encode_result, eval_vprintf_result,
     eval_vsprintf_result, eval_wordwrap_result,
 };
@@ -263,8 +268,42 @@ pub(in crate::interpreter) enum EvalValuesHook {
     PregReplaceCallback,
     /// Dispatches `preg_split(...)`.
     PregSplit,
-    /// Dispatches raw pointer and buffer extension builtins.
-    RawMemory,
+    /// Dispatches `buffer_free(...)`.
+    BufferFree,
+    /// Dispatches `buffer_len(...)`.
+    BufferLen,
+    /// Dispatches `buffer_new(...)`.
+    BufferNew,
+    /// Dispatches `ptr(...)`.
+    Ptr,
+    /// Dispatches `ptr_get(...)`.
+    PtrGet,
+    /// Dispatches `ptr_is_null(...)`.
+    PtrIsNull,
+    /// Dispatches `ptr_null()`.
+    PtrNull,
+    /// Dispatches `ptr_offset(...)`.
+    PtrOffset,
+    /// Dispatches `ptr_read8(...)`.
+    PtrRead8,
+    /// Dispatches `ptr_read16(...)`.
+    PtrRead16,
+    /// Dispatches `ptr_read32(...)`.
+    PtrRead32,
+    /// Dispatches `ptr_read_string(...)`.
+    PtrReadString,
+    /// Dispatches `ptr_set(...)`.
+    PtrSet,
+    /// Dispatches `ptr_sizeof(...)`.
+    PtrSizeof,
+    /// Dispatches `ptr_write8(...)`.
+    PtrWrite8,
+    /// Dispatches `ptr_write16(...)`.
+    PtrWrite16,
+    /// Dispatches `ptr_write32(...)`.
+    PtrWrite32,
+    /// Dispatches `ptr_write_string(...)`.
+    PtrWriteString,
     /// Dispatches by-value `settype(...)` callable calls.
     Settype,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
@@ -492,7 +531,24 @@ impl EvalValuesHook {
                 eval_preg_replace_callback_values_result(evaluated_args, context, values)
             }
             Self::PregSplit => eval_preg_split_values_result(evaluated_args, values),
-            Self::RawMemory => eval_raw_memory_values_result(name, evaluated_args, context, values),
+            Self::BufferFree => eval_buffer_free_values_result(evaluated_args, values),
+            Self::BufferLen => eval_buffer_len_values_result(evaluated_args, values),
+            Self::BufferNew => eval_buffer_new_values_result(evaluated_args, values),
+            Self::Ptr => eval_ptr_values_result(evaluated_args),
+            Self::PtrGet => eval_ptr_get_values_result(evaluated_args, values),
+            Self::PtrIsNull => eval_ptr_is_null_values_result(evaluated_args, values),
+            Self::PtrNull => eval_ptr_null_values_result(evaluated_args, values),
+            Self::PtrOffset => eval_ptr_offset_values_result(evaluated_args, values),
+            Self::PtrRead8 => eval_ptr_read8_values_result(evaluated_args, values),
+            Self::PtrRead16 => eval_ptr_read16_values_result(evaluated_args, values),
+            Self::PtrRead32 => eval_ptr_read32_values_result(evaluated_args, values),
+            Self::PtrReadString => eval_ptr_read_string_values_result(evaluated_args, values),
+            Self::PtrSet => eval_ptr_set_values_result(evaluated_args, values),
+            Self::PtrSizeof => eval_ptr_sizeof_values_result(evaluated_args, context, values),
+            Self::PtrWrite8 => eval_ptr_write8_values_result(evaluated_args, values),
+            Self::PtrWrite16 => eval_ptr_write16_values_result(evaluated_args, values),
+            Self::PtrWrite32 => eval_ptr_write32_values_result(evaluated_args, values),
+            Self::PtrWriteString => eval_ptr_write_string_values_result(evaluated_args, values),
             Self::Settype => eval_settype_values_result(evaluated_args, values),
             Self::Sin => one_arg(evaluated_args, values, eval_sin_result),
             Self::Sinh => one_arg(evaluated_args, values, eval_sinh_result),

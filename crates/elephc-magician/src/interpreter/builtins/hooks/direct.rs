@@ -45,9 +45,14 @@ use super::super::{
     eval_builtin_pi, eval_builtin_pow, eval_builtin_rad2deg, eval_builtin_rand,
     eval_builtin_random_int, eval_builtin_range, eval_builtin_round,
     eval_builtin_preg_match, eval_builtin_preg_match_all, eval_builtin_preg_replace,
-    eval_builtin_preg_replace_callback, eval_builtin_preg_split, eval_builtin_raw_memory_call,
-    eval_builtin_sin, eval_builtin_sinh, eval_builtin_str_pad, eval_builtin_str_replace,
-    eval_builtin_str_split,
+    eval_builtin_preg_replace_callback, eval_builtin_preg_split, eval_builtin_buffer_free,
+    eval_builtin_buffer_len, eval_builtin_buffer_new, eval_builtin_ptr, eval_builtin_ptr_get,
+    eval_builtin_ptr_is_null, eval_builtin_ptr_null, eval_builtin_ptr_offset,
+    eval_builtin_ptr_read16, eval_builtin_ptr_read32, eval_builtin_ptr_read8,
+    eval_builtin_ptr_read_string, eval_builtin_ptr_set, eval_builtin_ptr_sizeof,
+    eval_builtin_ptr_write16, eval_builtin_ptr_write32, eval_builtin_ptr_write8,
+    eval_builtin_ptr_write_string, eval_builtin_sin, eval_builtin_sinh, eval_builtin_str_pad,
+    eval_builtin_str_replace, eval_builtin_str_split,
     eval_builtin_stream_bool_predicate, eval_builtin_stream_introspection,
     eval_builtin_string_case, eval_builtin_string_compare, eval_builtin_string_position,
     eval_builtin_string_search, eval_builtin_strrev, eval_builtin_strstr, eval_builtin_substr,
@@ -256,8 +261,42 @@ pub(in crate::interpreter) enum EvalDirectHook {
     PregReplaceCallback,
     /// Dispatches `preg_split(...)`.
     PregSplit,
-    /// Dispatches raw pointer and buffer extension builtins.
-    RawMemory,
+    /// Dispatches `buffer_free(...)`.
+    BufferFree,
+    /// Dispatches `buffer_len(...)`.
+    BufferLen,
+    /// Dispatches `buffer_new(...)`.
+    BufferNew,
+    /// Dispatches `ptr(...)`.
+    Ptr,
+    /// Dispatches `ptr_get(...)`.
+    PtrGet,
+    /// Dispatches `ptr_is_null(...)`.
+    PtrIsNull,
+    /// Dispatches `ptr_null()`.
+    PtrNull,
+    /// Dispatches `ptr_offset(...)`.
+    PtrOffset,
+    /// Dispatches `ptr_read8(...)`.
+    PtrRead8,
+    /// Dispatches `ptr_read16(...)`.
+    PtrRead16,
+    /// Dispatches `ptr_read32(...)`.
+    PtrRead32,
+    /// Dispatches `ptr_read_string(...)`.
+    PtrReadString,
+    /// Dispatches `ptr_set(...)`.
+    PtrSet,
+    /// Dispatches `ptr_sizeof(...)`.
+    PtrSizeof,
+    /// Dispatches `ptr_write8(...)`.
+    PtrWrite8,
+    /// Dispatches `ptr_write16(...)`.
+    PtrWrite16,
+    /// Dispatches `ptr_write32(...)`.
+    PtrWrite32,
+    /// Dispatches `ptr_write_string(...)`.
+    PtrWriteString,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
     Slashes,
     /// Dispatches `sin(...)`.
@@ -435,7 +474,24 @@ impl EvalDirectHook {
                 eval_builtin_preg_replace_callback(args, context, scope, values)
             }
             Self::PregSplit => eval_builtin_preg_split(args, context, scope, values),
-            Self::RawMemory => eval_builtin_raw_memory_call(name, args, context, scope, values),
+            Self::BufferFree => eval_builtin_buffer_free(args, context, scope, values),
+            Self::BufferLen => eval_builtin_buffer_len(args, context, scope, values),
+            Self::BufferNew => eval_builtin_buffer_new(args, context, scope, values),
+            Self::Ptr => eval_builtin_ptr(args, context, scope, values),
+            Self::PtrGet => eval_builtin_ptr_get(args, context, scope, values),
+            Self::PtrIsNull => eval_builtin_ptr_is_null(args, context, scope, values),
+            Self::PtrNull => eval_builtin_ptr_null(args, context, scope, values),
+            Self::PtrOffset => eval_builtin_ptr_offset(args, context, scope, values),
+            Self::PtrRead8 => eval_builtin_ptr_read8(args, context, scope, values),
+            Self::PtrRead16 => eval_builtin_ptr_read16(args, context, scope, values),
+            Self::PtrRead32 => eval_builtin_ptr_read32(args, context, scope, values),
+            Self::PtrReadString => eval_builtin_ptr_read_string(args, context, scope, values),
+            Self::PtrSet => eval_builtin_ptr_set(args, context, scope, values),
+            Self::PtrSizeof => eval_builtin_ptr_sizeof(args, context, scope, values),
+            Self::PtrWrite8 => eval_builtin_ptr_write8(args, context, scope, values),
+            Self::PtrWrite16 => eval_builtin_ptr_write16(args, context, scope, values),
+            Self::PtrWrite32 => eval_builtin_ptr_write32(args, context, scope, values),
+            Self::PtrWriteString => eval_builtin_ptr_write_string(args, context, scope, values),
             Self::Sin => eval_builtin_sin(args, context, scope, values),
             Self::Sinh => eval_builtin_sinh(args, context, scope, values),
             Self::Slashes => eval_builtin_slashes(name, args, context, scope, values),
