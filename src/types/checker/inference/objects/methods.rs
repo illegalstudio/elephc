@@ -485,6 +485,10 @@ impl Checker {
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
                         && declared_flags.get(i).copied().unwrap_or(false)
+                        && !Self::method_array_param_keeps_generic_shape(
+                            &impl_class_name,
+                            &method_key,
+                        )
                         && Self::is_generic_array_hint(&sig.params[i].1)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
@@ -534,6 +538,12 @@ impl Checker {
             }
         }
         Ok(PhpType::Int)
+    }
+
+    /// Returns true for builtin method array params whose accepted shape must remain broad.
+    fn method_array_param_keeps_generic_shape(class_name: &str, method_key: &str) -> bool {
+        matches!(class_name, "ReflectionFunction" | "ReflectionMethod")
+            && method_key == php_symbol_key("invokeArgs")
     }
 
     /// Builds synthetic `__call` arguments: `[method_name, [args...]]`.

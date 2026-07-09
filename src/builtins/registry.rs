@@ -196,6 +196,7 @@ pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
     let mut fcc_sig = callable_wrapper_sig(&sig);
     refine_first_class_callable_sig(name, &mut fcc_sig);
     fcc_sig.declared_return = true;
+    fcc_sig.declared_params = vec![true; fcc_sig.params.len()];
     Some(fcc_sig)
 }
 

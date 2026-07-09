@@ -797,57 +797,19 @@ fn builtin_reflection_function_constructor_method() -> ClassMethod {
 /// attribute, and parameter slots. Codegen populates these from the reflected
 /// function's signature and attribute metadata.
 fn builtin_reflection_function() -> FlattenedClass {
-    FlattenedClass {
-        name: "ReflectionFunction".to_string(),
-        span: dummy(),
-        extends: None,
-        implements: Vec::new(),
-        is_abstract: false,
-        is_final: true,
-        is_readonly_class: false,
-        properties: vec![
-            builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
-            builtin_property(
-                "__short_name",
-                Visibility::Private,
-                Some(TypeExpr::Str),
-                empty_string(),
-            ),
-            builtin_property(
-                "__parameters",
-                Visibility::Private,
-                Some(object_array_type("ReflectionParameter")),
-                empty_array(),
-            ),
-            builtin_property(
-                "__required_parameter_count",
-                Visibility::Private,
-                Some(TypeExpr::Int),
-                int_lit(0),
-            ),
-            builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
-        ],
-        methods: vec![
-            builtin_reflection_function_constructor_method(),
-            builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str),
-            builtin_reflection_slot_getter("getShortName", "__short_name", TypeExpr::Str),
-            builtin_reflection_parameter_count_method(),
-            builtin_reflection_class_int_method(
-                "getNumberOfRequiredParameters",
-                "__required_parameter_count",
-            ),
-            builtin_reflection_class_array_method(
-                "getParameters",
-                "__parameters",
-                object_array_type("ReflectionParameter"),
-            ),
-            builtin_reflection_owner_get_attributes_method(),
-        ],
-        attributes: Vec::new(),
-        constants: Vec::new(),
-        used_traits: Vec::new(),
-        trait_aliases: Vec::new(),
+    let mut class = builtin_reflection_owner_class(
+        "ReflectionFunction",
+        true,
+        vec![("function", Some(TypeExpr::Str), None, false)],
+    );
+    if let Some(constructor) = class
+        .methods
+        .iter_mut()
+        .find(|method| method.name == "__construct")
+    {
+        *constructor = builtin_reflection_function_constructor_method();
     }
+    class
 }
 
 /// Builds the `ReflectionParameter` shell with private name/position/optional/
@@ -1390,7 +1352,8 @@ fn builtin_reflection_union_type() -> FlattenedClass {
                 "__types",
                 object_array_type("ReflectionNamedType"),
             ),
-            builtin_reflection_composite_type_to_string_method("|", true),
+            builtin_reflection_composite_type_string_method("__toString", "|", true),
+            builtin_reflection_composite_type_string_method("getName", "|", true),
             builtin_reflection_class_bool_method("allowsNull", "__allows_null"),
         ],
         attributes: Vec::new(),
@@ -1432,7 +1395,8 @@ fn builtin_reflection_intersection_type() -> FlattenedClass {
                 "__types",
                 object_array_type("ReflectionNamedType"),
             ),
-            builtin_reflection_composite_type_to_string_method("&", false),
+            builtin_reflection_composite_type_string_method("__toString", "&", false),
+            builtin_reflection_composite_type_string_method("getName", "&", false),
             builtin_reflection_class_bool_method("allowsNull", "__allows_null"),
         ],
         attributes: Vec::new(),
@@ -1495,8 +1459,9 @@ fn builtin_reflection_named_type_to_string_method() -> ClassMethod {
     }
 }
 
-/// Builds `ReflectionUnionType::__toString()` or `ReflectionIntersectionType::__toString()`.
-fn builtin_reflection_composite_type_to_string_method(
+/// Builds a string-rendering method for `ReflectionUnionType` and `ReflectionIntersectionType`.
+fn builtin_reflection_composite_type_string_method(
+    method_name: &str,
     separator: &'static str,
     append_null: bool,
 ) -> ClassMethod {
@@ -1550,7 +1515,7 @@ fn builtin_reflection_composite_type_to_string_method(
         dummy_span,
     ));
     ClassMethod {
-        name: "__toString".to_string(),
+        name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
         is_abstract: false,
@@ -5137,6 +5102,11 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("invokeArgs")) {
                     sig.return_type = PhpType::Mixed;
+                    sig.params = vec![("args".to_string(), PhpType::Array(Box::new(PhpType::Mixed)))];
+                    sig.param_type_exprs = vec![Some(array_type())];
+                    sig.defaults = vec![None];
+                    sig.ref_params = vec![false];
+                    sig.declared_params = vec![true];
                 }
                 if let Some(sig) =
                     class_info.methods.get_mut(&php_symbol_key("createFromMethodName"))
