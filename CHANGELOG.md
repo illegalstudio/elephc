@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- `htmlspecialchars()` / `htmlentities()` now accept the optional `$flags` and `$encoding` arguments (issue #506), and the `ENT_*` constants (`ENT_QUOTES`, `ENT_COMPAT`, `ENT_NOQUOTES`, `ENT_HTML401`, `ENT_HTML5`, `ENT_XHTML`, `ENT_XML1`, `ENT_SUBSTITUTE`, `ENT_IGNORE`) are defined with PHP's values. The escaper currently always applies `ENT_QUOTES` behavior.
 - Static interface methods (PHP 8.3+): an interface may declare `public static function` signatures; a concrete implementing class must provide a compatible public static method (abstract classes may defer to a concrete child), dispatched by class with no vtable slot. `#[\Override]` is accepted on the static implementation, including when the interface is implemented by an abstract parent class.
 - Deprecated `${var}` / `${expr}` string interpolation is now accepted by the lexer (issue #340), matching PHP 8.x's deprecated-but-working behavior.
 - `var_dump()` is now variadic (issue #389): each argument is dumped independently in source order. `print_r()` gains the `$return` flag — `print_r($v, true)` returns the rendered string instead of echoing, including when the flag is only known at runtime (`string|bool` boxed result); captures are truncated at the 64 KiB buffer cap.
