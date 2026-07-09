@@ -30,6 +30,7 @@ pub(super) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instructio
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
+    ctx.writeback_symbol_array_source(array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_shift_aarch64(ctx, array, &elem_ty)?,
         Arch::X86_64 => lower_array_shift_x86_64(ctx, array, &elem_ty)?,

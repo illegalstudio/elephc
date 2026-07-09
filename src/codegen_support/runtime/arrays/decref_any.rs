@@ -75,6 +75,8 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_decref_any_object");                         // release objects through __rt_decref_object
     emitter.instruction("cmp x11, #5");                                         // is this a boxed mixed value?
     emitter.instruction("b.eq __rt_decref_any_mixed");                          // release mixed cells through __rt_decref_mixed
+    emitter.instruction("cmp x11, #6");                                         // is this a compact Throwable payload?
+    emitter.instruction("b.eq __rt_decref_any_object");                         // throwables release through the object path (refcount + deep free)
     emitter.instruction("ret");                                                 // unknown/raw kinds need no release
 
     emitter.label("__rt_decref_any_string");
@@ -133,6 +135,8 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_decref_any_object");                           // objects release through the x86_64 object decref helper
     emitter.instruction("cmp r10, 5");                                          // does this heap-backed payload point at a boxed mixed cell?
     emitter.instruction("je __rt_decref_any_mixed");                            // mixed cells release through the x86_64 mixed decref helper
+    emitter.instruction("cmp r10, 6");                                          // does this heap-backed payload point at a compact Throwable?
+    emitter.instruction("je __rt_decref_any_object");                           // throwables release through the object path (refcount + deep free)
     emitter.instruction("jmp __rt_decref_any_done");                            // unknown/raw heap kinds need no release work in the current x86_64 bootstrap runtime
 
     emitter.label("__rt_decref_any_string");

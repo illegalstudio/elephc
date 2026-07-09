@@ -104,14 +104,12 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     // baseTimestamp argument, and therefore DateTime::modify(), are honored).
     emitter.instruction("cmp x3, #0");                                          // was a base timestamp supplied?
     emitter.instruction("b.eq __rt_strtotime_clock_from_now");                  // no base → fall back to the current time
-    emitter.adrp("x9", "_strtotime_clock");                                     // page of the clock global
-    emitter.add_lo12("x9", "x9", "_strtotime_clock");                           // resolve the clock global address
+    abi::emit_symbol_address(emitter, "x9", "_strtotime_clock");                      // resolve the clock global address
     emitter.instruction("str x0, [x9]");                                        // store the supplied base timestamp as the clock
     emitter.instruction("b __rt_strtotime_clock_ready");                        // skip the current-time path
     emitter.label("__rt_strtotime_clock_from_now");
     emitter.instruction("bl __rt_time");                                        // x0 = current Unix timestamp (ptr/len already saved)
-    emitter.adrp("x9", "_strtotime_clock");                                     // page of the clock global
-    emitter.add_lo12("x9", "x9", "_strtotime_clock");                           // resolve the clock global address
+    abi::emit_symbol_address(emitter, "x9", "_strtotime_clock");                      // resolve the clock global address
     emitter.instruction("str x0, [x9]");                                        // store the current time as the clock
     emitter.label("__rt_strtotime_clock_ready");
     emitter.instruction("bl __rt_tz_init_utc");                                 // default the timezone to UTC on first use (PHP-compatible) unless already set
@@ -203,8 +201,7 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_strtotime_relunit_restore");                 // no -> restore and fall back
     emitter.instruction("bl __rt_strtotime_lc_cursor");                         // lowercase the next word into the lc16 buffer
     emitter.instruction("add x6, sp, #64");                                     // candidate = lc16 buffer
-    emitter.adrp("x7", "_strtotime_unit_tab");                                  // unit table base page
-    emitter.add_lo12("x7", "x7", "_strtotime_unit_tab");                        // resolve the unit table base
+    abi::emit_symbol_address(emitter, "x7", "_strtotime_unit_tab");                  // resolve the unit table base address
     emitter.instruction("sub x8, x4, x3");                                      // remaining bytes
     emitter.instruction("mov x11, #16");                                        // cap candidate window to lc16 size
     emitter.instruction("cmp x8, x11");                                         // remaining bytes > 16 ?

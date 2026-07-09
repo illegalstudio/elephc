@@ -29,6 +29,7 @@ use crate::names::{
 use crate::types::{callable_wrapper_sig, first_class_callable_builtin_sig, FunctionSig, PhpType};
 
 use super::context::FunctionContext;
+use super::frame;
 use super::function_variants;
 use super::{CodegenIrError, Result};
 
@@ -81,6 +82,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),
+        Op::StoreGlobalReleasing => lower_store_global_releasing(ctx, &inst),
         Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),
         Op::ExternGlobalStore => lower_extern_global_store(ctx, &inst),
         Op::IAdd => arithmetic::lower_int_binop(ctx, &inst, "add", "add"),
@@ -2695,7 +2697,15 @@ fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     ctx.emitter.comment("push EIR exception handler");
     abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_handler_top", 0);
     abi::store_at_offset(ctx.emitter, scratch, handler_offset);
-    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    // Handler record[+8] = the survive-frame: the activation record that must remain
+    // on top after this catch. `__rt_throw_current` passes it to
+    // `__rt_exception_cleanup_frames`, which releases the owned locals of every frame
+    // unwound ABOVE it and stops there. It is the current `_exc_call_frame_top`: this
+    // function's own record when it owns refcounted locals (so its locals are cleaned
+    // by its normal epilogue after the catch, never twice), or the caller's record
+    // otherwise. Writing 0 here (the old EIR behavior) left the cleanup chain unwalked
+    // and leaked every nested frame's locals on throw.
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_call_frame_top", 0);
     abi::store_at_offset(ctx.emitter, scratch, handler_offset - 8);
     abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_rt_diag_suppression", 0);
     abi::store_at_offset(
@@ -2744,6 +2754,19 @@ fn lower_catch_current(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
 }
 
 /// Binds the active exception to an optional catch variable and clears the runtime slot.
+///
+/// The exception object arrives in `_exc_value` as a moved (owned) reference. Binding
+/// takes ownership, so this releases whatever the destination already owned before it
+/// overwrites it, or releases the object outright when the clause has no variable:
+///
+/// - With a variable: decref the catch slot's previous value (null-guarded — the slot
+///   is zero-initialized by the prologue since `$e` is a cleanup-tracked local), then
+///   move `_exc_value` into it as a transfer (no incref; the slot now owns the single
+///   reference and the epilogue / unwind callback releases it).
+/// - Without a variable (`catch (Exception)`): decref `_exc_value` itself, otherwise the
+///   only reference to the caught object is discarded unreleased.
+///
+/// Either way `_exc_value` is cleared afterwards so a later re-raise sees no stale slot.
 fn lower_catch_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
         let storage_ty = ctx.local_php_type(slot)?;
@@ -2753,9 +2776,21 @@ fn lower_catch_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
             inst.result_php_type.codegen_repr()
         };
         let offset = ctx.local_offset(slot)?;
+        // Release the value the catch slot currently owns before rebinding it, so a
+        // reused `$e` (e.g. a catch inside a loop) does not leak the previous object.
+        ctx.emitter.comment("release the catch variable's previous owned value");
+        abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        frame::emit_refcounted_release_in_result(ctx, &storage_ty);
         abi::emit_load_symbol_to_result(ctx.emitter, "_exc_value", &target_ty);
         let store_ty = catch_bind_store_type(ctx, &target_ty, &storage_ty);
         abi::emit_store(ctx.emitter, &store_ty, offset);
+    } else {
+        // Variable-less catch owns the caught object but never binds it; release the
+        // moved reference so it is not leaked when `_exc_value` is cleared below.
+        ctx.emitter.comment("release the caught exception discarded by a variable-less catch");
+        let discarded_ty = PhpType::Object("Throwable".to_string());
+        abi::emit_load_symbol_to_result(ctx.emitter, "_exc_value", &discarded_ty);
+        frame::emit_refcounted_release_in_result(ctx, &discarded_ty);
     }
     abi::emit_store_zero_to_symbol(ctx.emitter, "_exc_value", 0);
     Ok(())
@@ -3245,11 +3280,9 @@ fn emit_method_call_on_null_fatal(ctx: &mut FunctionContext<'_>, method_name: &s
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the member-call-on-null fatal to stderr
-            ctx.emitter.adrp("x1", &message_label);
-            ctx.emitter.add_lo12("x1", "x1", &message_label);
-            ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the member-call-on-null fatal byte length
+            ctx.emitter.instruction("mov x0, #2");                              // write the member-call-on-null fatal to stderr
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);               // resolve the member-call-on-null fatal message address
+            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the member-call-on-null fatal byte length
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }
@@ -3712,11 +3745,17 @@ fn lower_throwable_standard_method(
     store_if_result(ctx, inst)
 }
 
-/// Loads `Throwable::getMessage()` from payload offsets 8/16 into string result registers.
+/// Loads `Throwable::getMessage()` from payload offsets 8/16 and returns an owned copy.
+///
+/// The Throwable owns its message (persisted at construction). A getter must return an
+/// INDEPENDENT owned copy: the string result is released by the caller like any other
+/// owned string, and freeing the throwable's own copy there would dangle it for later
+/// getters (`__toString` corruption over a getter sequence). Persist re-copies it.
 fn lower_throwable_get_message(ctx: &mut FunctionContext<'_>, object_reg: &str) -> Result<PhpType> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, ptr_reg, object_reg, 8);
     abi::emit_load_from_address(ctx.emitter, len_reg, object_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");                      // hand back an owned copy so the caller's release never frees the throwable's message
     Ok(PhpType::Str)
 }
 
@@ -4615,6 +4654,14 @@ fn lower_lexical_instance_static_method_call(
     let mut target =
         resolve_method_call_target(ctx, receiver, method_name, inst.operands.len() + 1)?;
     target.dynamic_slot = None;
+    // A builtin Throwable constructor (`Exception`, `RuntimeException`, `Error`, …) has no
+    // emitted method body, so `parent::__construct(...)` cannot call it. Stamp the inherited
+    // message/code fields directly onto `$this` instead, matching the compact `new` path.
+    if php_symbol_key(method_name) == "__construct"
+        && objects::is_builtin_throwable_payload_class(&target.impl_class)
+    {
+        return objects::lower_parent_builtin_throwable_construct(ctx, inst, this_slot);
+    }
     let receiver_ty = PhpType::Object(receiver.to_string());
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(receiver_ty.clone());
@@ -5794,9 +5841,27 @@ fn mixed_unbox_low_payload_reg(ctx: &FunctionContext<'_>) -> &'static str {
 
 /// Unboxes a boxed Mixed/Union payload and retains it for an owned concrete heap result.
 fn emit_unbox_mixed_to_owned_refcounted_result(ctx: &mut FunctionContext<'_>, result_ty: &PhpType) {
+    emit_unbox_mixed_to_refcounted_result(ctx, result_ty, true);
+}
+
+/// Unboxes a Mixed cell to a refcounted payload pointer, increffing only when the
+/// result is an owned value.
+///
+/// EIR expresses ownership transfers with explicit `Op::Acquire` ops (which incref).
+/// A borrowed load — e.g. the receiver of `prop_get`/a method call read from a
+/// `Mixed`/union local — carries no `acquire` and no matching `release`, so increffing
+/// here would double-count and leak one reference per access. Callers pass `incref =
+/// false` for such borrowed loads and `true` only when the value is genuinely owned.
+fn emit_unbox_mixed_to_refcounted_result(
+    ctx: &mut FunctionContext<'_>,
+    result_ty: &PhpType,
+    incref: bool,
+) {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
-    abi::emit_incref_if_refcounted(ctx.emitter, result_ty);
+    if incref {
+        abi::emit_incref_if_refcounted(ctx.emitter, result_ty);
+    }
 }
 
 /// Stores an unboxed scalar Mixed payload back through the original by-reference source.
@@ -6065,7 +6130,8 @@ fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
         ctx.load_local_to_result(slot)?
     };
     let result_ty = ctx.value_php_type(result)?;
-    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    let result_owned = matches!(ctx.value_ownership(result)?, Ownership::Owned);
+    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty, result_owned)?;
     ctx.store_result_value(result)
 }
 
@@ -6077,7 +6143,8 @@ fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
         .ok_or_else(|| CodegenIrError::invalid_module("load_ref_cell missing result value"))?;
     let result_ty = ctx.value_php_type(result)?;
     let source_ty = load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
-    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    let result_owned = matches!(ctx.value_ownership(result)?, Ownership::Owned);
+    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty, result_owned)?;
     ctx.store_result_value(result)
 }
 
@@ -6146,6 +6213,7 @@ pub(super) fn coerce_loaded_local_to_result_type(
     ctx: &mut FunctionContext<'_>,
     source_ty: &PhpType,
     result_ty: &PhpType,
+    result_owned: bool,
 ) -> Result<()> {
     let source_ty = source_ty.codegen_repr();
     let result_ty = result_ty.codegen_repr();
@@ -6173,14 +6241,21 @@ pub(super) fn coerce_loaded_local_to_result_type(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
             Ok(())
         }
+        (PhpType::Mixed, PhpType::Object(_)) => {
+            // Objects are reference types (no copy-on-write). A borrowed load — the
+            // receiver of prop_get/prop_set/a method call read from a Mixed/union
+            // local — carries no matching `release`, so increffing here leaks one
+            // reference per access. Owned uses (e.g. `$x = $o`) get an explicit
+            // `Op::Acquire`, so the incref only applies when the value is itself Owned.
+            emit_unbox_mixed_to_refcounted_result(ctx, &result_ty, result_owned);
+            Ok(())
+        }
         (PhpType::Mixed, PhpType::Array(_))
         | (PhpType::Mixed, PhpType::AssocArray { .. })
         | (PhpType::Mixed, PhpType::Callable)
-        | (PhpType::Mixed, PhpType::Object(_)) => {
-            emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
-            Ok(())
-        }
-        (PhpType::Mixed, PhpType::Iterable) => {
+        | (PhpType::Mixed, PhpType::Iterable) => {
+            // Arrays/hashes/callables/iterables rely on this incref for copy-on-write
+            // and owned storage (no separate acquire is emitted), so always retain.
             emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
             Ok(())
         }
@@ -6574,17 +6649,33 @@ fn reject_multiword_ref_param_local(ty: &PhpType, action: &str) -> Result<()> {
     Ok(())
 }
 
+/// Records a user `global` variable (non-superglobal) into the data section so
+/// the classic `--web` `__rt_web_reset` routine releases/zeroes it per request,
+/// keeping PHP-FPM isolation. No-op for request superglobals (they have their own
+/// reset loop) and idempotent per symbol via `record_user_global`. Recorded
+/// unconditionally during lowering; only classic `--web` codegen consumes it, so
+/// it is inert metadata in worker/script/CLI builds.
+fn record_user_global_symbol(ctx: &mut FunctionContext<'_>, name: &str, symbol: &str, ty: &PhpType) {
+    if crate::superglobals::is_superglobal(name) {
+        return;
+    }
+    ctx.data.record_user_global(crate::codegen::data_section::UserGlobalRecord {
+        symbol: symbol.to_string(),
+        php_type: ty.clone(),
+    });
+}
+
 /// Lowers a global storage load into the result register and SSA destination slot.
 fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data = expect_global_name(inst)?;
-    let name = ctx.global_name_data(data)?;
-    let symbol = ir_global_symbol(name);
+    let name = ctx.global_name_data(data)?.to_string();
+    let symbol = ir_global_symbol(&name);
     let result = inst.result.ok_or_else(|| {
         CodegenIrError::invalid_module("load_global missing result value")
     })?;
     let ty = ctx.value_php_type(result)?;
-    ctx.data
-        .add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
+    ctx.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
+    record_user_global_symbol(ctx, &name, &symbol, &ty);
     abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
     store_if_result(ctx, inst)
 }
@@ -6611,6 +6702,47 @@ fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
     };
     ctx.data
         .add_comm(symbol.clone(), store_ty.codegen_repr().stack_size().max(8));
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &store_ty, true);
+    record_user_global_symbol(ctx, &name, &symbol, &store_ty);
+    Ok(())
+}
+
+/// Lowers a releasing global store for an authentic `$g = expr` assignment whose
+/// operand ir_lower has already acquired (mirroring `store_static_local`). The
+/// store is a plain overwrite of the global symbol — the per-request `__rt_web_reset`
+/// releases the previous occupant between requests, so an inline release here is not
+/// emitted (matching the static-local store shape).
+///
+/// Ordinary (non-superglobal) globals are `Mixed`-typed (see `global_alias_type`),
+/// and the load path (`eir_read_global_*` → `__rt_mixed_unbox`) expects a boxed
+/// `Mixed` cell pointer in the slot. A concrete stored value (e.g. the int `7` from
+/// `$g = 7`) MUST therefore be boxed into the `Mixed` cell representation before the
+/// store, exactly as `lower_store_global` does — otherwise the slot holds the raw
+/// scalar and the next `__rt_mixed_unbox` dereferences it as a pointer (SIGSEGV at
+/// the scalar value, e.g. `0x7`). Superglobals keep their native array storage type
+/// and are stored unboxed, matching `lower_store_global`.
+fn lower_store_global_releasing(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let data = expect_global_name(inst)?;
+    let name = ctx.global_name_data(data)?.to_string();
+    let symbol = ir_global_symbol(&name);
+    let value = expect_operand(inst, 0)?;
+    let ty = ctx.load_value_to_result(value)?;
+    let store_ty = if crate::superglobals::is_superglobal(&name) {
+        ty.codegen_repr()
+    } else {
+        let source_ty = ty.codegen_repr();
+        if source_ty != PhpType::Mixed {
+            if ctx.value_ownership(value)? == Ownership::Owned {
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
+            } else {
+                emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+            }
+        }
+        PhpType::Mixed
+    };
+    ctx.data
+        .add_comm(symbol.clone(), store_ty.codegen_repr().stack_size().max(8));
+    record_user_global_symbol(ctx, &name, &symbol, &store_ty);
     abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &store_ty, true);
     Ok(())
 }
@@ -6862,10 +6994,9 @@ fn emit_missing_tostring_fatal(ctx: &mut FunctionContext<'_>, class_name: &str) 
     let (label, len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the object string-cast fatal to stderr
-            ctx.emitter.adrp("x1", &label);
-            ctx.emitter.add_lo12("x1", "x1", &label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", len)); // pass the object string-cast fatal byte length
+            ctx.emitter.instruction("mov x0, #2");                              // write the object string-cast fatal to stderr
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);               // resolve the object string-cast fatal message address
+            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the object string-cast fatal byte length
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }

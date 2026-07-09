@@ -23,3 +23,5 @@ mod functions;
 mod string_and_type_builtins;
 #[path = "misc/math_more.rs"]
 mod math_more;
+#[path = "misc/superglobals.rs"]
+mod superglobals;

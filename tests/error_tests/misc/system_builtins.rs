@@ -21,6 +21,17 @@ expect_builtin_arity_error!(
     "exit() takes 0 or 1 arguments"
 );
 
+/// Verifies `exit()`/`die()` reject an argument that is neither an integer
+/// status nor a string message (here an array), matching the widened checker
+/// that accepts only `int`/`bool` (status) or `string` (printed message).
+#[test]
+fn test_error_exit_invalid_argument_type() {
+    expect_error(
+        "<?php exit([1, 2]);",
+        "exit() argument must be an integer status or a string message",
+    );
+}
+
 /// Verifies that referencing an undefined constant produces the expected "Undefined constant" error.
 #[test]
 fn test_error_undefined_constant() {

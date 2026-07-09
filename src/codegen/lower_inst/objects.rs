@@ -21,7 +21,7 @@ use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed, 
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::intrinsics::IntrinsicCall;
-use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, LocalSlotId, Op, Ownership, ValueDef, ValueId};
 use crate::names::{method_symbol, php_symbol_key};
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
@@ -798,8 +798,50 @@ fn lower_builtin_throwable_new(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `parent::__construct($message, $code)` when the parent is a builtin Throwable
+/// whose constructor has no emitted method body.
+///
+/// Built-in throwable classes (`Exception`, `RuntimeException`, `Error`, …) exist only as
+/// type-checker metadata, so `_method_<Throwable>___construct` is never generated and an
+/// explicit `parent::__construct()` call would dangle at link time. A user subclass that
+/// declares its own constructor is a normal kind-4 object, but its inherited `message` and
+/// `code` properties occupy the same slots the compact payload uses (`message` at slot 0 =
+/// offset 8/16, `code` at slot 1 = offset 24), so stamping those fields directly on `$this`
+/// is layout-identical to `new Exception(...)`. This reuses the exact construction-site
+/// field emitters (message persist + code default), keeping the ownership contract
+/// consistent so `object_free_deep` frees the persisted message exactly once.
+pub(super) fn lower_parent_builtin_throwable_construct(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    this_slot: LocalSlotId,
+) -> Result<()> {
+    if inst.operands.len() > 2 {
+        return Err(CodegenIrError::unsupported(format!(
+            "parent::__construct with {} EIR operands",
+            inst.operands.len()
+        )));
+    }
+    ctx.load_local_to_result(this_slot)?;
+    preserve_throwable_for_init(ctx);
+    emit_throwable_message_fields(ctx, inst.operands.first().copied())?;
+    emit_throwable_code_field(ctx, inst.operands.get(1).copied())?;
+    restore_throwable_after_init(ctx);
+    // `parent::__construct` is void: a void SSA result carries the canonical void sentinel.
+    if let Some(result) = inst.result {
+        if ctx.value_php_type(result)? == PhpType::Void {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                0x7fff_ffff_ffff_fffe,
+            );
+        }
+        ctx.store_result_value(result)?;
+    }
+    Ok(())
+}
+
 /// Returns true for builtin classes that share PHP's compact Throwable payload.
-fn is_builtin_throwable_payload_class(class_name: &str) -> bool {
+pub(super) fn is_builtin_throwable_payload_class(class_name: &str) -> bool {
     matches!(
         class_name,
         "Error"
@@ -871,7 +913,7 @@ fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id: u64) {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #32");                             // request compact Throwable payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks runtime object payloads
+            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 uniquely marks compact Throwable payloads (normal objects are kind 4)
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the Throwable payload
             ctx.emitter.instruction(&format!("mov x9, #{}", class_id));         // materialize the Throwable runtime class id
             ctx.emitter.instruction("str x9, [x0]");                            // store class id at payload offset zero
@@ -879,7 +921,7 @@ fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id: u64) {
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rax, 32");                             // request compact Throwable payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 6)); // materialize the x86_64 Throwable heap kind word
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 6)); // materialize the x86_64 Throwable heap kind word (kind 6 = throwables only)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the Throwable payload
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the Throwable runtime class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at payload offset zero
@@ -895,6 +937,26 @@ fn preserve_throwable_for_init(ctx: &mut FunctionContext<'_>) {
 /// Restores the initialized Throwable object to the canonical object result register.
 fn restore_throwable_after_init(ctx: &mut FunctionContext<'_>) {
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+}
+
+/// Decides whether the Throwable must persist (copy) its message before storing it.
+///
+/// The compact Throwable OWNS its message so releasing the creator's local (or the
+/// escape frame's epilogue) cannot dangle `msg_ptr`, and `object_free_deep` frees it
+/// exactly once. An `Owned` operand is a fresh temporary the constructor consumes:
+/// store it directly (transfer), matching the closure-capture convention in
+/// `lower_inst`. Any other ownership (a borrowed named local, a `.rodata`/persistent
+/// constant, a shared value) is owned elsewhere, so the Throwable must take an
+/// independent copy — otherwise the original's owner and the object both free it.
+/// A missing message (`None`) is the shared empty `.rodata` constant: no copy needed.
+fn throwable_message_needs_persist(
+    ctx: &FunctionContext<'_>,
+    message: Option<ValueId>,
+) -> Result<bool> {
+    match message {
+        Some(value) => Ok(ctx.value_ownership(value)? != Ownership::Owned),
+        None => Ok(false),
+    }
 }
 
 /// Writes the message pointer and length into the compact Throwable payload.
@@ -913,13 +975,17 @@ fn emit_throwable_message_fields_aarch64(
     ctx: &mut FunctionContext<'_>,
     message: Option<ValueId>,
 ) -> Result<()> {
+    let needs_persist = throwable_message_needs_persist(ctx, message)?;
     if let Some(message) = message {
         ctx.load_string_value_to_regs(message, "x1", "x2")?;
     } else {
         emit_empty_string_to_regs(ctx, "x1", "x2");
     }
+    if needs_persist {
+        abi::emit_call_label(ctx.emitter, "__rt_str_persist");                   // copy a borrowed/shared message into a Throwable-owned heap block (x1=owned ptr)
+    }
     ctx.emitter.instruction("ldr x9, [sp]");                                    // reload the saved Throwable object for message initialization
-    ctx.emitter.instruction("str x1, [x9, #8]");                                // store Throwable message pointer
+    ctx.emitter.instruction("str x1, [x9, #8]");                                // store owned Throwable message pointer
     ctx.emitter.instruction("str x2, [x9, #16]");                               // store Throwable message length
     Ok(())
 }
@@ -929,13 +995,17 @@ fn emit_throwable_message_fields_x86_64(
     ctx: &mut FunctionContext<'_>,
     message: Option<ValueId>,
 ) -> Result<()> {
+    let needs_persist = throwable_message_needs_persist(ctx, message)?;
     if let Some(message) = message {
         ctx.load_string_value_to_regs(message, "rax", "rdx")?;
     } else {
         emit_empty_string_to_regs(ctx, "rax", "rdx");
     }
+    if needs_persist {
+        abi::emit_call_label(ctx.emitter, "__rt_str_persist");                   // copy a borrowed/shared message into a Throwable-owned heap block (rax=owned ptr)
+    }
     ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                        // reload the saved Throwable object for message initialization
-    ctx.emitter.instruction("mov QWORD PTR [r11 + 8], rax");                    // store Throwable message pointer
+    ctx.emitter.instruction("mov QWORD PTR [r11 + 8], rax");                    // store owned Throwable message pointer
     ctx.emitter.instruction("mov QWORD PTR [r11 + 16], rdx");                   // store Throwable message length
     Ok(())
 }
@@ -1840,8 +1910,7 @@ fn emit_fatal_message(ctx: &mut FunctionContext<'_>, message: &[u8]) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #2");                              // select stderr for the fatal diagnostic
-            ctx.emitter.adrp("x1", &message_label);
-            ctx.emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);               // resolve the message diagnostic address
             ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the fatal diagnostic byte length to write()
             ctx.emitter.syscall(4);
         }
@@ -2660,8 +2729,7 @@ fn emit_property_on_null_warning(ctx: &mut FunctionContext<'_>, property: &str) 
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.adrp("x1", &message_label);
-            ctx.emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);               // resolve the message diagnostic address
             ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the property-on-null warning byte length
         }
         Arch::X86_64 => {
@@ -3566,8 +3634,7 @@ fn emit_property_assign_on_null_fatal(ctx: &mut FunctionContext<'_>, property: &
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #2");                              // write the property-assign-on-null fatal to stderr
-            ctx.emitter.adrp("x1", &message_label);
-            ctx.emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);               // resolve the message diagnostic address
             ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the property-assign-on-null fatal byte length
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);

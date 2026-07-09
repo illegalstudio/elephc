@@ -31,29 +31,62 @@ binary is written next to it, named after the source without its extension.
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
+| `--web-worker` / `--web-worker=handler` | — | off | Compile a worker-**handler**-mode HTTP server binary: the top-level boots once and registers a per-request handler (via the `elephc_worker_register` API) instead of re-running the program per request. See [Web Server — Worker mode](../beyond-php/web.md#worker-mode---web-worker). |
+| `--web-worker=script` | — | off | Compile a worker-**script**-mode HTTP server binary: no registration API required, the top-level program re-runs per request, but statics, class properties, and globals persist across requests within the same worker process. The source program uses no elephc-specific API, so the same `.php` file also runs unmodified under php-fpm or `php -S`. |
 
-`--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
-be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`. See
+`--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web`,
+`--web-worker` (handler mode), and `--web-worker=script` (script mode) are
+mutually exclusive with each other and each cannot be combined with `--check`,
+`--emit cdylib`, `--emit-asm`, or `--emit-ir`. See
 [Output formats and diagnostics](output-and-diagnostics.md).
 
 ## Web server binary runtime arguments
 
-When a program is compiled with `--web`, the produced binary accepts these
-runtime arguments (not elephc compiler flags):
+When a program is compiled with `--web`, `--web-worker` (handler mode), or
+`--web-worker=script` (script mode), the produced binary accepts these runtime
+arguments (not elephc compiler flags):
 
 | Argument | Required | Default | Description |
 |---|---|---|---|
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of prefork worker processes. Minimum 1. |
+| `--dispatch MODE` | No | `kernel` | Connection dispatch: `kernel` = per-worker `SO_REUSEPORT` listeners (kernel picks the worker); `master` = the master accepts and hands each connection to an idle worker (shared queue, no head-of-line blocking between workers). Unknown value = usage error (exit 2). See [Connection dispatch](../beyond-php/web.md#connection-dispatch-kernel-vs-master). |
+| `--dispatch-backlog N` | No | `1024` | Master mode only: max accepted connections queued while all workers are busy before the master applies SYN backpressure. Ignored (warns) without `--dispatch master`. |
+| `--handler-offload` | No | off | Run the PHP handler on a dedicated `php-handler` thread fed by a bounded job queue, so request/response I/O of other connections overlaps handler execution (handlers still never overlap — one consumer thread). Opt-in; default off keeps the synchronous inline handler path unchanged. Same in all three web modes. See [Handler offload](../beyond-php/web.md#handler-offload). |
+| `--max-pending N` | No | `16` | With `--handler-offload`: max parsed requests queued for the handler thread before new requests get `503 Service Unavailable` + `Retry-After: 1` (built on the I/O thread, no PHP). Bounds queued-body memory to `N × --max-body-size`; `0` is rejected (exit 2). Ignored (warns) without `--handler-offload`. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes (`0` = unlimited); oversized bodies get `413`. |
-| `--max-requests N` | No | `0` (never) | Recycle each worker after N requests (bounds memory growth). |
+| `--max-requests N` | No | `0` (classic) / `1000` (worker) | Recycle each worker process after N requests (bounds memory growth). Worker mode defaults to 1000. |
+| `--max-rss MiB` | No | `0` (off) | Recycle a worker whose resident set exceeds this many MiB; `0` = off (the default). Measurement is gated to at most once per 64 accepts. Same in all three web modes. |
+| `--reload-grace SECS` | No | `10` | Max seconds a worker waits for in-flight requests to finish during a SIGHUP rolling reload before the master force-recycles it; `0` = wait forever. Drain always happens on SIGUSR1; the flag only bounds the wait. Same in all three web modes. See [SIGHUP rolling reload](../beyond-php/web.md#sighup-rolling-reload). |
+| `--max-requests-per-connection N` | No | `0` (opt-in) | Close a keep-alive connection after N responses (sends `Connection: close`) so the client reconnects and the kernel re-picks a worker; `0` = unlimited (off by default; no behavior change unless set). Same default in all three web modes. |
+| `--idle-timeout SECS` | No | `0` (opt-in) | Close a keep-alive connection idle (no new request) for more than SECS seconds; `0` = never (off by default; no behavior change unless set). Same default in all three web modes. |
+| `--worker-gc-interval N` | No | `0` (classic) / `1` (worker) | Run the cycle collector every N requests (`0` = never, `1` = every request). Worker-mode only. |
+| `--max-execution-time N` | No | `0` (none) | Kill a handler that runs longer than N seconds; the master respawns the worker. |
+| `--gzip` | No | off | Gzip-compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--access-log` | No | off | Log one line per request to stderr. |
+| `--metrics` | No | off | Expose a per-worker JSON metrics snapshot at `--metrics-path` (default `/_status`). The snapshot is per-worker: under SO_REUSEPORT a request lands on a random worker, so scrape repeatedly for a cluster view. The endpoint is not recorded as a request. See [Metrics endpoint](../beyond-php/web.md#metrics-endpoint). |
+| `--metrics-path PATH` | No | `/_status` | Path that serves the metrics snapshot (only meaningful with `--metrics`; warns if set without it; empty value is rejected with exit 2 when `--metrics` is on). |
+| `--static-dir DIR` | No | — | Serve static files from `DIR` on the I/O thread before the PHP handler runs. `--static-prefix` (default `/assets`) is the URL prefix that triggers the intercept; other paths fall through to PHP. Files are read via `spawn_blocking` + `std::fs` (no `tokio::fs` dependency) and cached in a per-worker LRU sized by `--static-cache-size`. Path traversal is rejected with `404`. `--static-cache-size 0` is rejected (exit 2) when this is set. See [Static-asset fast path](../beyond-php/web.md#robustness). |
+| `--static-prefix PATH` | No | `/assets` | URL prefix that triggers the static-asset fast path (only meaningful with `--static-dir`; warns if set without it). Must begin with `/` (exit 2 otherwise). |
+| `--static-cache-size N` | No | `64` | Per-worker in-memory LRU cache size in MiB for static assets (`0` disables caching; rejected with exit 2 when `--static-dir` is set, since turning the cache off while serving files would re-read disk on every hit). Ignored (warns) without `--static-dir`. |
+| `--static-max-age N` | No | `3600` | `Cache-Control: max-age` seconds emitted on static hits (only meaningful with `--static-dir`; ignored/warns without it). |
+| `--static-max-file-size N` | No | `1048576` (1 MiB) | Largest static file served, in bytes (`0` = no cap; allowed). Files larger than this return `500`. Ignored (warns) without `--static-dir`. |
+| `--worker-affinity` | No | off | Pin each worker process to CPU `getpid() % ncpus` (round-robin via consecutive PIDs) before entering the serve loop, reducing scheduler migration and improving per-worker L1/L2 cache warmth. Linux: hard pin via `sched_setaffinity` (single-CPU mask). macOS: advisory `thread_policy_set` (`THREAD_AFFINITY_POLICY`) tag hint — macOS does NOT support hard CPU pinning. Best-effort: a failed pin logs a warning and the worker continues. Default off; no per-request hot-path cost (the pin runs once at worker startup). Same in all three web modes. See [Worker CPU affinity](../beyond-php/web.md#robustness). |
+| `--tls-cert FILE` | No | — | PEM certificate chain; enables TLS on `--listen`. Requires `--tls-key`. See [TLS / HTTPS](../beyond-php/web.md#tls--https). |
+| `--tls-key FILE` | No | — | PEM private key (PKCS#8/PKCS#1/SEC1, unencrypted) matching `--tls-cert`. Requires `--tls-cert`. |
+| `--http2` | No | off | Opt in to HTTP/2 (h2c prior-knowledge on plaintext; h2 over TLS is a follow-up). **Requires `--handler-offload`** (without offload, multiplexed h2 streams all stall on the single inline handler; exit 2 otherwise). Default off: the server speaks HTTP/1.1 only via one `http1_only()` code path. See [HTTP/2](../beyond-php/web.md#http2). |
+| `--http2-max-streams N` | No | `8` | Max concurrent h2 streams per connection. Also the per-connection stream budget (with `--max-requests-per-connection` as the cap, else `--max-requests`). Per-connection memory bound is `N × --max-body-size`. `N < 1` is rejected (exit 2). Ignored (warns) without `--http2`. |
+| `--http2-max-header-size N` | No | `65536` (64 KiB) | HPACK header-bomb clamp in bytes (hyper `max_header_list_size`). h1 is unaffected. Ignored (warns) without `--http2`. |
 | `--help`, `--version` | No | — | Print usage / version and exit. |
 
 ```bash
 elephc --web app.php
+elephc --web-worker app.php
+elephc --web-worker=script app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4 --max-body-size 1048576 --access-log
+./app --listen 0.0.0.0:8080 --workers 8 --dispatch master --max-requests-per-connection 32
+./app --listen 127.0.0.1:8443 --tls-cert cert.pem --tls-key key.pem
 ```
 
 The served program also receives `$_COOKIE`, `$_REQUEST`, and `$_ENV`, and can

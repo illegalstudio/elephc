@@ -20,8 +20,8 @@ categories = ["compilers", "command-line-utilities"]
 # libelephc_web.a (--web prefork HTTP server) into target/<profile>/, where
 # linker.rs locates them for programs that use those features.
 [workspace]
-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web"]
-default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web"]
+members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-globals-audit"]
+default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-globals-audit"]
 resolver = "2"
 
 [[bin]]
@@ -65,9 +65,23 @@ elephc-web = { path = "crates/elephc-web" }
 # round-trip without shelling out to php.
 flate2 = "1"
 # The streams codegen tests host a local HTTPS fixture so https:// wrapper
-# success coverage does not depend on outbound network access.
+# success coverage does not depend on outbound network access. The web_tests TLS
+# suite also drives a self-contained blocking rustls client against the compiled
+# server, so no `openssl`/`curl` subprocess is required.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-pemfile = "2"
+# rcgen generates the self-signed server cert+key at RUNTIME for the web_tests TLS
+# suite, written to a temp dir and never committed. Ring backend only (no
+# aws-lc-rs), matching the runtime crypto provider and staying musl-friendly.
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+# HTTP/2 client for the web_tests h2c prior-knowledge suite. `h2` is pinned to
+# 0.4 (hyper 1.10.1 transitively pins h2 0.4.x); dev-only, never linked into
+# the produced `--web` binary. `tokio` is the current-thread runtime the h2
+# client drives; `bytes`/`http` are h2's frame/body types.
+h2 = "0.4"
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time"] }
+bytes = "1"
+http = "1"
 
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of

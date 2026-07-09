@@ -233,6 +233,20 @@ impl Checker {
                         promote_indexed_local_for_element_unset(arg, env);
                     }
                 }
+                if builtin_name.eq_ignore_ascii_case("array_push")
+                    || builtin_name.eq_ignore_ascii_case("array_unshift")
+                {
+                    if let (Some(arr_arg), Some(val_arg)) =
+                        (expanded_args.first(), expanded_args.get(1))
+                    {
+                        if let ExprKind::Variable(var_name) = &arr_arg.kind {
+                            let val_ty = self.infer_type(val_arg, env)?;
+                            crate::types::checker::stmt_check::merge_pushed_element_type(
+                                self, var_name, &val_ty, env,
+                            );
+                        }
+                    }
+                }
                 Ok(ty)
             }
             ExprKind::NewObject { args, .. } | ExprKind::StaticMethodCall { args, .. } => {

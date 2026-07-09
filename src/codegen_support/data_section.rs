@@ -32,6 +32,21 @@ pub struct StaticLocalRecord {
     pub php_type: PhpType,
 }
 
+/// Symbol-backed metadata for one user `global` variable recorded during EIR
+/// lowering: the `_eir_global_*` value symbol and its codegen PHP type. Consumed
+/// only by the classic `--web` `__rt_web_reset` generator, which must
+/// release/zero every persistent user global between requests so `--web` keeps
+/// PHP-FPM per-request isolation. Superglobals are NOT recorded here — they have
+/// their own reset loop; worker/script modes never call the reset that consumes
+/// these, so globals persist there.
+#[derive(Clone, Debug)]
+pub struct UserGlobalRecord {
+    /// `.comm` value symbol (`_eir_global_<name>`, 8 or 16 bytes).
+    pub symbol: String,
+    /// Codegen representation of the global's PHP type (drives release shape).
+    pub php_type: PhpType,
+}
+
 /// Tracks constants and common symbols for the assembly `.data` section.
 ///
 /// - `entries`: string constants as `(label, bytes)` pairs
@@ -51,6 +66,8 @@ pub struct DataSection {
     comm_dedup: HashMap<String, String>,
     static_locals: Vec<StaticLocalRecord>,
     static_local_dedup: HashMap<String, usize>,
+    user_globals: Vec<UserGlobalRecord>,
+    user_global_dedup: HashMap<String, usize>,
 }
 
 impl DataSection {
@@ -68,6 +85,8 @@ impl DataSection {
             comm_dedup: HashMap::new(),
             static_locals: Vec::new(),
             static_local_dedup: HashMap::new(),
+            user_globals: Vec::new(),
+            user_global_dedup: HashMap::new(),
         }
     }
 
@@ -88,6 +107,28 @@ impl DataSection {
     /// the `--web` `__rt_web_reset` generator after all functions are emitted.
     pub fn static_locals(&self) -> &[StaticLocalRecord] {
         &self.static_locals
+    }
+
+    /// Records one user `global` variable's storage metadata for the classic
+    /// `--web` per-request reset routine. Deduplicates by value symbol because the
+    /// same global is resolved on every load/store; only the first record per
+    /// symbol is kept, preserving first-seen order. Superglobals must NOT be
+    /// recorded here (they have a dedicated reset loop) — callers guard with
+    /// `superglobals::is_superglobal`.
+    pub fn record_user_global(&mut self, record: UserGlobalRecord) {
+        if self.user_global_dedup.contains_key(&record.symbol) {
+            return;
+        }
+        self.user_global_dedup
+            .insert(record.symbol.clone(), self.user_globals.len());
+        self.user_globals.push(record);
+    }
+
+    /// Returns the recorded user `global` variables in first-seen order, used by
+    /// the classic `--web` `__rt_web_reset` generator after all functions are
+    /// emitted.
+    pub fn user_globals(&self) -> &[UserGlobalRecord] {
+        &self.user_globals
     }
 
     /// Looks up `value` in the float deduplication map; if found, returns the existing label.

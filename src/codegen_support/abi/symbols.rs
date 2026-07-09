@@ -236,6 +236,32 @@ pub fn emit_load_symbol_to_reg(emitter: &mut Emitter, reg: &str, symbol: &str, b
     }
 }
 
+/// Loads a symbol's payload into `dest` using paged addressing on AArch64:
+/// `adrp addr_reg, sym` followed by `ldr dest, [addr_reg, :lo12:sym]` (two
+/// instructions, matching the historical hand-written emission). In PIC mode
+/// the GOT entry is resolved into `addr_reg` first and the payload loaded
+/// through it. `addr_reg` is clobbered in both modes; `dest` may be an integer
+/// or floating-point register. AArch64-only: x86_64 callers use
+/// `emit_load_symbol_to_reg`, which already covers both modes there.
+pub fn emit_load_symbol_to_reg_via_page(
+    emitter: &mut Emitter,
+    dest: &str,
+    addr_reg: &str,
+    symbol: &str,
+) {
+    emitter
+        .target
+        .ensure_aarch64_backend("paged symbol load emission");
+    if emitter.pic_data_refs {
+        emitter.adrp_got(addr_reg, symbol);                                     // load the GOT page that points at the requested symbol
+        emitter.ldr_got_lo12(addr_reg, addr_reg, symbol);                       // resolve the GOT entry into the symbol address
+        emitter.instruction(&format!("ldr {}, [{}]", dest, addr_reg));          // load the symbol payload through the GOT-resolved address
+    } else {
+        emitter.adrp(addr_reg, symbol);                                         // load the page address that contains the symbol storage
+        emitter.ldr_lo12(dest, addr_reg, symbol);                               // load the symbol payload from its page offset
+    }
+}
+
 /// Stores the contents of `reg` into a local/internal symbol at a byte offset.
 /// Uses a temporary scratch register (x9 on AArch64) to compute the symbol
 /// address, then stores at `byte_offset`.  On x86_64 uses RIP-relative

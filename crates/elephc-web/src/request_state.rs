@@ -15,8 +15,14 @@
 //!   and before invoking the PHP handler.
 //!
 //! Key details:
-//! - One process per prefork worker, single-threaded: each request runs to
-//!   completion on the worker's one thread, so all process-statics are race-free.
+//! - Handler-thread-affine: without `--handler-offload` each request runs to
+//!   completion on the worker's one thread, so these statics are race-free. With
+//!   `--handler-offload` every `set_request` / `take_*` / capture / response
+//!   mutation happens on the dedicated `php-handler` thread ONLY; the I/O thread
+//!   never touches a `REQ_*` / `RESPONSE_*` static or the capture flag — it hands
+//!   parsed requests over as owned channel-moved values (`crate::offload`) and
+//!   receives owned `ResponseParts` back. Either way exactly one thread ever
+//!   accesses this state, so no mutex/`unsafe impl Send` is required.
 //! - All access to `static mut` items goes through raw pointers
 //!   (`core::ptr::addr_of_mut!` / `core::ptr::addr_of!`), never `&mut`/`&`
 //!   references, to stay clear of the `static_mut_refs` lint (a hard error under
@@ -24,6 +30,9 @@
 
 use std::ffi::{c_char, CString};
 
+use hyper::body::Bytes;
+
+#[cfg(not(test))]
 extern "C" {
     /// Per-request output-capture flag defined in the compiled program's runtime
     /// `.comm` storage (`elephc_web_capture`). Non-zero routes the runtime's
@@ -33,6 +42,24 @@ extern "C" {
     /// `elephc_web_capture` on Linux — matching the runtime's `.comm` and load.
     static mut elephc_web_capture: u8;
 }
+
+/// Test-only stand-in for the runtime's `elephc_web_capture` `.comm` symbol, so
+/// the elephc-web rlib test binary links (and `set_capture` / `run_one_job` are
+/// reachable from tests) without the compiled program's runtime object. Never
+/// compiled into a real `--web` binary. The lower-case name is kept deliberately
+/// so `set_capture`'s `addr_of_mut!(elephc_web_capture)` resolves identically in
+/// both builds.
+#[cfg(test)]
+#[allow(non_upper_case_globals)]
+static mut elephc_web_capture: u8 = 0;
+
+/// Serializes crate-wide tests that mutate the shared per-request process statics
+/// (`REQ_*`, `RESPONSE_*`, the capture flag). Production touches these on exactly
+/// one thread (single-threaded worker, or the handler thread under offload), but
+/// the Rust harness runs tests on many threads, so `set_request` / `run_one_job`
+/// -driving tests in `request_state` and `offload` share this ONE lock.
+#[cfg(test)]
+pub(crate) static REQUEST_STATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Process-static per-worker response body. Bytes echoed by the PHP handler land
 /// here while capture is enabled; the server scaffold flushes it to the client
@@ -210,8 +237,57 @@ static mut REQ_METHOD: Option<CString> = None;
 static mut REQ_URI: Option<CString> = None;
 static mut REQ_PATH: Option<CString> = None;
 static mut REQ_QUERY: Option<CString> = None;
-static mut REQ_HEADERS: Vec<(CString, CString)> = Vec::new();
-static mut REQ_BODY: Vec<u8> = Vec::new();
+/// Request headers as `(name, value, php_name)` triples. `php_name` is the
+/// precomputed `$_SERVER` key for the header (`HTTP_` + uppercased name with `-`
+/// mapped to `_`), so the web prelude's `$_SERVER` fill reads it directly instead
+/// of recomputing `strtoupper(str_replace('-','_',name))` in PHP on every header
+/// of every request.
+static mut REQ_HEADERS: Vec<(CString, CString, CString)> = Vec::new();
+/// Raw request body. Stored as `Bytes` (not `Vec<u8>`) so the worker loop can hand
+/// off hyper's already-collected buffer by reference-count bump instead of copying
+/// the whole body into a fresh `Vec` on every request.
+static mut REQ_BODY: Bytes = Bytes::new();
+/// Builds a `CString` from `s`, stripping interior NUL bytes (a `CString` cannot
+/// hold a NUL). Fast-paths the common NUL-free case to `CString::new` directly,
+/// avoiding the allocation that `s.replace('\0', "")` performs unconditionally;
+/// the result is identical either way. Shared by `set_request` and the header
+/// collection helper.
+fn field_cstr(s: &str) -> CString {
+    if s.as_bytes().contains(&0) {
+        CString::new(s.replace('\0', "")).unwrap_or_default()
+    } else {
+        CString::new(s).unwrap_or_default()
+    }
+}
+
+/// Computes the `$_SERVER` key for a request header: `HTTP_` followed by the
+/// header name uppercased with `-` mapped to `_` (PHP's CGI convention), built in
+/// Rust so the prelude does not run `strtoupper(str_replace(...))` per header per
+/// request. ASCII-only transform (HTTP header names are ASCII tokens).
+fn header_php_name(name: &str) -> String {
+    let mut out = String::with_capacity(5 + name.len());
+    out.push_str("HTTP_");
+    for &b in name.as_bytes() {
+        out.push(if b == b'-' { '_' } else { b.to_ascii_uppercase() as char });
+    }
+    out
+}
+
+/// Builds the `(name, value, php_name)` `CString` triple for one request header
+/// directly from the borrowed header bytes, so the worker loop can collect headers
+/// straight into their final `CString` form without an intermediate
+/// `Vec<(String, String)>` (removing one owned copy of every header name and value
+/// per request) and with the `$_SERVER` key (`php_name`) precomputed in Rust.
+/// Values are decoded lossily (HTTP header values are effectively text) and
+/// NUL-stripped, matching the prior behavior.
+pub(crate) fn request_header_cstrings(name: &str, value: &[u8]) -> (CString, CString, CString) {
+    (
+        field_cstr(name),
+        field_cstr(&String::from_utf8_lossy(value)),
+        field_cstr(&header_php_name(name)),
+    )
+}
+
 /// Connection/server metadata for the current request, backing the rest of the
 /// `$_SERVER` keys (`REMOTE_ADDR`, `SERVER_PORT`, `SERVER_PROTOCOL`, …).
 static mut REQ_REMOTE_ADDR: Option<CString> = None;
@@ -221,6 +297,12 @@ static mut REQ_SERVER_PORT: i64 = 0;
 static mut REQ_PROTOCOL: Option<CString> = None;
 /// Request start time in whole Unix seconds (backs `$_SERVER['REQUEST_TIME']`).
 static mut REQ_TIME: i64 = 0;
+/// Whether the current request arrived over TLS: `1` for HTTPS, `0` for plaintext.
+/// A plain scalar rewritten by `set_request` each request (no owned allocation, so
+/// the drop-assign leak concern that applies to the `CString` slots does not apply
+/// here). Read by `elephc_web_https`, which drives `$_SERVER['HTTPS']` /
+/// `REQUEST_SCHEME` in the web prelude.
+static mut REQ_HTTPS: i64 = 0;
 
 /// Connection/server metadata passed to `set_request` alongside the HTTP fields.
 pub(crate) struct RequestMeta {
@@ -228,47 +310,61 @@ pub(crate) struct RequestMeta {
     pub remote_port: u16,
     pub server_addr: String,
     pub server_port: u16,
-    /// HTTP protocol string, e.g. "HTTP/1.1".
-    pub protocol: String,
+    /// HTTP protocol string, e.g. "HTTP/1.1". A `&'static str` (from the fixed set
+    /// of HTTP versions) so the worker loop needs no per-request allocation for it.
+    pub protocol: &'static str,
+    /// True when the connection is TLS (HTTPS); drives `$_SERVER['HTTPS'] = 'on'`
+    /// and `REQUEST_SCHEME = 'https'`. False on plaintext (the `HTTPS` key is then
+    /// left absent, matching PHP-FPM).
+    pub https: bool,
 }
 
 /// Stores the parsed request for the current worker thread. Called by the
 /// worker before invoking the PHP handler. Non-UTF8 / interior-NUL bytes in
 /// header values are replaced (CString cannot hold a NUL), which is acceptable
 /// for HTTP tokens; the raw body keeps every byte (it is exposed binary-safe).
+///
+/// Each owned slot is written with a drop-assign through a raw pointer
+/// (`*addr_of_mut!(X) = v`), NOT `core::ptr::write`: the latter overwrites
+/// without dropping the previous value, which — in a long-lived worker serving
+/// thousands of requests — leaks the prior request's `CString`s, header `Vec`,
+/// body buffer and populated multipart cache on every request. The place
+/// assignment drops the old value in place while still never forming a `&mut`
+/// reference to the `static mut` (staying clear of the `static_mut_refs` lint).
 pub(crate) fn set_request(
     method: String,
     uri: String,
     path: String,
     query: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
+    headers: Vec<(CString, CString, CString)>,
+    body: Bytes,
     meta: RequestMeta,
 ) {
-    fn cstr(s: &str) -> CString {
-        CString::new(s.replace('\0', "")).unwrap_or_default()
-    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_METHOD), Some(cstr(&method)));
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_URI), Some(cstr(&uri)));
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_PATH), Some(cstr(&path)));
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_QUERY), Some(cstr(&query)));
-        let hs: Vec<(CString, CString)> =
-            headers.iter().map(|(n, v)| (cstr(n), cstr(v))).collect();
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_HEADERS), hs);
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_BODY), body);
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_REMOTE_ADDR), Some(cstr(&meta.remote_addr)));
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_REMOTE_PORT), meta.remote_port as i64);
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_SERVER_ADDR), Some(cstr(&meta.server_addr)));
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_SERVER_PORT), meta.server_port as i64);
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_PROTOCOL), Some(cstr(&meta.protocol)));
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_TIME), now);
-        // Invalidate the lazily-parsed multipart cache: it belongs to the prior request.
-        core::ptr::write(core::ptr::addr_of_mut!(MULTIPART_CACHE), None);
+        *core::ptr::addr_of_mut!(REQ_METHOD) = Some(field_cstr(&method));
+        *core::ptr::addr_of_mut!(REQ_URI) = Some(field_cstr(&uri));
+        *core::ptr::addr_of_mut!(REQ_PATH) = Some(field_cstr(&path));
+        *core::ptr::addr_of_mut!(REQ_QUERY) = Some(field_cstr(&query));
+        // Headers arrive already in their final `CString` form (built once by the
+        // worker loop via `request_header_cstrings`), so store them directly.
+        *core::ptr::addr_of_mut!(REQ_HEADERS) = headers;
+        *core::ptr::addr_of_mut!(REQ_BODY) = body;
+        *core::ptr::addr_of_mut!(REQ_REMOTE_ADDR) = Some(field_cstr(&meta.remote_addr));
+        *core::ptr::addr_of_mut!(REQ_REMOTE_PORT) = meta.remote_port as i64;
+        *core::ptr::addr_of_mut!(REQ_SERVER_ADDR) = Some(field_cstr(&meta.server_addr));
+        *core::ptr::addr_of_mut!(REQ_SERVER_PORT) = meta.server_port as i64;
+        *core::ptr::addr_of_mut!(REQ_PROTOCOL) = Some(field_cstr(meta.protocol));
+        *core::ptr::addr_of_mut!(REQ_TIME) = now;
+        // Scalar drop-assign (no owned buffer to free): 1 = HTTPS, 0 = plaintext.
+        *core::ptr::addr_of_mut!(REQ_HTTPS) = if meta.https { 1 } else { 0 };
+        // Invalidate the lazily-parsed multipart cache: it belongs to the prior
+        // request. Drop-assign so a populated cache from the previous request is
+        // freed here instead of leaked.
+        *core::ptr::addr_of_mut!(MULTIPART_CACHE) = None;
     }
 }
 
@@ -321,7 +417,7 @@ pub unsafe extern "C" fn elephc_web_header_name(i: i64) -> *const c_char {
     static EMPTY: [c_char; 1] = [0];
     let hs = &*core::ptr::addr_of!(REQ_HEADERS);
     match usize::try_from(i).ok().and_then(|i| hs.get(i)) {
-        Some((n, _)) => n.as_ptr(),
+        Some((n, _, _)) => n.as_ptr(),
         None => EMPTY.as_ptr(),
     }
 }
@@ -333,7 +429,21 @@ pub unsafe extern "C" fn elephc_web_header_value(i: i64) -> *const c_char {
     static EMPTY: [c_char; 1] = [0];
     let hs = &*core::ptr::addr_of!(REQ_HEADERS);
     match usize::try_from(i).ok().and_then(|i| hs.get(i)) {
-        Some((_, v)) => v.as_ptr(),
+        Some((_, v, _)) => v.as_ptr(),
+        None => EMPTY.as_ptr(),
+    }
+}
+
+/// Returns the precomputed `$_SERVER` key (`HTTP_*`) of header at index `i`, or an
+/// empty string when out of range. Lets the `$_SERVER` fill store the header under
+/// its CGI key without recomputing `strtoupper(str_replace('-','_',name))` in PHP.
+/// The pointer is valid until the next request.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_header_php_name(i: i64) -> *const c_char {
+    static EMPTY: [c_char; 1] = [0];
+    let hs = &*core::ptr::addr_of!(REQ_HEADERS);
+    match usize::try_from(i).ok().and_then(|i| hs.get(i)) {
+        Some((_, _, p)) => p.as_ptr(),
         None => EMPTY.as_ptr(),
     }
 }
@@ -379,6 +489,15 @@ pub unsafe extern "C" fn elephc_web_server_port() -> i64 {
 #[no_mangle]
 pub unsafe extern "C" fn elephc_web_protocol() -> *const c_char {
     opt_ptr(core::ptr::addr_of!(REQ_PROTOCOL))
+}
+
+/// Returns `1` when the current request arrived over TLS (HTTPS), `0` otherwise.
+/// The web prelude uses this to set `$_SERVER['HTTPS'] = 'on'` and
+/// `REQUEST_SCHEME = 'https'` on TLS requests (and to leave the `HTTPS` key absent
+/// on plaintext, matching PHP-FPM). Defaults to `0` before the first request.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_https() -> i64 {
+    *core::ptr::addr_of!(REQ_HTTPS)
 }
 
 /// Returns the request start time in whole Unix seconds; backs `$_SERVER['REQUEST_TIME']`.
@@ -447,8 +566,8 @@ unsafe fn multipart_parts() -> &'static [(CString, CString, CString, Vec<u8>)] {
     if (*slot).is_none() {
         let content_type = (*core::ptr::addr_of!(REQ_HEADERS))
             .iter()
-            .find(|(n, _)| n.to_bytes().eq_ignore_ascii_case(b"content-type"))
-            .map(|(_, v)| v.to_string_lossy().into_owned())
+            .find(|(n, _, _)| n.to_bytes().eq_ignore_ascii_case(b"content-type"))
+            .map(|(_, v, _)| v.to_string_lossy().into_owned())
             .unwrap_or_default();
         let body = (*core::ptr::addr_of!(REQ_BODY)).clone();
         let cstr = |s: &str| CString::new(s.replace('\0', "")).unwrap_or_default();
@@ -532,19 +651,21 @@ mod tests {
     #[test]
     fn request_getters_round_trip() {
         use std::ffi::CStr;
+        let _guard = REQUEST_STATE_TEST_LOCK.lock().unwrap();
         set_request(
             "POST".into(),
             "/p?x=1".into(),
             "/p".into(),
             "x=1".into(),
-            vec![("Content-Type".into(), "text/plain".into())],
-            b"hello".to_vec(),
+            vec![request_header_cstrings("Content-Type", b"text/plain")],
+            Bytes::from_static(b"hello"),
             RequestMeta {
                 remote_addr: "10.0.0.7".into(),
                 remote_port: 54321,
                 server_addr: "127.0.0.1".into(),
                 server_port: 8080,
-                protocol: "HTTP/1.1".into(),
+                protocol: "HTTP/1.1",
+                https: true,
             },
         );
         unsafe {
@@ -555,6 +676,11 @@ mod tests {
             assert_eq!(elephc_web_header_count(), 1);
             assert_eq!(CStr::from_ptr(elephc_web_header_name(0)).to_str().unwrap(), "Content-Type");
             assert_eq!(CStr::from_ptr(elephc_web_header_value(0)).to_str().unwrap(), "text/plain");
+            // Precomputed $_SERVER key: HTTP_ + uppercased name with '-' -> '_'.
+            assert_eq!(
+                CStr::from_ptr(elephc_web_header_php_name(0)).to_str().unwrap(),
+                "HTTP_CONTENT_TYPE"
+            );
             assert_eq!(elephc_web_body_len(), 5);
             let body = std::slice::from_raw_parts(elephc_web_body_ptr(), 5);
             assert_eq!(body, b"hello");
@@ -564,12 +690,76 @@ mod tests {
             assert_eq!(elephc_web_server_port(), 8080);
             assert_eq!(CStr::from_ptr(elephc_web_protocol()).to_str().unwrap(), "HTTP/1.1");
             assert!(elephc_web_request_time() > 0);
+            // https: true was passed, so the HTTPS getter must report 1.
+            assert_eq!(elephc_web_https(), 1);
+        }
+    }
+
+    /// Verifies a second `set_request` fully overwrites the first: the getters
+    /// return the new request's values and the header count reflects the new
+    /// set (not an append). This exercises the drop-assign write path that
+    /// replaced `core::ptr::write` to stop leaking the prior request's owned
+    /// buffers; if the previous state were retained rather than dropped/replaced,
+    /// the counts or values below would be wrong.
+    #[test]
+    fn set_request_overwrites_previous() {
+        use std::ffi::CStr;
+        let _guard = REQUEST_STATE_TEST_LOCK.lock().unwrap();
+        set_request(
+            "GET".into(),
+            "/first?a=1".into(),
+            "/first".into(),
+            "a=1".into(),
+            vec![
+                request_header_cstrings("X-One", b"1"),
+                request_header_cstrings("X-Two", b"2"),
+            ],
+            Bytes::from_static(b"first-body"),
+            RequestMeta {
+                remote_addr: "1.1.1.1".into(),
+                remote_port: 1,
+                server_addr: "127.0.0.1".into(),
+                server_port: 8080,
+                protocol: "HTTP/1.0",
+                https: true,
+            },
+        );
+        set_request(
+            "DELETE".into(),
+            "/second".into(),
+            "/second".into(),
+            "".into(),
+            vec![request_header_cstrings("X-Only", b"z")],
+            Bytes::from_static(b"2"),
+            RequestMeta {
+                remote_addr: "2.2.2.2".into(),
+                remote_port: 2,
+                server_addr: "127.0.0.1".into(),
+                server_port: 8080,
+                protocol: "HTTP/1.1",
+                https: false,
+            },
+        );
+        unsafe {
+            assert_eq!(CStr::from_ptr(elephc_web_method()).to_str().unwrap(), "DELETE");
+            assert_eq!(CStr::from_ptr(elephc_web_path()).to_str().unwrap(), "/second");
+            assert_eq!(CStr::from_ptr(elephc_web_query_string()).to_str().unwrap(), "");
+            assert_eq!(elephc_web_header_count(), 1);
+            assert_eq!(CStr::from_ptr(elephc_web_header_name(0)).to_str().unwrap(), "X-Only");
+            assert_eq!(elephc_web_body_len(), 1);
+            let body = std::slice::from_raw_parts(elephc_web_body_ptr(), 1);
+            assert_eq!(body, b"2");
+            assert_eq!(elephc_web_remote_port(), 2);
+            // The first request was https: true; the second is https: false, so the
+            // scalar must have been reset (not retained) to 0.
+            assert_eq!(elephc_web_https(), 0);
         }
     }
 
     /// Verifies the bridge response logic matches PHP header()/http_response_code().
     #[test]
     fn response_control_matches_php() {
+        let _guard = REQUEST_STATE_TEST_LOCK.lock().unwrap();
         unsafe {
             reset_response();
             assert_eq!(take_status(), 200); // default

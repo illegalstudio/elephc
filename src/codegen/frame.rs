@@ -19,7 +19,7 @@ use crate::codegen::{
     emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
 };
 use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
-use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, ValueDef, ValueId};
+use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, Ownership, ValueDef, ValueId};
 use crate::ir_passes::{allocate_registers, Allocation};
 use crate::names::ir_global_symbol;
 use crate::types::PhpType;
@@ -37,6 +37,13 @@ const FRAME_FOOTER_BYTES: usize = 16;
 /// reference never drift.
 pub(super) const WEB_HANDLER_SYMBOL: &str = "_elephc_web_handler";
 
+/// Local label for the shared `exit()`/`die()` bailout landing inside the unique
+/// `_elephc_web_handler`. The boundary `setjmp` (in the prologue) branches here
+/// on a non-zero return; the landing itself is emitted once at the handler tail.
+/// A fixed name is safe because exactly one `_elephc_web_handler` exists per
+/// program, so there is never more than one such label to collide.
+const WEB_EXIT_BAILOUT_LABEL: &str = "__elephc_web_exit_bailout";
+
 /// Complete fixed frame layout for spill slots, addressable locals, and the
 /// callee-saved registers the register allocator decided to use.
 pub(super) struct FrameLayout {
@@ -47,7 +54,19 @@ pub(super) struct FrameLayout {
     pub(super) frame_size: usize,
     pub(super) allocation: Allocation,
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
+    /// Base offset of this frame's 24-byte exception-cleanup activation record
+    /// (`{prev@base, cleanup_cb@base-8, saved_fp@base-16}`), or `None` when the
+    /// function owns no refcounted locals and therefore needs no record. The
+    /// record address is `x29 - base`, matching the `[+0]/[+8]/[+16]` layout that
+    /// `__rt_exception_cleanup_frames` walks. Only set for functions that push a
+    /// record; `main`/`_elephc_web_handler` are always the unwind root and never do.
+    pub(super) activation_record_offset: Option<usize>,
 }
+
+/// Size in bytes of an exception-cleanup activation record: three consecutive
+/// 8-byte fields (`prev`, `cleanup_cb`, `saved_fp`) matching the `[+0]/[+8]/[+16]`
+/// layout that `__rt_exception_cleanup_frames` reads.
+const ACTIVATION_RECORD_BYTES: usize = 24;
 
 /// Computes the register allocation and fixed stack slots for a function.
 ///
@@ -84,6 +103,18 @@ pub(super) fn layout_for_function(
         offset += TRY_HANDLER_SLOT_SIZE;
         try_handler_offsets.insert(token, offset);
     }
+    // Reserve the 24-byte exception-cleanup activation record when this function
+    // owns refcounted locals: on `throw`/`exit`/`die` unwinding THROUGH this frame,
+    // `__rt_exception_cleanup_frames` runs its per-frame cleanup callback to release
+    // those locals. Functions that own nothing refcounted stay out of the chain and
+    // pay no push/pop cost. Reserved like the try-handler slots: `offset += size`
+    // makes the record address `x29 - offset` with fields at `+0/+8/+16`.
+    let activation_record_offset = if function_needs_cleanup_registry(function) {
+        offset += ACTIVATION_RECORD_BYTES;
+        Some(offset)
+    } else {
+        None
+    };
     let mut callee_saved_offsets = Vec::new();
     for reg in allocation.used_callee_saved() {
         offset += 8;
@@ -100,7 +131,43 @@ pub(super) fn layout_for_function(
         frame_size,
         allocation,
         callee_saved_offsets,
+        activation_record_offset,
     }
+}
+
+/// Returns whether a function owns refcounted locals and therefore needs an
+/// exception-cleanup activation record pushed onto `_exc_call_frame_top`.
+///
+/// This is the frame-only mirror of the union of `function_cleanup_locals` (with
+/// `include_returned = true`, since an unwound frame is abandoned and even a
+/// would-be-returned local leaks) and `ref_cell_owner_locals`, computed without a
+/// `FunctionContext` because the layout decision must precede context creation. A
+/// function with an empty set stays out of the cleanup chain entirely.
+fn function_needs_cleanup_registry(function: &Function) -> bool {
+    let param_names = function
+        .params
+        .iter()
+        .map(|param| param.name.as_str())
+        .collect::<HashSet<_>>();
+    let promoted = promoted_ref_cell_local_slots(function);
+    let owns_refcounted_local = function.locals.iter().any(|local| {
+        local_kind_needs_epilogue_cleanup(local.kind)
+            && !promoted.contains(&local.id)
+            && local
+                .name
+                .as_deref()
+                .is_none_or(|name| !param_names.contains(name))
+            && local_slot_is_written(function, local.id)
+            && {
+                let ty = local.php_type.codegen_repr();
+                matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()
+            }
+    });
+    let owns_ref_cell = function
+        .locals
+        .iter()
+        .any(|local| local.kind == LocalKind::RefCell);
+    owns_refcounted_local || owns_ref_cell
 }
 
 /// Saves the callee-saved registers the allocator used into their reserved
@@ -205,6 +272,16 @@ pub(super) fn emit_function_prologue_with_label(
     }
     zero_initialize_function_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
+    // Register this frame in the exception-cleanup chain LAST — after params are
+    // stored and cleanup locals zeroed, before any body code that could throw — so a
+    // non-local unwind through this frame finds a well-formed record whose callback
+    // can safely release its owned locals. Only functions that reserved a record push
+    // one; the label is created here and reused by the epilogue's callback emission.
+    if ctx.activation_record_offset.is_some() {
+        let cleanup_label = ctx.next_label("frame_cleanup");
+        emit_activation_record_push(ctx, &cleanup_label);
+        ctx.frame_cleanup_label = Some(cleanup_label);
+    }
     Ok(())
 }
 
@@ -229,6 +306,18 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    // Release function-static locals' owned refcounted values at process exit.
+    // Statics persist across calls and are never freed by any function epilogue,
+    // so without this the final static value leaks at exit. Runs BEFORE the
+    // callee-saved restores / frame teardown so the runtime release helpers still
+    // have a valid frame to call into, and before gc_stats/heap_debug so the freed
+    // statics are counted in the allocator summary. CLI-only: the `--web` path
+    // uses `emit_web_handler_epilogue` and never reaches this epilogue.
+    {
+        let emitter = &mut *ctx.emitter;
+        let data = &*ctx.data;
+        super::web::emit_function_static_locals_release_at_exit(emitter, data);
+    }
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     if ctx.gc_stats {
@@ -333,12 +422,89 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // concat base and BEFORE the body's re-run static/enum initializers, so each
     // request sees clean state. `__rt_web_reset` is generated per program after
     // every function is emitted; the call here forward-references its label.
-    ctx.emitter.comment("reset per-request persistent state");
-    abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    //
+    // In `--web-worker` and `--web-worker=script` mode the boot runs once and
+    // statics persist for the worker lifetime, so the boot does NOT call the
+    // full reset. The per-request trampoline calls
+    // `__rt_web_worker_request_reset`, which only resets request superglobals
+    // and the concat offset. This skip is permanent and by design in both
+    // worker modes: the boot must NOT reset persistent statics.
+    if !ctx.web_worker && !ctx.web_worker_script {
+        ctx.emitter.comment("reset per-request persistent state");
+        abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    }
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
     zero_initialize_main_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
+    // Install the exit()/die() request boundary LAST, once the frame, callee-saved
+    // saves, and cleanup-local zero-inits are all in place, so the bailout landing's
+    // epilogue is valid when reached via longjmp. Only the top-level-re-run modes
+    // (`--web`, `--web-worker=script`) install it; in `--web-worker` handler mode
+    // this handler is the one-shot boot, not a per-request boundary.
+    if !ctx.web_worker {
+        emit_web_exit_boundary(ctx);
+    }
+}
+
+/// Installs the `exit()`/`die()` request boundary at the end of the
+/// `_elephc_web_handler` prologue (top-level-re-run web modes only).
+///
+/// Emits `setjmp(_exit_jmp_buf)` — a channel SEPARATE from the exception handler
+/// chain, so `exit()` is uncatchable by user `catch (\Throwable)` and skips
+/// `finally`, matching PHP — and marks `_exit_boundary_active`. A later
+/// `exit()`/`die()` at any call depth routes through `__rt_exit`, which longjmps
+/// back here with a non-zero `setjmp` result; that branches to the shared bailout
+/// landing (`emit_web_exit_bailout_landing`). On the install path (result 0) it
+/// falls through into the handler body.
+fn emit_web_exit_boundary(ctx: &mut FunctionContext<'_>) {
+    let target = ctx.emitter.target;
+    let arg0 = abi::int_arg_reg_name(target, 0);
+    ctx.emitter
+        .comment("-- install exit()/die() request boundary (setjmp into _exit_jmp_buf) --");
+    abi::emit_symbol_address(ctx.emitter, arg0, "_exit_jmp_buf");                // arg0 = &_exit_jmp_buf (this request's exit setjmp buffer)
+    ctx.emitter.bl_c("setjmp");                                                  // returns 0 on install, 1 when exit()/die() longjmps back here
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, WEB_EXIT_BAILOUT_LABEL); // non-zero result → arrived via exit()/die() → run the bailout landing
+    // Install path: mark the boundary active so __rt_exit longjmps here instead of
+    // terminating the process. temp_int_reg is x10/r10, distinct from the x9/r-scratch
+    // emit_store_reg_to_symbol uses internally, so the value survives the store.
+    let flag = abi::temp_int_reg(target);
+    abi::emit_load_int_immediate(ctx.emitter, flag, 1);
+    abi::emit_store_reg_to_symbol(ctx.emitter, flag, "_exit_boundary_active", 0);
+    // Capture the request-entry cleanup-chain head as the exit survivor frame. On a
+    // later exit()/die() at any call depth, __rt_exit passes this to
+    // __rt_exception_cleanup_frames so every PHP activation frame pushed during the
+    // request is released before the longjmp back here. At install time no user
+    // function has run yet, so this is the clean request baseline (0 on a fresh
+    // request; the per-request reset zeroes `_exc_call_frame_top`).
+    abi::emit_load_symbol_to_reg(ctx.emitter, flag, "_exc_call_frame_top", 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, flag, "_exit_survivor_frame", 0);
+}
+
+/// Emits the shared `exit()`/`die()` bailout landing at the tail of the unique
+/// `_elephc_web_handler` body.
+///
+/// Reached only via `setjmp` returning non-zero after `__rt_exit` longjmps into
+/// `_exit_jmp_buf`. The longjmp skipped every pending try-pop, so this restores
+/// the exception state to its request-entry baseline — `_exc_handler_top` and
+/// `_rt_diag_suppression` are both 0 at `_elephc_web_handler` entry (nothing
+/// outside the handler pushes a handler record or an `@` suppression), so it
+/// zeroes them — clears `_exit_boundary_active`, then runs the normal handler
+/// epilogue (owned-local cleanup, callee-saved restores, frame teardown, `ret`).
+/// The `ret` returns to the Rust worker loop, which flushes the response body
+/// already buffered by the pre-exit `echo`s and serves the next request.
+///
+/// Emitted once per program (the handler is unique), only for `--web` and
+/// `--web-worker=script`. Gating matches `emit_web_exit_boundary`.
+pub(super) fn emit_web_exit_bailout_landing(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter.blank();
+    ctx.emitter
+        .comment("-- exit()/die() bailout landing: end the request, keep the worker alive --");
+    ctx.emitter.label(WEB_EXIT_BAILOUT_LABEL);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_exc_handler_top", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_rt_diag_suppression", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_exit_boundary_active", 0);
+    emit_web_handler_epilogue(ctx);
 }
 
 /// Emits the `--web` top-level handler epilogue and returns to the bridge.
@@ -392,6 +558,66 @@ pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
     abi::emit_exit_with_result_reg(ctx.emitter);
 }
 
+/// Emits the `--web-worker` process-entry stub that drives the worker bridge.
+///
+/// The stub is the real process entry (`_main`/`main`). It stores the OS
+/// argc/argv to globals once, loads them plus the boot function address into the
+/// first three C-ABI integer argument registers, calls
+/// `elephc_web_run_worker(argc, argv, &boot)`, and exits with the bridge's
+/// integer return value. The boot address (arg 2) is the `_elephc_web_handler`
+/// symbol — the top-level PHP body that runs once per worker, initializes the
+/// app, and calls `elephc_worker_register` to hand the trampoline to Rust.
+pub(super) fn emit_web_worker_entry_stub(ctx: &mut FunctionContext<'_>) {
+    let target = ctx.emitter.target;
+    if target.arch == Arch::AArch64 {
+        ctx.emitter.raw(".align 2");
+    }
+    ctx.emitter.blank();
+    ctx.emitter.comment("--web-worker process entry: call elephc_web_run_worker(argc, argv, &boot)");
+    ctx.emitter.entry_label();
+    abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    ctx.emitter.comment("save argc/argv to globals for the bridge and boot");
+    abi::emit_store_process_args_to_globals(ctx.emitter);
+    let argc_reg = abi::int_arg_reg_name(target, 0);
+    let argv_reg = abi::int_arg_reg_name(target, 1);
+    let boot_reg = abi::int_arg_reg_name(target, 2);
+    abi::emit_load_symbol_to_reg(ctx.emitter, argc_reg, "_global_argc", 0);
+    abi::emit_load_symbol_to_reg(ctx.emitter, argv_reg, "_global_argv", 0);
+    // The boot function is the top-level PHP body, emitted as _elephc_web_handler.
+    abi::emit_symbol_address(ctx.emitter, boot_reg, WEB_HANDLER_SYMBOL);
+    let bridge_entry = target.extern_symbol("elephc_web_run_worker");
+    abi::emit_call_label(ctx.emitter, &bridge_entry);
+    abi::emit_exit_with_result_reg(ctx.emitter);
+}
+
+/// Emits the process entry stub for `--web-worker=script`: stores argc/argv to
+/// globals, then tail-calls the Rust bridge `elephc_web_run_script(argc, argv,
+/// &handler)` where `handler` is the compiled top-level `_elephc_web_handler`.
+/// Identical to `emit_web_worker_entry_stub` except the bridge symbol; the
+/// handler is registered directly per forked child (no PHP boot/register phase).
+pub(super) fn emit_web_worker_script_entry_stub(ctx: &mut FunctionContext<'_>) {
+    let target = ctx.emitter.target;
+    if target.arch == Arch::AArch64 {
+        ctx.emitter.raw(".align 2");
+    }
+    ctx.emitter.blank();
+    ctx.emitter.comment("--web-worker=script process entry: call elephc_web_run_script(argc, argv, &handler)");
+    ctx.emitter.entry_label();
+    abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    ctx.emitter.comment("save argc/argv to globals for the bridge and handler");
+    abi::emit_store_process_args_to_globals(ctx.emitter);
+    let argc_reg = abi::int_arg_reg_name(target, 0);
+    let argv_reg = abi::int_arg_reg_name(target, 1);
+    let handler_reg = abi::int_arg_reg_name(target, 2);
+    abi::emit_load_symbol_to_reg(ctx.emitter, argc_reg, "_global_argc", 0);
+    abi::emit_load_symbol_to_reg(ctx.emitter, argv_reg, "_global_argv", 0);
+    // The handler is the top-level PHP body, emitted as _elephc_web_handler.
+    abi::emit_symbol_address(ctx.emitter, handler_reg, WEB_HANDLER_SYMBOL);
+    let bridge_entry = target.extern_symbol("elephc_web_run_script");
+    abi::emit_call_label(ctx.emitter, &bridge_entry);
+    abi::emit_exit_with_result_reg(ctx.emitter);
+}
+
 /// Zero-initializes cleanup-tracked locals so skipped assignments stay safe at epilogue.
 fn zero_initialize_main_cleanup_locals(ctx: &mut FunctionContext<'_>) {
     for (_, _, ty, offset) in main_cleanup_locals(ctx) {
@@ -441,7 +667,7 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
                 .as_deref()
                 .is_none_or(|name| !param_names.contains(name))
         })
-        .filter(|local| local_slot_has_store(ctx.function, local.id))
+        .filter(|local| local_slot_is_written(ctx.function, local.id))
         .filter_map(|local| {
             let ty = local.php_type.codegen_repr();
             if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {
@@ -525,12 +751,51 @@ fn ref_cell_owner_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId,
     locals
 }
 
-/// Returns true when a local slot is written by an explicit EIR `StoreLocal`.
-fn local_slot_has_store(function: &Function, slot: LocalSlotId) -> bool {
+/// Returns true when a local slot receives an owned value through an explicit EIR
+/// `StoreLocal` or a `CatchBind`.
+///
+/// `CatchBind` counts because a caught exception variable (`$e`) owns the exception
+/// object moved out of the runtime exception slot: it is written by `Op::CatchBind`
+/// (never `Op::StoreLocal`), yet it must be zero-initialized, released at scope end,
+/// and released by the unwind cleanup callback exactly like any other owned local.
+fn local_slot_is_written(function: &Function, slot: LocalSlotId) -> bool {
     function.instructions.iter().any(|inst| {
-        inst.op == Op::StoreLocal
+        matches!(inst.op, Op::StoreLocal | Op::CatchBind)
             && matches!(inst.immediate, Some(Immediate::LocalSlot(candidate)) if candidate == slot)
     })
+}
+
+/// Returns whether `slot` names a local whose owned refcounted value the frame's
+/// cleanup paths (epilogue release and the unwind cleanup callback) will free.
+///
+/// Per-slot form of the membership test shared by `function_needs_cleanup_registry`,
+/// `main_cleanup_locals`, and `function_cleanup_locals`: the slot must be a
+/// cleanup-eligible kind, not a promoted ref-cell, not a parameter, written by an
+/// owning `StoreLocal`/`CatchBind`, and hold a refcounted representation. Used by
+/// `lower_throw_value` to decide whether a rethrown local (`throw $e`) needs an
+/// incref so the in-flight exception survives this frame releasing its slot.
+pub(super) fn slot_is_cleanup_tracked(function: &Function, slot: LocalSlotId) -> bool {
+    let Some(local) = function.locals.iter().find(|local| local.id == slot) else {
+        return false;
+    };
+    if !local_kind_needs_epilogue_cleanup(local.kind) {
+        return false;
+    }
+    if local
+        .name
+        .as_deref()
+        .is_some_and(|name| function.params.iter().any(|param| param.name == name))
+    {
+        return false;
+    }
+    if !local_slot_is_written(function, slot) {
+        return false;
+    }
+    let ty = local.php_type.codegen_repr();
+    if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {
+        return false;
+    }
+    !promoted_ref_cell_local_slots(function).contains(&slot)
 }
 
 /// Returns PHP-visible locals whose slot is rewritten to a ref-cell pointer.
@@ -606,17 +871,26 @@ fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
 /// Releases a refcounted local when the slot contains a non-null heap pointer.
 fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty: &PhpType) {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let done = ctx.next_label("main_refcounted_cleanup_done");
     abi::load_at_offset(ctx.emitter, result_reg, offset);
+    emit_refcounted_release_in_result(ctx, ty);
+}
+
+/// Decrefs the refcounted value already loaded in the int result register, skipping
+/// a null pointer.
+///
+/// Shared by the epilogue local cleanup (via `emit_main_refcounted_cleanup`) and the
+/// catch-bind release-old / release-discarded paths in `lower_inst`. The caller is
+/// responsible for loading the candidate pointer into the int result register first.
+pub(super) fn emit_refcounted_release_in_result(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let done = ctx.next_label("refcounted_release_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("cbz {}, {}", result_reg, done)); // skip uninitialized refcounted locals
+            ctx.emitter.instruction(&format!("cbz {}, {}", result_reg, done));  // skip uninitialized/null refcounted values
         }
         Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("test {}, {}", result_reg, result_reg)); // check whether the refcounted local is initialized
-            ctx.emitter.instruction(&format!("je {}", done)); // skip uninitialized refcounted locals
+            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // check whether the refcounted value is non-null
+            ctx.emitter.instruction(&format!("je {}", done));                   // skip uninitialized/null refcounted values
         }
     }
     abi::emit_decref_if_refcounted(ctx.emitter, ty);
@@ -696,7 +970,7 @@ fn function_cleanup_locals(
                 .is_none_or(|name| !param_names.contains(name))
         })
         .filter(|local| Some(local.id) != skip_return_slot)
-        .filter(|local| local_slot_has_store(ctx.function, local.id))
+        .filter(|local| local_slot_is_written(ctx.function, local.id))
         .filter_map(|local| {
             let ty = local.php_type.codegen_repr();
             if !cleanup_tracked_codegen_type(&ty) {
@@ -758,10 +1032,40 @@ fn return_cleanup_skip_slot_inner(
             if local_load_transfers_stored_owner(&local_ty, result_ty)
                 && return_preserves_result_owner(result_ty, return_ty)
             {
-                Some(slot)
-            } else {
-                None
+                return Some(slot);
             }
+            // Borrowed Mixed→refcounted unbox: loading a Mixed/union local as a
+            // refcounted payload (Object/Str/Array/AssocArray/Callable/Iterable) goes
+            // through `__rt_mixed_unbox`, which increfs ONLY when the load result is
+            // `Ownership::Owned`. A `MaybeOwned`/`Borrowed` load (the common case for a
+            // union local like DatePeriod::current's `slot[1]`, which holds either a
+            // DateTime or a DateTimeImmutable) hands the caller a raw pointer into the
+            // Mixed cell's payload with no matching retain. If the return epilogue then
+            // `__rt_decref_mixed`s the source local, it frees the cell AND the payload
+            // the caller now holds — so `$dt->format()` reads a freed object ("Call to a
+            // member function format() on null"). Skip the source local on this return
+            // path so the cell survives until the caller is done with the borrowed
+            // payload, mirroring the pre-#481 `direct_return_local_slots` exclusion that
+            // never released a local whose load fed a return. An `Owned` load increfs
+            // its own reference and is left to the epilogue (no skip) to avoid leaking
+            // the cell. The return lowering passes a refcounted result straight to the
+            // caller unless the declared return type is `Mixed` (which would re-box into
+            // a fresh cell and needs no skip), so we only check that `return_ty` is a
+            // refcounted non-Mixed type — not class-exact equality, since a function
+            // declared `-> Object` returning an `Object(DateTime)` load must still skip.
+            if local_ty == PhpType::Mixed
+                && *result_ty != PhpType::Mixed
+                && cleanup_tracked_codegen_type(result_ty)
+                && *return_ty != PhpType::Mixed
+                && cleanup_tracked_codegen_type(return_ty)
+                && !matches!(
+                    function.value(value)?.ownership,
+                    Ownership::Owned
+                )
+            {
+                return Some(slot);
+            }
+            None
         }
         Op::ArrayToMixed | Op::HashToMixed => {
             let source = *inst.operands.first()?;
@@ -924,14 +1228,106 @@ fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits a path-specific epilogue for one user-function return terminator.
+///
+/// Pops this frame's exception-cleanup activation record first, mirroring the shared
+/// epilogue (`emit_function_epilogue`): a function that pushed a record must remove it
+/// on every normal-return path, not only when it branches to the shared epilogue label.
+/// Without this pop, a `Terminator::Return` would leave the record on `_exc_call_frame_top`,
+/// so a later `throw`/`exit` in the same request would unwind into the stale record and
+/// re-run its cleanup callback — which releases the full owned-local set including the
+/// returned value (`include_returned = true`), prematurely freeing the object the caller
+/// now owns (e.g. a `new Exception` handed to `throw`). The pop is a no-op unless a record
+/// was pushed, and touches only scratch registers, so the already-loaded return value
+/// survives.
 pub(super) fn emit_function_return_epilogue(
     ctx: &mut FunctionContext<'_>,
     skip_return_slot: Option<LocalSlotId>,
 ) {
+    emit_activation_record_pop(ctx);
     emit_function_local_epilogue_cleanup(ctx, skip_return_slot);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
+}
+
+/// Pushes this frame's exception-cleanup activation record onto
+/// `_exc_call_frame_top` and records `cleanup_label` as its per-frame callback.
+///
+/// Emitted at the end of the prologue (once params are stored and cleanup locals
+/// zero-initialized, before any body code that could throw). Writes the record's
+/// three fields — `prev` = the previous chain head, `cleanup_cb` = `&cleanup_label`,
+/// `saved_fp` = this frame's `x29`/`rbp` — then publishes the record address
+/// (`x29 - base`) as the new chain head. On a `throw`/`exit`/`die` that unwinds
+/// through this frame, `__rt_exception_cleanup_frames` invokes the callback with
+/// `saved_fp` to release the frame's owned locals. No-op unless the layout reserved
+/// a record (`ctx.activation_record_offset`).
+fn emit_activation_record_push(ctx: &mut FunctionContext<'_>, cleanup_label: &str) {
+    let Some(base) = ctx.activation_record_offset else {
+        return;
+    };
+    let target = ctx.emitter.target;
+    let scratch = abi::temp_int_reg(target);
+    ctx.emitter.comment("register exception cleanup frame");
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_call_frame_top", 0);
+    abi::store_at_offset(ctx.emitter, scratch, base);                           // record[+0] = previous cleanup-chain head
+    abi::emit_symbol_address(ctx.emitter, scratch, cleanup_label);
+    abi::store_at_offset(ctx.emitter, scratch, base - 8);                       // record[+8] = per-frame cleanup callback address
+    abi::emit_copy_frame_pointer(ctx.emitter, scratch);
+    abi::store_at_offset(ctx.emitter, scratch, base - 16);                      // record[+16] = this frame's saved frame pointer
+    abi::emit_frame_slot_address(ctx.emitter, scratch, base);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
+}
+
+/// Pops this frame's exception-cleanup activation record on the normal-return path,
+/// restoring `_exc_call_frame_top` to the `prev` value the push saved.
+///
+/// Emitted at the top of the epilogue, before the return-value-preserving local
+/// cleanup. It only touches scratch registers (`x10`/`r10` and `x9`), never the
+/// return-value registers, so the already-loaded return value survives. Removing the
+/// record before normal cleanup makes the normal-return epilogue and the unwind
+/// callback mutually exclusive for this activation: once popped, no later `throw`
+/// can invoke this frame's callback. No-op unless a record was pushed.
+fn emit_activation_record_pop(ctx: &mut FunctionContext<'_>) {
+    let Some(base) = ctx.activation_record_offset else {
+        return;
+    };
+    let target = ctx.emitter.target;
+    let scratch = abi::temp_int_reg(target);
+    ctx.emitter.comment("unregister exception cleanup frame");
+    abi::load_at_offset(ctx.emitter, scratch, base);                           // reload record[+0] = previous cleanup-chain head
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
+}
+
+/// Emits the per-frame cleanup callback invoked by `__rt_exception_cleanup_frames`
+/// while unwinding a `throw`/`exit`/`die` through this frame.
+///
+/// The unwinder calls the callback with the unwound frame's saved frame pointer in
+/// the first integer argument register. `emit_cleanup_callback_prologue` rebases
+/// `x29`/`rbp` onto that pointer so the shared cleanup helpers address the unwound
+/// frame's local slots. It releases the ref-cell owners and the FULL owned-local set
+/// (`function_cleanup_locals(ctx, None)` — `include_returned = true`, because an
+/// unwound frame never hands its would-be return value to a caller, so that local
+/// leaks unless freed here). Emitted once, after the function's `ret`; control never
+/// falls into it.
+fn emit_frame_cleanup_callback(ctx: &mut FunctionContext<'_>, cleanup_label: &str) {
+    ctx.emitter.blank();
+    ctx.emitter
+        .comment("-- exception/exit frame-cleanup callback: release this frame's owned locals --");
+    ctx.emitter.label(cleanup_label);
+    abi::emit_cleanup_callback_prologue(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0));
+    let ref_cell_owners = ref_cell_owner_locals(ctx);
+    emit_ref_cell_owner_epilogue_cleanup_for(ctx, ref_cell_owners);
+    for (name, _, ty, offset) in function_cleanup_locals(ctx, None) {
+        ctx.emitter
+            .comment(&format!("frame-cleanup release ${}", name));
+        match ty {
+            PhpType::Str => emit_main_string_cleanup(ctx, offset),
+            PhpType::Callable => emit_main_refcounted_cleanup(ctx, offset, &ty),
+            other if other.is_refcounted() => emit_main_refcounted_cleanup(ctx, offset, &other),
+            _ => {}
+        }
+    }
+    abi::emit_cleanup_callback_epilogue(ctx.emitter);
 }
 
 /// Emits the shared epilogue for a direct-callable user function.
@@ -944,11 +1340,15 @@ pub(super) fn emit_function_epilogue(ctx: &mut FunctionContext<'_>) {
         .clone()
         .expect("codegen bug: user function has no epilogue label");
     ctx.emitter.label(&label);
+    emit_activation_record_pop(ctx);
     emit_function_local_epilogue_cleanup(ctx, None);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
     ctx.epilogue_emitted = true;
+    if let Some(cleanup_label) = ctx.frame_cleanup_label.clone() {
+        emit_frame_cleanup_callback(ctx, &cleanup_label);
+    }
 }
 
 /// Rounds a byte count up to a 16-byte stack alignment boundary.

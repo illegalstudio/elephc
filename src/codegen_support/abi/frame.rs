@@ -91,6 +91,39 @@ pub fn emit_return(emitter: &mut Emitter) {
     emitter.instruction("ret"); // return to the caller using the platform return instruction
 }
 
+/// Sets up the stack frame for a cleanup callback (e.g., from destructor unwinding).
+/// On AArch64: allocates 16 bytes of spill space and saves x29/x30.
+/// On x86_64: pushes rbp and establishes `frame_base_reg` as the temporary frame pointer.
+pub fn emit_cleanup_callback_prologue(emitter: &mut Emitter, frame_base_reg: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #16");                             // reserve spill space for the callback's saved frame state
+            emitter.instruction("stp x29, x30, [sp, #0]");                      // save the callback caller's frame pointer and return address
+            emitter.instruction(&format!("mov x29, {}", frame_base_reg));       // treat the unwound frame base as the temporary frame pointer during cleanup
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the callback caller frame pointer before rebasing cleanup
+            emitter.instruction(&format!("mov rbp, {}", frame_base_reg));       // treat the unwound frame base as the temporary cleanup frame pointer
+        }
+    }
+}
+
+/// Tears down the cleanup callback frame and returns.
+/// On AArch64: restores x29/x30 from the 16-byte spill area and releases it.
+/// On x86_64: pops rbp. Both targets then emit the platform `ret` instruction.
+pub fn emit_cleanup_callback_epilogue(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldp x29, x30, [sp, #0]");                      // restore the callback caller's frame pointer and return address
+            emitter.instruction("add sp, sp, #16");                             // release the callback spill space
+        }
+        Arch::X86_64 => {
+            emitter.instruction("pop rbp");                                     // restore the callback caller frame pointer after cleanup work
+        }
+    }
+    emit_return(emitter);
+}
+
 /// Emits code that computes the address of a local frame slot and stores it in `dest`.
 /// Uses the frame pointer (x29/rbp) as the base. Large offsets on AArch64 are walked down in
 /// 4095-byte chunks to stay within immediate-add instructions.

@@ -17,7 +17,6 @@ mod symbols;
 mod tests;
 mod values;
 
-#[cfg(test)]
 pub use bootstrap::emit_copy_frame_pointer;
 pub use bootstrap::{
     emit_enable_heap_debug_flag, emit_exit, emit_exit_with_result_reg,
@@ -31,10 +30,11 @@ pub use calls::{
     emit_store_to_sp, emit_temporary_stack_address, materialize_outgoing_args,
 };
 pub use frame::{
-    emit_frame_prologue, emit_frame_restore, emit_frame_slot_address, emit_load_from_address,
-    emit_reg_move, emit_return, emit_store_to_address, emit_store_zero_to_address,
-    emit_store_zero_to_local_slot, load_at_offset, load_at_offset_scratch, load_from_caller_stack,
-    store_at_offset, store_at_offset_scratch,
+    emit_cleanup_callback_epilogue, emit_cleanup_callback_prologue, emit_frame_prologue,
+    emit_frame_restore, emit_frame_slot_address, emit_load_from_address, emit_reg_move,
+    emit_return, emit_store_to_address, emit_store_zero_to_address, emit_store_zero_to_local_slot,
+    load_at_offset, load_at_offset_scratch, load_from_caller_stack, store_at_offset,
+    store_at_offset_scratch,
 };
 #[cfg(test)]
 pub use frame::{emit_preserve_return_value, emit_restore_return_value};
@@ -48,9 +48,10 @@ pub use registers::{
 };
 pub use symbols::{
     emit_cmp_reg_to_symbol, emit_dec_symbol, emit_extern_symbol_address,
-    emit_load_extern_symbol_to_reg, emit_load_symbol_to_reg, emit_load_symbol_to_result,
-    emit_store_imm_to_symbol, emit_store_reg_to_extern_symbol, emit_store_reg_to_symbol,
-    emit_store_result_to_symbol, emit_store_zero_to_symbol, emit_symbol_address,
+    emit_load_extern_symbol_to_reg, emit_load_symbol_to_reg, emit_load_symbol_to_reg_via_page,
+    emit_load_symbol_to_result, emit_store_imm_to_symbol, emit_store_reg_to_extern_symbol,
+    emit_store_reg_to_symbol, emit_store_result_to_symbol, emit_store_zero_to_symbol,
+    emit_symbol_address,
 };
 #[cfg(test)]
 pub use symbols::{emit_load_symbol_to_local_slot, emit_store_local_slot_to_symbol};

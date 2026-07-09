@@ -225,8 +225,7 @@ fn emit_missing_tostring_fatal(ctx: &mut FunctionContext<'_>, class_name: &str) 
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #2");                              // write the object string-cast fatal to stderr
-            ctx.emitter.adrp("x1", &label);
-            ctx.emitter.add_lo12("x1", "x1", &label);
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);                  // resolve the object string-cast fatal message address
             ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the object string-cast fatal byte length
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);

@@ -359,7 +359,7 @@ pub(super) fn lower_array_elem_addr(
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
-    ctx.writeback_global_array_source(array)?;
+    ctx.writeback_symbol_array_source(array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => emit_array_elem_addr_result_aarch64(ctx, array, index, elem_size)?,
         Arch::X86_64 => emit_array_elem_addr_result_x86_64(ctx, array, index, elem_size)?,
@@ -377,6 +377,10 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let value_ty = effective_array_set_value_type(&elem_ty, &raw_value_ty, inst)?;
     require_integer_like_index(ctx.value_php_type(index)?, inst)?;
     let source_local = source_load_local_slot(ctx, array)?;
+    // Drop the spurious boxed-load retain so an in-place element write to a Mixed
+    // static-local container republishes in place instead of re-boxing (and, after
+    // any ensure_unique split, deep-cloning) on every assignment.
+    ctx.emit_uncow_if_mixed_boxed_static_source(array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_set_aarch64(ctx, array, index, value, &raw_value_ty, &value_ty)?,
         Arch::X86_64 => lower_array_set_x86_64(ctx, array, index, value, &raw_value_ty, &value_ty)?,
@@ -385,7 +389,7 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
-    ctx.writeback_global_array_source(array)?;
+    ctx.writeback_symbol_array_source(array)?;
     Ok(())
 }
 
@@ -521,6 +525,11 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     require_indexed_array(array_ty.clone(), inst)?;
     let elem_ty = indexed_array_element_type(&array_ty, inst)?;
     let source_local = source_load_local_slot(ctx, array)?;
+    // Drop the spurious boxed-load retain before ensure_unique runs so a Mixed
+    // static-local container appended in place mutates instead of deep-cloning
+    // on every push (no-op unless the receiver came from a Mixed static slot
+    // whose owning cell is uniquely owned).
+    ctx.emit_uncow_if_mixed_boxed_static_source(array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_push_aarch64(ctx, array, value, &elem_ty)?,
         Arch::X86_64 => lower_array_push_x86_64(ctx, array, value, &elem_ty)?,
@@ -529,7 +538,7 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
-    ctx.writeback_global_array_source(array)?;
+    ctx.writeback_symbol_array_source(array)?;
     Ok(())
 }
 

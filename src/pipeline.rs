@@ -16,6 +16,8 @@ use std::time::Instant;
 use crate::cli::CliConfig;
 use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
+use crate::errors::CompileError;
+use crate::span::Span;
 use crate::timings::CompileTimings;
 use crate::{
     autoload, codegen, conditional, debug_info, errors, exports, ir, ir_lower, ir_passes, lexer,
@@ -56,6 +58,8 @@ pub(crate) fn compile(config: CliConfig) {
         extra_frameworks,
         defines,
         web,
+        web_worker,
+        web_worker_script,
         with_crates,
     } = config;
     let filename = filename.as_str();
@@ -164,7 +168,16 @@ pub(crate) fn compile(config: CliConfig) {
     timings.record_since("image-prelude", phase_started);
 
     let phase_started = Instant::now();
-    let ast = web_prelude::inject_if_web(ast, web);
+    let ast = if web_worker {
+        web_prelude::inject_if_web_worker(ast, true)
+    } else {
+        // Script mode reuses the classic web prelude (inline superglobal fills,
+        // try-wrap, hoisting, setcookie): `web` is already true in script mode,
+        // so inject_if_web applies. The worker=script mode diverges from plain
+        // --web only at the entry stub / Rust bridge (WI-S3/S4), not in the
+        // prelude.
+        web_prelude::inject_if_web(ast, web)
+    };
     timings.record_since("web-prelude", phase_started);
 
     let phase_started = Instant::now();
@@ -203,6 +216,34 @@ pub(crate) fn compile(config: CliConfig) {
     for warning in &check_result.warnings {
         errors::report_warning(warning);
     }
+
+    // WI-S2: worker web-mode ↔ elephc_worker_register() consistency diagnostics.
+    // elephc_worker_register() is meaningful ONLY under --web-worker (handler
+    // mode): handler mode requires it, and every other compilation mode
+    // (--web-worker=script, plain --web, and non-web CLI) rejects it up front so
+    // it never reaches codegen — where it would otherwise fail with an
+    // undefined-symbol link error instead of a clean diagnostic.
+    let register_span = check_result.worker_register_call_span;
+    if web_worker {
+        if register_span.is_none() {
+            errors::report(&CompileError::new(
+                Span::new(1, 1),
+                "--web-worker (handler mode) requires the program to call elephc_worker_register(<handler>) to register its request handler, but no such call was found. Either register a handler, or compile with --web-worker=script to run the whole script on each request (no registration required).",
+            ).with_file(filename.to_string()));
+            process::exit(1);
+        }
+    } else if let Some(span) = register_span {
+        let message = if web_worker_script {
+            "elephc_worker_register() cannot be used with --web-worker=script: in script mode the entire top-level script is re-executed as the request handler, so there is nothing to register. Remove this call, or compile with --web-worker (handler mode) instead."
+        } else if web {
+            "elephc_worker_register() is only valid under --web-worker (handler mode); it does nothing under --web. Compile with --web-worker to register a persistent request handler, or remove the call."
+        } else {
+            "elephc_worker_register() is only valid when compiling with --web-worker (handler mode). Compile with --web-worker, or remove the call."
+        };
+        errors::report(&CompileError::new(span, message).with_file(filename.to_string()));
+        process::exit(1);
+    }
+
     codegen::prepare_declared_name_order(
         &ast,
         &check_result.classes,
@@ -350,6 +391,8 @@ pub(crate) fn compile(config: CliConfig) {
         &exported_functions,
         regalloc_linear,
         web,
+        web_worker,
+        web_worker_script,
     ) {
         Ok(asm) => asm,
         Err(err) => {

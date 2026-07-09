@@ -171,6 +171,144 @@ fn collect_global_var_names_in_body(
     }
 }
 
+/// Accumulator for the `static` null-init persistence pre-scan over one function body.
+#[derive(Default)]
+struct StaticPersistenceScan {
+    /// static local names whose initializer IS a null literal (`ExprKind::Null`).
+    null_init: std::collections::HashSet<String>,
+    /// static local names that are whole-variable reassigned anywhere in the body's
+    /// control-flow tree (via `StmtKind::Assign` or a statement-level inc/dec).
+    reassigned: std::collections::HashSet<String>,
+}
+
+/// Seeds `ctx.static_persisted_types` for `static $x = null` locals that are later reassigned.
+///
+/// The initializer of such a static lowers to a `Void` (null-sentinel) value, so declaring the
+/// slot from the initializer type alone can never hold the reassigned value across calls. This
+/// pre-scans the body for null-initialized `static` declarations and whole-variable
+/// reassignments, then records the widened persisted type (`Mixed`) for every static that is both
+/// null-initialized AND reassigned (the set intersection). `lower_static_var` consumes those
+/// entries when it declares the slot. `Mixed` is used uniformly: the boxed `Mixed` cell already
+/// carries int/null/string/array/object through its existing coerce arms.
+fn seed_static_persisted_types(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
+    let mut scan = StaticPersistenceScan::default();
+    scan_static_persistence(body, &mut scan);
+    for name in scan.null_init.intersection(&scan.reassigned) {
+        ctx.set_static_persisted_type(name, PhpType::Mixed);
+    }
+}
+
+/// Recursively records null-initialized `static` declarations and whole-variable reassignments.
+///
+/// A `static $x = null;` declaration adds `$x` to the null-init set; a whole-variable
+/// reassignment (`StmtKind::Assign` or a statement-level `$x++`/`--$x`) adds it to the reassigned
+/// set. Recurses only into control-flow bodies (if/elseif/else, while, do-while, for
+/// init+update+body, foreach, switch cases+default, try/catch/finally, and
+/// `Synthetic`/`IfDef`/include-guard wrappers). It deliberately does NOT descend into nested
+/// function, closure, class, interface, or trait bodies, which are separate variable scopes with
+/// their own statics.
+fn scan_static_persistence(statements: &[Stmt], scan: &mut StaticPersistenceScan) {
+    for stmt in statements {
+        match &stmt.kind {
+            StmtKind::StaticVar { name, init } => {
+                if matches!(init.kind, ExprKind::Null) {
+                    scan.null_init.insert(name.clone());
+                }
+            }
+            StmtKind::Assign { name, .. } => {
+                scan.reassigned.insert(name.clone());
+            }
+            StmtKind::ExprStmt(expr) => {
+                if let Some(name) = static_incdec_target(&expr.kind) {
+                    // Statement-level `$x++`/`$x--` reassigns the whole variable.
+                    scan.reassigned.insert(name.to_string());
+                }
+            }
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                scan_static_persistence(then_body, scan);
+                for (_, body) in elseif_clauses {
+                    scan_static_persistence(body, scan);
+                }
+                if let Some(body) = else_body {
+                    scan_static_persistence(body, scan);
+                }
+            }
+            StmtKind::IfDef {
+                then_body,
+                else_body,
+                ..
+            } => {
+                scan_static_persistence(then_body, scan);
+                if let Some(body) = else_body {
+                    scan_static_persistence(body, scan);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. }
+            | StmtKind::Synthetic(body) => {
+                scan_static_persistence(body, scan);
+            }
+            StmtKind::For {
+                init,
+                update,
+                body,
+                ..
+            } => {
+                if let Some(init) = init {
+                    scan_static_persistence(std::slice::from_ref(init.as_ref()), scan);
+                }
+                if let Some(update) = update {
+                    scan_static_persistence(std::slice::from_ref(update.as_ref()), scan);
+                }
+                scan_static_persistence(body, scan);
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    scan_static_persistence(body, scan);
+                }
+                if let Some(body) = default {
+                    scan_static_persistence(body, scan);
+                }
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                scan_static_persistence(try_body, scan);
+                for catch in catches {
+                    scan_static_persistence(&catch.body, scan);
+                }
+                if let Some(body) = finally_body {
+                    scan_static_persistence(body, scan);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Returns the target variable name of a statement-level increment/decrement expression, if any.
+///
+/// Only whole-variable `$x++`/`++$x`/`$x--`/`--$x` forms (which reassign the variable itself)
+/// match; element or property increments carry a different expression shape and yield `None`.
+fn static_incdec_target(kind: &ExprKind) -> Option<&str> {
+    match kind {
+        ExprKind::PreIncrement(name)
+        | ExprKind::PostIncrement(name)
+        | ExprKind::PreDecrement(name)
+        | ExprKind::PostDecrement(name) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
 /// Lowers one user-defined function declaration into an EIR function.
 pub(crate) fn lower_user_function(
     name: &str,
@@ -618,6 +756,7 @@ fn lower_body_into_function(
         }
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
+    seed_static_persisted_types(&mut ctx, body);
     for stmt in body {
         crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
     }

@@ -9,11 +9,13 @@
 //! - Static locals are backed by `.comm` symbols and an initialization marker,
 //!   so their values persist across function calls without using frame slots.
 //! - Initializers transfer their freshly-created owner into the static slot;
-//!   assignments retain refcounted values before publishing a second owner.
+//!   assignments receive an already-acquired owner from EIR lowering; the store is a
+//!   plain overwrite, mirroring StoreGlobal.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Instruction, LocalSlot, LocalSlotId, ValueId};
+use crate::codegen::{emit_box_current_value_as_mixed, emit_box_current_owned_value_as_mixed};
+use crate::ir::{Function, Instruction, LocalSlot, LocalSlotId, Op, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -29,6 +31,10 @@ struct StaticLocalSlot {
 }
 
 /// Lowers a static-local read into the current result register(s).
+///
+/// If the slot widened to Mixed and the SSA result type is concrete, the loaded
+/// Mixed cell is unboxed/coerced to the result type; the coerce is a no-op when
+/// storage types already match (i.e. the slot did not widen to Mixed).
 pub(super) fn lower_load_static_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = resolve_static_local_slot(ctx, inst)?;
     ensure_static_local_type_supported(&slot, inst)?;
@@ -37,17 +43,25 @@ pub(super) fn lower_load_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     })?;
     abi::emit_load_symbol_to_result(ctx.emitter, &slot.symbol, &slot.php_type);
     let result_ty = ctx.value_php_type(result)?;
-    coerce_loaded_local_to_result_type(ctx, &slot.php_type, &result_ty)?;
+    let result_owned = matches!(ctx.value_ownership(result)?, crate::ir::Ownership::Owned);
+    coerce_loaded_local_to_result_type(ctx, &slot.php_type, &result_ty, result_owned)?;
     ctx.store_result_value(result)
 }
 
 /// Lowers a static-local assignment from one SSA operand into symbol-backed storage.
+/// EIR lowering acquires ownership for refcounted values (and persists strings),
+/// so this store is a plain overwrite, mirroring `lower_store_global`.
+///
+/// When the slot widened to Mixed but the stored value is a concrete type, the
+/// acquired owner is boxed into the Mixed cell representation before the overwrite
+/// (the EIR Acquire makes the box net-correct).
 pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let slot = resolve_static_local_slot(ctx, inst)?;
     ensure_static_local_type_supported(&slot, inst)?;
     ensure_static_local_value_supported(ctx, &slot, value, inst)?;
-    let mut loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
+    let source_ty = ctx.load_value_to_result(value)?;
+    let mut loaded_ty = source_ty.codegen_repr();
     // Narrow Mixed to Int when the static local slot is Int-typed
     // (from checked integer arithmetic that may overflow to float).
     if matches!(slot.php_type.codegen_repr(), PhpType::Int)
@@ -73,26 +87,60 @@ pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Ins
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         loaded_ty = PhpType::Int;
     }
-    if loaded_ty.is_refcounted() {
+    // Give the static slot its own persistent reference to the stored value — but
+    // ONLY when EIR lowering still `release`s that value elsewhere in the function.
+    //
+    // The store overwrites the slot symbol with the value's pointer; whether it must
+    // ALSO incref depends on whether EIR lowering transfers ownership into the store
+    // or keeps the value live afterward:
+    //   * Kept live (a trailing `Op::Release` exists) — e.g. `static $count = 0;
+    //     return ++$count;`, where the overflow-checked `++` yields a boxed Mixed that
+    //     is stored, then read by the `return` cast, then `release`d. The store must
+    //     incref so the slot's copy survives that release; without it the trailing
+    //     release frees the cell and a persistent `--web-worker` loses the accumulated
+    //     value across requests.
+    //   * Transferred (no trailing `Release`) — e.g. `static $map = []; $map[$k] = 'v';`,
+    //     where the freshly built hash is the store's sole consumer. EIR lowering emits
+    //     no release, so the value's single reference belongs to the slot. Increffing
+    //     here double-counts and leaks the whole growing container (allocs=1025
+    //     frees=125 over 40 iterations). `box_current_result_for_static_slot`'s
+    //     owned-source path already moved that reference into the fresh Mixed cell.
+    // Mirrors the EIR model where the release site, not the store, decides ownership.
+    if loaded_ty.is_refcounted() && value_released_elsewhere(ctx.function, value) {
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty);
     }
+    box_current_result_for_static_slot(ctx, &slot, value, &source_ty)?;
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, true);
     clear_static_local_high_word_if_needed(ctx, &slot);
     Ok(())
 }
 
 /// Lowers a static-local declaration initializer guarded by the per-slot marker.
+///
+/// When the slot widened to Mixed but the initializer is a concrete type, the
+/// result is boxed into the Mixed cell representation before the one-time store;
+/// the marker guard ensures the box runs at most once per request.
 pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let slot = resolve_static_local_slot(ctx, inst)?;
     ensure_static_local_type_supported(&slot, inst)?;
     ensure_static_local_value_supported(ctx, &slot, value, inst)?;
     let initialized_label = ctx.next_label("static_local_initialized");
+    let skip_release_label = ctx.next_label("static_local_skip_release");
+    // The initializer operand (e.g. `[]`) was lowered before this instruction,
+    // so its heap allocation already ran this call regardless of the marker. On
+    // the init path (marker == 0) ownership transfers into the static slot; on
+    // the skip path (marker != 0, already initialized this process) the freshly
+    // allocated initializer temp is orphaned and must be released here — the
+    // function epilogue intentionally does not clean it up because ownership is
+    // considered transferred to the static, which is only true on the init path.
     abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &initialized_label);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &skip_release_label);
+    // -- init path: first-time initialization this process --
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
-    let mut loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
+    let source_ty = ctx.load_value_to_result(value)?;
+    let loaded_ty = source_ty.codegen_repr();
     // Narrow Mixed to Int when the static local slot is Int-typed.
     if matches!(slot.php_type.codegen_repr(), PhpType::Int)
         && matches!(loaded_ty, PhpType::Mixed)
@@ -110,18 +158,74 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
         ctx.load_value_to_result(value)?;
         abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        loaded_ty = PhpType::Int;
     }
-    // Box Int/Float/Bool/Void as Mixed when the static local slot is Mixed-typed.
-    if matches!(slot.php_type.codegen_repr(), PhpType::Mixed)
-        && !matches!(loaded_ty, PhpType::Mixed)
-    {
-        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &loaded_ty);
-    }
+    box_current_result_for_static_slot(ctx, &slot, value, &source_ty)?;
     let store_ty = slot.php_type.codegen_repr();
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &store_ty, false);
     clear_static_local_high_word_if_needed(ctx, &slot);
+    abi::emit_jump(ctx.emitter, &initialized_label);
+    // -- skip path: already initialized; release the orphaned initializer temp --
+    ctx.emitter.label(&skip_release_label);
+    release_orphaned_initializer_temp(ctx, value)?;
     ctx.emitter.label(&initialized_label);
+    Ok(())
+}
+
+/// Releases the initializer operand on the init-marker skip path, where the
+/// freshly allocated temp (e.g. the `[]` from `Op::ArrayNew`) was never stored
+/// to the static slot and is not cleaned up by the function epilogue. Mirrors
+/// the per-type release shape of `emit_release_symbol_value` in
+/// `codegen_ir/web.rs`: strings free their payload through the validating
+/// heap-free helper (a safe no-op for pooled/.rodata string literals), other
+/// refcounted kinds decref through the type-specific helper, and non-refcounted
+/// scalars (int/bool/float) own no heap and are a no-op.
+fn release_orphaned_initializer_temp(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let source_ty = ctx.load_value_to_result(value)?;
+    match source_ty.codegen_repr() {
+        PhpType::Str => {
+            let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
+            abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), ptr_reg);
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        }
+        _ => {
+            abi::emit_decref_if_refcounted(ctx.emitter, &source_ty);
+        }
+    }
+    Ok(())
+}
+
+/// Returns whether EIR lowering emits an `Op::Release` for `value` anywhere in the
+/// function — i.e. the value is kept live past its store and its reference is not
+/// transferred into the static slot.
+///
+/// A static-local store must incref only when this is true: a trailing release would
+/// otherwise free the slot's copy of a still-live value (breaking `--web-worker`
+/// persistence), while a value with no release has transferred its sole reference
+/// into the slot and must not be double-counted. SSA values are single-assignment,
+/// so scanning every instruction's operands for a `Release` referencing `value` is a
+/// position-independent read of that ownership intent.
+fn value_released_elsewhere(function: &Function, value: ValueId) -> bool {
+    function.instructions.iter().any(|inst| {
+        inst.op == Op::Release && inst.operands.iter().any(|operand| *operand == value)
+    })
+}
+
+/// Boxes the current result into the Mixed slot representation when the static
+/// slot widened to Mixed but the stored value is a concrete type. Mirrors
+/// `store_value_to_local`'s ownership-aware box selection.
+fn box_current_result_for_static_slot(
+    ctx: &mut FunctionContext<'_>,
+    slot: &StaticLocalSlot,
+    value: ValueId,
+    source_ty: &PhpType,
+) -> Result<()> {
+    if slot.php_type.codegen_repr() == PhpType::Mixed && *source_ty != PhpType::Mixed {
+        if ctx.value_can_own_mixed_box_source(value)? {
+            emit_box_current_owned_value_as_mixed(ctx.emitter, source_ty);
+        } else {
+            emit_box_current_value_as_mixed(ctx.emitter, source_ty);
+        }
+    }
     Ok(())
 }
 
@@ -136,8 +240,7 @@ fn resolve_static_local_slot(
         CodegenIrError::invalid_module(format!("{} static local is missing a source name", inst.op.name()))
     })?;
     let php_type = local.php_type.codegen_repr();
-    let function_fragment = static_local_function_fragment(&ctx.function.name);
-    let symbol = format!("_static_{}_{}", function_fragment, name);
+    let symbol = crate::names::static_local_symbol(&ctx.function.name, &name);
     let init_symbol = format!("{}_init", symbol);
     ctx.data.add_comm(symbol.clone(), 16);
     ctx.data.add_comm(init_symbol.clone(), 8);
@@ -206,7 +309,12 @@ fn ensure_static_local_value_supported(
 }
 
 /// Returns true when a stored value can use the static-local symbol layout.
+/// A Mixed slot accepts any boxable value, since concrete values are boxed into
+/// the Mixed cell representation at store time.
 fn static_local_value_type_matches(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    if matches!(slot_ty, PhpType::Mixed) {
+        return true;
+    }
     if value_ty == slot_ty {
         return true;
     }
@@ -232,19 +340,4 @@ fn clear_static_local_high_word_if_needed(ctx: &mut FunctionContext<'_>, slot: &
     if !matches!(slot.php_type.codegen_repr(), PhpType::Str | PhpType::TaggedScalar) {
         abi::emit_store_zero_to_symbol(ctx.emitter, &slot.symbol, 8);
     }
-}
-
-/// Builds an assembly-safe function fragment for a static-local storage symbol.
-fn static_local_function_fragment(name: &str) -> String {
-    let mut fragment = String::new();
-    for ch in name.chars() {
-        match ch {
-            'A'..='Z' | 'a'..='z' | '0'..='9' => fragment.push(ch),
-            '_' => fragment.push_str("_u_"),
-            '\\' => fragment.push_str("_N_"),
-            ':' => fragment.push_str("_C_"),
-            _ => fragment.push('_'),
-        }
-    }
-    fragment
 }

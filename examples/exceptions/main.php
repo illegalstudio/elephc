@@ -39,3 +39,22 @@ try {
 } catch (AppThrowable $e) {
     echo "caught AppThrowable: " . $e->getMessage() . " #" . $e->getCode() . PHP_EOL;
 }
+
+// A domain exception with its own constructor forwarding to the builtin parent:
+// parent::__construct() stamps the inherited message/code, and the subclass adds a
+// field of its own — the common framework pattern for rich exceptions.
+class HttpException extends RuntimeException {
+    public string $url = "";
+
+    public function __construct(string $message, int $status, string $url) {
+        parent::__construct($message, $status);
+        $this->url = $url;
+    }
+}
+
+try {
+    throw new HttpException("not found", 404, "/missing");
+} catch (HttpException $e) {
+    echo "caught HttpException: " . $e->getMessage()
+        . " #" . $e->getCode() . " (" . $e->url . ")" . PHP_EOL;
+}

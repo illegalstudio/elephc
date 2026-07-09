@@ -22,7 +22,9 @@
 //! - Scratch slots used by this strategy: wd-or-sentinel `[sp+80]`, ordinal `n` `[sp+88]`, month
 //!   delta `[sp+104]` (and on x86 the parked cursor `[rsp+96]`).
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen::{
+    abi::emit_symbol_address, emit::Emitter, platform::Arch,
+};
 
 /// Dispatches to the architecture-specific ordinal-date parser.
 pub(crate) fn emit_first_last_day(emitter: &mut Emitter) {
@@ -233,8 +235,7 @@ fn emit_first_last_day_arm64(emitter: &mut Emitter) {
     emitter.instruction("mov x15, x30");                                        // park the return address (lc16 is sp-relative)
     emitter.instruction("bl __rt_strtotime_lc_cursor");                         // lowercase 16 bytes from the cursor into lc16
     emitter.instruction("add x6, sp, #64");                                     // candidate = lc16 buffer
-    emitter.adrp("x7", "_strtotime_firstlast_tab");                             // phrase-token table page
-    emitter.add_lo12("x7", "x7", "_strtotime_firstlast_tab");                   // resolve table address
+    emit_symbol_address(emitter, "x7", "_strtotime_firstlast_tab");             // resolve phrase-token table address
     emitter.instruction("sub x8, x4, x3");                                      // remaining bytes
     emitter.instruction("mov x11, #16");                                        // capped to lc16 width
     emitter.instruction("cmp x8, x11");                                         // remaining > 16 ?
@@ -248,8 +249,7 @@ fn emit_first_last_day_arm64(emitter: &mut Emitter) {
     emitter.instruction("mov x15, x30");                                        // park the return address (lc16 is sp-relative)
     emitter.instruction("bl __rt_strtotime_lc_cursor");                         // lowercase 16 bytes from the cursor into lc16
     emitter.instruction("add x6, sp, #64");                                     // candidate = lc16 buffer
-    emitter.adrp("x7", "_strtotime_keyword_tab");                               // keyword table page
-    emitter.add_lo12("x7", "x7", "_strtotime_keyword_tab");                     // resolve table address
+    emit_symbol_address(emitter, "x7", "_strtotime_keyword_tab");               // resolve keyword table address
     emitter.instruction("sub x8, x4, x3");                                      // remaining bytes
     emitter.instruction("mov x11, #16");                                        // capped to lc16 width
     emitter.instruction("cmp x8, x11");                                         // remaining > 16 ?

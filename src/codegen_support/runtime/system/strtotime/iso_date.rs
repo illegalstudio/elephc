@@ -11,7 +11,9 @@
 //! - Inputs come from `[sp+48]` (trimmed ptr) and `[sp+56]` (trimmed len); the result `struct tm` is built at `[sp+0..47]`.
 //! - All exits branch to the shared `__rt_strtotime_ret` / `__rt_strtotime_fail` epilogues owned by the dispatcher (`mod.rs`).
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen::{
+    abi::emit_symbol_address, emit::Emitter, platform::Arch,
+};
 
 /// Dispatches to the architecture-specific ISO date parser.
 /// Routes to `emit_iso_date_arm64` or `emit_iso_date_linux_x86_64` based on `emitter.target`.
@@ -404,8 +406,7 @@ fn emit_iso_date_arm64(emitter: &mut Emitter) {
     emitter.label("__rt_strtotime_iso_iana_mk");
     emitter.instruction("bl __rt_date_default_timezone_get");                   // x1 = current zone id ptr, x2 = len
     emitter.instruction("str x2, [sp, #96]");                                   // save the current id length across the calls
-    emitter.adrp("x3", "_php_tz_save");                                         // save-buffer page
-    emitter.add_lo12("x3", "x3", "_php_tz_save");                               // resolve the save buffer
+    emit_symbol_address(emitter, "x3", "_php_tz_save");                          // resolve the timezone save buffer address
     emitter.instruction("mov x4, #0");                                          // copy index
     emitter.label("__rt_strtotime_iana_save_copy");
     emitter.instruction("cmp x4, x2");                                          // copied the whole id ?
@@ -421,8 +422,7 @@ fn emit_iso_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, sp");                                          // x0 = struct tm
     emitter.instruction("bl __rt_mktime_shifted");                              // mktime in the IANA zone -> x0 = timestamp
     emitter.instruction("str x0, [sp, #104]");                                  // save the timestamp across the restore call (non-overlapping with +96)
-    emitter.adrp("x1", "_php_tz_save");                                         // saved id page
-    emitter.add_lo12("x1", "x1", "_php_tz_save");                               // resolve the saved id
+    emit_symbol_address(emitter, "x1", "_php_tz_save");                          // resolve the saved timezone id address
     emitter.instruction("ldr x2, [sp, #96]");                                   // saved id length
     emitter.instruction("bl __rt_date_default_timezone_set");                   // restore the previous default zone
     emitter.instruction("ldr x0, [sp, #104]");                                  // reload the timestamp

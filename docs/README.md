@@ -87,5 +87,6 @@ How elephc works under the hood — from lexing to code generation and runtime s
 - [Architecture](internals/architecture.md) — module map, calling conventions
 - [ARM64 Assembly](internals/arm64-assembly.md) — introduction to ARM64
 - [ARM64 Instructions](internals/arm64-instructions.md) — instruction reference
+- [Global State Audit](internals/global-state.md) — mutable global classification and centralized symbol addressing
 
 For compile-time instrumentation and debug artifacts, the CLI also supports `--timings` to print per-phase compiler timings, including the optimizer phases, and `--source-map` to emit a sidecar `.map` file next to generated assembly.

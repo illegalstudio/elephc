@@ -152,8 +152,7 @@ fn emit_intdiv_zero_fatal(ctx: &mut FunctionContext<'_>, zero_label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #2");                              // select stderr as the fatal diagnostic destination
-            ctx.emitter.adrp("x1", &err_label);
-            ctx.emitter.add_lo12("x1", "x1", &err_label);
+            abi::emit_symbol_address(ctx.emitter, "x1", &err_label);               // resolve the fatal diagnostic message address
             ctx.emitter.instruction(&format!("mov x2, #{}", err_len));          // pass the fatal diagnostic byte length to write()
             ctx.emitter.syscall(4);
             ctx.emitter.instruction("mov x0, #1");                              // select process exit code 1 after the fatal diagnostic
@@ -223,8 +222,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
             abi::emit_symbol_address(ctx.emitter, "x9", "_spl_arithmetic_error_class_id");
             ctx.emitter.instruction("ldr x9, [x9]");                                // load ArithmeticError's runtime class id for this program
             ctx.emitter.instruction("str x9, [x0]");                                // store the ArithmeticError class id in the Throwable header
-            ctx.emitter.adrp("x9", &msg_label);
-            ctx.emitter.add_lo12("x9", "x9", &msg_label);
+            abi::emit_symbol_address(ctx.emitter, "x9", &msg_label);               // resolve the ArithmeticError message address
             ctx.emitter.instruction("str x9, [x0, #8]");                            // store the static ArithmeticError message pointer
             ctx.emitter.instruction(&format!("mov x9, #{}", msg_len));              // materialize the static ArithmeticError message length
             ctx.emitter.instruction("str x9, [x0, #16]");                           // store the exception message length

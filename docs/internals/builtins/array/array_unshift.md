@@ -10,13 +10,13 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_unshift.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_unshift.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays/unshift.rs`:23](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays/unshift.rs#L23) (`lower_array_unshift`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays/unshift.rs`:24](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays/unshift.rs#L24) (`lower_array_unshift`)
 - **Function symbol**: `lower_array_unshift()`
 
 
 ### Lowering notes
 
-- Lowers `array_unshift()` by ensuring uniqueness, prepending one scalar value, and returning count.
+- Lowers `array_unshift()` by ensuring uniqueness, prepending one value, and returning count.
 
 ## Runtime helpers
 

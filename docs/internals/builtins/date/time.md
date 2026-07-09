@@ -21,6 +21,8 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
+- `__rt_exit`
+- `__rt_stdout_write`
 - `__rt_time`
 
 ## Signature summary

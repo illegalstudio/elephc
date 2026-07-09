@@ -466,3 +466,66 @@ echo 1 + 2;
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `--web-worker` (handler mode) and `--web-worker=script` are rejected
+/// as mutually exclusive rather than silently picking a mode, in both orders —
+/// the codegen entry tests `web_worker` before `web_worker_script`, so an
+/// unrejected combination would quietly compile as handler mode.
+#[test]
+fn test_cli_rejects_web_worker_handler_and_script_together() {
+    let dir = make_cli_test_dir("elephc_cli_web_worker_mode_conflict");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1;").unwrap();
+
+    for order in [
+        ["--web-worker", "--web-worker=script"],
+        ["--web-worker=script", "--web-worker"],
+    ] {
+        let output = elephc_cli_command(&dir)
+            .arg(order[0])
+            .arg(order[1])
+            .arg(&php_path)
+            .output()
+            .expect("failed to run elephc CLI with conflicting worker-mode flags");
+
+        assert!(
+            !output.status.success(),
+            "expected {order:?} to fail as mutually exclusive"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("mutually exclusive"),
+            "expected conflict message for {order:?}, got stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an unknown `--web-worker=<mode>` suffix is rejected with a message
+/// listing the accepted spellings, rather than being treated as a filename or
+/// silently ignored.
+#[test]
+fn test_cli_rejects_unknown_web_worker_mode() {
+    let dir = make_cli_test_dir("elephc_cli_web_worker_bad_mode");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1;").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--web-worker=bogus")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI with unknown --web-worker mode");
+
+    assert!(
+        !output.status.success(),
+        "expected --web-worker=bogus to fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Unknown --web-worker mode"),
+        "expected unknown-mode message, got stderr={stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

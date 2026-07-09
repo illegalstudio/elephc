@@ -218,11 +218,9 @@ fn emit_mixed_callable_not_callable_fatal(ctx: &mut FunctionContext<'_>, op_name
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the non-callable Mixed diagnostic to stderr
-            ctx.emitter.adrp("x1", &message_label); // load the non-callable Mixed diagnostic page
-            ctx.emitter.add_lo12("x1", "x1", &message_label); // resolve the non-callable Mixed diagnostic address
-            ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the non-callable Mixed diagnostic byte length to write
+            ctx.emitter.instruction("mov x0, #2");                              // write the non-callable Mixed diagnostic to stderr
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);             // resolve the diagnostic message address
+            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the non-callable Mixed diagnostic byte length to write
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }
@@ -1501,11 +1499,9 @@ fn emit_runtime_callable_array_no_match_abort(ctx: &mut FunctionContext<'_>) {
         .add_string(b"Fatal error: callable array did not resolve to an invokable target\n");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the callable-array failure diagnostic to stderr
-            ctx.emitter.adrp("x1", &message_label);
-            ctx.emitter.add_lo12("x1", "x1", &message_label);
-            ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the callable-array diagnostic byte length
+            ctx.emitter.instruction("mov x0, #2");                              // write the callable-array failure diagnostic to stderr
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);             // resolve the diagnostic message address
+            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the callable-array diagnostic byte length
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }
@@ -1906,11 +1902,9 @@ fn emit_missing_descriptor_invoker_fatal(ctx: &mut FunctionContext<'_>, op_name:
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the missing descriptor-invoker diagnostic to stderr
-            ctx.emitter.adrp("x1", &message_label); // load the missing descriptor-invoker diagnostic page
-            ctx.emitter.add_lo12("x1", "x1", &message_label); // resolve the missing descriptor-invoker diagnostic address
-            ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the descriptor-invoker diagnostic byte length to write
+            ctx.emitter.instruction("mov x0, #2");                              // write the missing descriptor-invoker diagnostic to stderr
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);             // resolve the diagnostic message address
+            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the descriptor-invoker diagnostic byte length to write
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }
@@ -2342,11 +2336,9 @@ fn emit_undefined_runtime_string_call_fatal(ctx: &mut FunctionContext<'_>) {
     let (message_label, message_len) = ctx.data.add_string(message);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the undefined dynamic-call diagnostic to stderr
-            ctx.emitter.adrp("x1", &message_label); // load the dynamic-call diagnostic string page
-            ctx.emitter.add_lo12("x1", "x1", &message_label); // resolve the dynamic-call diagnostic string address
-            ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the dynamic-call diagnostic byte length to write
+            ctx.emitter.instruction("mov x0, #2");                              // write the undefined dynamic-call diagnostic to stderr
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);             // resolve the diagnostic message address
+            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the dynamic-call diagnostic byte length to write
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }
