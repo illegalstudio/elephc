@@ -9340,6 +9340,31 @@ fn method_call_result_type(
         }
         return fallback_expr_type(expr);
     };
+    // Fluent `with*` wither (@return static): a method declared to return a strict
+    // ANCESTOR interface of the receiver interface actually returns `clone $this`
+    // (the receiver's concrete type). Resolve the IR value to the receiver so a
+    // descendant-only chained call dispatches — e.g. `withHeader(): Message` on a
+    // `Request` receiver must stay `Request` for the following `->withMethod()`.
+    // This MUST agree with the checker's infer_method_call_on_interface_type (#547):
+    // if the IR value kept the ancestor type, the EIR backend rejects the chained
+    // call as "interface method call to unknown method Message::withMethod".
+    let fluent_receiver = if let (Some((recv_name, _)), PhpType::Object(return_name)) =
+        (singular_object_class(&object_ty), &return_ty)
+    {
+        if php_symbol_key(method).starts_with("with")
+            && ctx.interfaces.contains_key(recv_name.trim_start_matches('\\'))
+            && php_symbol_key(return_name.trim_start_matches('\\'))
+                != php_symbol_key(recv_name.trim_start_matches('\\'))
+            && interface_extends_interface_for_ir(ctx, recv_name, return_name)
+        {
+            Some(recv_name.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let return_ty = fluent_receiver.map(PhpType::Object).unwrap_or(return_ty);
     if op == Op::NullsafeMethodCall && nullable {
         nullable_result_type(return_ty)
     } else {

@@ -235,6 +235,25 @@ impl Checker {
             env,
             &format!("Method {}::{}", interface_name, method),
         )?;
+        // Immutable "wither" fluent methods (the PSR-FIG `with*` convention:
+        // MessageInterface::withHeader, RequestInterface::withMethod, …) are
+        // declared `: MessageInterface` but carry `@return static` — at runtime
+        // they return `clone $this`, i.e. the receiver's concrete type, not the
+        // ancestor interface the signature names. PHPStan honours the `@return
+        // static`, so PHPStan-clean code (`$serverRequest = $serverRequest
+        // ->withHeader(...)` then `->withQueryParams(...)`) relies on the type
+        // staying the receiver's. Resolve the return to the receiver interface
+        // when the declared return is a strict ancestor of it — otherwise the
+        // type widens to the ancestor and later child-only calls/params fail.
+        if method_key.starts_with("with") {
+            if let PhpType::Object(return_name) = &sig.return_type {
+                if return_name != interface_name
+                    && self.interface_extends_interface(interface_name, return_name)
+                {
+                    return Ok(PhpType::Object(interface_name.to_string()));
+                }
+            }
+        }
         Ok(sig.return_type)
     }
 

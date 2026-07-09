@@ -95,8 +95,13 @@ impl Checker {
                     self.type_accepts(expected_key.as_ref(), actual_key.as_ref())
                         && self.type_accepts(expected_value.as_ref(), actual_value.as_ref())
                 }
+                // A packed `Array(T)` is an int-keyed list, so it assigns into an
+                // `AssocArray` whose key is `Int` (or `Mixed`) and whose value the
+                // element satisfies — e.g. a list literal `[...]` (Array(Mixed))
+                // passed to an `array<int, mixed>` param (SubmissionContext::withBound).
+                // The two share the same run representation; no element re-typing.
                 PhpType::Array(actual_elem)
-                    if matches!(expected_key.as_ref(), PhpType::Mixed)
+                    if matches!(expected_key.as_ref(), PhpType::Mixed | PhpType::Int)
                         && self.type_accepts(expected_value.as_ref(), actual_elem.as_ref()) =>
                 {
                     true
