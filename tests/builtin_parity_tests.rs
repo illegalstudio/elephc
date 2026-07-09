@@ -16,7 +16,7 @@ const EVAL_DIRECT_DISPATCH_SOURCES: &[&str] = &[include_str!(
 )];
 
 const EVAL_DYNAMIC_DISPATCH_SOURCES: &[&str] = &[include_str!(
-    "../crates/elephc-magician/src/interpreter/builtins/raw_memory.rs"
+    "../crates/elephc-magician/src/interpreter/builtins/raw_memory/mod.rs"
 )];
 
 /// Eval-only reflection probes exist because magician can inspect dynamic eval metadata before the AOT catalog exposes them.

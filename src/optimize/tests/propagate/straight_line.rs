@@ -213,7 +213,9 @@ fn test_pure_user_call_keeps_constants() {
             StmtKind::FunctionDecl {
                 name: "pf".to_string(),
                 params: vec![("a".to_string(), None, None, false)],
+                param_attributes: Vec::new(),
                 variadic: None,
+                variadic_by_ref: false,
                 variadic_type: None,
                 return_type: None,
                 by_ref_return: false,
@@ -261,7 +263,9 @@ fn test_global_writing_user_call_clears_constants_at_top_level() {
             StmtKind::FunctionDecl {
                 name: "gw".to_string(),
                 params: Vec::new(),
+                param_attributes: Vec::new(),
                 variadic: None,
+                variadic_by_ref: false,
                 variadic_type: None,
                 return_type: None,
                 by_ref_return: false,

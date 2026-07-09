@@ -25,7 +25,9 @@ fn function_with_params(name: &str, params: Vec<(&str, bool)>) -> Stmt {
                 .into_iter()
                 .map(|(param, is_ref)| (param.to_string(), None, None, is_ref))
                 .collect(),
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -48,7 +50,9 @@ fn method_with_params(name: &str, params: Vec<(&str, bool)>) -> ClassMethod {
             .into_iter()
             .map(|(param, is_ref)| (param.to_string(), None, None, is_ref))
             .collect(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: None,
         by_ref_return: false,
@@ -90,6 +94,7 @@ fn by_ref_property(name: &str) -> ClassProperty {
         is_static: false,
         is_abstract: false,
         by_ref: true,
+        is_promoted: false,
         default: None,
         span: Span::dummy(),
         attributes: Vec::new(),
