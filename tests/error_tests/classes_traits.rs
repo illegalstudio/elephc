@@ -422,12 +422,13 @@ fn test_error_class_attribute_args_non_string_attr() {
     );
 }
 
-/// Verifies that `class_attribute_args()` on an attribute with named arguments reports
-/// "requested attribute uses argument metadata that is not supported yet".
+/// Verifies that `class_attribute_args()` on an attribute with an unmaterialized
+/// symbolic constant argument reports "requested attribute uses argument metadata
+/// that is not supported yet".
 #[test]
-fn test_error_class_attribute_named_args_are_not_silently_dropped() {
+fn test_error_class_attribute_const_args_are_not_silently_dropped() {
     expect_error(
-        "<?php #[Foo(name: \"Ada\")] class C {} class_attribute_args('C', 'Foo');",
+        "<?php #[Attribute(Attribute::TARGET_CLASS)] class MyAttr {} class_attribute_args('MyAttr', 'Attribute');",
         "requested attribute uses argument metadata that is not supported yet",
     );
 }

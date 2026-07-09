@@ -46,6 +46,20 @@ fn test_parse_class_decl() {
     }
 }
 
+/// Verifies that `clone`, a PHP operator keyword, is still accepted as a method name.
+#[test]
+fn test_parse_clone_named_method() {
+    let stmts =
+        parse_source("<?php class Image { public function clone(): Image { return $this; } }");
+    match &stmts[0].kind {
+        StmtKind::ClassDecl { methods, .. } => {
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].name, "clone");
+        }
+        _ => panic!("Expected ClassDecl"),
+    }
+}
+
 /// Verifies that `<?php $p = new Point(1, 2);` parses `new` expression with constructor args
 /// into `StmtKind::Assign` wrapping `ExprKind::NewObject` with class name and argument list.
 #[test]
