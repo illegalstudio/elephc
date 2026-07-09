@@ -18,6 +18,7 @@ use crate::ir_lower::context::{
     StaticCallableBinding,
 };
 use crate::ir_lower::effects_lookup;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{
     AttributeGroup, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr,
 };
@@ -1089,8 +1090,13 @@ pub(crate) fn eir_signature_with_php_param_contracts(
         let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
         let variadic = signature.variadic.as_deref() == Some(name.as_str());
         if !declared && !by_ref && !variadic {
-            if preserve_untyped_eir_param_contract(owner_name, name, php_type, callable_param_sigs)
-            {
+            if preserve_untyped_eir_param_contract(
+                owner_name,
+                index,
+                name,
+                php_type,
+                callable_param_sigs,
+            ) {
                 continue;
             }
             *php_type = PhpType::Mixed;
@@ -1119,12 +1125,39 @@ fn eir_runtime_metadata_signature(signature: &FunctionSig) -> FunctionSig {
 /// Returns true when an inferred untyped parameter has an EIR-safe concrete ABI contract.
 fn preserve_untyped_eir_param_contract(
     owner_name: &str,
+    param_index: usize,
     param_name: &str,
     php_type: &PhpType,
     callable_param_sigs: &std::collections::HashMap<(String, String), FunctionSig>,
 ) -> bool {
-    matches!(php_type.codegen_repr(), PhpType::Callable)
+    magic_method_param_keeps_eir_contract(owner_name, param_index, php_type)
+        || matches!(php_type.codegen_repr(), PhpType::Callable)
         || callable_param_sigs.contains_key(&(owner_name.to_string(), param_name.to_string()))
+}
+
+/// Returns whether a checker-patched magic-method parameter must keep its real ABI type.
+fn magic_method_param_keeps_eir_contract(
+    owner_name: &str,
+    param_index: usize,
+    php_type: &PhpType,
+) -> bool {
+    let Some((_, method_name)) = owner_name.rsplit_once("::") else {
+        return false;
+    };
+    let method_key = php_symbol_key(method_name);
+    match method_key.as_str() {
+        "__get" | "__isset" | "__unset" => {
+            param_index == 0 && matches!(php_type.codegen_repr(), PhpType::Str)
+        }
+        "__set" => {
+            param_index == 0 && matches!(php_type.codegen_repr(), PhpType::Str)
+        }
+        "__call" | "__callstatic" => {
+            (param_index == 0 && matches!(php_type.codegen_repr(), PhpType::Str))
+                || (param_index == 1 && matches!(php_type.codegen_repr(), PhpType::Array(_)))
+        }
+        _ => false,
+    }
 }
 
 /// Widens inferred container return elements that may be built from dynamic params.

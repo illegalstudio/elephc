@@ -8829,6 +8829,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
                 values,
             );
         }
+        if method_name.eq_ignore_ascii_case("getArguments") {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let Some(args) = attribute_metadata.attribute().args() else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            return eval_class_attribute_args_result(args, values);
+        }
         if method_name.eq_ignore_ascii_case("getTarget") {
             if !evaluated_args.is_empty() {
                 return Err(EvalStatus::RuntimeFatal);

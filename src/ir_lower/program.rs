@@ -352,6 +352,7 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
     for function in all_lowered_functions(module) {
         if function_contains_eval_state(function) {
             features.eval_scope = true;
+            features.eval_bridge = true;
         }
         for (inst_index, inst) in function.instructions.iter().enumerate() {
             match inst.op {

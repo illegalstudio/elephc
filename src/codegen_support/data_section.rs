@@ -131,6 +131,11 @@ impl DataSection {
         label
     }
 
+    /// Returns true when common storage has been declared for `label`.
+    pub fn has_comm(&self, label: &str) -> bool {
+        self.comm_dedup.contains_key(label)
+    }
+
     /// Adds words to the current runtime or metadata collection.
     pub fn add_words(&mut self, words: Vec<DataWord>) -> String {
         if let Some(label) = self.word_dedup.get(&words) {

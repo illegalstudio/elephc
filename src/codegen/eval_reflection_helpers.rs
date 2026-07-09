@@ -270,13 +270,12 @@ fn emit_set_args_property_aarch64(
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array argument metadata
     emitter.label(args_ok_label);
     emitter.instruction("str x1, [sp, #32]");                                   // save the unboxed argument array across incref
-    emitter.instruction("str x0, [sp, #56]");                                   // save the argument array tag for the object slot
     emitter.instruction("mov x0, x1");                                          // move the array payload into the incref argument register
     emitter.instruction("bl __rt_incref");                                      // retain the argument array for ReflectionAttribute ownership
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload the retained argument array payload
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", layout.args_lo);
-    emitter.instruction("ldr x10, [sp, #56]");                                  // reload the original argument array tag
+    emitter.instruction("mov x10, #4");                                         // store the native property array tag expected by getArguments()
     abi::emit_store_to_address(emitter, "x10", "x9", layout.args_hi);
 }
 
@@ -297,13 +296,12 @@ fn emit_set_args_property_x86_64(
     emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array argument metadata
     emitter.label(args_ok_label);
     emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // save the unboxed argument array across incref
-    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the argument array tag for the object slot
     emitter.instruction("mov rax, rdi");                                        // move the array payload into the incref argument register
     emitter.instruction("call __rt_incref");                                    // retain the argument array for ReflectionAttribute ownership
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the retained argument array payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", layout.args_lo);
-    emitter.instruction("mov r11, QWORD PTR [rbp - 64]");                       // reload the original argument array tag
+    emitter.instruction("mov r11, 4");                                          // store the native property array tag expected by getArguments()
     abi::emit_store_to_address(emitter, "r11", "r10", layout.args_hi);
 }
 

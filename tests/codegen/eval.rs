@@ -16237,9 +16237,9 @@ try {
     );
 }
 
-/// Verifies eval-declared readonly classes mirror instance/static property rules.
+/// Verifies eval-declared readonly classes initialize typed properties and can inherit readonly parents.
 #[test]
-fn test_eval_declared_readonly_class_rules() {
+fn test_eval_declared_readonly_class_initializes_and_inherits() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('readonly class EvalReadonlyClassBox {
@@ -16259,7 +16259,11 @@ echo $box->id() . ":" . $child->id();');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "7:9");
+}
 
+/// Verifies eval-declared readonly classes leave static properties mutable.
+#[test]
+fn test_eval_declared_readonly_class_static_properties_remain_mutable() {
     let static_out = compile_and_run_capture(
         r#"<?php
 eval('readonly class EvalReadonlyStaticPropertyBox {
@@ -16275,7 +16279,11 @@ echo EvalReadonlyStaticPropertyBox::$count;');
         static_out.stdout, static_out.stderr
     );
     assert_eq!(static_out.stdout, "2");
+}
 
+/// Verifies eval-declared readonly classes reject untyped instance properties.
+#[test]
+fn test_eval_declared_readonly_class_rejects_untyped_property() {
     let untyped_err = compile_and_run_expect_failure(
         r#"<?php
 eval('readonly class EvalReadonlyUntypedPropertyBox {
@@ -16287,7 +16295,11 @@ eval('readonly class EvalReadonlyUntypedPropertyBox {
         untyped_err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {untyped_err}"
     );
+}
 
+/// Verifies eval-declared readonly class properties reject writes after construction.
+#[test]
+fn test_eval_declared_readonly_class_rejects_second_write() {
     let err = compile_and_run_capture(
         r#"<?php
 eval('readonly class EvalReadonlyClassFailBox {
@@ -16313,7 +16325,11 @@ try {
         err.stdout,
         "Error:Cannot modify readonly property EvalReadonlyClassFailBox::$id"
     );
+}
 
+/// Verifies eval-declared readonly classes reject dynamic property creation.
+#[test]
+fn test_eval_declared_readonly_class_rejects_dynamic_property() {
     let dynamic_err = compile_and_run_capture(
         r#"<?php
 eval('readonly class EvalReadonlyClassDynamicFailBox {
@@ -16338,7 +16354,11 @@ try {
         dynamic_err.stdout,
         "Error:Cannot create dynamic property EvalReadonlyClassDynamicFailBox::$dynamic"
     );
+}
 
+/// Verifies eval-declared readonly classes reject the global `AllowDynamicProperties` marker.
+#[test]
+fn test_eval_declared_readonly_class_rejects_allow_dynamic_properties() {
     let attribute_err = compile_and_run_expect_failure(
         r#"<?php
 eval('#[\AllowDynamicProperties] readonly class EvalReadonlyAllowDynamicAttrBox {}');
@@ -16348,7 +16368,11 @@ eval('#[\AllowDynamicProperties] readonly class EvalReadonlyAllowDynamicAttrBox 
         attribute_err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {attribute_err}"
     );
+}
 
+/// Verifies eval-declared readonly classes may route missing writes through `__set`.
+#[test]
+fn test_eval_declared_readonly_class_allows_magic_set() {
     let magic = compile_and_run_capture(
         r#"<?php
 eval('readonly class EvalReadonlyClassMagicSetBox {
@@ -16366,7 +16390,11 @@ $box->dynamic = 8;');
         magic.stdout, magic.stderr
     );
     assert_eq!(magic.stdout, "dynamic:8");
+}
 
+/// Verifies eval-declared readonly classes cannot extend non-readonly parents.
+#[test]
+fn test_eval_declared_readonly_class_rejects_non_readonly_parent() {
     let parent_err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalReadonlyClassBase {}
@@ -18743,86 +18771,193 @@ echo call_user_func_array($callback, ["C"]);');
     assert_eq!(out.stdout, "C:H:A:H:B:H:C");
 }
 
-/// Verifies eval rejects invalid magic method contracts during dynamic class declaration.
+/// Verifies one invalid eval magic-method declaration fails during runtime class registration.
+fn assert_eval_magic_method_contract_rejected(source: &str) {
+    let err = compile_and_run_expect_failure(&format!("<?php\n{source}\n"));
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval rejects variadic `__call` declarations.
 #[test]
-fn test_eval_rejects_invalid_magic_method_contracts() {
-    let cases = [
+fn test_eval_rejects_invalid_magic_variadic_call_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidMagic {
     public function __call($method, ...$args) {
         return "bad";
     }
 }');"#,
+    );
+}
+
+/// Verifies eval rejects non-string `__toString` return declarations.
+#[test]
+fn test_eval_rejects_invalid_magic_to_string_return_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidToStringReturn {
     public function __toString(): int {
         return 1;
     }
 }');"#,
+    );
+}
+
+/// Verifies eval rejects non-bool `__isset` return declarations.
+#[test]
+fn test_eval_rejects_invalid_magic_isset_return_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidIssetReturn {
     public function __isset($name): string {
         return "yes";
     }
 }');"#,
+    );
+}
+
+/// Verifies eval rejects by-reference `__get` parameters.
+#[test]
+fn test_eval_rejects_invalid_magic_get_by_ref_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidGetByRef {
     public function __get(&$name) {
         return "x";
     }
 }');"#,
+    );
+}
+
+/// Verifies eval rejects non-string-compatible `__get` parameter declarations.
+#[test]
+fn test_eval_rejects_invalid_magic_get_param_type_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidGetParamType {
     public function __get(int $name) {
         return "x";
     }
 }');"#,
+    );
+}
+
+/// Verifies eval rejects return types on `__unset`.
+#[test]
+fn test_eval_rejects_invalid_magic_unset_return_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidUnsetReturn {
     public function __unset($name): int {
         return 1;
     }
 }');"#,
+    );
+}
+
+/// Verifies eval rejects return types on `__set`.
+#[test]
+fn test_eval_rejects_invalid_magic_set_return_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidSetReturn {
     public function __set($name, $value): int {
         return 1;
     }
 }');"#,
+    );
+}
+
+/// Verifies eval rejects non-array `__call` arguments parameters.
+#[test]
+fn test_eval_rejects_invalid_magic_call_args_type_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidCallArgsType {
     public function __call(string $name, string $args) {}
 }');"#,
+    );
+}
+
+/// Verifies eval rejects non-array `__sleep` return declarations.
+#[test]
+fn test_eval_rejects_invalid_magic_sleep_return_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidSleepReturn {
     public function __sleep(): string {
         return "x";
     }
 }');"#,
+    );
+}
+
+/// Verifies eval rejects static `__serialize` declarations.
+#[test]
+fn test_eval_rejects_invalid_magic_serialize_static_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidSerializeStatic {
     public static function __serialize(): array {
         return [];
     }
 }');"#,
+    );
+}
+
+/// Verifies eval rejects wrong-arity `__unserialize` declarations.
+#[test]
+fn test_eval_rejects_invalid_magic_unserialize_arity_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidUnserializeArity {
     public function __unserialize(): void {}
 }');"#,
+    );
+}
+
+/// Verifies eval rejects non-array `__debugInfo` return declarations.
+#[test]
+fn test_eval_rejects_invalid_magic_debug_info_return_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidDebugInfoReturn {
     public function __debugInfo(): string {
         return "x";
     }
 }');"#,
+    );
+}
+
+/// Verifies eval rejects instance `__set_state` declarations.
+#[test]
+fn test_eval_rejects_invalid_magic_set_state_instance_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidSetStateInstance {
     public function __set_state($data) {}
 }');"#,
+    );
+}
+
+/// Verifies eval rejects return types on `__clone`.
+#[test]
+fn test_eval_rejects_invalid_magic_clone_return_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidCloneReturn {
     public function __clone(): int {}
 }');"#,
+    );
+}
+
+/// Verifies eval rejects return types on `__construct`.
+#[test]
+fn test_eval_rejects_invalid_magic_construct_return_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidConstructReturn {
     public function __construct(): void {}
 }');"#,
+    );
+}
+
+/// Verifies eval rejects return types on `__destruct`.
+#[test]
+fn test_eval_rejects_invalid_magic_destruct_return_contract() {
+    assert_eval_magic_method_contract_rejected(
         r#"eval('class EvalInvalidDestructReturn {
     public function __destruct(): void {}
 }');"#,
-    ];
-    for source in cases {
-        let err = compile_and_run_expect_failure(&format!("<?php\n{source}\n"));
-        assert!(
-            err.contains("Fatal error: eval() runtime failed"),
-            "stderr did not contain eval runtime fatal diagnostic: {err}"
-        );
-    }
+    );
 }
 
 /// Verifies eval-declared `#[Override]` methods require a parent or interface target.

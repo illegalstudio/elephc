@@ -291,6 +291,9 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
             continue;
         }
         let symbol = ir_global_symbol(&name);
+        if !ctx.data.has_comm(&symbol) {
+            continue;
+        }
         ctx.emitter.comment(&format!("epilogue cleanup global ${}", name));
         emit_static_symbol_value_cleanup(ctx, &symbol, &ty);
         abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);

@@ -46,6 +46,10 @@ const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
     "array_walk_recursive",
     "serialize",
     "unserialize",
+    "zval_free",
+    "zval_pack",
+    "zval_type",
+    "zval_unpack",
 ];
 
 /// Eval supports these PHP optional parameters before the static backend does.

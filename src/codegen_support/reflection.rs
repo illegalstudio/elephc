@@ -301,11 +301,17 @@ pub(crate) fn build_attribute_get_arguments_body_with_extra(
             span,
         ));
     }
-    // Every attribute with supported arguments is registered as a factory
-    // above (class or not), so this is only a defensive default; return an
-    // empty associative array to match the declared return type.
+    // Runtime eval materializes `ReflectionAttribute` objects with factory id
+    // zero and stores their retained arguments in `__args`, so the fallback
+    // must preserve that path instead of returning an empty factory miss.
     body.push(Stmt::new(
-        StmtKind::Return(Some(entries_to_array_expr(&[], true))),
+        StmtKind::Return(Some(Expr::new(
+            ExprKind::PropertyAccess {
+                object: Box::new(Expr::new(ExprKind::This, span)),
+                property: "__args".to_string(),
+            },
+            span,
+        ))),
         span,
     ));
     body

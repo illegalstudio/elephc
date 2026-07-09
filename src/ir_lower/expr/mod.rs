@@ -1953,13 +1953,13 @@ fn emit_builtin_call_value(
 /// Returns true when a literal `eval` call may still need runtime scope/interpreter state.
 fn eval_literal_needs_barrier(ctx: &LoweringContext<'_, '_>, fragment: &str) -> bool {
     if crate::eval_aot::literal_fragment_direct_local_store_writes(fragment).is_some() {
-        return false;
+        return true;
     }
     if eval_literal_direct_read_write_supported_by_lowering(ctx, fragment) {
-        return false;
+        return true;
     }
     if eval_literal_local_scalar_direct_sync_supported_by_lowering(ctx, fragment) {
-        return false;
+        return true;
     }
     let static_call_supported = |name: &str, args: &[Expr]| {
         eval_literal_static_function_supported_by_lowering(ctx, name, args)
@@ -2002,13 +2002,13 @@ fn eval_literal_needs_barrier(ctx: &LoweringContext<'_, '_>, fragment: &str) -> 
 /// Returns true when a literal `eval` only needs materialized eval-scope state.
 fn eval_literal_needs_scope_barrier(ctx: &LoweringContext<'_, '_>, fragment: &str) -> bool {
     if crate::eval_aot::literal_fragment_direct_local_store_writes(fragment).is_some() {
-        return false;
+        return true;
     }
     if eval_literal_direct_read_write_supported_by_lowering(ctx, fragment) {
-        return false;
+        return true;
     }
     if eval_literal_local_scalar_direct_sync_supported_by_lowering(ctx, fragment) {
-        return false;
+        return true;
     }
     let static_call_supported = |name: &str, args: &[Expr]| {
         eval_literal_static_function_supported_by_lowering(ctx, name, args)

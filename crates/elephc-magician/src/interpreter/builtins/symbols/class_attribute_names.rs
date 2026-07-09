@@ -178,11 +178,15 @@ fn eval_attribute_is_repeated(attributes: &[EvalAttribute], name: &str) -> bool 
 }
 
 /// Builds the mixed PHP array returned by `class_attribute_args()`.
-fn eval_class_attribute_args_result(
+pub(in crate::interpreter) fn eval_class_attribute_args_result(
     args: &[EvalAttributeArg],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(args.len())?;
+    let mut result = if args.iter().any(|arg| arg.name().is_some()) {
+        values.assoc_new(args.len())?
+    } else {
+        values.array_new(args.len())?
+    };
     for (index, arg) in args.iter().enumerate() {
         let key = match arg.name() {
             Some(name) => values.string(name)?,
