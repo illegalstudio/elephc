@@ -8,13 +8,15 @@ sidebar:
 ## htmlspecialchars()
 
 ```php
-function htmlspecialchars(string $string): string
+function htmlspecialchars(string $string, int $flags = 11, string $encoding = 'UTF-8'): string
 ```
 
 Converts the HTML special characters in a string into their entities.
 
 **Parameters**:
 - `$string` (`string`)
+- `$flags` (`int`), default `11`, optional
+- `$encoding` (`string`), default `'UTF-8'`, optional
 
 **Returns**: `string`
 

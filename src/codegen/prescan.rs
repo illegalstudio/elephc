@@ -14,6 +14,7 @@ use crate::codegen::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
@@ -24,10 +25,10 @@ use super::context::{Context, TRY_HANDLER_SLOT_SIZE};
 /// Seeds the constant map with built-in PHP constants and user-defined constants.
 ///
 /// Built-in constants include platform-specific values (e.g., `FNM_*` flags differ
-/// between macOS and Linux), `PATHINFO_*` bitmask values, stream handles (`STDIN`/`STDOUT`/`STDERR`),
-/// `LOCK_*` values, array callback-mode constants, `JSON_*` integer constants, and
-/// `PREG_*` integer constants. User constants come from `const` declarations and
-/// `define()` calls discovered by `collect_constant_decls`.
+/// between macOS and Linux), `PATHINFO_*` bitmask values, `ENT_*` HTML-escaping flags,
+/// stream handles (`STDIN`/`STDOUT`/`STDERR`), `LOCK_*` values, array callback-mode
+/// constants, `JSON_*` integer constants, and `PREG_*` integer constants. User constants
+/// come from `const` declarations and `define()` calls discovered by `collect_constant_decls`.
 pub(crate) fn collect_constants(
     program: &Program,
     target_platform: Platform,
@@ -60,21 +61,10 @@ pub(crate) fn collect_constants(
         "PATHINFO_ALL".to_string(),
         (ExprKind::IntLiteral(15), PhpType::Int),
     );
-    // htmlspecialchars()/htmlentities() ENT_* flag constants (PHP standard values).
-    for (ent_name, ent_value) in [
-        ("ENT_QUOTES", 3),
-        ("ENT_COMPAT", 2),
-        ("ENT_NOQUOTES", 0),
-        ("ENT_HTML401", 0),
-        ("ENT_HTML5", 48),
-        ("ENT_XHTML", 32),
-        ("ENT_XML1", 16),
-        ("ENT_SUBSTITUTE", 8),
-        ("ENT_IGNORE", 4),
-    ] {
+    for (name, value) in ENT_INT_CONSTANTS {
         constants.insert(
-            ent_name.to_string(),
-            (ExprKind::IntLiteral(ent_value), PhpType::Int),
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
     let (fnm_noescape, fnm_pathname) = match target_platform {

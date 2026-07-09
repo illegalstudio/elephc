@@ -494,3 +494,30 @@ fn test_htmlspecialchars_ent_flags() {
         "&lt;b&gt; &amp; x|&lt;y&gt;|51"
     );
 }
+
+/// Regression: the shared `lower_html_escape` emitter must name the builtin that was actually
+/// called in its argument-coercion diagnostic. `htmlentities()` with an uncoercible (array)
+/// subject previously reported "htmlspecialchars string coercion ..." instead of htmlentities.
+#[test]
+fn test_htmlentities_coercion_error_names_htmlentities() {
+    let dir = make_cli_test_dir("elephc_htmlentities_diag");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo htmlentities([1, 2]);").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "expected the compile to fail on an array subject, got success; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("htmlentities string coercion"),
+        "coercion diagnostic must name htmlentities, got stderr={stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

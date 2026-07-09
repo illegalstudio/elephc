@@ -9,8 +9,9 @@
 //! - No `check` hook is needed: `htmlentities` is a pure-data builtin whose return
 //!   type (`Str`) is fully determined by its declaration. The registry derives the
 //!   return type from the `returns:` field without calling a check hook.
-//! - `lower` is a thin wrapper over the shared `lower_unary_string_runtime` emitter.
-//!   Like the legacy arm, it reuses the `__rt_htmlspecialchars` runtime helper.
+//! - `lower` is a thin wrapper over the shared `lower_html_escape` emitter,
+//!   passing the builtin name for diagnostics. Like the legacy arm, it reuses
+//!   the `__rt_htmlspecialchars` runtime helper.
 
 use crate::builtins::spec::DefaultSpec;
 use crate::codegen_ir::context::FunctionContext;
@@ -33,5 +34,5 @@ fn lower(
     ctx: &mut FunctionContext,
     inst: &Instruction,
 ) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_html_escape(ctx, inst)
+    crate::codegen_ir::lower_inst::builtins::strings::lower_html_escape(ctx, inst, "htmlentities")
 }

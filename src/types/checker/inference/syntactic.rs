@@ -254,7 +254,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "strrev" | "chr" | "str_replace" | "str_ireplace" | "ucfirst" | "lcfirst"
             | "ucwords" | "str_pad" | "implode" | "sprintf" | "vsprintf" | "nl2br" | "wordwrap" | "md5"
             | "sha1" | "hash" | "substr_replace" | "addslashes" | "stripslashes"
-            | "htmlspecialchars" | "html_entity_decode" | "urlencode" | "urldecode"
+            | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode" | "urldecode"
             | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin" | "number_format"
             | "date" | "json_encode" | "json_decode" | "json_last_error_msg" | "gettype"
             | "str_word_count" | "chunk_split" => PhpType::Str,

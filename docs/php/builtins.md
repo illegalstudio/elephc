@@ -365,8 +365,8 @@ sidebar:
 | [`hash_update()`](./builtins/string/hash_update.md) | `(resource $context, string $data): bool` | `bool` |
 | [`hex2bin()`](./builtins/string/hex2bin.md) | `(string $string): string` | `string` |
 | [`html_entity_decode()`](./builtins/string/html_entity_decode.md) | `(string $string): string` | `string` |
-| [`htmlentities()`](./builtins/string/htmlentities.md) | `(string $string): string` | `string` |
-| [`htmlspecialchars()`](./builtins/string/htmlspecialchars.md) | `(string $string): string` | `string` |
+| [`htmlentities()`](./builtins/string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` |
+| [`htmlspecialchars()`](./builtins/string/htmlspecialchars.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` |
 | [`implode()`](./builtins/string/implode.md) | `(string $separator, array $array = null): string` | `string` |
 | [`inet_ntop()`](./builtins/string/inet_ntop.md) | `(string $ip): mixed` | `mixed` |
 | [`inet_pton()`](./builtins/string/inet_pton.md) | `(string $ip): mixed` | `mixed` |

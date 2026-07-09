@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::platform::Platform;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
@@ -24,9 +25,10 @@ impl Checker {
     /// Constructs a new `Checker` with pre-populated builtin constants and empty declaration tables.
     ///
     /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, pathinfo
-    /// constants, `FNM_*` flags, `STDIN`/`STDOUT`/`STDERR` stream resources, `LOCK_*` constants),
-    /// array constants, JSON integer constants, and preg flag constants. All other tables (function declarations,
-    /// classes, interfaces, enums, etc.) are initialized empty.
+    /// constants, `ENT_*` HTML-escaping flags, `FNM_*` flags, `STDIN`/`STDOUT`/`STDERR` stream
+    /// resources, `LOCK_*` constants), array constants, JSON integer constants, and preg flag
+    /// constants. All other tables (function declarations, classes, interfaces, enums, etc.)
+    /// are initialized empty.
     ///
     /// # Arguments
     /// * `target_platform` - The compilation target platform, stored for use in platform-specific
@@ -42,18 +44,8 @@ impl Checker {
         constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);
         constants.insert("PATHINFO_FILENAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_ALL".to_string(), PhpType::Int);
-        for ent in [
-            "ENT_QUOTES",
-            "ENT_COMPAT",
-            "ENT_NOQUOTES",
-            "ENT_HTML401",
-            "ENT_HTML5",
-            "ENT_XHTML",
-            "ENT_XML1",
-            "ENT_SUBSTITUTE",
-            "ENT_IGNORE",
-        ] {
-            constants.insert(ent.to_string(), PhpType::Int);
+        for (name, _value) in ENT_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
         }
         constants.insert("FNM_NOESCAPE".to_string(), PhpType::Int);
         constants.insert("FNM_PATHNAME".to_string(), PhpType::Int);

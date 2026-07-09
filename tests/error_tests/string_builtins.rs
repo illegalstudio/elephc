@@ -176,11 +176,13 @@ fn test_error_sha1_wrong_args() {
 }
 
 /// Verifies that `htmlspecialchars()` with no arguments produces the correct arity error.
+/// htmlspecialchars() accepts optional `$flags` and `$encoding` arguments, so the message
+/// reports 1 to 3 args.
 #[test]
 fn test_error_htmlspecialchars_wrong_args() {
     expect_error(
         "<?php htmlspecialchars();",
-        "htmlspecialchars() takes exactly 1 argument",
+        "htmlspecialchars() takes 1 to 3 arguments",
     );
 }
 
