@@ -2,7 +2,7 @@
 title: "md5() — internals"
 description: "Compiler internals for md5(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 370
+  order: 371
 ---
 
 ## `md5()` — internals

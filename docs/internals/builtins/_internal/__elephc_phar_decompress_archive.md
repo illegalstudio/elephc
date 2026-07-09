@@ -2,7 +2,7 @@
 title: "__elephc_phar_decompress_archive() — internals"
 description: "Compiler internals for __elephc_phar_decompress_archive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 435
+  order: 436
 ---
 
 ## `__elephc_phar_decompress_archive()` — internals

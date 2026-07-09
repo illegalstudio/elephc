@@ -2,7 +2,7 @@
 title: "ord() — internals"
 description: "Compiler internals for ord(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 373
+  order: 374
 ---
 
 ## `ord()` — internals

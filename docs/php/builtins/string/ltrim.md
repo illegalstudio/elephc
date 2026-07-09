@@ -2,7 +2,7 @@
 title: "ltrim()"
 description: "Strips whitespace (or other characters) from the beginning of a string."
 sidebar:
-  order: 369
+  order: 370
 ---
 
 ## ltrim()

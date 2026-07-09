@@ -323,6 +323,7 @@ sidebar:
 | [`sleep()`](./builtins/process/sleep.md) | `(int $seconds): int` | `int` |
 | [`system()`](./builtins/process/system.md) | `(string $command): string` | `string` |
 | [`usleep()`](./builtins/process/usleep.md) | `(int $microseconds): void` | `void` |
+| [`mb_ereg_match()`](./builtins/regex/mb_ereg_match.md) | `(string $pattern, string $subject, string $options = null): bool` | `bool` |
 | [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = []): int` | `int` |
 | [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject): int` | `int` |
 | [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): string` | `string` |

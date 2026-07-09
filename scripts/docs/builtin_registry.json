@@ -11335,6 +11335,61 @@
     "sub_area": "Math"
   },
   {
+    "area": "Regex",
+    "canonical_name": "mb_ereg_match",
+    "description": "Tests whether a regex pattern matches the beginning of a string (multibyte).",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen/lower_inst/builtins/regex.rs",
+      "codegen_function": "lower_mb_ereg_match",
+      "codegen_line": 52,
+      "notes": [
+        "Lowers `mb_ereg_match(pattern, subject, options = null)` as a start-anchored regex match.",
+        "The bare delimiter-less pattern and subject use the shared regex string loader. Optional",
+        "options are passed as a string pair when present, or as `(0, 0)` for `null`/omitted options."
+      ],
+      "runtime_helpers": [
+        "__rt_mb_ereg_match"
+      ],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/mb_ereg_match.rs",
+      "sig_line": null
+    },
+    "name": "mb_ereg_match",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "pattern",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "subject",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "options",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "mb_ereg_match",
+    "sub_area": "Regex"
+  },
+  {
     "area": "String",
     "canonical_name": "md5",
     "description": "Calculates the MD5 hash of a string.",
@@ -12283,7 +12338,6 @@
       ],
       "runtime_helpers": [
         "__rt_preg_match",
-        "__rt_preg_match_all",
         "__rt_preg_match_capture"
       ],
       "sig_arm": null,
@@ -12332,7 +12386,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/regex.rs",
       "codegen_function": "lower_preg_match_all",
-      "codegen_line": 49,
+      "codegen_line": 66,
       "notes": [
         "Lowers `preg_match_all(pattern, subject)` through the shared regex runtime helper."
       ],
@@ -12379,7 +12433,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/regex.rs",
       "codegen_function": "lower_preg_replace",
-      "codegen_line": 62,
+      "codegen_line": 79,
       "notes": [
         "Lowers `preg_replace(pattern, replacement, subject)` through the regex replacement helper."
       ],
@@ -12432,7 +12486,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/regex.rs",
       "codegen_function": "lower_preg_replace_callback",
-      "codegen_line": 84,
+      "codegen_line": 101,
       "notes": [
         "Lowers `preg_replace_callback(pattern, callback, subject)` through supported direct callbacks."
       ],
@@ -12485,7 +12539,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/regex.rs",
       "codegen_function": "lower_preg_split",
-      "codegen_line": 388,
+      "codegen_line": 405,
       "notes": [
         "Lowers `preg_split(pattern, subject, limit?, flags?)` through the regex split helper."
       ],

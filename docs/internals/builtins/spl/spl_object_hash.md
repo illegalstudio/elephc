@@ -2,7 +2,7 @@
 title: "spl_object_hash() — internals"
 description: "Compiler internals for spl_object_hash(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 330
+  order: 331
 ---
 
 ## `spl_object_hash()` — internals

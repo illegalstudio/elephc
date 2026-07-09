@@ -1278,6 +1278,11 @@ RETURN_TYPE_OVERRIDES: Dict[str, str] = {
 }
 
 
+RUNTIME_HELPER_OVERRIDES: Dict[str, List[str]] = {
+    "mb_ereg_match": ["__rt_mb_ereg_match"],
+}
+
+
 # Hand-curated one-line descriptions for the user-facing pages. When a
 # builtin has no override here, the renderer falls back to the first line of
 # the lowering function's `///` doc comment, if available.
