@@ -134,7 +134,7 @@ fn apply_static_method(
     if let Some(parent_sig) = state.static_sigs.get(&method_key) {
         validate_override_signature(checker, &class.name, method, parent_sig, true)?;
     } else if has_override_attribute(method)
-        && !interface_declares_method(checker, class, &method_key)
+        && !interface_declares_method(checker, state, class, &method_key)
     {
         return Err(missing_override_target(class, method));
     }
@@ -231,7 +231,7 @@ fn apply_instance_method(
     if let Some(parent_sig) = state.method_sigs.get(&method_key) {
         validate_override_signature(checker, &class.name, method, parent_sig, false)?;
     } else if has_override_attribute(method)
-        && !interface_declares_method(checker, class, &method_key)
+        && !interface_declares_method(checker, state, class, &method_key)
     {
         return Err(missing_override_target(class, method));
     }
@@ -313,17 +313,21 @@ fn has_override_attribute(method: &ClassMethod) -> bool {
 }
 
 /// Returns `true` if any interface implemented by the class (directly or
-/// transitively via parent interfaces) declares the method — instance OR PHP 8.3+
-/// static (a `#[\Override]` on a static interface-method implementation is valid).
-/// Uses `class.implements` because `apply_methods` runs before `collect_interfaces`
-/// has populated `state.interfaces`.
+/// transitively via parent interfaces or parent classes) declares the method —
+/// instance OR PHP 8.3+ static (a `#[\Override]` on a static interface-method
+/// implementation is valid). Seeds from `class.implements` because `apply_methods`
+/// runs before `collect_interfaces` has added the class's own clause to
+/// `state.interfaces`, plus `state.interfaces`, which at this point carries the
+/// interfaces inherited from the parent class chain.
 fn interface_declares_method(
     checker: &Checker,
+    state: &ClassBuildState,
     class: &FlattenedClass,
     method_key: &str,
 ) -> bool {
     let mut visited = std::collections::HashSet::new();
     let mut queue: Vec<String> = class.implements.clone();
+    queue.extend(state.interfaces.iter().cloned());
     while let Some(name) = queue.pop() {
         if !visited.insert(name.clone()) {
             continue;
