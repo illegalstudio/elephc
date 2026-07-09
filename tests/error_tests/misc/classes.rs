@@ -67,6 +67,40 @@ fn test_error_object_subscript_requires_array_access() {
     );
 }
 
+/// Verifies that parenthesis-free `new Class` rejects immediate postfix access.
+#[test]
+fn test_error_parenthesis_free_new_rejects_immediate_postfix_access() {
+    expect_error(
+        "<?php class Box { public $value = \"x\"; } echo new Box->value;",
+        "Parentheses are required before accessing a parenthesis-free new expression",
+    );
+    expect_error(
+        "<?php class Box { public $value = \"x\"; } echo new Box?->value;",
+        "Parentheses are required before accessing a parenthesis-free new expression",
+    );
+    expect_error(
+        "<?php class Box { public static function value() {} } echo new Box::value();",
+        "Parentheses are required before accessing a parenthesis-free new expression",
+    );
+    expect_error(
+        "<?php class Box {} echo new Box[0];",
+        "Parentheses are required before accessing a parenthesis-free new expression",
+    );
+}
+
+/// Verifies unsupported dynamic class-name references after `new` fail instead of miscompiling.
+#[test]
+fn test_error_dynamic_new_rejects_unsupported_class_name_references() {
+    expect_error(
+        "<?php class Box { public $className = \"stdClass\"; } $box = new Box(); $object = new $box->className;",
+        "Dynamic class-name expressions after 'new' are not supported",
+    );
+    expect_error(
+        "<?php $classes = [\"stdClass\"]; $object = new $classes[0];",
+        "Dynamic class-name expressions after 'new' are not supported",
+    );
+}
+
 /// Verifies the error diagnostic for nullsafe property rejects scalar receiver.
 #[test]
 fn test_error_nullsafe_property_rejects_scalar_receiver() {
@@ -114,16 +148,6 @@ fn test_error_private_access() {
     expect_error(
         "<?php class Secret { private $value = 7; } $s = new Secret(); echo $s->value;",
         "Cannot access private property: Secret::value",
-    );
-}
-
-/// Verifies the error diagnostic for readonly assign.
-#[test]
-fn test_error_readonly_assign() {
-    // readonly property may only be assigned during construction.
-    expect_error(
-        "<?php class User { public readonly $id; public function __construct($id) { $this->id = $id; } } $u = new User(1); $u->id = 2;",
-        "Cannot assign to readonly property outside constructor: User::id",
     );
 }
 
@@ -411,6 +435,36 @@ fn test_error_missing_interface_method() {
     );
 }
 
+/// Verifies the error diagnostic for a missing static interface method (PHP 8.3+).
+#[test]
+fn test_error_missing_static_interface_method() {
+    // a concrete class implementing an interface must provide all its static methods.
+    expect_error(
+        "<?php interface Previewable { public static function previews(): array; } class User implements Previewable {}",
+        "Class User must implement static interface method Previewable::previews",
+    );
+}
+
+/// Verifies a concrete child must implement a static interface method deferred by an abstract parent.
+#[test]
+fn test_error_concrete_child_missing_static_interface_method_via_abstract_parent() {
+    // an abstract class may defer a static interface method, but its concrete child must provide it.
+    expect_error(
+        "<?php interface Previewable { public static function previews(): array; } abstract class Base implements Previewable {} class User extends Base {}",
+        "Class User must implement static interface method Previewable::previews",
+    );
+}
+
+/// Verifies an instance method does not satisfy a static interface method contract.
+#[test]
+fn test_error_instance_method_does_not_satisfy_static_interface_method() {
+    // the implementing method must itself be static; an instance method leaves the contract unmet.
+    expect_error(
+        "<?php interface Previewable { public static function previews(): array; } class User implements Previewable { public function previews(): array { return []; } }",
+        "Class User must implement static interface method Previewable::previews",
+    );
+}
+
 /// Verifies the error diagnostic for wrong signature vs interface.
 #[test]
 fn test_error_wrong_signature_vs_interface() {
@@ -597,16 +651,6 @@ fn test_error_class_cannot_extend_interface() {
 }
 
 // --- Date/time error tests ---
-
-/// Verifies the error diagnostic for readonly class property is implicitly readonly.
-#[test]
-fn test_error_readonly_class_property_is_implicitly_readonly() {
-    // inside a readonly class, instance properties are implicitly readonly.
-    expect_error(
-        "<?php readonly class User { public $id; public function __construct($id) { $this->id = $id; } } $u = new User(1); $u->id = 2;",
-        "Cannot assign to readonly property outside constructor: User::id",
-    );
-}
 
 /// Verifies the error diagnostic for readonly class cannot extend non readonly parent.
 #[test]

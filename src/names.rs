@@ -273,8 +273,8 @@ pub fn ir_global_symbol(name: &str) -> String {
 
 /// Returns the runtime guard symbol for a `define()` constant name.
 ///
-/// The encoding matches the legacy backend's existing BSS sentinel naming so
-/// duplicate `define()` checks stay stable across backend implementations.
+/// The encoding is stable so duplicate `define()` checks use deterministic BSS
+/// sentinel names across compiler versions.
 pub fn define_seen_symbol(name: &str) -> String {
     let mut symbol = String::from("_define_seen");
     for byte in name.bytes() {

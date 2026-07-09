@@ -4,7 +4,7 @@
 //!
 //! Called from:
 //! - `crate::builtins::registry` (collected via `inventory`).
-//! - `crate::types::checker::builtins` and `crate::codegen_ir::lower_inst::builtins`
+//! - `crate::types::checker::builtins` and `crate::codegen::lower_inst::builtins`
 //!   (consumed during type-check and codegen dispatch).
 //!
 //! Key details:
@@ -141,9 +141,9 @@ pub type CheckFn = for<'ctx, 'a> fn(
 /// and emits the required assembly. Returns a `CodegenIrError` if the lowering path
 /// is not yet implemented for this target.
 pub type LowerFn = for<'ctx, 'f, 'i> fn(
-    &'ctx mut crate::codegen_ir::context::FunctionContext<'f>,
+    &'ctx mut crate::codegen::context::FunctionContext<'f>,
     &'i crate::ir::Instruction,
-) -> Result<(), crate::codegen_ir::CodegenIrError>;
+) -> Result<(), crate::codegen::CodegenIrError>;
 
 /// Complete static descriptor for one PHP builtin function.
 ///
@@ -232,8 +232,8 @@ inventory::collect!(BuiltinSpec);
 mod macro_tests {
     use crate::builtins::spec::*;
     /// No-op `LowerFn` used to satisfy the `builtin!` macro in this test module.
-    fn lower(_c: &mut crate::codegen_ir::context::FunctionContext, _i: &crate::ir::Instruction)
-        -> Result<(), crate::codegen_ir::CodegenIrError> { Ok(()) }
+    fn lower(_c: &mut crate::codegen::context::FunctionContext, _i: &crate::ir::Instruction)
+        -> Result<(), crate::codegen::CodegenIrError> { Ok(()) }
     builtin! { name: "__macro_probe", area: Internal, params: [x: Int], returns: Int, lower: lower, summary: "probe", internal: true }
 
     /// Verifies a builtin! declaration is collected by inventory.
@@ -262,6 +262,6 @@ mod tests {
         assert_eq!(S.params.len(), 1);
     }
     /// No-op `LowerFn` used to satisfy the `BuiltinSpec` struct literal in this test module.
-    fn noop_lower(_c: &mut crate::codegen_ir::context::FunctionContext, _i: &crate::ir::Instruction)
-        -> Result<(), crate::codegen_ir::CodegenIrError> { Ok(()) }
+    fn noop_lower(_c: &mut crate::codegen::context::FunctionContext, _i: &crate::ir::Instruction)
+        -> Result<(), crate::codegen::CodegenIrError> { Ok(()) }
 }

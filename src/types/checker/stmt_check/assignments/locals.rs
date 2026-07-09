@@ -228,6 +228,27 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
+        ExprKind::ArrayAccess { array, index } => {
+            let array_ty = checker.infer_type(array, env)?;
+            let index_ty = checker.infer_type(index, env)?;
+            if !matches!(array_ty, PhpType::Array(_)) {
+                return Err(CompileError::new(
+                    span,
+                    "Reference assignment to an array element requires an indexed array",
+                ));
+            }
+            if !matches!(index_ty, PhpType::Int) {
+                return Err(CompileError::new(
+                    span,
+                    "Reference assignment to an array element requires an integer index",
+                ));
+            }
+            let target_ty = checker.infer_type(source, env)?;
+            env.insert(target.to_string(), target_ty);
+            checker.active_ref_params.insert(target.to_string());
+            clear_callable_metadata(checker, target);
+            Ok(())
+        }
         _ => Err(CompileError::new(
             span,
             "Reference assignment source must be a variable, array/property element, or a by-reference call",

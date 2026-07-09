@@ -16,8 +16,8 @@
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -50,5 +50,5 @@ fn lower(
     ctx: &mut FunctionContext,
     inst: &Instruction,
 ) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_str_split(ctx, inst)
+    crate::codegen::lower_inst::builtins::strings::lower_str_split(ctx, inst)
 }

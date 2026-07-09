@@ -63,7 +63,11 @@ pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
             tokens.extend(heredoc_tokens);
         } else {
             let token = scan_token(&mut cursor)?;
-            tokens.push((token, span));
+            let end = cursor.span();
+            tokens.push((
+                token,
+                crate::span::Span::with_end(span.line, span.col, end.line, end.col),
+            ));
         }
     }
 

@@ -64,6 +64,11 @@ if (preg_match("/[a-z]+@[a-z]+\\.[a-z]+/", $email)) {
     echo "Valid email pattern\n";
 }
 
+$handle = "FooUser42";
+if (mb_ereg_match("foo", $handle, "i")) {
+    echo "Case-insensitive mb regex prefix\n";
+}
+
 // Count matches
 $text = "The quick brown fox jumps over the lazy dog";
 $words = preg_match_all("/[a-z]+/", $text);

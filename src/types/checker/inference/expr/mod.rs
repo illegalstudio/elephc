@@ -48,8 +48,15 @@ impl Checker {
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
                 match ty {
-                    PhpType::Int => Ok(PhpType::Int),
+                    PhpType::Int => {
+                        if matches!(&inner.kind, ExprKind::IntLiteral(_)) {
+                            Ok(PhpType::Int)
+                        } else {
+                            Ok(PhpType::Mixed)
+                        }
+                    }
                     PhpType::Float => Ok(PhpType::Float),
+                    PhpType::Mixed | PhpType::Bool | PhpType::Void => Ok(PhpType::Mixed),
                     _ => Err(CompileError::new(
                         expr.span,
                         "Cannot negate a non-numeric value",
@@ -65,11 +72,22 @@ impl Checker {
                 self.infer_type(inner, env)?;
                 Ok(PhpType::Int)
             }
-            ExprKind::PreIncrement(name)
-            | ExprKind::PostIncrement(name)
-            | ExprKind::PreDecrement(name)
-            | ExprKind::PostDecrement(name) => match env.get(name) {
+            ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
+                Some(PhpType::Int) => Ok(PhpType::Mixed),
+                Some(PhpType::Mixed) => Ok(PhpType::Mixed),
+                Some(PhpType::Bool) | Some(PhpType::Void) => Ok(PhpType::Int),
+                Some(other) => Err(CompileError::new(
+                    expr.span,
+                    &format!("Cannot increment/decrement ${} of type {:?}", name, other),
+                )),
+                None => Err(CompileError::new(
+                    expr.span,
+                    &format!("Undefined variable: ${}", name),
+                )),
+            },
+            ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => match env.get(name) {
                 Some(PhpType::Int) | Some(PhpType::Bool) | Some(PhpType::Void) => Ok(PhpType::Int),
+                Some(PhpType::Mixed) => Ok(PhpType::Mixed),
                 Some(other) => Err(CompileError::new(
                     expr.span,
                     &format!("Cannot increment/decrement ${} of type {:?}", name, other),
@@ -687,6 +705,7 @@ impl Checker {
 /// parsed as a PHP string offset (e.g. `"0"`, `"-1"`, `"10"`).
 fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
     *idx_ty == PhpType::Int
+        || *idx_ty == PhpType::Mixed
         || matches!(
             &index.kind,
             ExprKind::StringLiteral(value)

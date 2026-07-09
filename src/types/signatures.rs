@@ -130,9 +130,15 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "intval" | "floatval" | "boolval" | "gettype" | "is_bool" | "is_null"
         | "is_float" | "is_int" | "is_iterable" | "is_string" | "is_numeric"
         | "is_array" | "is_object" | "is_scalar"
-        | "empty" | "var_dump" | "print_r" => {
+        | "empty" => {
             Some(fixed(&["value"]))
         }
+        "var_dump" => Some(variadic(&["value"], "values")),
+        "print_r" => Some(optional(
+            &["value", "return"],
+            1,
+            vec![bool_lit(false)],
+        )),
         "isset" => Some(variadic(&["var"], "vars")),
         "unset" => Some(variadic(&["var"], "vars")),
         "settype" => {
@@ -664,6 +670,8 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
         }
         "ptr_write_string" => Some(fixed(&["pointer", "string"])),
         "ptr_sizeof" => Some(fixed(&["type"])),
+        "zval_pack" => Some(fixed(&["value"])),
+        "zval_unpack" | "zval_type" | "zval_free" => Some(fixed(&["zval"])),
         "buffer_new" => Some(fixed(&["length"])),
         "buffer_len" | "buffer_free" => Some(fixed(&["buffer"])),
         _ => None,
@@ -766,9 +774,9 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             PhpType::Float,
         )),
         // NOTE: is_array/is_object/is_scalar are intentionally NOT first-class callable.
-        // The runtime callable wrapper for a builtin is emitted by the legacy backend, which
-        // has no codegen for these three predicates, so listing them here would emit an
-        // undefined `_fn_is_*` invoker reference in any program using dynamic string callbacks.
+        // No runtime callable wrapper is emitted for these three predicates, so listing
+        // them here would emit an undefined `_fn_is_*` invoker reference in any program
+        // using dynamic string callbacks.
         // Direct calls are fully supported; first-class/string-callback use is not (yet).
         "boolval" | "is_bool" | "is_null" | "is_float" | "is_int" | "is_iterable"
         | "is_string" | "is_numeric" | "is_nan" | "is_finite" | "is_infinite"
@@ -1017,6 +1025,26 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             name,
             &[PhpType::Pointer(None), PhpType::Str],
             PhpType::Int,
+        )),
+        "zval_pack" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed],
+            PhpType::Pointer(None),
+        )),
+        "zval_unpack" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None)],
+            PhpType::Mixed,
+        )),
+        "zval_type" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None)],
+            PhpType::Int,
+        )),
+        "zval_free" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None)],
+            PhpType::Void,
         )),
         _ => None,
     }

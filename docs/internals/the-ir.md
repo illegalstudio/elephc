@@ -5,10 +5,10 @@ sidebar:
   order: 13
 ---
 
-**Status:** EIR is the default user-facing backend. The diagnostic `--emit-ir`
-path lowers the checked and optimized AST into validated textual EIR, and the
-normal executable/cdylib path lowers that same EIR into assembly. The legacy
-AST backend remains available only as the temporary `--ast-backend` fallback.
+**Status:** EIR is the canonical compiler IR and backend contract for v1.0.
+The diagnostic `--emit-ir` path lowers the checked and optimized AST into
+validated textual EIR, and normal executable/cdylib builds lower that same EIR
+into assembly.
 
 **Implementation phases:** `.plans/eir-*.md`
 
@@ -23,13 +23,9 @@ AST backend remains available only as the temporary `--ast-backend` fallback.
 - `src/parser/ast/ffi.rs`
 - `src/ir/`
 - `src/ir_lower/`
-- `src/codegen_ir/`
-- `src/codegen/expr.rs` and `src/codegen/expr/`
-- `src/codegen/stmt.rs` and `src/codegen/stmt/`
-- `src/codegen/functions/locals.rs`
-- `src/codegen/context.rs`
-- `src/codegen/builtins/`
-- `src/codegen/runtime/emitters.rs`
+- `src/codegen/`
+- `src/codegen_support/abi/`
+- `src/codegen_support/runtime/emitters.rs`
 - `src/optimize/effects.rs` and `src/optimize/effects/`
 
 EIR is elephc's intermediate representation. It sits between the AST-level
@@ -41,27 +37,6 @@ EIR is intentionally PHP-shaped. Arrays, hashes, Mixed boxing, callable
 descriptors, copy-on-write checks, fatal paths, exception paths, runtime calls,
 and exact source evaluation order are first-class compiler concepts. EIR is not
 a generic LLVM- or Cranelift-style IR.
-
-## Historical Design Boundary
-
-The first roadmap item originally covered this document only:
-
-```text
-EIR design specification (`docs/internals/the-ir.md`) - types, instructions,
-terminators, effects, ownership, textual format
-```
-
-That first item did **not** include:
-
-- EIR -> assembly backend
-- `--ir-backend`
-- register allocation
-- IR optimization passes
-
-That design-only milestone is complete. The current implementation has since
-added `src/ir/`, `src/ir_lower/`, `--emit-ir`, and the default EIR assembly
-backend under `src/codegen_ir/`. Register allocation and IR optimization passes
-remain follow-up work.
 
 ## Pipeline Position
 
@@ -88,45 +63,20 @@ PHP source
   -> binary
 ```
 
-Temporary legacy fallback path (`--ast-backend`):
-
-```text
-PHP source
-  -> Lexer
-  -> Parser
-  -> Magic constants
-  -> Conditional compilation
-  -> Resolver
-  -> NameResolver
-  -> Autoload insertion
-  -> AST constant folding
-  -> Type checker / warnings
-  -> AST optimizer passes
-  -> AST -> assembly codegen
-  -> runtime cache
-  -> assembler / linker
-  -> binary
-```
-
 The AST optimizer remains in front of EIR. It handles PHP-preserving rewrites
 that are naturally expressed over syntax: constant folding, local scalar
 propagation, control-flow pruning, control-flow normalization, and DCE. EIR
 adds what the AST cannot express well: value identity, basic blocks, block
 parameters, liveness, dominance, register placement, CSE, LICM, and inlining.
 
-## Backend Selection
+## Backend Contract
 
-The compiler currently supports two assembly backends:
+The compiler lowers EIR through the target-aware assembly emitter in
+`src/codegen/`.
 
-- EIR backend, selected by default and also by explicit `--ir-backend`
-- legacy AST backend, selected only by `--ast-backend`
-
-`--ast-backend` is a deprecated escape hatch while the legacy emitter remains
-in-tree. It emits a warning and will be removed after the default EIR path has
-completed its validation window. EIR preserves the existing hand-written assembly
-style and adds linear-scan register allocation plus a fixed-point IR optimization
-pass driver (see [Optimization Passes](#optimization-passes)); further IR passes
-are incremental follow-up work.
+EIR preserves the hand-written assembly style while adding linear-scan register
+allocation plus a fixed-point IR optimization pass driver (see
+[Optimization Passes](#optimization-passes)).
 
 ## Design Invariants
 
@@ -138,7 +88,7 @@ are incremental follow-up work.
   generic "call".
 - EIR is target-aware through metadata and the selected `Target`, but it does
   not hardcode ARM64/x86_64 register names or stack layouts.
-- `src/codegen/abi/` remains authoritative for physical ABI lowering.
+- `src/codegen_support/abi/` remains authoritative for physical ABI lowering.
 - Runtime helpers remain outside the EIR `Module`; EIR references them through
   `RuntimeCall` or specialized opcodes.
 - Source spans must survive lowering for diagnostics, source maps, and `--emit-ir`
@@ -1456,7 +1406,7 @@ The pass has four stages:
    active set; a free register from the matching pool is assigned, otherwise the
    use-weighted spill heuristic evicts the cheapest interval. Integer and float
    values draw from separate pools.
-4. **Frame integration** (`codegen_ir/frame.rs`): the allocation is stored in
+4. **Frame integration** (`codegen/frame.rs`): the allocation is stored in
    the frame layout, each used callee-saved register gets a save slot, and the
    value-access chokepoints (`load_value_to_result`, `load_value_to_reg`,
    `store_result_value`) read and write registers instead of slots.

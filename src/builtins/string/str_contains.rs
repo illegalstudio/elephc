@@ -12,8 +12,8 @@
 //! - `lower` is a thin wrapper over `lower_str_contains` which uses `__rt_strpos`
 //!   and normalizes its signed result to a PHP boolean.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -31,5 +31,5 @@ fn lower(
     ctx: &mut FunctionContext,
     inst: &Instruction,
 ) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_str_contains(ctx, inst)
+    crate::codegen::lower_inst::builtins::strings::lower_str_contains(ctx, inst)
 }

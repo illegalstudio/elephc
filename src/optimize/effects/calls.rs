@@ -25,8 +25,23 @@ pub(in crate::optimize) fn function_call_effect(name: &str) -> Effect {
     .unwrap_or_else(|| {
         if is_pure_non_throwing_builtin(name) {
             Effect::PURE
+        } else if crate::builtins::registry::lookup(name).is_some() {
+            // A known builtin can mutate by-ref arguments, heap state, or
+            // emit output, but it can never write PHP `global` storage —
+            // unless it invokes a user callback, which can.
+            if builtin_invokes_callbacks(name) {
+                Effect::PURE
+                    .with_side_effects()
+                    .with_may_throw()
+                    .with_writes_globals()
+            } else {
+                Effect::PURE.with_side_effects().with_may_throw()
+            }
         } else {
-            Effect::PURE.with_side_effects().with_may_throw()
+            Effect::PURE
+                .with_side_effects()
+                .with_may_throw()
+                .with_writes_globals()
         }
     })
 }
@@ -46,7 +61,7 @@ pub(in crate::optimize) fn expr_call_effect(callee: &Expr) -> Effect {
     match &callee.kind {
         ExprKind::FirstClassCallable(target) => callable_target_call_effect(target),
         ExprKind::Closure { body, .. } => closure_body_call_effect(body),
-        _ => Effect::PURE.with_side_effects().with_may_throw(),
+        _ => Effect::PURE.with_side_effects().with_may_throw().with_writes_globals(),
     }
 }
 
@@ -60,7 +75,7 @@ pub(in crate::optimize) fn callable_alias_effect(name: &str) -> Effect {
             .as_ref()
             .and_then(|effects| effects.get(name).copied())
     })
-    .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw())
+    .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw().with_writes_globals())
 }
 
 /// Computes the effect for a callable target resolved at compile time.
@@ -116,7 +131,7 @@ pub(in crate::optimize) fn static_method_call_effect(
     method_name: &str,
 ) -> Effect {
     let Some(class_name) = resolve_static_receiver_class(receiver) else {
-        return Effect::PURE.with_side_effects().with_may_throw();
+        return Effect::PURE.with_side_effects().with_may_throw().with_writes_globals();
     };
 
     ACTIVE_STATIC_METHOD_EFFECTS.with(|slot| {
@@ -124,7 +139,7 @@ pub(in crate::optimize) fn static_method_call_effect(
             .as_ref()
             .and_then(|effects| effects.get(&method_effect_key(&class_name, method_name)).copied())
     })
-    .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw())
+    .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw().with_writes_globals())
 }
 
 /// Looks up the effect for a private instance method call on `$this`.
@@ -135,13 +150,13 @@ pub(in crate::optimize) fn static_method_call_effect(
 /// falling back to a conservative default.
 pub(in crate::optimize) fn private_instance_method_call_effect(object: &Expr, method_name: &str) -> Effect {
     if !matches!(object.kind, ExprKind::This) {
-        return Effect::PURE.with_side_effects().with_may_throw();
+        return Effect::PURE.with_side_effects().with_may_throw().with_writes_globals();
     }
 
     let Some(class_name) = ACTIVE_CLASS_EFFECT_CONTEXT
         .with(|slot| slot.borrow().as_ref().map(|context| context.class_name.clone()))
     else {
-        return Effect::PURE.with_side_effects().with_may_throw();
+        return Effect::PURE.with_side_effects().with_may_throw().with_writes_globals();
     };
 
     ACTIVE_PRIVATE_INSTANCE_METHOD_EFFECTS.with(|slot| {
@@ -149,7 +164,7 @@ pub(in crate::optimize) fn private_instance_method_call_effect(object: &Expr, me
             .as_ref()
             .and_then(|effects| effects.get(&method_effect_key(&class_name, method_name)).copied())
     })
-    .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw())
+    .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw().with_writes_globals())
 }
 
 /// Resolves a static receiver to a class name string.

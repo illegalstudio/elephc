@@ -9,8 +9,8 @@
 //! - No `check` hook is needed: `json_last_error_msg` takes no arguments and
 //!   always returns `Str`. The registry common path enforces arity.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -24,5 +24,5 @@ builtin! {
 
 /// Lowers a `json_last_error_msg` call by dispatching to the shared JSON emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::json::lower_json_last_error_msg(ctx, inst)
+    crate::codegen::lower_inst::builtins::json::lower_json_last_error_msg(ctx, inst)
 }

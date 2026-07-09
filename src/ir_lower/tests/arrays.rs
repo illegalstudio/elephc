@@ -11,14 +11,17 @@
 use crate::ir::print_module;
 
 /// Verifies indexed array access preserves string and float element metadata.
+/// The indices are runtime-unknown (`$argc`) so the accesses survive AST-level
+/// array-fact propagation, which folds constant-index reads of literal-backed
+/// locals before lowering.
 #[test]
 fn indexed_array_access_uses_array_element_type() {
     let module = super::lower_source(
         r#"<?php
 $strings = ["a", "b"];
-echo $strings[1];
+echo $strings[$argc];
 $floats = [1.5, 2.5];
-echo $floats[0];
+echo $floats[$argc];
 "#,
     );
     let text = print_module(&module);

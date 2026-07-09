@@ -28,7 +28,8 @@ binary is written next to it, named after the source without its extension.
 | `--emit-asm` | — | off | Write generated assembly instead of a binary. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run front-end checks only; write nothing. |
-| `--source-map` | — | off | Emit a `.map` sidecar next to the assembly. |
+| `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
+| `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
@@ -81,11 +82,8 @@ spellings.
 | `--no-ir-opt` | — | — | `ELEPHC_IR_OPT=off` | Shorthand for `--ir-opt=off`. |
 | `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Register allocator: linear-scan, or stack-only fallback. |
 | `--null-repr=sentinel\|tagged` | `sentinel`, `tagged` | `tagged` | `ELEPHC_NULL_REPR` | Representation for null-capable scalar slots. |
-| `--ir-backend` | — | on | — | Force the EIR backend (already the default). |
-| `--ast-backend` | — | off | — | **Deprecated.** Legacy direct AST backend; removal planned for a future release. |
 
-`--ir-backend` and `--ast-backend` cannot be combined. See
-[Optimization and codegen controls](optimization.md).
+See [Optimization and codegen controls](optimization.md).
 
 ## Linking and FFI
 

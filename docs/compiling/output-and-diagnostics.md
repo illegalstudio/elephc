@@ -69,11 +69,29 @@ elephc --check hello.php
 ### `--source-map`
 
 Emits a `.map` sidecar file next to the generated assembly, mapping assembly back
-to PHP source positions.
+to PHP source positions. The sidecar is a versioned JSON document with function
+ranges, assembly labels, opcode-tagged line mappings, and a PHP-line inverse
+index — see [Source maps](source-maps.md) for the schema contract.
 
 ```bash
 elephc --emit-asm --source-map hello.php
 ```
+
+### `--debug-info`
+
+Embeds DWARF debug information in the generated assembly — a line table and one
+`DW_TAG_subprogram` per PHP function, derived from the same source markers that
+drive `--source-map`. Standard debuggers (lldb, gdb) and profilers then map
+compiled code back to PHP lines without any custom tooling. On macOS a `.dSYM`
+bundle is produced next to the binary:
+
+```bash
+elephc --debug-info hello.php
+lldb ./hello   # breakpoints and backtraces resolve to hello.php lines
+```
+
+`--debug-info` and `--source-map` compose: the first serves standard DWARF
+consumers, the second serves tools that want the richer JSON schema.
 
 ## Compile-time diagnostics
 

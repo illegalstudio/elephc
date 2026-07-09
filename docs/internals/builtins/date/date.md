@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/date.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/date.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:22](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L22) (`lower_date`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:22](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L22) (`lower_date`)
 - **Function symbol**: `lower_date()`
 
 

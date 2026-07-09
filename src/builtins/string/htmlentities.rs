@@ -10,12 +10,12 @@
 //!   type (`Str`) is fully determined by its declaration. The registry derives the
 //!   return type from the `returns:` field without calling a check hook.
 //! - `lower` is a thin wrapper over the shared `lower_html_escape` emitter,
-//!   passing the builtin name for diagnostics. Like the legacy arm, it reuses
-//!   the `__rt_htmlspecialchars` runtime helper.
+//!   passing the builtin name for diagnostics. It reuses the
+//!   `__rt_htmlspecialchars` runtime helper.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -34,5 +34,5 @@ fn lower(
     ctx: &mut FunctionContext,
     inst: &Instruction,
 ) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_html_escape(ctx, inst, "htmlentities")
+    crate::codegen::lower_inst::builtins::strings::lower_html_escape(ctx, inst, "htmlentities")
 }

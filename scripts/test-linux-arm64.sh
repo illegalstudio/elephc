@@ -80,6 +80,7 @@ if [ "$TEST_ARG_COUNT" -eq 0 ]; then
         --init \
         --rm \
         -e "RUST_TEST_THREADS=$TEST_THREADS" \
+        -e "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1}" \
         -e "CARGO_TARGET_DIR=/cargo-target" \
         -v "$PROJECT_DIR:/app" \
         -v "$TARGET_VOLUME:/cargo-target" \
@@ -94,6 +95,7 @@ else
         --init \
         --rm \
         -e "RUST_TEST_THREADS=$TEST_THREADS" \
+        -e "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1}" \
         -e "CARGO_TARGET_DIR=/cargo-target" \
         -v "$PROJECT_DIR:/app" \
         -v "$TARGET_VOLUME:/cargo-target" \

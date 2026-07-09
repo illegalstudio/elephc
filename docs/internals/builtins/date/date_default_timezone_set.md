@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/date_default_timezone_set.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/date_default_timezone_set.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:84](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L84) (`lower_date_default_timezone_set`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:84](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L84) (`lower_date_default_timezone_set`)
 - **Function symbol**: `lower_date_default_timezone_set()`
 
 

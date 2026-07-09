@@ -11,8 +11,8 @@
 //! - The `arity_error` override preserves the user-facing `strtotime` error message.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -28,5 +28,5 @@ builtin! {
 
 /// Lowers an `__elephc_strtotime_raw` call by dispatching to the shared system emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::system::lower_elephc_strtotime_raw(ctx, inst)
+    crate::codegen::lower_inst::builtins::system::lower_elephc_strtotime_raw(ctx, inst)
 }

@@ -226,6 +226,26 @@ pub struct ClassMethod {
     pub attributes: Vec<AttributeGroup>,
 }
 
+impl ClassMethod {
+    /// Rewrites the relative class types `self`/`static`/`parent` in every type annotation this
+    /// method carries — regular parameters, the variadic parameter, and the return type — to
+    /// `self_class`/`parent`. Shared by class, interface, and enum schema processing so no caller
+    /// can forget one of the annotation positions.
+    pub fn substitute_relative_class_types(&mut self, self_class: &str, parent: Option<&str>) {
+        for (_, type_ann, _, _) in self.params.iter_mut() {
+            if let Some(ty) = type_ann.as_mut() {
+                *ty = ty.substitute_relative_class_types(self_class, parent);
+            }
+        }
+        if let Some(variadic_ty) = self.variadic_type.as_mut() {
+            *variadic_ty = variadic_ty.substitute_relative_class_types(self_class, parent);
+        }
+        if let Some(ret) = self.return_type.as_mut() {
+            *ret = ret.substitute_relative_class_types(self_class, parent);
+        }
+    }
+}
+
 impl PartialEq for ClassMethod {
     /// Compares class methods by name, visibility, static/abstract/final flags,
     /// has_body, and attributes; span, params, return_type, and body are not compared.

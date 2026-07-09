@@ -105,29 +105,50 @@ fn test_constant_int_multiply_overflow_promotes_to_float() {
 /// Verifies that adding 1 to the maximum 64-bit integer at runtime overflows to float.
 #[test]
 fn test_runtime_int_add_overflow_promotes_to_float() {
-    let out = compile_and_run("<?php $a = 9223372036854775807; $b = 1; echo gettype($a + $b);");
+    let out = compile_and_run("<?php function add_one(int $x) { return $x + 1; } echo gettype(add_one(9223372036854775807));");
+    assert_eq!(out, "double");
+}
+
+/// Verifies that subtracting past the minimum 64-bit integer at runtime overflows to float.
+#[test]
+fn test_runtime_int_sub_overflow_promotes_to_float() {
+    let out = compile_and_run("<?php function sub_two(int $x) { return $x - 2; } echo gettype(sub_two(-9223372036854775807));");
     assert_eq!(out, "double");
 }
 
 /// Verifies that squaring a large integer at runtime overflows to float.
 #[test]
 fn test_runtime_int_multiply_overflow_promotes_to_float() {
-    let out = compile_and_run("<?php $a = 3037000500; $b = 3037000500; echo gettype($a * $b);");
+    let out = compile_and_run("<?php function mul_big(int $x) { return $x * 3037000500; } echo gettype(mul_big(3037000500));");
     assert_eq!(out, "double");
 }
 
 /// Verifies that runtime integer arithmetic without overflow remains integer, not float.
 #[test]
 fn test_runtime_int_arithmetic_without_overflow_stays_integer() {
-    let out = compile_and_run("<?php $a = 40; $b = 2; echo gettype($a + $b) . ':' . ($a + $b);");
+    let out = compile_and_run("<?php function add_small(int $x) { return $x + 2; } $v = add_small(40); echo gettype($v) . ':' . $v;");
     assert_eq!(out, "integer:42");
 }
 
 /// Verifies that a runtime overflow result (float) participates correctly in subsequent arithmetic.
 #[test]
 fn test_runtime_overflow_result_participates_in_later_arithmetic() {
-    let out = compile_and_run("<?php $a = 9223372036854775807; $b = 1; $c = $a + $b; echo gettype($c + 1);");
+    let out = compile_and_run("<?php function add_one(int $x) { return $x + 1; } $c = add_one(9223372036854775807); echo gettype($c + 1);");
     assert_eq!(out, "double");
+}
+
+/// Verifies that pre-increment promotes an overflowing int local and returns the promoted value.
+#[test]
+fn test_runtime_pre_increment_overflow_promotes_local_to_float() {
+    let out = compile_and_run("<?php function pre_inc(int $x) { $y = ++$x; echo gettype($y) . ':' . gettype($x); } pre_inc(9223372036854775807);");
+    assert_eq!(out, "double:double");
+}
+
+/// Verifies that post-increment returns the old int while promoting the local for later reads.
+#[test]
+fn test_runtime_post_increment_overflow_returns_old_int_and_promotes_local() {
+    let out = compile_and_run("<?php function post_inc(int $x) { $y = $x++; echo gettype($y) . ':' . gettype($x); } post_inc(9223372036854775807);");
+    assert_eq!(out, "integer:double");
 }
 
 // --- Phase 3: Concatenation ---

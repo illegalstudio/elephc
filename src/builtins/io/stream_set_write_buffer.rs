@@ -9,8 +9,8 @@
 //!   (0 on success, matching PHP's successful no-op behaviour).
 //! - `lower` dispatches to `io::lower_stream_set_buffer`, shared with `stream_set_read_buffer`.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -25,5 +25,5 @@ builtin! {
 
 /// Lowers a `stream_set_write_buffer` call by dispatching to the shared io buffer emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::io::lower_stream_set_buffer(ctx, inst)
+    crate::codegen::lower_inst::builtins::io::lower_stream_set_buffer(ctx, inst)
 }

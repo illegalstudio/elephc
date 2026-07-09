@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fflush.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fflush.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3266](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3266) (`lower_fflush`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3266](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3266) (`lower_fflush`)
 - **Function symbol**: `lower_fflush()`
 
 

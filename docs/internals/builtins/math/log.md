@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/log.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/log.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/libm.rs`:51](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/libm.rs#L51) (`lower_log`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/libm.rs`:51](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/libm.rs#L51) (`lower_log`)
 - **Function symbol**: `lower_log()`
 
 

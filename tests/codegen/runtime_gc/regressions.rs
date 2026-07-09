@@ -987,6 +987,84 @@ echo "x";
     );
 }
 
+/// Regression test for the call-argument release / alias-guard interaction: a user
+/// function that accepts an array and returns it typed as `iterable`
+/// (`function id(iterable $x): iterable`) aliases its argument. Releasing owned
+/// call-argument temporaries must not free that shared payload, or the returned
+/// value would be corrupted (read back as null/garbage). This asserts correctness
+/// only — the conservative alias guard intentionally keeps the argument alive when
+/// it might be the return value, which leaves a pre-existing passthrough leak that
+/// is out of scope for the call-argument-release fix.
+#[test]
+fn test_iterable_passthrough_arg_not_freed() {
+    let out = compile_and_run(
+        r#"<?php
+function id(iterable $x): iterable { return $x; }
+$total = 0;
+for ($i = 0; $i < 100; $i++) {
+    $v = id([1, 2, 3]);
+    foreach ($v as $x) { $total += $x; }
+}
+echo $total;
+"#,
+    );
+    assert_eq!(out, "600");
+}
+
+/// Regression test for the call-argument-temporary leak: a fresh array literal passed
+/// to a plain BUILTIN (`count([...])`) inside a loop is an owning temporary that must
+/// be released after each call. Before the fix it leaked one array allocation per
+/// iteration — an unbounded heap leak. The sibling iterable-passthrough test cannot
+/// catch this because a leak does not change program output, so this heap-debug test
+/// is the one that actually guards the bug.
+#[test]
+fn test_builtin_call_owned_array_arg_temp_released() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$t = 0;
+for ($i = 0; $i < 200; $i++) {
+    $t += count([$i, 20, 30]);
+}
+echo $t;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "600");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: a fresh array literal passed to a plain USER function that does
+/// not return it is an owning temporary that must be released after the call, the same
+/// way method and builtin calls do. Before the fix, user (and extern) calls never
+/// released owned argument temporaries, leaking one array per iteration. The alias
+/// guard still keeps a passthrough result alive (see
+/// `test_iterable_passthrough_arg_not_freed`); here the argument is discarded, so the
+/// heap must stay flat.
+#[test]
+fn test_user_function_owned_array_arg_temp_released() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function sink(array $a): int { return count($a); }
+$t = 0;
+for ($i = 0; $i < 200; $i++) {
+    $t += sink([$i, 20, 30]);
+}
+echo $t;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "600");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for the array-to-string echo fix: echoing an owned temporary array
 /// stringifies to "Array" and releases the temporary, keeping GC allocs and frees balanced
 /// (no leak from the discarded array, no premature/double free).
@@ -1054,6 +1132,75 @@ echo "done";
     assert_eq!(out.stdout, "done");
     assert!(
         out.stderr.contains("leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: a local widened to boxed Mixed by loop arithmetic must be
+/// released on return paths that return another value instead of that local.
+#[test]
+fn test_widened_loop_local_cleaned_on_alternate_return_path() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box {}
+class Sink {
+    public array $objects;
+
+    public function __construct() {
+        $this->objects = [];
+    }
+
+    public function idx(mixed $object): int {
+        $i = 0;
+        $limit = count($this->objects);
+        while ($i < $limit) {
+            if ($this->objects[$i] === $object) {
+                return $i;
+            }
+            $i++;
+        }
+        return -1;
+    }
+}
+
+$box = new Box();
+$sink = new Sink();
+echo $sink->idx($box);
+unset($sink);
+unset($box);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "-1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: ordinary PHP global overwrites release the previous Mixed box
+/// and the final global value is released before heap-debug leak reporting.
+#[test]
+fn test_ordinary_global_reassignment_releases_previous_mixed() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$g = 0;
+function set_global(int $value): void {
+    global $g;
+    $g = $value;
+}
+for ($i = 0; $i < 200; $i++) {
+    set_global($i);
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",
         out.stderr
     );

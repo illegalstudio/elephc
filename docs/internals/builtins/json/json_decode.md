@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/json_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/json_decode.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/json.rs`:30](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/json.rs#L30) (`lower_json_decode`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/json.rs`:30](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/json.rs#L30) (`lower_json_decode`)
 - **Function symbol**: `lower_json_decode()`
 
 

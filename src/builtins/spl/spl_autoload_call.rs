@@ -8,8 +8,8 @@
 //! Key details:
 //! - The AOT stub accepts exactly one class-name argument and returns void.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -24,7 +24,7 @@ builtin! {
 
 /// Lowers `spl_autoload_call` by evaluating the argument for side effects and returning null.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::spl::lower_spl_autoload_void(
+    crate::codegen::lower_inst::builtins::spl::lower_spl_autoload_void(
         ctx,
         inst,
         "spl_autoload_call",

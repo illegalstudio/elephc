@@ -66,6 +66,7 @@ fn populate_metadata(module: &mut Module, program: &Program, check_result: &Chec
     module.extern_class_infos = check_result.extern_classes.clone();
     module.packed_class_infos = check_result.packed_classes.clone();
     module.packed_layouts.names = sorted_keys(&check_result.packed_classes);
+    module.extern_globals = check_result.extern_globals.clone();
     module.callable_param_sigs = check_result.callable_param_sigs.clone();
     module.extern_decls = check_result
         .extern_functions
@@ -670,6 +671,7 @@ fn lower_builtin_reflection_class_methods(
     let Some(class_info) = check_result.classes.get(class_name) else {
         return;
     };
+    let before = module.class_methods.len();
     for method in &class_info.method_decls {
         if !method.has_body {
             continue;
@@ -703,6 +705,9 @@ fn lower_builtin_reflection_class_methods(
             fiber_return_sigs,
         );
     }
+    for method in module.class_methods.iter_mut().skip(before) {
+        method.flags.is_synthetic = true;
+    }
 }
 
 /// Lowers the small builtin SPL method slice currently consumed by the EIR backend.
@@ -727,6 +732,9 @@ fn lower_referenced_builtin_spl_methods(
         let before = module.class_methods.len();
         for (class_name, method_key) in methods {
             lower_builtin_spl_method(&class_name, &method_key, module, check_result, constants, fiber_return_sigs);
+        }
+        for method in module.class_methods.iter_mut().skip(before) {
+            method.flags.is_synthetic = true;
         }
         if module.class_methods.len() == before {
             break;

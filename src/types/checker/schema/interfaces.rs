@@ -69,6 +69,8 @@ pub(crate) fn build_interface_info_recursive(
     let mut method_declaring_interfaces = HashMap::new();
     let mut method_order = Vec::new();
     let mut method_slots = HashMap::new();
+    let mut static_methods = HashMap::new();
+    let mut static_method_order: Vec<String> = Vec::new();
     let mut properties = HashMap::new();
     let mut property_order = Vec::new();
 
@@ -127,6 +129,26 @@ pub(crate) fn build_interface_info_recursive(
             let slot = method_order.len();
             method_slots.insert(method_name.clone(), slot);
             method_order.push(method_name.clone());
+        }
+        for method_name in &parent_info.static_method_order {
+            let parent_sig = parent_info
+                .static_methods
+                .get(method_name)
+                .expect("type checker bug: missing interface parent static method signature");
+            if let Some(existing_sig) = static_methods.get(method_name) {
+                validate_signature_compatibility(
+                    interface.span,
+                    &interface.name,
+                    method_name,
+                    existing_sig,
+                    parent_sig,
+                    "method",
+                    "combining interface parent",
+                )?;
+                continue;
+            }
+            static_methods.insert(method_name.clone(), parent_sig.clone());
+            static_method_order.push(method_name.clone());
         }
         for property_name in &parent_info.property_order {
             let parent_contract = parent_info
@@ -209,15 +231,6 @@ pub(crate) fn build_interface_info_recursive(
                 ),
             ));
         }
-        if method.is_static {
-            return Err(CompileError::new(
-                method.span,
-                &format!(
-                    "Static interface methods are not supported yet: {}::{}",
-                    interface.name, method.name
-                ),
-            ));
-        }
         if method.has_body {
             return Err(CompileError::new(
                 method.span,
@@ -229,6 +242,27 @@ pub(crate) fn build_interface_info_recursive(
         }
 
         let sig = build_method_sig(checker, method)?;
+        if method.is_static {
+            // PHP 8.3+ static interface method: a bodyless static contract. Recorded apart
+            // from instance methods (no vtable slot — dispatch is by class). Implementing
+            // classes satisfy it with a static method (see validate_interface_contracts).
+            if let Some(existing) = static_methods.get(&method_key) {
+                validate_signature_compatibility(
+                    method.span,
+                    &interface.name,
+                    &method.name,
+                    &sig,
+                    existing,
+                    "method",
+                    "redeclaring interface",
+                )?;
+            }
+            static_methods.insert(method_key.clone(), sig);
+            if !static_method_order.contains(&method_key) {
+                static_method_order.push(method_key.clone());
+            }
+            continue;
+        }
         if let Some(parent_sig) = methods.get(&method_key) {
             validate_signature_compatibility(
                 method.span,
@@ -273,6 +307,8 @@ pub(crate) fn build_interface_info_recursive(
             method_declaring_interfaces,
             method_order,
             method_slots,
+            static_methods,
+            static_method_order,
             constants: iface_constants,
         },
     );

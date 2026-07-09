@@ -12,8 +12,8 @@
 //! - `lower` is a thin wrapper over the dedicated `lower_ctype_digit` emitter in the
 //!   ctype lowering module.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -28,5 +28,5 @@ builtin! {
 
 /// Lowers a `ctype_digit` call by dispatching to the shared `lower_ctype_digit` emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::ctype::lower_ctype_digit(ctx, inst)
+    crate::codegen::lower_inst::builtins::ctype::lower_ctype_digit(ctx, inst)
 }

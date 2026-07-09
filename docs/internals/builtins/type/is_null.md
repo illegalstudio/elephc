@@ -2,7 +2,7 @@
 title: "is_null() — internals"
 description: "Compiler internals for is_null(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 421
+  order: 426
 ---
 
 ## `is_null()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_null.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_null.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:993](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L993) (`lower_is_null_builtin`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:992](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L992) (`lower_is_null_builtin`)
 - **Function symbol**: `lower_is_null_builtin()`
 
 

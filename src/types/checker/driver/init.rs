@@ -79,6 +79,7 @@ impl Checker {
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),
+            resolving_functions: HashSet::new(),
             constants,
             closure_return_types: HashMap::new(),
             callable_sigs: HashMap::new(),
@@ -114,6 +115,7 @@ impl Checker {
             finally_break_continue_bases: Vec::new(),
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
+            throw_access_sites: HashMap::new(),
         }
     }
 }

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ftruncate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ftruncate.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3210](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3210) (`lower_ftruncate`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3210](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3210) (`lower_ftruncate`)
 - **Function symbol**: `lower_ftruncate()`
 
 

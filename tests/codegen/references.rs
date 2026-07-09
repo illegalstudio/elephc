@@ -351,3 +351,41 @@ fn test_two_locals_aliasing_same_property() {
     );
     assert_eq!(out, "3\n8\n");
 }
+
+/// `$b =& $a[0]` aliases an indexed-array int element: writing the local updates the array
+/// element in place (write-through from the alias to the array).
+#[test]
+fn test_ref_alias_array_element_int() {
+    let out = compile_and_run(r#"<?php $a = [1, 2]; $b =& $a[0]; $b = 9; echo $a[0];"#);
+    assert_eq!(out, "9");
+}
+
+/// `$b =& $a[0]` aliases an indexed-array int element: reading the local after the array is
+/// mutated through another path reflects the change (write-through from the array to the alias).
+#[test]
+fn test_ref_alias_array_element_int_readback() {
+    let out = compile_and_run(
+        r#"<?php $a = [1, 2]; $b =& $a[0]; $a[0] = 7; echo $b;"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// `$b =& $a[0]` aliases an indexed-array string element: writing the local updates the array
+/// element's pointer and length in place.
+#[test]
+fn test_ref_alias_array_element_string() {
+    let out = compile_and_run(
+        r#"<?php $a = ["hello", "world"]; $b =& $a[0]; $b = "HEY"; echo $a[0];"#,
+    );
+    assert_eq!(out, "HEY");
+}
+
+/// `$b =& $a[1]` aliases a non-zero indexed-array int element: the address computation must
+/// scale by the element size and skip the header correctly.
+#[test]
+fn test_ref_alias_array_element_nonzero_index() {
+    let out = compile_and_run(
+        r#"<?php $a = [10, 20, 30]; $b =& $a[1]; $b = 99; echo $a[1];"#,
+    );
+    assert_eq!(out, "99");
+}

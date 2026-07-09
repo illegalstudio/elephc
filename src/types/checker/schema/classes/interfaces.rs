@@ -15,7 +15,7 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::Visibility;
 use crate::span::Span;
 use crate::types::traits::FlattenedClass;
-use crate::types::{PhpType, PropertyHookContract};
+use crate::types::{FunctionSig, PhpType, PropertyHookContract};
 
 use super::super::super::Checker;
 use super::super::validation::{
@@ -135,6 +135,19 @@ pub(super) fn validate_interface_contracts(
                 building,
             )?;
         }
+        for method_name in &interface_info.static_method_order {
+            let required_sig = interface_info
+                .static_methods
+                .get(method_name)
+                .expect("type checker bug: missing interface static method signature");
+            validate_interface_static_method(
+                state,
+                class,
+                &interface_name,
+                method_name,
+                required_sig,
+            )?;
+        }
         for property_name in &interface_info.property_order {
             let contract = interface_info
                 .properties
@@ -221,6 +234,37 @@ pub(super) fn ensure_concrete_class_implements_abstracts(
 /// Checks signature compatibility, return type declarations, visibility (must be public), and
 /// that non-public static methods cannot satisfy interface contracts. For abstract classes,
 /// missing methods are inserted into the class state as deferred contracts.
+/// Validates that `class` satisfies the static interface method `method_name` from
+/// `interface_name` — a concrete class must declare a compatible `static` method; an abstract
+/// class may defer. PHP 8.3+ static interface methods.
+fn validate_interface_static_method(
+    state: &ClassBuildState,
+    class: &FlattenedClass,
+    interface_name: &str,
+    method_name: &str,
+    required_sig: &FunctionSig,
+) -> Result<(), CompileError> {
+    match state.static_sigs.get(method_name) {
+        Some(actual_sig) => validate_signature_compatibility(
+            Span::dummy(),
+            &class.name,
+            method_name,
+            actual_sig,
+            required_sig,
+            "method",
+            "implementing interface",
+        ),
+        None if class.is_abstract => Ok(()),
+        None => Err(CompileError::new(
+            Span::dummy(),
+            &format!(
+                "Class {} must implement static interface method {}::{}",
+                class.name, interface_name, method_name
+            ),
+        )),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn validate_interface_method(
     state: &mut ClassBuildState,

@@ -8,8 +8,8 @@
 //! - No check hook: the common registry path infers the protocol argument and returns `Bool`.
 //! - `lower` is a thin wrapper over `io::lower_stream_wrapper_restore` in the EIR backend.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -24,5 +24,5 @@ builtin! {
 
 /// Lowers a `stream_wrapper_restore` call by dispatching to the shared io emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::io::lower_stream_wrapper_restore(ctx, inst)
+    crate::codegen::lower_inst::builtins::io::lower_stream_wrapper_restore(ctx, inst)
 }

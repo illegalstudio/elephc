@@ -10,13 +10,13 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/uksort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/uksort.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1126](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1126) (`lower_uksort`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1129](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1129) (`lower_uksort`)
 - **Function symbol**: `lower_uksort()`
 
 
 ### Lowering notes
 
-- Lowers `uksort()` through the legacy user-sort helper for static comparators.
+- Lowers `uksort()` through the user-sort helper for static comparators.
 
 ## Runtime helpers
 

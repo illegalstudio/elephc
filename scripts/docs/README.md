@@ -47,7 +47,7 @@ everything.
 | Layer | Source | What we extract |
 |---|---|---|
 | Registry | `gen_builtins` binary (reads `src/builtins/`) | The authoritative set of builtins (incl. `internal` helpers) with exact signatures: parameter names, types, defaults, by-ref flags, variadics, and return types. |
-| Lowering | Home files `src/builtins/<area>/<name>.rs` + `src/codegen_ir/lower_inst/builtins/` | Each home's `lower` hook names the emitter it dispatches to; we resolve that emitter's file, line, `__rt_*` runtime helpers, and leading `///` doc comment. |
+| Lowering | Home files `src/builtins/<area>/<name>.rs` + `src/codegen/lower_inst/builtins/` | Each home's `lower` hook names the emitter it dispatches to; we resolve that emitter's file, line, `__rt_*` runtime helpers, and leading `///` doc comment. |
 | Precision | `elephc_builtins/registry.py` | Presentation refinements the registry represents coarsely as `Mixed`: `PARAM_TYPES` (param display types) and `RETURN_TYPE_OVERRIDES`. Return types are also recovered from a home's `check` hook when possible. |
 
 The registry represents non-scalar params/returns as `Mixed`; the generator

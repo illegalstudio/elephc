@@ -12,8 +12,8 @@
 //! - `lower` is a thin wrapper over `lower_trim_like` which dispatches to the appropriate
 //!   runtime helper depending on whether a mask argument is provided.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -34,7 +34,7 @@ fn lower(
     ctx: &mut FunctionContext,
     inst: &Instruction,
 ) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_trim_like(
+    crate::codegen::lower_inst::builtins::strings::lower_trim_like(
         ctx,
         inst,
         "trim",

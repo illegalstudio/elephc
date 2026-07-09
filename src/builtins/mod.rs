@@ -5,7 +5,7 @@
 //!
 //! Called from:
 //! - `crate::types::checker::builtins`, `crate::types::signatures`,
-//!   `crate::codegen_ir::lower_inst::builtins`, and `gen_builtins` (doc export).
+//!   `crate::codegen::lower_inst::builtins`, and `gen_builtins` (doc export).
 //!
 //! Key details:
 //! - Homes live under `<area>/<name>.rs`; the legacy dispatch points fall back to

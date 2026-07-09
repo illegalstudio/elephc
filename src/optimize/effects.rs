@@ -16,6 +16,8 @@ mod builtins;
 mod calls;
 
 use aliases::apply_stmt_callable_aliases;
+#[cfg(test)]
+pub(super) use builtins::is_pure_non_throwing_builtin;
 pub(super) use calls::{
     callable_alias_effect,
     expr_call_effect,
@@ -77,6 +79,7 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             expr_effect(object)
                 .combine(expr_effect(value))
                 .with_side_effects()
+                .with_may_throw()
         }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_effect(object)
@@ -168,6 +171,10 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
                     .unwrap_or(Effect::PURE),
             ),
         StmtKind::NamespaceBlock { body, .. } => block_effect(body),
+        // Declaring `global` conservatively counts as writing global storage
+        // (a declaration almost always precedes a write). The bit stays out of
+        // `is_observable`, so the declaration itself remains removable.
+        StmtKind::Global { .. } => Effect::PURE.with_writes_globals(),
         StmtKind::FunctionDecl { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
@@ -176,7 +183,6 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::InterfaceDecl { .. }
         | StmtKind::TraitDecl { .. }
-        | StmtKind::Global { .. }
         | StmtKind::Return(None)
         | StmtKind::Break(_)
         | StmtKind::Continue(_)

@@ -60,7 +60,7 @@ sidebar:
 | [`call_user_func()`](./array/call_user_func.md) | `(callable $callback, ...$args): mixed` | `mixed` |
 | [`call_user_func_array()`](./array/call_user_func_array.md) | `(callable $callback, array $args): mixed` | `mixed` |
 | [`count()`](./array/count.md) | `(array $value, int $mode = 0): int` | `int` |
-| [`in_array()`](./array/in_array.md) | `(mixed $needle, array $haystack, bool $strict = false): mixed` | `mixed` |
+| [`in_array()`](./array/in_array.md) | `(mixed $needle, array $haystack, bool $strict = false): bool` | `bool` |
 | [`krsort()`](./array/krsort.md) | `(array $array): bool` | `bool` |
 | [`ksort()`](./array/ksort.md) | `(array $array): bool` | `bool` |
 | [`natcasesort()`](./array/natcasesort.md) | `(array $array): bool` | `bool` |

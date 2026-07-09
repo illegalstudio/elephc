@@ -9,11 +9,11 @@
 //! - `check` validates that the first argument is a string literal and registers the
 //!   constant's type in `checker.constants` as a compile-time side effect.
 //! - The hook calls `infer_type` on the value argument to obtain its type for registration.
-//! - `lower` delegates to the module-level `lower_define` in `src/codegen_ir/lower_inst/builtins.rs`.
+//! - `lower` delegates to the module-level `lower_define` in `src/codegen/lower_inst/builtins.rs`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
@@ -51,5 +51,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers a `define` call by delegating to the shared module-level emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::lower_define(ctx, inst)
+    crate::codegen::lower_inst::builtins::lower_define(ctx, inst)
 }

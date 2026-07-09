@@ -2,7 +2,7 @@
 title: "__elephc_mktime_raw() — internals"
 description: "Compiler internals for __elephc_mktime_raw(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 429
+  order: 434
 ---
 
 ## `__elephc_mktime_raw()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_mktime_raw.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_mktime_raw.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:140](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L140) (`lower_mktime`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:140](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L140) (`lower_mktime`)
 - **Function symbol**: `lower_mktime()`
 
 

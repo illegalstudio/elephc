@@ -4,7 +4,7 @@
 //!
 //! Called from:
 //! - `crate::types::checker::builtins::catalog` for name-based lookup.
-//! - `crate::codegen_ir::lower_inst::builtins` for lowering-hook dispatch.
+//! - `crate::codegen::lower_inst::builtins` for lowering-hook dispatch.
 //!
 //! Key details:
 //! - Registry is initialized once at first access via a `OnceLock`; subsequent calls
@@ -192,8 +192,45 @@ pub fn function_sig(name: &str) -> Option<FunctionSig> {
 pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
     let sig = function_sig(name)?;
     let mut fcc_sig = callable_wrapper_sig(&sig);
+    refine_first_class_callable_sig(name, &mut fcc_sig);
     fcc_sig.declared_return = true;
     Some(fcc_sig)
+}
+
+/// Applies first-class-callable refinements that are broader in the direct builtin spec.
+fn refine_first_class_callable_sig(name: &str, sig: &mut FunctionSig) {
+    match crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "preg_replace_callback" => {
+            if let Some((_, callback_ty)) = sig.params.get_mut(1) {
+                *callback_ty = PhpType::Callable;
+            }
+        }
+        "zval_pack" => {
+            if let Some((_, value_ty)) = sig.params.get_mut(0) {
+                *value_ty = PhpType::Mixed;
+            }
+            sig.return_type = PhpType::Pointer(None);
+        }
+        "zval_unpack" => {
+            if let Some((_, zval_ty)) = sig.params.get_mut(0) {
+                *zval_ty = PhpType::Pointer(None);
+            }
+            sig.return_type = PhpType::Mixed;
+        }
+        "zval_type" => {
+            if let Some((_, zval_ty)) = sig.params.get_mut(0) {
+                *zval_ty = PhpType::Pointer(None);
+            }
+            sig.return_type = PhpType::Int;
+        }
+        "zval_free" => {
+            if let Some((_, zval_ty)) = sig.params.get_mut(0) {
+                *zval_ty = PhpType::Pointer(None);
+            }
+            sig.return_type = PhpType::Void;
+        }
+        _ => {}
+    }
 }
 
 /// Returns the minimum and maximum arity for the named builtin.
@@ -300,9 +337,9 @@ mod tests {
 
     /// No-op lowering hook used by test probe builtins; does nothing and succeeds.
     fn noop_lower(
-        _c: &mut crate::codegen_ir::context::FunctionContext,
+        _c: &mut crate::codegen::context::FunctionContext,
         _i: &crate::ir::Instruction,
-    ) -> Result<(), crate::codegen_ir::CodegenIrError> {
+    ) -> Result<(), crate::codegen::CodegenIrError> {
         Ok(())
     }
 

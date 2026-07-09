@@ -8,13 +8,14 @@ sidebar:
 ## var_dump()
 
 ```php
-function var_dump(mixed $value): void
+function var_dump(mixed $value, ...$values): void
 ```
 
 Dumps information about a variable, including its type and value.
 
 **Parameters**:
 - `$value` (`mixed`)
+- `...$values` — variadic: collects excess arguments into `$values`.
 
 **Returns**: `void`
 

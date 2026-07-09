@@ -19,8 +19,8 @@
 //!   boxes the `string|false` runtime result as `Mixed`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -59,5 +59,5 @@ fn lower(
     ctx: &mut FunctionContext,
     inst: &Instruction,
 ) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_grapheme_strrev(ctx, inst)
+    crate::codegen::lower_inst::builtins::strings::lower_grapheme_strrev(ctx, inst)
 }

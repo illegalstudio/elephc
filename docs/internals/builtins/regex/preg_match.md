@@ -2,7 +2,7 @@
 title: "preg_match() — internals"
 description: "Compiler internals for preg_match(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 311
+  order: 316
 ---
 
 ## `preg_match()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_match.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/regex.rs`:28](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/regex.rs#L28) (`lower_preg_match`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/regex.rs`:28](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/regex.rs#L28) (`lower_preg_match`)
 - **Function symbol**: `lower_preg_match()`
 
 

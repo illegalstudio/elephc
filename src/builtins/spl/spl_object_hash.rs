@@ -10,8 +10,8 @@
 //! - The hash is derived from the object's heap pointer stringified via `__rt_itoa`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -41,5 +41,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers `spl_object_hash()` by delegating to the object-pointer-to-string emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::spl::lower_spl_object_hash(ctx, inst)
+    crate::codegen::lower_inst::builtins::spl::lower_spl_object_hash(ctx, inst)
 }

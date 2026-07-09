@@ -710,3 +710,51 @@ echo sum(4, 5, 6);
     );
     assert_eq!(out, "15");
 }
+
+// --- First-class callables over registry builtins with variadic/optional signatures ---
+
+/// Verifies `var_dump(...)` as a first-class callable exposes the registry's variadic
+/// signature (`value, ...values`): the wrapper accepts multiple arguments and dumps
+/// each independently in source order.
+#[test]
+fn test_first_class_callable_var_dump_variadic() {
+    let out = compile_and_run(
+        r#"<?php
+$dump = var_dump(...);
+$dump(1, "a");
+"#,
+    );
+    assert_eq!(out, "int(1)\nstring(1) \"a\"\n");
+}
+
+/// Verifies `print_r(...)` as a first-class callable exposes the optional `$return`
+/// flag from the registry signature. Through the wrapper the flag is a runtime
+/// parameter, so the call takes the runtime-selected mode path and returns the
+/// rendered string (boxed Mixed) without echoing.
+#[test]
+fn test_first_class_callable_print_r_return_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$render = print_r(...);
+$r = $render("hi", true);
+echo "|$r";
+"#,
+    );
+    assert_eq!(out, "|hi");
+}
+
+/// Verifies `print_r(...)` as a first-class callable defaults the `$return` flag to
+/// `false` when called with one argument: the value is echoed and the wrapper
+/// returns true.
+#[test]
+fn test_first_class_callable_print_r_echo_default() {
+    let out = compile_and_run(
+        r#"<?php
+$render = print_r(...);
+$ok = $render(42);
+echo "|";
+echo $ok ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "42|yes");
+}

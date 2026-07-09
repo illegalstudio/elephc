@@ -2,7 +2,7 @@
 title: "preg_replace_callback() — internals"
 description: "Compiler internals for preg_replace_callback(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 314
+  order: 319
 ---
 
 ## `preg_replace_callback()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/preg_replace_callback.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/preg_replace_callback.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/regex.rs`:90](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/regex.rs#L90) (`lower_preg_replace_callback`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/regex.rs`:101](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/regex.rs#L101) (`lower_preg_replace_callback`)
 - **Function symbol**: `lower_preg_replace_callback()`
 
 

@@ -28,7 +28,8 @@ Everything about driving the compiler: the command-line flags and the full path 
 - [CLI reference](compiling/cli-reference.md) — the complete, authoritative list of every flag, value, default, and env override
 - [Targets and cross-compilation](compiling/targets.md) — the supported target matrix and `--target`
 - [Optimization and codegen controls](compiling/optimization.md) — `--ir-opt` (EIR identity, peephole, and dead-instruction passes), `--regalloc`, `--null-repr`
-- [Output formats and diagnostics](compiling/output-and-diagnostics.md) — `--emit`, `--emit-asm`, `--emit-ir`, `--check`, `--timings`, `--source-map`, `--gc-stats`, `--heap-debug`
+- [Output formats and diagnostics](compiling/output-and-diagnostics.md) — `--emit`, `--emit-asm`, `--emit-ir`, `--check`, `--timings`, `--source-map`, `--debug-info`, `--gc-stats`, `--heap-debug`
+- [Source maps](compiling/source-maps.md) — the `--source-map` v2 JSON schema (function ranges, labels, opcode/origin-tagged mappings, inverse line index) and `--debug-info` DWARF lines
 - [Linking, heap, and conditional compilation](compiling/linking-and-conditional-compilation.md) — `--link`/`-l`, `--link-path`/`-L`, `--framework`, `--heap-size`, `--define`
 
 ## PHP Syntax
@@ -67,6 +68,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [Conditional Compilation](beyond-php/ifdef.md) — ifdef blocks, compile-time feature flags, CLI flags
 - [Shared Libraries (cdylib)](beyond-php/cdylib.md) — --emit cdylib, #[Export] C-ABI functions, dlopen lifecycle
 - [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone prefork HTTP server binary
+- [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
 
 ## Compiler Internals
 
@@ -78,8 +80,8 @@ How elephc works under the hood — from lexing to code generation and runtime s
 - [The Parser](internals/the-parser.md) — tokens to AST with Pratt parsing
 - [The Type Checker](internals/the-type-checker.md) — compile-time type inference and validation
 - [The Optimizer](internals/the-optimizer.md) — constant folding, constant propagation, purity / may-throw reasoning, control-flow pruning, normalization, and dead-code elimination on the AST
-- [The Code Generator](internals/the-codegen.md) — checked AST to EIR, then target assembly through the default backend
-- [The EIR Design](internals/the-ir.md) — PHP-shaped intermediate representation used by the default backend and `--emit-ir`
+- [The Code Generator](internals/the-codegen.md) — checked AST to EIR, then target assembly
+- [The EIR Design](internals/the-ir.md) — PHP-shaped intermediate representation used by codegen and `--emit-ir`
 - [The Runtime](internals/the-runtime.md) — hand-written assembly routines
 - [Memory Model](internals/memory-model.md) — stack frames, heap, reference counting
 - [Architecture](internals/architecture.md) — module map, calling conventions

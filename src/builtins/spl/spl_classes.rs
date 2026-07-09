@@ -11,8 +11,8 @@
 //! - The function takes no arguments; arity is enforced by the registry.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -35,5 +35,5 @@ fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers `spl_classes()` by delegating to the static SPL class-name array emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::spl::lower_spl_classes(ctx, inst)
+    crate::codegen::lower_inst::builtins::spl::lower_spl_classes(ctx, inst)
 }

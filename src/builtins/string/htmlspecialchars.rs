@@ -14,8 +14,8 @@
 //!   `__rt_htmlspecialchars`.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -34,5 +34,5 @@ fn lower(
     ctx: &mut FunctionContext,
     inst: &Instruction,
 ) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_html_escape(ctx, inst, "htmlspecialchars")
+    crate::codegen::lower_inst::builtins::strings::lower_html_escape(ctx, inst, "htmlspecialchars")
 }

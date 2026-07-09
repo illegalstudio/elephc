@@ -671,6 +671,7 @@ pub(super) fn parse_named_expr(
             ))
         } else {
             let args = parse_args(tokens, pos, span)?;
+            let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
             Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
         }
     } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
@@ -685,6 +686,7 @@ pub(super) fn parse_named_expr(
                     // dynamic-dispatch path, exactly like the variable-receiver form `$c::$m()`.
                     *pos += 1; // consume '('
                     let dynamic_args = parse_args(tokens, pos, span)?;
+                    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                     crate::parser::expr::pratt::reject_named_args_in_dynamic_call(
                         &dynamic_args,
                         span,
@@ -754,6 +756,7 @@ pub(super) fn parse_named_expr(
                 ))
             } else {
                 let args = parse_args(tokens, pos, span)?;
+                let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                 Ok(Expr::new(
                     ExprKind::StaticMethodCall {
                         receiver: StaticReceiver::Named(name),
@@ -813,13 +816,15 @@ pub(super) fn parse_new_object(
     if let Some(receiver) = scoped_receiver {
         *pos += 1;
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-            return Err(CompileError::new(
+            reject_parenthesis_free_new_postfix(tokens, *pos)?;
+            return Ok(Expr::new(
+                ExprKind::NewScopedObject { receiver, args: Vec::new() },
                 span,
-                "Expected '(' after self/static/parent",
             ));
         }
         *pos += 1;
         let args = parse_args(tokens, pos, span)?;
+        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
         return Ok(Expr::new(
             ExprKind::NewScopedObject { receiver, args },
             span,
@@ -832,13 +837,18 @@ pub(super) fn parse_new_object(
         let var_name = name.clone();
         *pos += 1;
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-            return Err(CompileError::new(
+            reject_dynamic_new_class_reference(tokens, *pos)?;
+            return Ok(Expr::new(
+                ExprKind::NewDynamic {
+                    name_expr: Box::new(Expr::new(ExprKind::Variable(var_name), span)),
+                    args: Vec::new(),
+                },
                 span,
-                "Expected '(' after class-name variable in 'new $var('",
             ));
         }
         *pos += 1;
         let args = parse_args(tokens, pos, span)?;
+        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
         return Ok(Expr::new(
             ExprKind::NewDynamic {
                 name_expr: Box::new(Expr::new(ExprKind::Variable(var_name), span)),
@@ -850,9 +860,51 @@ pub(super) fn parse_new_object(
 
     let class_name = parse_name(tokens, pos, span, "Expected class name after 'new'")?;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-        return Err(CompileError::new(span, "Expected '(' after class name"));
+        reject_parenthesis_free_new_postfix(tokens, *pos)?;
+        return Ok(Expr::new(ExprKind::NewObject { class_name, args: Vec::new() }, span));
     }
     *pos += 1;
     let args = parse_args(tokens, pos, span)?;
+    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
     Ok(Expr::new(ExprKind::NewObject { class_name, args }, span))
+}
+
+/// Rejects postfix access that would otherwise bind to `new Foo` without constructor parentheses.
+fn reject_parenthesis_free_new_postfix(
+    tokens: &[(Token, Span)],
+    pos: usize,
+) -> Result<(), CompileError> {
+    if let Some((token, token_span)) = tokens.get(pos) {
+        if is_new_without_parens_postfix(token) {
+            return Err(CompileError::new(
+                *token_span,
+                "Parentheses are required before accessing a parenthesis-free new expression",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Rejects unsupported dynamic class-name references before they become object postfix access.
+fn reject_dynamic_new_class_reference(
+    tokens: &[(Token, Span)],
+    pos: usize,
+) -> Result<(), CompileError> {
+    if let Some((token, token_span)) = tokens.get(pos) {
+        if is_new_without_parens_postfix(token) {
+            return Err(CompileError::new(
+                *token_span,
+                "Dynamic class-name expressions after 'new' are not supported",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Returns true for postfix tokens that cannot follow a parenthesis-free `new Foo` in PHP.
+fn is_new_without_parens_postfix(token: &Token) -> bool {
+    matches!(
+        token,
+        Token::Arrow | Token::QuestionArrow | Token::DoubleColon | Token::LBracket
+    )
 }

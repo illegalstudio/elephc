@@ -2,7 +2,7 @@
 title: "__elephc_strtotime_raw() — internals"
 description: "Compiler internals for __elephc_strtotime_raw(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 446
+  order: 451
 ---
 
 ## `__elephc_strtotime_raw()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_strtotime_raw.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_strtotime_raw.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:543](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L543) (`lower_elephc_strtotime_raw`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:543](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L543) (`lower_elephc_strtotime_raw`)
 - **Function symbol**: `lower_elephc_strtotime_raw()`
 
 

@@ -2,7 +2,7 @@
 title: "ucfirst() — internals"
 description: "Compiler internals for ucfirst(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 398
+  order: 403
 ---
 
 ## `ucfirst()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/ucfirst.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ucfirst.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:96](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L96) (`lower_ucfirst`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:96](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L96) (`lower_ucfirst`)
 - **Function symbol**: `lower_ucfirst()`
 
 
