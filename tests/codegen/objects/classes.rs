@@ -511,3 +511,31 @@ echo $u->id();
     );
     assert_eq!(out, "7");
 }
+
+/// Array element covariance into a declared `array<Object>` parameter. A spread literal
+/// `[...$list, $x]` types as `Array(Mixed)`, and a method-call element `[$this->mk()]` types as
+/// `Array(Mixed)` too (its storage type is Mixed, not the syntactic `Int` that would int-cast
+/// the object at the element store) — both must be accepted for a declared object-element array
+/// and run byte-parity through a fluent builder.
+#[test]
+fn test_array_element_covariance_spread_and_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+interface CondI { public function label(): string; }
+final class Leaf implements CondI { public function __construct(public string $x) {} public function label(): string { return "L:".$this->x; } }
+final class Group implements CondI { public function __construct(public string $op) {} public function label(): string { return "G:".$this->op; } }
+final class Builder {
+    /** @param list<CondI> $conditions */
+    public function __construct(private array $conditions) {}
+    /** @param list<CondI> $conditions */
+    private function withConditions(array $conditions): self { return new self($conditions); }
+    private function mkGroup(string $op): Group { return new Group($op); }
+    public function addLeaf(Leaf $c): self { return $this->withConditions([...$this->conditions, $c]); }
+    public function addGroup(string $op): self { return $this->withConditions([$this->mkGroup($op)]); }
+    public function render(): string { $o = ""; foreach ($this->conditions as $c) { $o .= $c->label() . "|"; } return $o; }
+}
+echo (new Builder([new Leaf("a")]))->addLeaf(new Leaf("b"))->addGroup("AND")->render();
+"#,
+    );
+    assert_eq!(out, "G:AND|");
+}

@@ -206,6 +206,18 @@ impl Checker {
                 PhpType::AssocArray { key, value },
                 PhpType::Array(_) | PhpType::AssocArray { .. },
             ) if **key == PhpType::Mixed && **value == PhpType::Mixed => true,
+            // Array element covariance for a declared `Array(T)` parameter. The PHP
+            // parameter is a bare `array` and PHP does NOT enforce the `@param
+            // array<T>` element type at runtime, so the declared element type is a
+            // hint, not a hard bound. Accept an `Array(Mixed)` (a spread literal
+            // `[...$list, $x]` or an adaptive local — codegen boxes the elements
+            // adaptively) or an element-compatible array in either covariance
+            // direction. This mirrors the whole-value `(_, Mixed) => true` trust
+            // posture, one container level down.
+            (PhpType::Array(expected_elem), PhpType::Array(actual_elem)) => {
+                Self::types_compatible(expected_elem, actual_elem)
+                    || Self::types_compatible(actual_elem, expected_elem)
+            }
             (PhpType::Float, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) => true,
             (PhpType::Int, PhpType::Bool | PhpType::False | PhpType::Void) => true,
             (PhpType::Bool, PhpType::Int | PhpType::Void) => true,

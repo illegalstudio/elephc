@@ -6907,6 +6907,16 @@ fn array_literal_element_type_for_ir(
             property,
         )
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+        // A method-call element has no resolved storage type here (unlike a free
+        // `FunctionCall`, whose signature is looked up above) — the syntactic
+        // fallback reduces it to `Int`, so an object-returning method (`[$this->mk()]`)
+        // would be stored in an `Array(Int)` and int-cast at the element store (a
+        // hard backend error). Store method-call elements as `Mixed`: an
+        // adaptive-boxed array is run-clean for objects and every other return type,
+        // and matches the `Array(Mixed)` covariance the call boundary now accepts.
+        ExprKind::MethodCall { .. }
+        | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::StaticMethodCall { .. } => PhpType::Mixed,
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
     }
 }
