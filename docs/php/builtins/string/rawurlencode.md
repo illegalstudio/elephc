@@ -2,7 +2,7 @@
 title: "rawurlencode()"
 description: "URL-encodes a string using RFC 3986 percent-encoding (no '+' for spaces)."
 sidebar:
-  order: 376
+  order: 377
 ---
 
 ## rawurlencode()

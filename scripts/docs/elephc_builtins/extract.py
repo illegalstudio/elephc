@@ -50,6 +50,7 @@ from registry import (  # noqa: E402  (sys.path tweak above)
     PARAM_TYPES,
     Parameter,
     RETURN_TYPE_OVERRIDES,
+    RUNTIME_HELPER_OVERRIDES,
     slug,
 )
 
@@ -540,6 +541,8 @@ def build_registry(repo: Path) -> list[Builtin]:
         lowering = resolve_lowering(
             repo, read, dispatch, lowering_dir, emitter_fn, home_rel
         )
+        if canonical in RUNTIME_HELPER_OVERRIDES:
+            lowering.runtime_helpers = RUNTIME_HELPER_OVERRIDES[canonical]
 
         description = DESCRIPTION_OVERRIDES.get(canonical, "")
         if not description:
