@@ -3523,7 +3523,6 @@ fn require_static_method_callback_param_types(
     sig: &crate::types::FunctionSig,
     visible_arg_types: &[PhpType],
 ) -> Result<()> {
-    let mut needs_mixed_boxes = false;
     for ((_, param_ty), visible_ty) in sig.params.iter().zip(visible_arg_types.iter()) {
         let param_ty = param_ty.codegen_repr();
         let visible_ty = visible_ty.codegen_repr();
@@ -3531,7 +3530,6 @@ fn require_static_method_callback_param_types(
             continue;
         }
         if param_ty == PhpType::Mixed {
-            needs_mixed_boxes = true;
             continue;
         }
         if matches!((&param_ty, &visible_ty), (PhpType::Int | PhpType::Bool, PhpType::Int | PhpType::Bool)) {
@@ -3543,18 +3541,6 @@ fn require_static_method_callback_param_types(
         return Err(CodegenIrError::unsupported(format!(
             "{} '{}' with callback param type {:?} for runtime arg type {:?}",
             owner, callback_name, param_ty, visible_ty
-        )));
-    }
-    if needs_mixed_boxes
-        && matches!(
-            sig.return_type.codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar
-        )
-    {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} '{}' with boxed callback args and alias-sensitive return type",
-            owner,
-            callback_name
         )));
     }
     Ok(())
@@ -3814,9 +3800,20 @@ fn cleanup_callback_boxed_args(
     if !callback_wrapper_has_boxed_args(frame) {
         return;
     }
+    if callback_return_may_alias_boxed_args(return_ty) {
+        return;
+    }
     save_callback_return_value(ctx, frame, return_ty);
     release_callback_boxed_args(ctx, frame);
     restore_callback_return_value(ctx, frame, return_ty);
+}
+
+/// Returns true when the callback result may be one of the boxed wrapper arguments.
+fn callback_return_may_alias_boxed_args(return_ty: &PhpType) -> bool {
+    matches!(
+        return_ty.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar
+    )
 }
 
 /// Emits a local wrapper that prepends the hidden static called-class id.

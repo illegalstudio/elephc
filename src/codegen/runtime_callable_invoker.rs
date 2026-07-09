@@ -576,7 +576,13 @@ fn emit_loaded_indexed_array_callback_call(
         abi::emit_jump(emitter, &loop_label);
         emitter.label(&loop_done_label);
         emitter.label(&done_label);
-        arg_types.push(PhpType::Array(Box::new(variadic_elem_ty)));
+        let variadic_ty = PhpType::Array(Box::new(variadic_elem_ty));
+        if variadic_param_is_by_ref(sig) {
+            wrap_pushed_value_in_ref_cell(emitter, &variadic_ty);
+            arg_types.push(PhpType::Int);
+        } else {
+            arg_types.push(variadic_ty);
+        }
     }
 
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
@@ -681,7 +687,12 @@ fn emit_loaded_assoc_array_callback_call(
             ctx,
             data,
         );
-        arg_types.push(variadic_ty);
+        if variadic_param_is_by_ref(sig) {
+            wrap_pushed_value_in_ref_cell(emitter, &variadic_ty);
+            arg_types.push(PhpType::Int);
+        } else {
+            arg_types.push(variadic_ty);
+        }
     }
 
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
@@ -704,6 +715,16 @@ fn callback_arg_target_ty<'a>(
     } else {
         None
     }
+}
+
+/// Returns whether the visible variadic parameter is declared by-reference.
+fn variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
+    sig.variadic.is_some()
+        && sig
+            .ref_params
+            .get(sig.params.len().saturating_sub(1))
+            .copied()
+            .unwrap_or(false)
 }
 
 /// Returns the declared target PHP type for a parameter.
@@ -1171,6 +1192,20 @@ fn push_current_result_ref_arg_address(
     store_pushed_value_to_ref_cell(emitter, cell_reg, &pushed_ty);
     abi::emit_push_reg(emitter, cell_reg);
     PhpType::Int
+}
+
+/// Wraps the value currently on top of the invoker stack in a heap reference cell.
+fn wrap_pushed_value_in_ref_cell(emitter: &mut Emitter, val_ty: &PhpType) {
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    let cell_reg = abi::symbol_scratch_reg(emitter);
+    emitter.instruction(&format!(
+        "mov {}, {}",
+        cell_reg,
+        abi::int_result_reg(emitter)
+    ));
+    store_pushed_value_to_ref_cell(emitter, cell_reg, val_ty);
+    abi::emit_push_reg(emitter, cell_reg);
 }
 
 /// Stores a just-pushed value into a heap reference cell.
