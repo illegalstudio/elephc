@@ -132,7 +132,7 @@ fn test_example_interfaces_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/interfaces/main.php"));
     // `isset(...) . "\n"`: a bool false stringifies to "" (not "0") in PHP, so the
     // post-unset isset line is empty.
-    assert_eq!(out, "WIDGET\nA-42\n1\n\n");
+    assert_eq!(out, "WIDGET\nproduct\nA-42\n1\n\n");
 }
 
 /// Verifies an interface with a read-only property (`get;`) can be satisfied by a concrete property.
@@ -210,23 +210,75 @@ echo $product->name;
     assert_eq!(out, "widget");
 }
 
-/// EC-4 (#487): PHP 8.3+ static interface methods. An interface may declare a `static` method;
-/// an implementing class satisfies it with a static method, dispatched by class. Byte-parity.
+/// Verifies a PHP 8.3+ static interface method: an interface may declare a `static` method,
+/// and an implementing class satisfies it with a static method, dispatched by class.
+/// Fixture: interface `Previewable` with `static previews(): array`, final `C` implementing it.
 #[test]
 fn test_static_interface_method() {
     let out = compile_and_run(
-        "<?php declare(strict_types=1); interface Previewable { public static function previews(): array; } final class C implements Previewable { public static function previews(): array { return ['a', 'b', 'c']; } } echo implode(',', C::previews());",
+        r#"<?php
+interface Previewable {
+    public static function previews(): array;
+}
+
+final class C implements Previewable {
+    public static function previews(): array {
+        return ['a', 'b', 'c'];
+    }
+}
+
+echo implode(',', C::previews());
+"#,
     );
     assert_eq!(out, "a,b,c");
 }
 
-/// EC-9 (#492): `#[\Override]` on a static interface-method implementation is valid
-/// (the override target is the interface's static method, matched via InterfaceInfo.static_methods).
-/// Byte-parity vs PHP 8.5.
+/// Verifies a concrete child satisfies a static interface method when the interface is
+/// implemented by an abstract parent class, and `#[\Override]` on the child's static
+/// implementation resolves through the parent's inherited interfaces.
+#[test]
+fn test_static_interface_method_via_abstract_parent() {
+    let out = compile_and_run(
+        r#"<?php
+interface Previewable {
+    public static function previews(): array;
+}
+
+abstract class Base implements Previewable {
+}
+
+class C extends Base {
+    #[\Override]
+    public static function previews(): array {
+        return ['x', 'y'];
+    }
+}
+
+echo implode(',', C::previews());
+"#,
+    );
+    assert_eq!(out, "x,y");
+}
+
+/// Verifies `#[\Override]` is accepted on a static interface-method implementation
+/// (the override target is the interface's static method, matched via `InterfaceInfo.static_methods`).
 #[test]
 fn test_override_on_static_interface_method() {
     let out = compile_and_run(
-        "<?php declare(strict_types=1); interface Previewable { public static function previews(): array; } final class C implements Previewable { #[\\Override] public static function previews(): array { return ['a', 'b']; } } echo implode(',', C::previews());",
+        r#"<?php
+interface Previewable {
+    public static function previews(): array;
+}
+
+final class C implements Previewable {
+    #[\Override]
+    public static function previews(): array {
+        return ['a', 'b'];
+    }
+}
+
+echo implode(',', C::previews());
+"#,
     );
     assert_eq!(out, "a,b");
 }
