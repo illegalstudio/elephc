@@ -47,6 +47,28 @@ class Product implements Named {
 - signature-only methods and PHP 8.4 property hook contracts; method and hook bodies are not allowed in interfaces
 - interface inheritance flattened transitively with cycle detection
 
+Interfaces may also declare `static` methods (PHP 8.3+). A concrete implementing
+class must provide a compatible public static method (an instance method does
+not satisfy the contract); an abstract class may defer it to a concrete child.
+Dispatch is by class name — static interface methods take no vtable slot.
+`#[\Override]` is accepted on a static implementation, matching the interface's
+static declaration.
+
+```php
+<?php
+interface Previewable {
+    public static function previews(): array;
+}
+
+class Card implements Previewable {
+    public static function previews(): array {
+        return ["front", "back"];
+    }
+}
+
+echo implode(",", Card::previews());
+```
+
 Interface properties must be hooked contracts. A concrete class can satisfy a `{ get; }` contract with a public readable property, a `{ set; }` contract with a public writable property, or both with an invariant public property. Get-only contracts allow covariant concrete types; set-only contracts allow contravariant concrete types.
 
 ```php

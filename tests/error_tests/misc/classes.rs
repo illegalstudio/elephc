@@ -435,6 +435,36 @@ fn test_error_missing_interface_method() {
     );
 }
 
+/// Verifies the error diagnostic for a missing static interface method (PHP 8.3+).
+#[test]
+fn test_error_missing_static_interface_method() {
+    // a concrete class implementing an interface must provide all its static methods.
+    expect_error(
+        "<?php interface Previewable { public static function previews(): array; } class User implements Previewable {}",
+        "Class User must implement static interface method Previewable::previews",
+    );
+}
+
+/// Verifies a concrete child must implement a static interface method deferred by an abstract parent.
+#[test]
+fn test_error_concrete_child_missing_static_interface_method_via_abstract_parent() {
+    // an abstract class may defer a static interface method, but its concrete child must provide it.
+    expect_error(
+        "<?php interface Previewable { public static function previews(): array; } abstract class Base implements Previewable {} class User extends Base {}",
+        "Class User must implement static interface method Previewable::previews",
+    );
+}
+
+/// Verifies an instance method does not satisfy a static interface method contract.
+#[test]
+fn test_error_instance_method_does_not_satisfy_static_interface_method() {
+    // the implementing method must itself be static; an instance method leaves the contract unmet.
+    expect_error(
+        "<?php interface Previewable { public static function previews(): array; } class User implements Previewable { public function previews(): array { return []; } }",
+        "Class User must implement static interface method Previewable::previews",
+    );
+}
+
 /// Verifies the error diagnostic for wrong signature vs interface.
 #[test]
 fn test_error_wrong_signature_vs_interface() {

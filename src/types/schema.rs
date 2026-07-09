@@ -100,6 +100,11 @@ pub struct InterfaceInfo {
     pub method_declaring_interfaces: HashMap<String, String>,
     pub method_order: Vec<String>,
     pub method_slots: HashMap<String, usize>,
+    /// Static interface methods (PHP 8.3+), keyed by method key. Recorded separately from
+    /// instance `methods` — static dispatch is by class, so they take no vtable slot.
+    pub static_methods: HashMap<String, FunctionSig>,
+    /// Declaration order of `static_methods`, for deterministic conformance checking.
+    pub static_method_order: Vec<String>,
     /// Interface constants (PHP 5.0+). Inherited from parent interfaces.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
 }
