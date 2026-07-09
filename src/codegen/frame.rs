@@ -19,7 +19,7 @@ use crate::codegen::{
     emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
 };
 use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
-use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, ValueDef, ValueId};
+use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, Ownership, ValueDef, ValueId};
 use crate::ir_passes::{allocate_registers, Allocation};
 use crate::names::ir_global_symbol;
 use crate::types::PhpType;
@@ -1032,10 +1032,40 @@ fn return_cleanup_skip_slot_inner(
             if local_load_transfers_stored_owner(&local_ty, result_ty)
                 && return_preserves_result_owner(result_ty, return_ty)
             {
-                Some(slot)
-            } else {
-                None
+                return Some(slot);
             }
+            // Borrowed Mixed→refcounted unbox: loading a Mixed/union local as a
+            // refcounted payload (Object/Str/Array/AssocArray/Callable/Iterable) goes
+            // through `__rt_mixed_unbox`, which increfs ONLY when the load result is
+            // `Ownership::Owned`. A `MaybeOwned`/`Borrowed` load (the common case for a
+            // union local like DatePeriod::current's `slot[1]`, which holds either a
+            // DateTime or a DateTimeImmutable) hands the caller a raw pointer into the
+            // Mixed cell's payload with no matching retain. If the return epilogue then
+            // `__rt_decref_mixed`s the source local, it frees the cell AND the payload
+            // the caller now holds — so `$dt->format()` reads a freed object ("Call to a
+            // member function format() on null"). Skip the source local on this return
+            // path so the cell survives until the caller is done with the borrowed
+            // payload, mirroring the pre-#481 `direct_return_local_slots` exclusion that
+            // never released a local whose load fed a return. An `Owned` load increfs
+            // its own reference and is left to the epilogue (no skip) to avoid leaking
+            // the cell. The return lowering passes a refcounted result straight to the
+            // caller unless the declared return type is `Mixed` (which would re-box into
+            // a fresh cell and needs no skip), so we only check that `return_ty` is a
+            // refcounted non-Mixed type — not class-exact equality, since a function
+            // declared `-> Object` returning an `Object(DateTime)` load must still skip.
+            if local_ty == PhpType::Mixed
+                && *result_ty != PhpType::Mixed
+                && cleanup_tracked_codegen_type(result_ty)
+                && *return_ty != PhpType::Mixed
+                && cleanup_tracked_codegen_type(return_ty)
+                && !matches!(
+                    function.value(value)?.ownership,
+                    Ownership::Owned
+                )
+            {
+                return Some(slot);
+            }
+            None
         }
         Op::ArrayToMixed | Op::HashToMixed => {
             let source = *inst.operands.first()?;

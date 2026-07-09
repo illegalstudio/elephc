@@ -15,7 +15,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{emit_box_current_value_as_mixed, emit_box_current_owned_value_as_mixed};
-use crate::ir::{Instruction, LocalSlot, LocalSlotId, ValueId};
+use crate::ir::{Function, Instruction, LocalSlot, LocalSlotId, Op, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -87,7 +87,26 @@ pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Ins
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         loaded_ty = PhpType::Int;
     }
-    if loaded_ty.is_refcounted() {
+    // Give the static slot its own persistent reference to the stored value — but
+    // ONLY when EIR lowering still `release`s that value elsewhere in the function.
+    //
+    // The store overwrites the slot symbol with the value's pointer; whether it must
+    // ALSO incref depends on whether EIR lowering transfers ownership into the store
+    // or keeps the value live afterward:
+    //   * Kept live (a trailing `Op::Release` exists) — e.g. `static $count = 0;
+    //     return ++$count;`, where the overflow-checked `++` yields a boxed Mixed that
+    //     is stored, then read by the `return` cast, then `release`d. The store must
+    //     incref so the slot's copy survives that release; without it the trailing
+    //     release frees the cell and a persistent `--web-worker` loses the accumulated
+    //     value across requests.
+    //   * Transferred (no trailing `Release`) — e.g. `static $map = []; $map[$k] = 'v';`,
+    //     where the freshly built hash is the store's sole consumer. EIR lowering emits
+    //     no release, so the value's single reference belongs to the slot. Increffing
+    //     here double-counts and leaks the whole growing container (allocs=1025
+    //     frees=125 over 40 iterations). `box_current_result_for_static_slot`'s
+    //     owned-source path already moved that reference into the fresh Mixed cell.
+    // Mirrors the EIR model where the release site, not the store, decides ownership.
+    if loaded_ty.is_refcounted() && value_released_elsewhere(ctx.function, value) {
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty);
     }
     box_current_result_for_static_slot(ctx, &slot, value, &source_ty)?;
@@ -173,6 +192,22 @@ fn release_orphaned_initializer_temp(ctx: &mut FunctionContext<'_>, value: Value
         }
     }
     Ok(())
+}
+
+/// Returns whether EIR lowering emits an `Op::Release` for `value` anywhere in the
+/// function — i.e. the value is kept live past its store and its reference is not
+/// transferred into the static slot.
+///
+/// A static-local store must incref only when this is true: a trailing release would
+/// otherwise free the slot's copy of a still-live value (breaking `--web-worker`
+/// persistence), while a value with no release has transferred its sole reference
+/// into the slot and must not be double-counted. SSA values are single-assignment,
+/// so scanning every instruction's operands for a `Release` referencing `value` is a
+/// position-independent read of that ownership intent.
+fn value_released_elsewhere(function: &Function, value: ValueId) -> bool {
+    function.instructions.iter().any(|inst| {
+        inst.op == Op::Release && inst.operands.iter().any(|operand| *operand == value)
+    })
 }
 
 /// Boxes the current result into the Mixed slot representation when the static

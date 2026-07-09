@@ -67,3 +67,41 @@ pub(crate) fn collect_cycles(ctx: &mut LoweringContext<'_, '_>, span: Option<Spa
 pub(crate) fn may_require_release(ownership: Ownership) -> bool {
     matches!(ownership, Ownership::Owned | Ownership::MaybeOwned)
 }
+
+/// Releases a boxed `Mixed` temporary produced by overflow-checked integer
+/// arithmetic and consumed by a scalar (`int`/`float`/`bool`) cast or coercion whose
+/// unboxed result cannot alias the source cell.
+///
+/// `ICheckedAdd`/`ICheckedSub`/`ICheckedMul` box their result into a fresh `Mixed`
+/// cell (to carry an overflow-promoted float). When such a result feeds only a scalar
+/// cast/coercion — e.g. the `$i * 2` narrowed to fill an `array<int>` element on
+/// `$arr[$i] = $i * 2` — the cast reads the payload into a fresh scalar register and
+/// the box has no remaining consumer, yet the emitting `Op::Cast` carries no trailing
+/// `release`, so the cell leaks one per cast/coercion. Emitting the release here fixes
+/// that. Shared by the explicit-cast path (`expr::lower_cast`) and the implicit
+/// numeric-coercion path (`stmt::coerce_to_int`/`coerce_to_float`).
+///
+/// Scoped narrowly to a checked-arithmetic `Mixed` producer on purpose: a general
+/// "owning `Mixed` temporary" would also match an `Op::Acquire`d value that is stored
+/// elsewhere and released by its own lifecycle (e.g. `static $c = 0; return ++$c;`,
+/// where the `++` box is stored into the static AND cast for the return AND already
+/// `release`d twice) — releasing there over-frees the cell and breaks `--web-worker`
+/// state persistence. A checked-arithmetic result has no such second consumer.
+pub(crate) fn release_unboxed_scalar_source_if_owned(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Option<Span>,
+) {
+    if !matches!(
+        ctx.builder.value_defining_op(source.value),
+        Some(Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+    ) {
+        return;
+    }
+    if matches!(
+        ctx.builder.value_php_type(source.value).codegen_repr(),
+        crate::types::PhpType::Mixed
+    ) {
+        release_if_owned(ctx, source, span);
+    }
+}

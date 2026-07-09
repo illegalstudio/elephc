@@ -3181,14 +3181,18 @@ fn coerce_to_int(
             Op::StrToI.default_effects(),
             span,
         ),
-        _ => ctx.emit_value(
-            Op::Cast,
-            vec![value.value],
-            Some(Immediate::CastTarget(IrType::I64)),
-            PhpType::Int,
-            Op::Cast.default_effects(),
-            span,
-        ),
+        _ => {
+            let result = ctx.emit_value(
+                Op::Cast,
+                vec![value.value],
+                Some(Immediate::CastTarget(IrType::I64)),
+                PhpType::Int,
+                Op::Cast.default_effects(),
+                span,
+            );
+            crate::ir_lower::ownership::release_unboxed_scalar_source_if_owned(ctx, value, span);
+            result
+        }
     }
 }
 
@@ -3216,14 +3220,18 @@ fn coerce_to_float(
             Op::StrToF.default_effects(),
             span,
         ),
-        _ => ctx.emit_value(
-            Op::Cast,
-            vec![value.value],
-            Some(Immediate::CastTarget(IrType::F64)),
-            PhpType::Float,
-            Op::Cast.default_effects(),
-            span,
-        ),
+        _ => {
+            let result = ctx.emit_value(
+                Op::Cast,
+                vec![value.value],
+                Some(Immediate::CastTarget(IrType::F64)),
+                PhpType::Float,
+                Op::Cast.default_effects(),
+                span,
+            );
+            crate::ir_lower::ownership::release_unboxed_scalar_source_if_owned(ctx, value, span);
+            result
+        }
     }
 }
 

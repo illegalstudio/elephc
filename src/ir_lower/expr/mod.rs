@@ -7682,8 +7682,23 @@ fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr
         Op::Cast.default_effects(),
         Some(expr.span),
     );
-    if matches!(target, CastType::String) {
-        release_stringified_source_if_owned(ctx, value, Some(expr.span));
+    match target {
+        CastType::String => release_stringified_source_if_owned(ctx, value, Some(expr.span)),
+        // A scalar cast (`(int)`, `(float)`, `(bool)`) unboxes a boxed `Mixed`
+        // source to an independent scalar via `__rt_mixed_cast_*`; the produced
+        // scalar cannot alias the source box, so a throwaway checked-arithmetic
+        // `Mixed` temporary would otherwise leak. `Op::Cast` is a consuming op
+        // (ir_lower emits no trailing `release` for its operand, unlike the borrowing
+        // `array_push`), so the release must be emitted here. See the helper for why
+        // it is scoped to checked-arithmetic producers only.
+        CastType::Int | CastType::Float | CastType::Bool => {
+            crate::ir_lower::ownership::release_unboxed_scalar_source_if_owned(
+                ctx,
+                value,
+                Some(expr.span),
+            );
+        }
+        _ => {}
     }
     result
 }
