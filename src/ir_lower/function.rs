@@ -1154,17 +1154,18 @@ fn magic_method_param_keeps_eir_contract(
         }
         "__call" | "__callstatic" => {
             // The $args array keeps its contract only once call sites have
-            // specialized the element type to Mixed. The checker seeds it as
+            // specialized the element type. The checker seeds it as
             // Array<Never>; eval-only magic calls never specialize it, and a
             // Never element would lower every $args[N] read to an empty
-            // constant, so those fall back to the boxed Mixed widening. Other
-            // element types must widen too: the invoker's Mixed→Array pass
-            // hands over boxed-Mixed element cells unconverted.
+            // constant, so those fall back to the boxed Mixed widening.
             (param_index == 0 && matches!(php_type.codegen_repr(), PhpType::Str))
                 || (param_index == 1
-                    && matches!(
-                        php_type.codegen_repr(),
-                        PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Mixed)
+                    && matches!(php_type.codegen_repr(), PhpType::Array(_))
+                    // Check the raw element type: codegen_repr normalizes the
+                    // Never seed to Void and would hide it.
+                    && !matches!(
+                        php_type,
+                        PhpType::Array(elem) if matches!(elem.as_ref(), PhpType::Never)
                     ))
         }
         _ => false,

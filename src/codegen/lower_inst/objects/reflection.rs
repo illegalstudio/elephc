@@ -3922,20 +3922,19 @@ fn reflection_parameter_members_with_declaring_function(
     for (index, (name, ty)) in sig.params.iter().enumerate() {
         let is_variadic = sig.variadic.as_deref() == Some(name.as_str());
         // `declared_params` doubles as the runtime invoker's boxed-ABI marker
-        // (see `eir_runtime_metadata_signature`), so untyped params widened to
-        // Mixed carry a true flag. The source type hint disambiguates: a
-        // parameter only hasType() when the source actually declared one.
+        // (see `eir_runtime_metadata_signature`), which only ever raises the
+        // flag for Mixed/Union params. Non-Mixed declared params are always
+        // genuine (source hints, builtin signatures, variadics); a declared
+        // Mixed param needs the source type expression to distinguish a real
+        // `mixed` hint from an untyped param widened for the boxed ABI.
         let declared = sig.declared_params.get(index).copied().unwrap_or(false);
-        let has_type = if sig.param_type_exprs.len() == sig.params.len() {
-            declared
-                && sig
+        let has_type = declared
+            && (!matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+                || sig
                     .param_type_exprs
                     .get(index)
                     .and_then(Option::as_ref)
-                    .is_some()
-        } else {
-            declared
-        };
+                    .is_some());
         let type_metadata = reflection_parameter_type_metadata(
             sig.param_type_exprs.get(index).and_then(Option::as_ref),
             ty,
