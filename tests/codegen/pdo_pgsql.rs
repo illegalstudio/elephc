@@ -209,3 +209,40 @@ fn test_pgsql_get_pid() {
     );
     assert_eq!(out, "pid-ok");
 }
+
+/// `Pdo\Pgsql::lobCreate()` returns a new large object's OID (a numeric string) and
+/// `lobUnlink()` deletes it, both driven against the live server.
+#[test]
+#[ignore]
+fn test_pgsql_lob_create_unlink() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
+$oid = $db->lobCreate();
+$ok = ($oid !== false && is_numeric($oid)) ? "1" : "0";
+$unlinked = $db->lobUnlink((string) $oid) ? "1" : "0";
+echo $ok . $unlinked;
+"#,
+    );
+    assert_eq!(out, "11");
+}
+
+/// `Pdo\Pgsql::copyFromArray()` streams rows into a table via COPY FROM STDIN and
+/// `copyToArray()` reads them back via COPY TO STDOUT (default tab/`\N` format).
+#[test]
+#[ignore]
+fn test_pgsql_copy_from_to_array() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
+$db->exec("DROP TABLE IF EXISTS elephc_copy");
+$db->exec("CREATE TABLE elephc_copy (id INT, name TEXT)");
+$ok = $db->copyFromArray("elephc_copy", ["1\tAda", "2\tBob"]) ? "1" : "0";
+$rows = $db->copyToArray("elephc_copy");
+$db->exec("DROP TABLE elephc_copy");
+$joined = implode("", $rows);
+echo $ok . ":" . count($rows) . ":" . (strpos($joined, "Ada") !== false ? "y" : "n") . (strpos($joined, "Bob") !== false ? "y" : "n");
+"#,
+    );
+    assert_eq!(out, "1:2:yy");
+}

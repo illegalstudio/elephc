@@ -147,6 +147,14 @@ fn last_insert_id_text_cell() -> &'static Mutex<CString> {
     C.get_or_init(|| Mutex::new(CString::default()))
 }
 
+/// Static buffer for the most recent PostgreSQL text result returned to PHP
+/// (`elephc_pdo_lob_create` / `elephc_pdo_copy_out`). Shared because each result is
+/// copied into an owned PHP string before the next call writes the cell.
+fn pg_text_result_cell() -> &'static Mutex<CString> {
+    static C: OnceLock<Mutex<CString>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(CString::default()))
+}
+
 /// Stores `s` (NUL bytes stripped) into the per-result static `cell` and returns
 /// a pointer into it. Valid until the next call writing the same cell; elephc
 /// copies it into an owned PHP string on return.
@@ -262,10 +270,12 @@ fn open_persistent_dsn(dsn: &str) -> i64 {
 /// connection/statement SQLSTATE + statement error accessors, boolean/blob binds,
 /// a busy-timeout setter, server version reporting, and a text-valued last-insert
 /// id. v8 adds the PostgreSQL backend-pid and MySQL warning-count accessors that
-/// back `Pdo\Pgsql::getPid()` / `Pdo\Mysql::getWarningCount()`.
+/// back `Pdo\Pgsql::getPid()` / `Pdo\Mysql::getWarningCount()`. v9 adds the
+/// PostgreSQL large-object create/unlink and COPY in/out accessors backing
+/// `Pdo\Pgsql::lobCreate()` / `lobUnlink()` / `copyFrom*()` / `copyTo*()`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    8
+    9
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -584,6 +594,84 @@ pub extern "C" fn elephc_pdo_warning_count(conn_id: i64) -> i64 {
         Some(Conn::Postgres(_)) => 0,
         None => 0,
     }
+}
+
+/// Creates a large object and returns its OID as text for a `pgsql:` connection
+/// (`Pdo\Pgsql::lobCreate()`); empty string for a non-PostgreSQL connection, an
+/// unknown handle, or an error.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_lob_create(conn_id: i64) -> *const c_char {
+    let text = {
+        let mut guard = conns().lock().unwrap();
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Postgres(c)) => c.lob_create(),
+            _ => String::new(),
+        }
+    };
+    store_cstr(pg_text_result_cell(), &text)
+}
+
+/// Deletes a large object by OID for a `pgsql:` connection (`Pdo\Pgsql::lobUnlink()`);
+/// returns 1 on success, 0 for a non-PostgreSQL connection, unknown handle, or error.
+///
+/// # Safety
+/// `oid` must point to a NUL-terminated string valid for the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_lob_unlink(conn_id: i64, oid: *const c_char) -> i64 {
+    let Some(oid) = cstr_arg(oid) else {
+        return 0;
+    };
+    let mut guard = conns().lock().unwrap();
+    match guard.get_mut(&conn_id) {
+        Some(Conn::Postgres(c)) => c.lob_unlink(oid),
+        _ => 0,
+    }
+}
+
+/// Runs a prelude-built `COPY … FROM STDIN` for a `pgsql:` connection, streaming
+/// `data` into it (`Pdo\Pgsql::copyFromArray()` / `copyFromFile()`); returns the row
+/// count copied, or -1 for a non-PostgreSQL connection, unknown handle, or error.
+///
+/// # Safety
+/// `copy_sql` and `data` must point to NUL-terminated strings valid for the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_copy_in(
+    conn_id: i64,
+    copy_sql: *const c_char,
+    data: *const c_char,
+) -> i64 {
+    let (Some(sql), Some(data)) = (cstr_arg(copy_sql), cstr_arg(data)) else {
+        return -1;
+    };
+    let mut guard = conns().lock().unwrap();
+    match guard.get_mut(&conn_id) {
+        Some(Conn::Postgres(c)) => c.copy_in(sql, data.as_bytes()),
+        _ => -1,
+    }
+}
+
+/// Runs a prelude-built `COPY … TO STDOUT` for a `pgsql:` connection and returns the
+/// raw text output (`Pdo\Pgsql::copyToArray()` / `copyToFile()`); empty string for a
+/// non-PostgreSQL connection, unknown handle, or error.
+///
+/// # Safety
+/// `copy_sql` must point to a NUL-terminated string valid for the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_copy_out(
+    conn_id: i64,
+    copy_sql: *const c_char,
+) -> *const c_char {
+    let Some(sql) = cstr_arg(copy_sql) else {
+        return store_cstr(pg_text_result_cell(), "");
+    };
+    let text = {
+        let mut guard = conns().lock().unwrap();
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Postgres(c)) => c.copy_out(sql),
+            _ => String::new(),
+        }
+    };
+    store_cstr(pg_text_result_cell(), &text)
 }
 
 /// Prepares a statement (`PDO::prepare` / `PDO::query`) and returns an `i64`

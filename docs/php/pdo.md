@@ -328,10 +328,12 @@ or at program exit. You do not need to close them explicitly.
   declares its PHP 8.4 driver-specific constants (`Pdo\Sqlite::DETERMINISTIC` /
   `OPEN_*` / `ATTR_*`, `Pdo\Mysql::ATTR_*`, `Pdo\Pgsql::ATTR_*` / `TRANSACTION_*`).
   Driver-specific methods: `Pdo\Pgsql::escapeIdentifier()` (identifier quoting),
-  `Pdo\Pgsql::getPid()` (backend process id), and `Pdo\Mysql::getWarningCount()`
-  (warnings from the last statement). The remaining connection-backed methods
-  (`lob*` / `copy*` / `getNotify`, `loadExtension` / `openBlob`) and the callback
-  methods are not yet provided (see Limitations).
+  `Pdo\Pgsql::getPid()` (backend process id), `Pdo\Mysql::getWarningCount()`
+  (warnings from the last statement), `Pdo\Pgsql::lobCreate()` / `lobUnlink()`
+  (large-object create/delete), and `Pdo\Pgsql::copyFromArray()` / `copyFromFile()` /
+  `copyToArray()` / `copyToFile()` (COPY). The remaining connection-backed methods
+  (`getNotify`, `loadExtension`, and the stream-returning `openBlob` / `lobOpen`)
+  and the callback methods are not yet provided (see Limitations).
 
 ## Limitations
 
@@ -356,11 +358,14 @@ or at program exit. You do not need to close them explicitly.
   only a subclass still injects the prelude), are directly instantiable, inherit
   the full base connection surface, are what `PDO::connect()` returns, and declare
   their driver-specific constants. Implemented driver methods:
-  `Pdo\Pgsql::escapeIdentifier()`, `Pdo\Pgsql::getPid()`, `Pdo\Mysql::getWarningCount()`
-  (the last reflects a preceding direct `exec()`/DML statement; the pure-Rust client
-  does not surface a SELECT's EOF-packet warnings). Still missing: the remaining
-  **connection-backed** methods (`Pdo\Pgsql::lob*` / `copy*` / `getNotify`,
-  `Pdo\Sqlite::loadExtension` / `openBlob`) and the **callback** methods
+  `Pdo\Pgsql::escapeIdentifier()`, `getPid()`, `lobCreate()` / `lobUnlink()`,
+  `copyFromArray()` / `copyFromFile()` / `copyToArray()` / `copyToFile()`, and
+  `Pdo\Mysql::getWarningCount()` (which reflects a preceding direct `exec()`/DML
+  statement; the pure-Rust client does not surface a SELECT's EOF-packet warnings).
+  `copyToArray()` returns an empty array both for an empty table and a transport
+  error (check `errorInfo()`). Still missing: the remaining **connection-backed**
+  methods (`Pdo\Pgsql::getNotify`, `Pdo\Sqlite::loadExtension`, and the
+  stream-returning `openBlob` / `lobOpen`) and the **callback** methods
   (`Pdo\Sqlite::createFunction` / `createAggregate` / `createCollation`,
   `Pdo\Pgsql::setNoticeCallback`), the latter needing a PHP-callable-to-C trampoline
   elephc's FFI does not yet provide. `PDO::connect()` selects the subclass from the

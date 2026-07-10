@@ -89,6 +89,12 @@ extern "elephc_pdo" {
     // connection of a different driver.
     function elephc_pdo_backend_pid(int $conn): int;
     function elephc_pdo_warning_count(int $conn): int;
+    // v9: PostgreSQL large objects + COPY. lob_create returns the new OID as text
+    // (empty on error); copy_out returns the raw COPY TO STDOUT text.
+    function elephc_pdo_lob_create(int $conn): string;
+    function elephc_pdo_lob_unlink(int $conn, string $oid): int;
+    function elephc_pdo_copy_in(int $conn, string $copy_sql, string $data): int;
+    function elephc_pdo_copy_out(int $conn, string $copy_sql): string;
 }
 
 class PDOException extends RuntimeException {
@@ -1077,6 +1083,89 @@ namespace Pdo {
             // The PostgreSQL backend process id serving this connection
             // (`pg_backend_pid()`).
             return \elephc_pdo_backend_pid($this->connectionId());
+        }
+
+        public function lobCreate(): string|bool {
+            // Creates an empty large object and returns its OID as a numeric string,
+            // or false on error (PHP returns the OID as a string).
+            $_oid = \elephc_pdo_lob_create($this->connectionId());
+            return $_oid === "" ? false : $_oid;
+        }
+
+        public function lobUnlink(string $oid): bool {
+            // Deletes the large object with the given OID.
+            return \elephc_pdo_lob_unlink($this->connectionId(), $oid) === 1;
+        }
+
+        private function copyOptions(string $separator, string $nullAs): string {
+            // PostgreSQL COPY text format defaults DELIMITER to a tab and NULL to
+            // "\N", so only emit a WITH clause when the caller overrides them. A tab
+            // delimiter must use the E'\t' escape-string form.
+            if ($separator === "\t" && $nullAs === "\\N") {
+                return "";
+            }
+            $_delim = $separator === "\t" ? "E'\\t'" : "'" . $separator . "'";
+            $_null = "'" . \str_replace("'", "''", $nullAs) . "'";
+            return " WITH (DELIMITER " . $_delim . ", NULL " . $_null . ")";
+        }
+
+        private function copyTarget(string $tableName, ?string $fields): string {
+            // The `table [(col, …)]` prefix shared by the COPY builders.
+            if ($fields !== null) {
+                return $tableName . " (" . $fields . ")";
+            }
+            return $tableName;
+        }
+
+        public function copyFromArray(string $tableName, array $rows, string $separator = "\t", string $nullAs = "\\N", ?string $fields = null): bool {
+            // Each element of $rows is a full line (its fields already joined by
+            // $separator); join them into the newline-terminated stream COPY FROM
+            // STDIN consumes. On error the connection's errorInfo is set by the bridge.
+            $_data = \implode("\n", $rows) . "\n";
+            $_sql = "COPY " . $this->copyTarget($tableName, $fields) . " FROM STDIN"
+                . $this->copyOptions($separator, $nullAs);
+            return \elephc_pdo_copy_in($this->connectionId(), $_sql, $_data) >= 0;
+        }
+
+        public function copyFromFile(string $tableName, string $filename, string $separator = "\t", string $nullAs = "\\N", ?string $fields = null): bool {
+            // Reads the client-side file and streams it as COPY FROM STDIN, matching
+            // PHP's client-side file read.
+            $_data = \file_get_contents($filename);
+            if ($_data === false) {
+                return false;
+            }
+            $_sql = "COPY " . $this->copyTarget($tableName, $fields) . " FROM STDIN"
+                . $this->copyOptions($separator, $nullAs);
+            // Cast to string: the checker does not narrow $_data out of string|false
+            // after the `=== false` guard above, and copy_in's $data param is Str.
+            return \elephc_pdo_copy_in($this->connectionId(), $_sql, (string) $_data) >= 0;
+        }
+
+        public function copyToArray(string $tableName, string $separator = "\t", string $nullAs = "\\N", ?string $fields = null): array {
+            // Returns the table's rows, one array element per row (each keeping its
+            // trailing newline, as PHP's copyToArray does). An empty result yields an
+            // empty array; a transport error also yields an empty array, with the
+            // connection's errorInfo set by the bridge.
+            $_sql = "COPY " . $this->copyTarget($tableName, $fields) . " TO STDOUT"
+                . $this->copyOptions($separator, $nullAs);
+            $_raw = \elephc_pdo_copy_out($this->connectionId(), $_sql);
+            if ($_raw === "") {
+                return [];
+            }
+            $_lines = \explode("\n", \rtrim($_raw, "\n"));
+            $_out = [];
+            foreach ($_lines as $_line) {
+                $_out[] = $_line . "\n";
+            }
+            return $_out;
+        }
+
+        public function copyToFile(string $tableName, string $filename, string $separator = "\t", string $nullAs = "\\N", ?string $fields = null): bool {
+            // Writes the table's COPY TO STDOUT output to the client-side file.
+            $_sql = "COPY " . $this->copyTarget($tableName, $fields) . " TO STDOUT"
+                . $this->copyOptions($separator, $nullAs);
+            $_raw = \elephc_pdo_copy_out($this->connectionId(), $_sql);
+            return \file_put_contents($filename, $_raw) !== false;
         }
     }
 }

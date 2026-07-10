@@ -415,6 +415,88 @@ impl PgConn {
         }
     }
 
+    /// Creates a new empty large object and returns its OID as a decimal string
+    /// (`SELECT lo_create(0)`), or an empty string on error. Backs
+    /// `Pdo\Pgsql::lobCreate()`.
+    pub fn lob_create(&mut self) -> String {
+        match self.client.query_one("SELECT lo_create(0)", &[]) {
+            Ok(row) => row
+                .try_get::<_, u32>(0)
+                .map(|oid| oid.to_string())
+                .unwrap_or_default(),
+            Err(_) => String::new(),
+        }
+    }
+
+    /// Deletes the large object named by `oid` (`SELECT lo_unlink(<oid>)`), returning
+    /// 1 on success and 0 on a non-numeric OID or a server error. Backs
+    /// `Pdo\Pgsql::lobUnlink()`.
+    pub fn lob_unlink(&mut self, oid: &str) -> i64 {
+        let Ok(oid_num) = oid.parse::<u32>() else {
+            return 0;
+        };
+        // oid_num is a validated integer, so inlining it is injection-safe.
+        match self
+            .client
+            .query_one(&format!("SELECT lo_unlink({oid_num})"), &[])
+        {
+            Ok(_) => 1,
+            Err(_) => 0,
+        }
+    }
+
+    /// Streams `data` into the server for a `COPY … FROM STDIN` statement (built by
+    /// the prelude), returning the number of rows copied or -1 on error. Backs
+    /// `Pdo\Pgsql::copyFromArray()` / `copyFromFile()`.
+    pub fn copy_in(&mut self, copy_sql: &str, data: &[u8]) -> i64 {
+        use std::io::Write;
+        // Run the whole COPY in a closure so the writer's borrow of `self.client`
+        // ends before the connection bookkeeping fields (or `fail`) are written.
+        let result: Result<u64, postgres::Error> = (|| {
+            let mut writer = self.client.copy_in(copy_sql)?;
+            // write_all's io::Error is not a postgres::Error; a write failure is
+            // surfaced with the real server error by finish() below.
+            let _ = writer.write_all(data);
+            writer.finish()
+        })();
+        match result {
+            Ok(rows) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                rows as i64
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
+    /// Runs a `COPY … TO STDOUT` statement (built by the prelude) and returns its raw
+    /// text output (rows separated by newlines), or an empty string on error. Backs
+    /// `Pdo\Pgsql::copyToArray()` / `copyToFile()`.
+    pub fn copy_out(&mut self, copy_sql: &str) -> String {
+        use std::io::Read;
+        // Run the COPY in a closure so the reader's borrow of `self.client` ends
+        // before the connection bookkeeping fields (or `fail`) are written.
+        let result: Result<Vec<u8>, postgres::Error> = (|| {
+            let mut reader = self.client.copy_out(copy_sql)?;
+            let mut buf = Vec::new();
+            // read_to_end's io::Error is not a postgres::Error; a partial read still
+            // returns whatever bytes arrived.
+            let _ = reader.read_to_end(&mut buf);
+            Ok(buf)
+        })();
+        match result {
+            Ok(buf) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                String::from_utf8_lossy(&buf).into_owned()
+            }
+            Err(e) => {
+                self.fail(e);
+                String::new()
+            }
+        }
+    }
+
     /// Prepares a statement: translates placeholders and prepares it server-side
     /// for column metadata. Returns the statement or an error message.
     pub fn prepare(&mut self, sql: &str) -> Result<PgStmt, String> {
