@@ -228,6 +228,17 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 ));
             }
             *pos += 1; // consume `const`
+            // PHP 8.3 typed class constant: `const TYPE NAME = value`. An untyped
+            // const has its name directly before `=`; anything else before `=` is a
+            // declared type — speculatively parse and discard it (the annotation does
+            // not affect the value's runtime behaviour, and `ClassConst` carries no
+            // type, so byte-parity with PHP is preserved).
+            if !matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::Assign)) {
+                let before_type = *pos;
+                if parse_type_expr(tokens, pos, member_span).is_err() {
+                    *pos = before_type;
+                }
+            }
             // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
             // which is reserved for the `Foo::class` name fetch.
             let const_name = match tokens.get(*pos).map(|(t, _)| t) {
@@ -663,6 +674,14 @@ fn parse_interface_body(
         }
         if tokens[*pos].0 == Token::Const {
             *pos += 1; // consume `const`
+            // PHP 8.3 typed class constant: `const TYPE NAME = value` — speculatively
+            // parse and discard a declared type before the name (see the class-body site).
+            if !matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::Assign)) {
+                let before_type = *pos;
+                if parse_type_expr(tokens, pos, member_span).is_err() {
+                    *pos = before_type;
+                }
+            }
             // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
             // which is reserved for the `Foo::class` name fetch.
             let const_name = match tokens.get(*pos).map(|(t, _)| t) {
