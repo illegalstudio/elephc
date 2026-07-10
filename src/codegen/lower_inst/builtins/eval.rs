@@ -10609,15 +10609,17 @@ fn store_mixed_scope_cell_to_local(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
             ctx.store_current_result_to_local(local.slot)?;
         }
-        PhpType::Object(_) => {
+        PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            // Objects, arrays, and hashes are heap pointers boxed in the
+            // scope cell; unbox and store the raw payload pointer.
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            let object_reg = match ctx.emitter.target.arch {
+            let payload_reg = match ctx.emitter.target.arch {
                 Arch::AArch64 => "x1",
                 Arch::X86_64 => "rdi",
             };
             let result_reg = abi::int_result_reg(ctx.emitter);
             ctx.emitter
-                .instruction(&format!("mov {}, {}", result_reg, object_reg)); // move unboxed object pointer into the local-store result register
+                .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed heap pointer into the local-store result register
             ctx.store_current_result_to_local(local.slot)?;
         }
         other => {
@@ -10728,7 +10730,9 @@ fn store_missing_scope_entry_to_local(
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
             ctx.store_current_result_to_local(local.slot)?;
         }
-        PhpType::Object(_) => {
+        PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            // Heap-pointer locals fall back to the null pointer when eval
+            // removed the entry, matching the object fallback.
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             ctx.store_current_result_to_local(local.slot)?;
         }
