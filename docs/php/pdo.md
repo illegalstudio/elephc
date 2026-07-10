@@ -293,10 +293,11 @@ per-request heap reset the web runtime performs between requests.
   transaction before closing.
 - **PDOStatement**: `execute`, `bindValue`, `bindParam`, `setFetchMode`, `fetch`,
   `fetchAll`, `fetchColumn`, `fetchObject`, `closeCursor`, `errorCode`,
-  `errorInfo`, `rowCount`, `columnCount`, `__destruct`; Traversable, so a
-  statement can be walked with `foreach`. `fetch*()` on a statement that has not
-  been `execute()`d (or after `closeCursor()`) returns `false` rather than
-  stepping the query.
+  `errorInfo`, `rowCount`, `columnCount`, `getColumnMeta`, `getAttribute`,
+  `setAttribute`, `nextRowset`, `debugDumpParams`, `__destruct`, plus the public
+  `$queryString` property (the prepared SQL); Traversable, so a statement can be
+  walked with `foreach`. `fetch*()` on a statement that has not been `execute()`d
+  (or after `closeCursor()`) returns `false` rather than stepping the query.
 
 Connections and prepared statements release their underlying bridge resources
 automatically through `__destruct`: a `PDO` closes its connection (finalizing any
@@ -323,8 +324,12 @@ or at program exit. You do not need to close them explicitly.
   works like `new \PDO(...)` and the instance is `instanceof \PDO`. A program that
   names only a subclass — never the base `PDO` — still injects the prelude, and the
   PHP 8.4 `PDO::connect($dsn, …)` factory returns the matching subclass for the
-  DSN's driver prefix (an unknown prefix throws `PDOException`).
-  Driver-specific methods are not yet provided (see Limitations).
+  DSN's driver prefix (an unknown prefix throws `PDOException`). Each subclass also
+  declares its PHP 8.4 driver-specific constants (`Pdo\Sqlite::DETERMINISTIC` /
+  `OPEN_*` / `ATTR_*`, `Pdo\Mysql::ATTR_*`, `Pdo\Pgsql::ATTR_*` / `TRANSACTION_*`),
+  and `Pdo\Pgsql::escapeIdentifier()` performs PostgreSQL identifier quoting. The
+  remaining connection-backed and callback driver methods are not yet provided
+  (see Limitations).
 
 ## Limitations
 
@@ -347,11 +352,16 @@ or at program exit. You do not need to close them explicitly.
 - **Namespaced driver subclasses** `Pdo\Sqlite`, `Pdo\Mysql`, and `Pdo\Pgsql`
   (PHP 8.4) exist and extend `PDO`: they are auto-detected (a program that names
   only a subclass still injects the prelude), are directly instantiable, inherit
-  the full base connection surface, and are what `PDO::connect()` returns. Their
-  **driver-specific methods** (e.g. `Pdo\Sqlite::createFunction`,
-  `Pdo\Mysql::getWarningCount`) are not yet implemented. `PDO::connect()` selects
-  the subclass from the DSN prefix, so a subclass-qualified call with a mismatched
-  DSN (`Pdo\Sqlite::connect("mysql:…")`) is not rejected as PHP would.
+  the full base connection surface, are what `PDO::connect()` returns, and declare
+  their driver-specific constants; `Pdo\Pgsql::escapeIdentifier()` is implemented.
+  Still missing: the **connection-backed** driver methods
+  (`Pdo\Mysql::getWarningCount`, `Pdo\Pgsql::getPid` / `lob*` / `copy*` /
+  `getNotify`, `Pdo\Sqlite::loadExtension` / `openBlob`) and the **callback**
+  methods (`Pdo\Sqlite::createFunction` / `createAggregate` / `createCollation`,
+  `Pdo\Pgsql::setNoticeCallback`), the latter needing a PHP-callable-to-C
+  trampoline elephc's FFI does not yet provide. `PDO::connect()` selects the
+  subclass from the DSN prefix, so a subclass-qualified call with a mismatched DSN
+  (`Pdo\Sqlite::connect("mysql:…")`) is not rejected as PHP would.
 - **`FETCH_GROUP` / `FETCH_UNIQUE`** result shaping and **`createFunction()`** are
   not yet implemented — their constants exist but the behaviors either fail loudly
   or are absent.

@@ -308,7 +308,7 @@ class PDO {
         }
         // Inherit the connection's default fetch mode (ATTR_DEFAULT_FETCH_MODE) so
         // a statement fetched with no explicit mode uses the dbh default.
-        $_stmt = new PDOStatement($_handle, $this->conn, $this->errMode);
+        $_stmt = new PDOStatement($_handle, $this->conn, $this->errMode, $query);
         $_stmt->setFetchMode($this->defaultFetchMode);
         return $_stmt;
     }
@@ -488,11 +488,20 @@ class PDOStatement implements Iterator {
     private $iterRow;
     private int $iterKey;
     private bool $executed;
+    private array $attributes;
+    public string $queryString;
 
-    public function __construct(int $handle, int $connection, int $errMode = 2) {
+    public function __construct(int $handle, int $connection, int $errMode = 2, string $query = "") {
         $this->stmt = $handle;
         $this->conn = $connection;
         $this->errMode = $errMode;
+        // PHP exposes the prepared SQL as the public PDOStatement::$queryString
+        // property; thread it through from prepare() so debugDumpParams and callers
+        // can read it.
+        $this->queryString = $query;
+        // Statement-level attribute store for get/setAttribute (a small per-object
+        // map; PHP surfaces a handful of driver attributes here).
+        $this->attributes = [];
         $this->fetchMode = 4;
         $this->fetchTarget = null;
         $this->boundParams = [];
@@ -858,6 +867,76 @@ class PDOStatement implements Iterator {
         return elephc_pdo_column_count($this->stmt);
     }
 
+    public function getAttribute(int $name): mixed {
+        // Statement-level attributes are a simple per-statement store. Returns null
+        // for an attribute never set, matching PHP for an unknown statement attribute.
+        if (isset($this->attributes[$name])) {
+            return $this->attributes[$name];
+        }
+        return null;
+    }
+
+    public function setAttribute(int $attribute, mixed $value): bool {
+        $this->attributes[$attribute] = $value;
+        return true;
+    }
+
+    public function nextRowset(): bool {
+        // elephc's drivers expose a single result set per prepared statement (SQLite
+        // has no multiple rowsets; the pg/mysql bridges run one statement per
+        // prepare), so there is never a further rowset. PHP returns false when no
+        // more rowsets exist.
+        return false;
+    }
+
+    public function getColumnMeta(int $column): array|bool {
+        // Reduced PDOStatement::getColumnMeta: the column name plus the PDO and
+        // native type derived from the bridge's per-column type code (1=INTEGER,
+        // 2=FLOAT, 3=TEXT, 4=BLOB, 5=NULL). PHP's full metadata (len, precision,
+        // driver flags, table) is not surfaced by the bridge, so those keys are
+        // present with neutral values rather than omitted, so callers that read
+        // them do not error. Returns false for an out-of-range column index.
+        if ($column < 0 || $column >= elephc_pdo_column_count($this->stmt)) {
+            return false;
+        }
+        $_type = elephc_pdo_column_type($this->stmt, $column);
+        $_native = "null";
+        $_pdoType = 0;
+        if ($_type == 1) {
+            $_native = "integer";
+            $_pdoType = 1;
+        } elseif ($_type == 2) {
+            $_native = "double";
+            $_pdoType = 2;
+        } elseif ($_type == 3) {
+            $_native = "string";
+            $_pdoType = 2;
+        } elseif ($_type == 4) {
+            $_native = "blob";
+            $_pdoType = 3;
+        }
+        return [
+            "name" => elephc_pdo_column_name($this->stmt, $column),
+            "native_type" => $_native,
+            "pdo_type" => $_pdoType,
+            "len" => 0,
+            "precision" => 0,
+            "flags" => [],
+            "table" => "",
+        ];
+    }
+
+    public function debugDumpParams(): ?bool {
+        // Reduced PDOStatement::debugDumpParams: writes the SQL and the number of
+        // bound parameters to stdout. PHP additionally prints per-parameter detail;
+        // that format is a debugging aid and is not contractual, so elephc emits the
+        // load-bearing SQL + parameter count. Always returns null (never false here,
+        // as elephc keeps no unparsed-query state PHP would report failure for).
+        echo "SQL: [" . strlen($this->queryString) . "] " . $this->queryString . "\n";
+        echo "Params:  " . count($this->boundValues) . "\n";
+        return null;
+    }
+
     // Iterator: `foreach ($stmt as $key => $row)` walks the result set forward
     // using the statement's current fetch mode, with sequential integer keys —
     // matching PHP's PDOStatement Traversable behavior. The cursor is
@@ -897,11 +976,13 @@ class PDOStatement implements Iterator {
 // PHP 8.4 driver-specific PDO subclasses. They are returned by the DSN-dispatching
 // `PDO::connect()` factory (defined above) and can also be constructed directly;
 // each inherits the full base PDO connection surface (constructor, exec/query/
-// prepare, transactions, quoting) from \PDO. Only the shared base is provided
-// here: driver-specific
-// methods (e.g. Pdo\Sqlite::createFunction, Pdo\Mysql::getWarningCount,
-// Pdo\Pgsql::escapeIdentifier) require callable/driver plumbing and are tracked
-// as a follow-up.
+// prepare, transactions, quoting) from \PDO, and adds its driver-specific
+// constants plus the driver methods that need no C->PHP callback. Still deferred:
+// the callback methods (Pdo\Sqlite::createFunction / createAggregate /
+// createCollation, Pdo\Pgsql::setNoticeCallback), which require a PHP callable to
+// be invoked from C mid-query — elephc's FFI cannot yet marshal a callable to a C
+// function pointer — and the connection-backed methods that need new bridge externs
+// (getWarningCount, getPid, lob*/copy*, loadExtension, openBlob).
 //
 // The classes are declared in a BLOCK-form namespace: a statement-form
 // `namespace Pdo;` would apply to every statement that follows it, and because
@@ -909,12 +990,69 @@ class PDOStatement implements Iterator {
 // the entire user program. The block keeps the `Pdo\` scope contained, leaving
 // the appended user code in the global namespace. `extends \PDO` is
 // fully-qualified so it binds to the global prelude PDO regardless of scope.
+// Builtins called from a method body here are `\`-qualified because an unqualified
+// call inside the `Pdo` namespace does not fall back to the global function on
+// every name-resolution path.
 namespace Pdo {
-    class Sqlite extends \PDO {}
+    class Sqlite extends \PDO {
+        // SQLite driver-specific constants (ext/pdo_sqlite). ATTR_* start at
+        // PDO_ATTR_DRIVER_SPECIFIC (1000); OPEN_* mirror the SQLite C open flags;
+        // DETERMINISTIC is the SQLITE_DETERMINISTIC function flag.
+        const DETERMINISTIC = 2048;
+        const OPEN_READONLY = 1;
+        const OPEN_READWRITE = 2;
+        const OPEN_CREATE = 4;
+        const ATTR_OPEN_FLAGS = 1000;
+        const ATTR_READONLY_STATEMENT = 1001;
+        const ATTR_EXTENDED_RESULT_CODES = 1002;
+    }
 
-    class Mysql extends \PDO {}
+    class Mysql extends \PDO {
+        // MySQL/MariaDB driver-specific attribute constants (ext/pdo_mysql, mysqlnd
+        // build — the PHP default). Values start at PDO_ATTR_DRIVER_SPECIFIC (1000).
+        // The libmysqlclient-only ATTR_MAX_BUFFER_SIZE / ATTR_READ_DEFAULT_* are
+        // intentionally omitted (absent under mysqlnd, and their presence would shift
+        // every value from ATTR_COMPRESS upward).
+        const ATTR_USE_BUFFERED_QUERY = 1000;
+        const ATTR_LOCAL_INFILE = 1001;
+        const ATTR_INIT_COMMAND = 1002;
+        const ATTR_COMPRESS = 1003;
+        const ATTR_DIRECT_QUERY = 1004;
+        const ATTR_FOUND_ROWS = 1005;
+        const ATTR_IGNORE_SPACE = 1006;
+        const ATTR_SSL_KEY = 1007;
+        const ATTR_SSL_CERT = 1008;
+        const ATTR_SSL_CA = 1009;
+        const ATTR_SSL_CAPATH = 1010;
+        const ATTR_SSL_CIPHER = 1011;
+        const ATTR_SERVER_PUBLIC_KEY = 1012;
+        const ATTR_MULTI_STATEMENTS = 1013;
+        const ATTR_SSL_VERIFY_SERVER_CERT = 1014;
+        const ATTR_LOCAL_INFILE_DIRECTORY = 1015;
+    }
 
-    class Pgsql extends \PDO {}
+    class Pgsql extends \PDO {
+        // PostgreSQL driver-specific constants (ext/pdo_pgsql). ATTR_* start at
+        // PDO_ATTR_DRIVER_SPECIFIC (1000); TRANSACTION_* mirror libpq's PQTRANS_*
+        // connection-transaction-status enum.
+        const ATTR_DISABLE_PREPARES = 1000;
+        const ATTR_RESULT_MEMORY_SIZE = 1001;
+        const TRANSACTION_IDLE = 0;
+        const TRANSACTION_ACTIVE = 1;
+        const TRANSACTION_INTRANS = 2;
+        const TRANSACTION_INERROR = 3;
+        const TRANSACTION_UNKNOWN = 4;
+
+        public function escapeIdentifier(string $input): string {
+            // PostgreSQL identifier quoting (PQescapeIdentifier semantics): double any
+            // interior double-quote and wrap the whole identifier in double-quotes. A
+            // pure string transform with no server round-trip, so it is safe to call
+            // on any Pdo\Pgsql instance. (Divergence: PHP rejects an embedded NUL with
+            // a ValueError; that pathological case is not guarded here.)
+            $_doubled = \str_replace("\"", "\"\"", $input);
+            return "\"" . $_doubled . "\"";
+        }
+    }
 }
 "#;
 

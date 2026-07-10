@@ -1222,3 +1222,101 @@ echo seed(\PDO::connect("sqlite::memory:"));
     );
     assert_eq!(out, "7");
 }
+
+/// Driver subclasses declare their own PHP 8.4 constants (not just inherited base
+/// PDO ones): SQLite DETERMINISTIC / ATTR_OPEN_FLAGS, MySQL ATTR_LOCAL_INFILE,
+/// PostgreSQL ATTR_DISABLE_PREPARES / TRANSACTION_INERROR. Static constant access
+/// errors on an undefined member at compile time, so a passing result proves each
+/// namespaced subclass carries its own declared constants.
+#[test]
+fn test_pdo_driver_subclass_own_constants() {
+    let out = compile_and_run(
+        r#"<?php
+echo \Pdo\Sqlite::DETERMINISTIC . ":" . \Pdo\Sqlite::ATTR_OPEN_FLAGS . ":"
+    . \Pdo\Mysql::ATTR_LOCAL_INFILE . ":" . \Pdo\Pgsql::ATTR_DISABLE_PREPARES . ":"
+    . \Pdo\Pgsql::TRANSACTION_INERROR;
+"#,
+    );
+    assert_eq!(out, "2048:1000:1001:1000:3");
+}
+
+/// PDOStatement PHP 8.4 surface additions: the public `$queryString` property is
+/// threaded from prepare(), statement-level get/setAttribute round-trips (unknown
+/// attribute -> null), and nextRowset() is false (single rowset).
+#[test]
+fn test_pdo_statement_querystring_attributes_nextrowset() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+$db->exec("INSERT INTO t (name) VALUES ('Ada')");
+$stmt = $db->prepare("SELECT name FROM t WHERE id = 1");
+$qs = $stmt->queryString;
+$stmt->setAttribute(19, 5);
+$attr = $stmt->getAttribute(19);
+$missing = $stmt->getAttribute(999) === null ? "null" : "?";
+$stmt->execute();
+$more = $stmt->nextRowset() ? "1" : "0";
+echo $qs . "|" . $attr . "|" . $missing . "|" . $more;
+"#,
+    );
+    assert_eq!(out, "SELECT name FROM t WHERE id = 1|5|null|0");
+}
+
+/// PDOStatement::getColumnMeta returns the column name plus neutral metadata keys
+/// from the bridge accessors, and false for an out-of-range column index.
+#[test]
+fn test_pdo_statement_get_column_meta() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+$db->exec("INSERT INTO t (id, name) VALUES (7, 'Zed')");
+$stmt = $db->query("SELECT id, name FROM t");
+$stmt->fetch();
+$meta0 = $stmt->getColumnMeta(0);
+$meta1 = $stmt->getColumnMeta(1);
+$bad = $stmt->getColumnMeta(9) === false ? "F" : "?";
+echo $meta0["name"] . "," . $meta1["name"] . "," . $meta0["len"] . "," . $bad;
+"#,
+    );
+    assert_eq!(out, "id,name,0,F");
+}
+
+/// PDOStatement::debugDumpParams writes the SQL (with its byte length) and the
+/// bound-parameter count to stdout.
+#[test]
+fn test_pdo_statement_debug_dump_params() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \PDO("sqlite::memory:");
+$stmt = $db->prepare("SELECT 1");
+$stmt->debugDumpParams();
+"#,
+    );
+    assert_eq!(out, "SQL: [8] SELECT 1\nParams:  0\n");
+}
+
+/// Pdo\Pgsql::escapeIdentifier is a pure string transform (PQescapeIdentifier
+/// semantics: double interior double-quotes, wrap in double-quotes) that touches no
+/// connection, so it is exercised via a non-connecting Pdo\Pgsql subclass — proving
+/// both the transform and dispatch of an own method declared on a namespaced
+/// subclass, without a live PostgreSQL server.
+#[test]
+fn test_pdo_pgsql_escape_identifier() {
+    let out = compile_and_run(
+        r#"<?php
+class FakePg extends \Pdo\Pgsql {
+    // Bypass the connecting parent constructor AND destructor so the pure,
+    // connection-independent escapeIdentifier() can be exercised without a live
+    // server: the inherited PDO::__destruct reads $this->inTxn/$this->conn, which
+    // the empty constructor never initialized.
+    public function __construct() {}
+    public function __destruct() {}
+}
+$pg = new FakePg();
+echo $pg->escapeIdentifier('my"col') . "|" . $pg->escapeIdentifier('plain');
+"#,
+    );
+    assert_eq!(out, "\"my\"\"col\"|\"plain\"");
+}
