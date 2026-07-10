@@ -1940,6 +1940,16 @@ fn emit_builtin_call_value(
     };
     if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
         ctx.mark_eval_executed();
+        if let Some(widen_targets) =
+            eval_literal.and_then(|fragment| eval_literal_direct_store_widen_targets(ctx, fragment))
+        {
+            // A direct store that changes a scalar slot's type keeps the
+            // native path by widening the slot to boxed Mixed storage first;
+            // codegen re-lowers every load/store with the final slot type.
+            for name in widen_targets {
+                ctx.set_local_type(&name, PhpType::Mixed);
+            }
+        }
         if eval_needs_barrier {
             ctx.apply_eval_barrier();
         } else if eval_literal
@@ -2037,34 +2047,57 @@ fn eval_literal_needs_scope_barrier(ctx: &LoweringContext<'_, '_>, fragment: &st
 }
 
 /// Returns true when a direct-store eval fragment fits every caller slot type.
-/// Mirrors codegen's per-target checks: a store that changes an existing
-/// slot's scalar type (e.g. Int -> Str) needs the barrier and a wider path.
 fn eval_literal_direct_store_supported_by_lowering(
     ctx: &LoweringContext<'_, '_>,
     fragment: &str,
 ) -> bool {
-    let Some(writes) = crate::eval_aot::literal_fragment_direct_local_store_writes(fragment)
-    else {
-        return false;
-    };
-    writes.iter().all(|(name, kind)| {
+    eval_literal_direct_store_widen_targets(ctx, fragment).is_some()
+}
+
+/// Classifies a direct-store eval fragment against caller slots. Returns the
+/// locals whose scalar slot must widen to Mixed because the store changes
+/// their runtime type (e.g. Int -> Str); `None` when any write target rules
+/// out the direct path entirely.
+fn eval_literal_direct_store_widen_targets(
+    ctx: &LoweringContext<'_, '_>,
+    fragment: &str,
+) -> Option<Vec<String>> {
+    let writes = crate::eval_aot::literal_fragment_direct_local_store_writes(fragment)?;
+    let mut widen_targets = Vec::new();
+    for (name, kind) in &writes {
         if crate::superglobals::is_superglobal(name)
             || (ctx.in_main && ctx.all_global_var_names.contains(name))
         {
-            return false;
+            return None;
         }
         if ctx.local_slots.get(name).is_none() {
-            return true;
+            continue;
         }
         if ctx.is_ref_bound_local(name)
             || ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal)
         {
-            return false;
+            return None;
         }
-        ctx.local_types
-            .get(name)
-            .is_some_and(|ty| eval_literal_direct_store_type_supported(ty, *kind))
-    })
+        let ty = ctx.local_types.get(name)?;
+        if eval_literal_direct_store_type_supported(ty, *kind) {
+            continue;
+        }
+        if eval_literal_direct_store_type_widenable(ty) {
+            widen_targets.push(name.clone());
+        } else {
+            return None;
+        }
+    }
+    Some(widen_targets)
+}
+
+/// Returns true when a scalar slot can widen to Mixed for a type-changing
+/// direct eval store. Containers and special storage keep the barrier path.
+fn eval_literal_direct_store_type_widenable(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str | PhpType::TaggedScalar
+    )
 }
 
 /// Returns true when a static scalar store kind fits an existing caller slot type.
