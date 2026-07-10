@@ -185,19 +185,29 @@ impl Checker {
     ) -> Result<(), CompileError> {
         if let Some(default_expr) = default_expr {
             let default_ty = infer_expr_type_syntactic(default_expr);
-            // An object default for an object-typed parameter (e.g. an interface-typed promoted
-            // property with a concrete default, `I $x = new N()`) cannot be subtype-checked in
-            // this purely-syntactic schema pass — the class/interface table (and thus
-            // `class_implements_interface`) is not yet populated, so `type_accepts` would
-            // spuriously reject a valid subtype. Accept it here; a genuine mismatch surfaces at
-            // the call site / later semantic pass. (Mirrors the enum-case leniency above.)
+            self.require_compatible_arg_type(expected_ty, &default_ty, span, context)?;
+        }
+        Ok(())
+    }
+
+    /// Validates a declaration default while class-like schema metadata is still being built.
+    /// Object-to-object checks are deferred because inheritance and interface relationships are
+    /// incomplete during this phase; every other type pair is validated immediately.
+    pub(crate) fn validate_schema_declared_default_type(
+        &self,
+        expected_ty: &PhpType,
+        default_expr: Option<&Expr>,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if let Some(default_expr) = default_expr {
+            let default_ty = infer_expr_type_syntactic(default_expr);
             if matches!(expected_ty, PhpType::Object(_)) && matches!(default_ty, PhpType::Object(_))
             {
                 return Ok(());
             }
-            self.require_compatible_arg_type(expected_ty, &default_ty, span, context)?;
         }
-        Ok(())
+        self.validate_declared_default_type(expected_ty, default_expr, span, context)
     }
 
     /// Builds the initial parameter type list for a function declaration, resolving type hints,

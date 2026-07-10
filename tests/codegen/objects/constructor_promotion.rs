@@ -158,13 +158,30 @@ echo $box->value;
     assert_eq!(out, "7:9");
 }
 
-/// EC-8 (#491): an interface-typed constructor-promoted property with a concrete-subtype default
-/// (`public I $x = new N()`) must be accepted — the syntactic schema pass has no class/interface
-/// table to subtype-check, so it defers. Byte-parity vs PHP 8.5 (the default instantiates + dispatches).
+/// Verifies that an interface-typed promoted property accepts a concrete implementing-class
+/// default after schema construction, and that the default instance dispatches normally.
 #[test]
-fn test_interface_promoted_prop_subtype_default() {
+fn test_interface_promoted_property_accepts_object_default() {
     let out = compile_and_run(
-        "<?php declare(strict_types=1); interface I { public function v(): string; } final class N implements I { public function v(): string { return 'n'; } } final class C { public function __construct(public I $x = new N()) {} } echo (new C())->x->v();",
+        r#"<?php
+interface I {
+    public function v(): string;
+}
+final class N implements I {
+    public function v(): string { return "n"; }
+}
+final class C {
+    public function __construct(public I $x = new N()) {}
+    public function read(I $x = new N()): string { return $x->v(); }
+}
+function read_value(I $x = new N()): string { return $x->v(); }
+$c = new C();
+echo $c->x->v();
+echo ":";
+echo $c->read();
+echo ":";
+echo read_value();
+"#,
     );
-    assert_eq!(out, "n");
+    assert_eq!(out, "n:n:n");
 }

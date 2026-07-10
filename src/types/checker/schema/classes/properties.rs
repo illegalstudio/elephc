@@ -94,7 +94,7 @@ fn apply_static_property(
     }
 
     let ty = if let Some(declared_ty) = declared_ty {
-        checker.validate_declared_default_type(
+        checker.validate_schema_declared_default_type(
             &declared_ty,
             prop.default.as_ref(),
             prop.span,
@@ -248,7 +248,7 @@ fn apply_instance_property(
     }
 
     let ty = if let Some(declared_ty) = resolve_property_declared_type(checker, &class.name, prop)? {
-        checker.validate_declared_default_type(
+        checker.validate_schema_declared_default_type(
             &declared_ty,
             prop.default.as_ref(),
             prop.span,
@@ -341,7 +341,7 @@ fn apply_instance_property_redeclaration(
     )?;
 
     let ty = if let Some(declared_ty) = declared_ty {
-        checker.validate_declared_default_type(
+        checker.validate_schema_declared_default_type(
             &declared_ty,
             prop.default.as_ref(),
             prop.span,
