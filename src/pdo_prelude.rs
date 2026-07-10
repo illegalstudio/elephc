@@ -95,6 +95,10 @@ extern "elephc_pdo" {
     function elephc_pdo_lob_unlink(int $conn, string $oid): int;
     function elephc_pdo_copy_in(int $conn, string $copy_sql, string $data): int;
     function elephc_pdo_copy_out(int $conn, string $copy_sql): string;
+    // v10: SQLite column declared-type (for getColumnMeta native_type) + extension
+    // loading. column_decltype is empty for a non-SQLite/expression column.
+    function elephc_pdo_column_decltype(int $stmt, int $i): string;
+    function elephc_pdo_load_extension(int $conn, string $path): int;
 }
 
 class PDOException extends RuntimeException {
@@ -935,6 +939,13 @@ class PDOStatement implements Iterator {
             $_native = "blob";
             $_pdoType = 3;
         }
+        // Prefer the column's DECLARED type (sqlite3_column_decltype), which PHP's
+        // getColumnMeta reports as native_type; fall back to the value-type name for
+        // an expression column (or a driver) with no declared type.
+        $_decltype = elephc_pdo_column_decltype($this->stmt, $column);
+        if ($_decltype !== "") {
+            $_native = $_decltype;
+        }
         return [
             "name" => elephc_pdo_column_name($this->stmt, $column),
             "native_type" => $_native,
@@ -1025,6 +1036,16 @@ namespace Pdo {
         const ATTR_OPEN_FLAGS = 1000;
         const ATTR_READONLY_STATEMENT = 1001;
         const ATTR_EXTENDED_RESULT_CODES = 1002;
+
+        public function loadExtension(string $name): void {
+            // Loads a SQLite extension library by path (its entry point is
+            // auto-derived, as PHP's loadExtension does), throwing on failure.
+            // Extension loading runs native code from the named library, so it
+            // weakens the standalone-binary guarantee — use only trusted extensions.
+            if (\elephc_pdo_load_extension($this->connectionId(), $name) !== 1) {
+                throw new \PDOException("Failed to load SQLite extension: " . $name);
+            }
+        }
     }
 
     class Mysql extends \PDO {

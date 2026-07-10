@@ -188,6 +188,33 @@ impl SqliteConn {
             }
         }
     }
+
+    /// Loads the SQLite extension at `path` (its entry point auto-derived, as PHP's
+    /// `Pdo\Sqlite::loadExtension()` does), returning 1 on success or 0 on error.
+    /// Extension loading is enabled only for the duration of the call and disabled
+    /// again afterward to keep the default hardened posture. The freed error message
+    /// is discarded (the caller reports failure via the connection's error state /
+    /// a thrown exception).
+    ///
+    /// # Safety
+    /// Loading an extension executes arbitrary native code from `path`; the caller
+    /// is trusted to supply a library it intends to run.
+    pub fn load_extension(&self, path: &str) -> i64 {
+        let Ok(c_path) = CString::new(path) else {
+            return 0;
+        };
+        unsafe {
+            ffi::sqlite3_enable_load_extension(self.db, 1);
+            let mut errmsg: *mut c_char = ptr::null_mut();
+            let rc =
+                ffi::sqlite3_load_extension(self.db, c_path.as_ptr(), ptr::null(), &mut errmsg);
+            ffi::sqlite3_enable_load_extension(self.db, 0);
+            if !errmsg.is_null() {
+                ffi::sqlite3_free(errmsg as *mut _);
+            }
+            (rc == ffi::SQLITE_OK) as i64
+        }
+    }
 }
 
 impl SqliteStmt {
@@ -311,6 +338,19 @@ impl SqliteStmt {
     /// 1=INTEGER, 2=FLOAT, 3=TEXT, 4=BLOB, 5=NULL.
     pub fn column_type(&self, i: i64) -> i64 {
         unsafe { ffi::sqlite3_column_type(self.ptr, i as c_int) as i64 }
+    }
+
+    /// Returns the declared type of result column `i` (`sqlite3_column_decltype`),
+    /// e.g. "INTEGER" or "TEXT", or an empty string for an expression column with no
+    /// declared type. Feeds `PDOStatement::getColumnMeta`'s native_type.
+    pub fn column_decltype(&self, i: i64) -> String {
+        unsafe {
+            let p = ffi::sqlite3_column_decltype(self.ptr, i as c_int);
+            if p.is_null() {
+                return String::new();
+            }
+            CStr::from_ptr(p).to_string_lossy().into_owned()
+        }
     }
 
     /// Returns the current row's column `i` (0-based) as an integer.

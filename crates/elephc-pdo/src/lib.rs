@@ -99,6 +99,12 @@ fn colname_cell() -> &'static Mutex<CString> {
     C.get_or_init(|| Mutex::new(CString::default()))
 }
 
+/// Static buffer for the most recent `elephc_pdo_column_decltype` result.
+fn decltype_cell() -> &'static Mutex<CString> {
+    static C: OnceLock<Mutex<CString>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(CString::default()))
+}
+
 /// Static buffer for the most recent `elephc_pdo_column_text` result.
 fn coltext_cell() -> &'static Mutex<CString> {
     static C: OnceLock<Mutex<CString>> = OnceLock::new();
@@ -272,10 +278,12 @@ fn open_persistent_dsn(dsn: &str) -> i64 {
 /// id. v8 adds the PostgreSQL backend-pid and MySQL warning-count accessors that
 /// back `Pdo\Pgsql::getPid()` / `Pdo\Mysql::getWarningCount()`. v9 adds the
 /// PostgreSQL large-object create/unlink and COPY in/out accessors backing
-/// `Pdo\Pgsql::lobCreate()` / `lobUnlink()` / `copyFrom*()` / `copyTo*()`.
+/// `Pdo\Pgsql::lobCreate()` / `lobUnlink()` / `copyFrom*()` / `copyTo*()`. v10 adds
+/// the SQLite column-decltype and load-extension accessors backing
+/// `PDOStatement::getColumnMeta()`'s native type and `Pdo\Sqlite::loadExtension()`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    9
+    10
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -947,6 +955,41 @@ pub extern "C" fn elephc_pdo_column_type(stmt_id: i64, i: i64) -> i64 {
         Some(Stmt::Postgres(s)) => s.column_type(i),
         Some(Stmt::Mysql(s)) => s.column_type(i),
         None => 5,
+    }
+}
+
+/// Returns a pointer to the declared type of result column `i` (0-based) for a
+/// SQLite statement (`sqlite3_column_decltype`), or an empty string for a
+/// non-SQLite statement or an expression column. Feeds `getColumnMeta`'s
+/// native_type. Valid until the next `elephc_pdo_column_decltype`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_column_decltype(stmt_id: i64, i: i64) -> *const c_char {
+    let decltype = {
+        let guard = stmts().lock().unwrap();
+        match guard.get(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.column_decltype(i),
+            _ => String::new(),
+        }
+    };
+    store_cstr(decltype_cell(), &decltype)
+}
+
+/// Loads a SQLite extension by path for a `sqlite:` connection
+/// (`Pdo\Sqlite::loadExtension()`), returning 1 on success or 0 for a
+/// non-SQLite connection, unknown handle, or load error.
+///
+/// # Safety
+/// `path` must point to a NUL-terminated string valid for the call, and loading an
+/// extension runs arbitrary native code from it.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_load_extension(conn_id: i64, path: *const c_char) -> i64 {
+    let Some(path) = cstr_arg(path) else {
+        return 0;
+    };
+    let guard = conns().lock().unwrap();
+    match guard.get(&conn_id) {
+        Some(Conn::Sqlite(c)) => c.load_extension(path),
+        _ => 0,
     }
 }
 

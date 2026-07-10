@@ -1277,10 +1277,30 @@ $stmt->fetch();
 $meta0 = $stmt->getColumnMeta(0);
 $meta1 = $stmt->getColumnMeta(1);
 $bad = $stmt->getColumnMeta(9) === false ? "F" : "?";
-echo $meta0["name"] . "," . $meta1["name"] . "," . $meta0["len"] . "," . $bad;
+echo $meta0["name"] . ":" . $meta0["native_type"] . "," . $meta1["name"] . ":" . $meta1["native_type"] . "," . $bad;
 "#,
     );
-    assert_eq!(out, "id,name,0,F");
+    // native_type comes from the column's declared type (sqlite3_column_decltype).
+    assert_eq!(out, "id:INTEGER,name:TEXT,F");
+}
+
+/// `Pdo\Sqlite::loadExtension()` throws a PDOException when an extension cannot be
+/// loaded (a nonexistent path here), exercising the method and its error path
+/// without needing a real extension library.
+#[test]
+fn test_pdo_sqlite_load_extension_error() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+try {
+    $db->loadExtension("/nonexistent/elephc_missing_ext.so");
+    echo "no-throw";
+} catch (\PDOException $e) {
+    echo "caught";
+}
+"#,
+    );
+    assert_eq!(out, "caught");
 }
 
 /// PDOStatement::debugDumpParams writes the SQL (with its byte length) and the
