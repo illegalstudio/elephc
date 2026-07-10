@@ -16,6 +16,7 @@
 //!   result falls back to the original type, so valid code is never narrowed away to `Never`.
 
 use crate::errors::CompileError;
+use crate::names::{php_symbol_key, property_hook_get_method};
 use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
@@ -57,6 +58,9 @@ impl Checker {
         let Some(key) = Self::guard_env_key(receiver) else {
             return Ok(None);
         };
+        if self.property_guard_receiver_is_unstable(receiver, env)? {
+            return Ok(None);
+        }
         // A prior narrowing (or a variable binding) wins; otherwise a property receiver falls back
         // to its declared field type. An unbound plain variable stays un-narrowed.
         let current = match env.get(&key) {
@@ -107,6 +111,39 @@ impl Checker {
     /// visible assignments already update those bindings directly.
     pub(crate) fn purge_property_narrowings(env: &mut TypeEnv) {
         env.retain(|key, _| !key.starts_with('\u{1}'));
+    }
+
+    /// Drops synthetic property narrowings rooted at one local variable after that local is
+    /// rebound. Other receivers remain valid and keep their precision.
+    pub(crate) fn purge_property_narrowings_for_root(env: &mut TypeEnv, root: &str) {
+        let prefix = format!("\u{1}prop\u{1}{root}->");
+        env.retain(|key, _| !key.starts_with(&prefix));
+    }
+
+    /// Returns whether a property guard can invoke user code on either read. Hooked or magic
+    /// properties are not stable flow bindings because two reads may produce different values.
+    fn property_guard_receiver_is_unstable(
+        &mut self,
+        receiver: &Expr,
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        let ExprKind::PropertyAccess { object, property } = &receiver.kind else {
+            return Ok(false);
+        };
+        let object_ty = self.infer_type(object, env)?;
+        let classes = match object_ty {
+            PhpType::Object(class) => vec![class],
+            PhpType::Union(_) => self.union_object_classes(&object_ty),
+            _ => return Ok(false),
+        };
+        let get_hook = php_symbol_key(&property_hook_get_method(property));
+        Ok(classes.iter().any(|class| {
+            self.classes.get(class).is_some_and(|info| {
+                info.methods.contains_key(&get_hook)
+                    || (!info.properties.iter().any(|(name, _)| name == property)
+                        && info.methods.contains_key("__get"))
+            })
+        }))
     }
 
     /// Narrows `current` to the guard-true type. Inside the branch the guard guarantees the target,
@@ -213,8 +250,9 @@ fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType)> {
             };
             Some((value, PhpType::Object(class.as_str().to_string())))
         }
-        // `$var === false` / `false === $var`: narrow to Bool in the then-branch; the else-branch
-        // (guard false) strips the false-ish Bool member (e.g. int|false → int). Enables the common
+        // `$var === false` / `false === $var`: narrow to the literal False subtype in the
+        // then-branch; the else-branch strips only that member (e.g. int|false → int) while a full
+        // `bool` member remains. Enables the common
         // `if ($x === false) { throw; } return $x;` guard (ward-http StreamGuards::requireInt etc.).
         ExprKind::BinaryOp { left, op: BinOp::StrictEq, right } => {
             let (receiver, lit) = match (&left.kind, &right.kind) {
@@ -227,7 +265,7 @@ fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType)> {
                 _ => return None,
             };
             match lit {
-                ExprKind::BoolLiteral(false) => Some((receiver, PhpType::Bool)),
+                ExprKind::BoolLiteral(false) => Some((receiver, PhpType::False)),
                 // `$x === null`: strip the null-ish member (elephc models a `?T` value's null as
                 // Void), e.g. `?self` / self|null → self after `if ($x === null) { throw; }`.
                 ExprKind::Null => Some((receiver, PhpType::Void)),
@@ -244,6 +282,7 @@ fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType)> {
 fn guard_matches(member: &PhpType, target: &PhpType) -> bool {
     match (member, target) {
         (PhpType::Object(member_class), PhpType::Object(target_class)) => member_class == target_class,
+        (PhpType::False, PhpType::Bool) => true,
         _ => member == target,
     }
 }

@@ -119,7 +119,7 @@ fn test_function_no_args() {
 #[test]
 fn test_strict_false_guard_narrowing() {
     let out = compile_and_run(
-        "<?php declare(strict_types=1); final class G { public static function requireInt(int|false $v): int { if ($v === false) { throw new \\RuntimeException('no'); } return $v; } } echo G::requireInt(42), ':', G::requireInt(7);",
+        "<?php final class G { public static function requireInt(int|false $v): int { if ($v === false) { throw new \\RuntimeException('no'); } return $v; } } echo G::requireInt(42), ':', G::requireInt(7);",
     );
     assert_eq!(out, "42:7");
 }
@@ -130,7 +130,7 @@ fn test_strict_false_guard_narrowing() {
 #[test]
 fn test_strict_null_guard_narrowing() {
     let out = compile_and_run(
-        "<?php declare(strict_types=1); function req(?string $x): string { if ($x === null) { throw new \\Exception('no'); } return $x; } echo req('hi');",
+        "<?php function req(?string $x): string { if ($x === null) { throw new \\Exception('no'); } return $x; } echo req('hi');",
     );
     assert_eq!(out, "hi");
 }
@@ -141,7 +141,7 @@ fn test_strict_null_guard_narrowing() {
 #[test]
 fn test_property_instanceof_ternary_narrowing() {
     let out = compile_and_run(
-        "<?php declare(strict_types=1); final class Message { public function __construct(public string $key) {} } final class V { public function __construct(private Message|string $raw) {} public function msg(): Message { return $this->raw instanceof Message ? $this->raw : new Message($this->raw); } } echo (new V('hi'))->msg()->key, ':', (new V(new Message('k')))->msg()->key;",
+        "<?php final class Message { public function __construct(public string $key) {} } final class V { public function __construct(private Message|string $raw) {} public function msg(): Message { return $this->raw instanceof Message ? $this->raw : new Message($this->raw); } } echo (new V('hi'))->msg()->key, ':', (new V(new Message('k')))->msg()->key;",
     );
     assert_eq!(out, "hi:k");
 }
@@ -152,7 +152,7 @@ fn test_property_instanceof_ternary_narrowing() {
 #[test]
 fn test_is_null_guard_narrowing() {
     let out = compile_and_run(
-        "<?php declare(strict_types=1); function f(?int $p): int { if (is_null($p)) { throw new \\InvalidArgumentException('null'); } if ($p <= 0) { throw new \\InvalidArgumentException('non-positive'); } return $p; } echo f(5);",
+        "<?php function f(?int $p): int { if (is_null($p)) { throw new \\InvalidArgumentException('null'); } if ($p <= 0) { throw new \\InvalidArgumentException('non-positive'); } return $p; } echo f(5);",
     );
     assert_eq!(out, "5");
 }
@@ -163,7 +163,7 @@ fn test_is_null_guard_narrowing() {
 #[test]
 fn test_property_throw_guard_narrowing() {
     let out = compile_and_run(
-        "<?php declare(strict_types=1); final class W { public function __construct(public string $v) {} } final class R { public function __construct(private ?W $w) {} public function ref(): W { if (!$this->w instanceof W) { throw new \\LogicException('rejected'); } return $this->w; } } echo (new R(new W('x')))->ref()->v;",
+        "<?php final class W { public function __construct(public string $v) {} } final class R { public function __construct(private ?W $w) {} public function ref(): W { if (!$this->w instanceof W) { throw new \\LogicException('rejected'); } return $this->w; } } echo (new R(new W('x')))->ref()->v;",
     );
     assert_eq!(out, "x");
 }

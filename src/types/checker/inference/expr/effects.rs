@@ -62,8 +62,14 @@ impl Checker {
                 )?;
                 // A write through to a property (directly or via one of its elements)
                 // invalidates every property narrowing.
-                if assignment_may_write_property(target) {
-                    Self::purge_property_narrowings(env);
+                match &target.kind {
+                    ExprKind::Variable(name) => {
+                        Self::purge_property_narrowings_for_root(env, name)
+                    }
+                    _ if assignment_may_write_property(target) => {
+                        Self::purge_property_narrowings(env)
+                    }
+                    _ => {}
                 }
                 Ok(ty)
             }
