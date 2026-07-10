@@ -368,10 +368,10 @@ fn emit_intrinsic_method_wrappers(module: &Module, emitter: &mut Emitter) {
         emitter.label(&symbol);
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("b {}", wrapper.helper)); // tail-call the runtime helper using the method ABI arguments
+                emitter.instruction(&format!("b {}", wrapper.helper));          // tail-call the runtime helper using the method ABI arguments
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("jmp {}", wrapper.helper)); // tail-call the runtime helper using the method ABI arguments
+                emitter.instruction(&format!("jmp {}", wrapper.helper));        // tail-call the runtime helper using the method ABI arguments
             }
         }
     }

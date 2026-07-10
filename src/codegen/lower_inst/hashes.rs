@@ -562,7 +562,7 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction("cmp rax, 1");                                      // string mixed keys need PHP numeric-string normalization
     ctx.emitter.instruction(&format!("je {}", string_key));                     // route string keys through the normal hash-key helper
     ctx.emitter.instruction("cmp rax, 8");                                      // null mixed keys normalize to the empty string like PHP
-    ctx.emitter.instruction(&format!("je {}", null_key));                      // route null keys to the empty-string key path
+    ctx.emitter.instruction(&format!("je {}", null_key));                       // route null keys to the empty-string key path
     ctx.emitter.instruction("cmp rax, 0");                                      // integer mixed keys are already scalar hash keys
     ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep integer keys as integer hash keys
     ctx.emitter.instruction("cmp rax, 3");                                      // boolean mixed keys normalize like integer keys
@@ -572,7 +572,7 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after fallback selection
     ctx.emitter.label(&null_key);
     emit_empty_string_hash_key_x86_64(ctx);                                    // null normalizes to the empty string "" hash key
-    ctx.emitter.instruction(&format!("jmp {}", done));                         // skip the string-key normalization path
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the string-key normalization path
     ctx.emitter.label(&scalar_key);
     ctx.emitter.instruction("mov rsi, rdi");                                    // publish the unboxed scalar payload as key_lo
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks scalar mixed keys as integers

@@ -490,14 +490,14 @@ fn emit_ref_cell_owner_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty:
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset_scratch(ctx.emitter, "x9", offset, "x11");
-            ctx.emitter.instruction(&format!("cbz x9, {}", done)); // skip released or never-created fallback ref-cells
+            ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip released or never-created fallback ref-cells
             abi::emit_release_local_ref_cell(ctx.emitter, "x9", ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
         }
         Arch::X86_64 => {
             abi::load_at_offset_scratch(ctx.emitter, "r11", offset, "r10");
-            ctx.emitter.instruction("test r11, r11"); // check whether this owner still holds a fallback ref-cell
-            ctx.emitter.instruction(&format!("je {}", done)); // skip released or never-created fallback ref-cells
+            ctx.emitter.instruction("test r11, r11");                           // check whether this owner still holds a fallback ref-cell
+            ctx.emitter.instruction(&format!("je {}", done));                   // skip released or never-created fallback ref-cells
             abi::emit_release_local_ref_cell(ctx.emitter, "r11", ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
         }
@@ -616,7 +616,7 @@ fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", result_reg, result_reg)); // check whether the refcounted local is initialized
-            ctx.emitter.instruction(&format!("je {}", done)); // skip uninitialized refcounted locals
+            ctx.emitter.instruction(&format!("je {}", done));                   // skip uninitialized refcounted locals
         }
     }
     abi::emit_decref_if_refcounted(ctx.emitter, ty);

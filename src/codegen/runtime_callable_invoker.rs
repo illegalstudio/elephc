@@ -111,10 +111,10 @@ pub(super) fn emit_runtime_callable_invoker(
 fn emit_descriptor_entry_to_call_reg(emitter: &mut Emitter, call_reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov {}, x0", call_reg)); // keep descriptor while loading its native entry
+            emitter.instruction(&format!("mov {}, x0", call_reg));              // keep descriptor while loading its native entry
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, rdi", call_reg)); // keep descriptor while loading its native entry
+            emitter.instruction(&format!("mov {}, rdi", call_reg));             // keep descriptor while loading its native entry
         }
     }
     callable_descriptor::emit_load_entry_from_descriptor(emitter, call_reg, call_reg);
@@ -594,11 +594,11 @@ fn emit_indexed_required_arg_count_check(
 fn emit_compare_len_ge(emitter: &mut Emitter, len_reg: &str, value: usize, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #{}", len_reg, value)); // compare runtime argument count against required bound
+            emitter.instruction(&format!("cmp {}, #{}", len_reg, value));       // compare runtime argument count against required bound
             emitter.instruction(&format!("b.ge {}", label));
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, {}", len_reg, value)); // compare runtime argument count against required bound
+            emitter.instruction(&format!("cmp {}, {}", len_reg, value));        // compare runtime argument count against required bound
             emitter.instruction(&format!("jge {}", label));
         }
     }
@@ -608,11 +608,11 @@ fn emit_compare_len_ge(emitter: &mut Emitter, len_reg: &str, value: usize, label
 fn emit_compare_len_gt(emitter: &mut Emitter, len_reg: &str, value: usize, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #{}", len_reg, value)); // compare runtime argument count against fixed prefix length
+            emitter.instruction(&format!("cmp {}, #{}", len_reg, value));       // compare runtime argument count against fixed prefix length
             emitter.instruction(&format!("b.gt {}", label));
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, {}", len_reg, value)); // compare runtime argument count against fixed prefix length
+            emitter.instruction(&format!("cmp {}, {}", len_reg, value));        // compare runtime argument count against fixed prefix length
             emitter.instruction(&format!("jg {}", label));
         }
     }
@@ -622,11 +622,11 @@ fn emit_compare_len_gt(emitter: &mut Emitter, len_reg: &str, value: usize, label
 fn emit_compare_reg_ge(emitter: &mut Emitter, left_reg: &str, right_reg: &str, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, {}", left_reg, right_reg)); // compare variadic loop index against tail count
+            emitter.instruction(&format!("cmp {}, {}", left_reg, right_reg));   // compare variadic loop index against tail count
             emitter.instruction(&format!("b.ge {}", label));
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, {}", left_reg, right_reg)); // compare variadic loop index against tail count
+            emitter.instruction(&format!("cmp {}, {}", left_reg, right_reg));   // compare variadic loop index against tail count
             emitter.instruction(&format!("jge {}", label));
         }
     }

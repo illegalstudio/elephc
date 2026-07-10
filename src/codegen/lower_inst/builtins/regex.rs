@@ -303,10 +303,10 @@ fn reserve_descriptor_callback_env(
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str x0, [sp]"); // store the runtime callable descriptor for the regex callback wrapper
+            ctx.emitter.instruction("str x0, [sp]");                            // store the runtime callable descriptor for the regex callback wrapper
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov QWORD PTR [rsp], rax"); // store the runtime callable descriptor for the regex callback wrapper
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // store the runtime callable descriptor for the regex callback wrapper
         }
     }
     Ok(16)

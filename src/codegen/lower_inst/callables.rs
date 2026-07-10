@@ -179,7 +179,7 @@ fn lower_mixed_callable_descriptor_invoke(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter
                 .instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // check whether the boxed Mixed payload is a callable descriptor
-            ctx.emitter.instruction(&format!("b.ne {}", fatal_label)); // fatal when the boxed Mixed value is not callable
+            ctx.emitter.instruction(&format!("b.ne {}", fatal_label));          // fatal when the boxed Mixed value is not callable
             ctx.emitter
                 .instruction(&format!("mov {}, x1", descriptor_reg)); // keep the unboxed callable descriptor in the nested-call register
         }
@@ -188,7 +188,7 @@ fn lower_mixed_callable_descriptor_invoke(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter
                 .instruction(&format!("cmp rax, {}", MIXED_TAG_CALLABLE)); // check whether the boxed Mixed payload is a callable descriptor
-            ctx.emitter.instruction(&format!("jne {}", fatal_label)); // fatal when the boxed Mixed value is not callable
+            ctx.emitter.instruction(&format!("jne {}", fatal_label));           // fatal when the boxed Mixed value is not callable
             ctx.emitter
                 .instruction(&format!("mov {}, rdi", descriptor_reg)); // keep the unboxed callable descriptor in the nested-call register
         }
@@ -218,7 +218,7 @@ fn emit_mixed_callable_not_callable_fatal(ctx: &mut FunctionContext<'_>, op_name
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the non-callable Mixed diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #2");                              // write the non-callable Mixed diagnostic to stderr
             ctx.emitter.adrp("x1", &message_label); // load the non-callable Mixed diagnostic page
             ctx.emitter.add_lo12("x1", "x1", &message_label); // resolve the non-callable Mixed diagnostic address
             ctx.emitter
@@ -227,12 +227,12 @@ fn emit_mixed_callable_not_callable_fatal(ctx: &mut FunctionContext<'_>, op_name
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the non-callable Mixed diagnostic to stderr
+            ctx.emitter.instruction("mov edi, 2");                              // write the non-callable Mixed diagnostic to stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the non-callable Mixed diagnostic byte length to write
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the non-callable Mixed diagnostic before terminating
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the non-callable Mixed diagnostic before terminating
             abi::emit_exit(ctx.emitter, 1);
         }
     }
@@ -1214,13 +1214,13 @@ fn emit_branch_if_stack_tag_mismatch(
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", tag_offset);
             ctx.emitter
                 .instruction(&format!("cmp x9, #{}", expected_tag)); // compare the callable-array selector runtime tag
-            ctx.emitter.instruction(&format!("b.ne {}", next_label)); // try the next callable-array target when the tag differs
+            ctx.emitter.instruction(&format!("b.ne {}", next_label));           // try the next callable-array target when the tag differs
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", tag_offset);
             ctx.emitter
                 .instruction(&format!("cmp r10, {}", expected_tag)); // compare the callable-array selector runtime tag
-            ctx.emitter.instruction(&format!("jne {}", next_label)); // try the next callable-array target when the tag differs
+            ctx.emitter.instruction(&format!("jne {}", next_label));            // try the next callable-array target when the tag differs
         }
     }
 }
@@ -1234,20 +1234,20 @@ fn emit_branch_if_receiver_class_id_mismatch(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", MIXED_RECEIVER_PAYLOAD_OFFSET);
-            ctx.emitter.instruction(&format!("cbz x9, {}", next_label)); // reject null callable-array receivers before reading class id
-            ctx.emitter.instruction("ldr x10, [x9]"); // load the callable-array receiver class id
+            ctx.emitter.instruction(&format!("cbz x9, {}", next_label));        // reject null callable-array receivers before reading class id
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the callable-array receiver class id
             abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
-            ctx.emitter.instruction("cmp x10, x11"); // compare the receiver class id against this target
-            ctx.emitter.instruction(&format!("b.ne {}", next_label)); // try the next callable-array target when the class differs
+            ctx.emitter.instruction("cmp x10, x11");                            // compare the receiver class id against this target
+            ctx.emitter.instruction(&format!("b.ne {}", next_label));           // try the next callable-array target when the class differs
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", MIXED_RECEIVER_PAYLOAD_OFFSET);
-            ctx.emitter.instruction("test r10, r10"); // reject null callable-array receivers before reading class id
-            ctx.emitter.instruction(&format!("je {}", next_label)); // try the next callable-array target when the receiver is null
-            ctx.emitter.instruction("mov r11, QWORD PTR [r10]"); // load the callable-array receiver class id
+            ctx.emitter.instruction("test r10, r10");                           // reject null callable-array receivers before reading class id
+            ctx.emitter.instruction(&format!("je {}", next_label));             // try the next callable-array target when the receiver is null
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // load the callable-array receiver class id
             abi::emit_load_int_immediate(ctx.emitter, "r10", class_id as i64);
-            ctx.emitter.instruction("cmp r11, r10"); // compare the receiver class id against this target
-            ctx.emitter.instruction(&format!("jne {}", next_label)); // try the next callable-array target when the class differs
+            ctx.emitter.instruction("cmp r11, r10");                            // compare the receiver class id against this target
+            ctx.emitter.instruction(&format!("jne {}", next_label));            // try the next callable-array target when the class differs
         }
     }
 }
@@ -1310,8 +1310,8 @@ fn emit_stack_string_compare_branch(
             abi::emit_symbol_address(ctx.emitter, "x3", &expected_label);
             abi::emit_load_int_immediate(ctx.emitter, "x4", expected_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("cmp x0, #0"); // check whether the runtime method string matched
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label)); // select this callable-array target when names match
+            ctx.emitter.instruction("cmp x0, #0");                              // check whether the runtime method string matched
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // select this callable-array target when names match
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", ptr_offset);
@@ -1319,8 +1319,8 @@ fn emit_stack_string_compare_branch(
             abi::emit_symbol_address(ctx.emitter, "rdx", &expected_label);
             abi::emit_load_int_immediate(ctx.emitter, "rcx", expected_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("test rax, rax"); // check whether the runtime method string matched
-            ctx.emitter.instruction(&format!("je {}", matched_label)); // select this callable-array target when names match
+            ctx.emitter.instruction("test rax, rax");                           // check whether the runtime method string matched
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // select this callable-array target when names match
         }
     }
 }
@@ -1501,7 +1501,7 @@ fn emit_runtime_callable_array_no_match_abort(ctx: &mut FunctionContext<'_>) {
         .add_string(b"Fatal error: callable array did not resolve to an invokable target\n");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the callable-array failure diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #2");                              // write the callable-array failure diagnostic to stderr
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
@@ -1510,12 +1510,12 @@ fn emit_runtime_callable_array_no_match_abort(ctx: &mut FunctionContext<'_>) {
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the callable-array failure diagnostic to stderr
+            ctx.emitter.instruction("mov edi, 2");                              // write the callable-array failure diagnostic to stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the callable-array diagnostic byte length
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the fatal diagnostic before terminating
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the fatal diagnostic before terminating
             abi::emit_exit(ctx.emitter, 1);
         }
     }
@@ -1892,7 +1892,7 @@ fn emit_branch_if_invoker_present(
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", invoker_reg, invoker_reg)); // check whether the callable descriptor has a uniform invoker
-            ctx.emitter.instruction(&format!("jnz {}", ready_label)); // continue when the callable descriptor has a uniform invoker
+            ctx.emitter.instruction(&format!("jnz {}", ready_label));           // continue when the callable descriptor has a uniform invoker
         }
     }
 }
@@ -1906,7 +1906,7 @@ fn emit_missing_descriptor_invoker_fatal(ctx: &mut FunctionContext<'_>, op_name:
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the missing descriptor-invoker diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #2");                              // write the missing descriptor-invoker diagnostic to stderr
             ctx.emitter.adrp("x1", &message_label); // load the missing descriptor-invoker diagnostic page
             ctx.emitter.add_lo12("x1", "x1", &message_label); // resolve the missing descriptor-invoker diagnostic address
             ctx.emitter
@@ -1915,12 +1915,12 @@ fn emit_missing_descriptor_invoker_fatal(ctx: &mut FunctionContext<'_>, op_name:
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the missing descriptor-invoker diagnostic to stderr
+            ctx.emitter.instruction("mov edi, 2");                              // write the missing descriptor-invoker diagnostic to stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the descriptor-invoker diagnostic byte length to write
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the missing descriptor-invoker diagnostic before terminating
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the missing descriptor-invoker diagnostic before terminating
             abi::emit_exit(ctx.emitter, 1);
         }
     }
@@ -1986,12 +1986,12 @@ fn emit_append_boxed_invoker_arg(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 16);
-            ctx.emitter.instruction("mov x1, x0"); // pass the boxed visible argument to the invoker array append helper
-            ctx.emitter.instruction("mov x0, x9"); // pass the saved invoker argument array to the append helper
+            ctx.emitter.instruction("mov x1, x0");                              // pass the boxed visible argument to the invoker array append helper
+            ctx.emitter.instruction("mov x0, x9");                              // pass the saved invoker argument array to the append helper
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 16);
-            ctx.emitter.instruction("mov rsi, rax"); // pass the boxed visible argument to the invoker array append helper
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the boxed visible argument to the invoker array append helper
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
@@ -2001,10 +2001,10 @@ fn emit_append_boxed_invoker_arg(ctx: &mut FunctionContext<'_>) {
 fn emit_store_result_to_top_stack_slot(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str x0, [sp]"); // update the saved invoker argument array after append growth
+            ctx.emitter.instruction("str x0, [sp]");                            // update the saved invoker argument array after append growth
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov QWORD PTR [rsp], rax"); // update the saved invoker argument array after append growth
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // update the saved invoker argument array after append growth
         }
     }
 }
@@ -2111,14 +2111,14 @@ fn store_descriptor_invoker_tagged_scalar_result(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x9, x0"); // preserve the unboxed Mixed tag before moving the payload
-            ctx.emitter.instruction("mov x0, x1"); // place the unboxed nullable-int payload into the tagged-scalar payload register
-            ctx.emitter.instruction("mov x1, x9"); // place the unboxed Mixed tag into the tagged-scalar tag register
+            ctx.emitter.instruction("mov x9, x0");                              // preserve the unboxed Mixed tag before moving the payload
+            ctx.emitter.instruction("mov x0, x1");                              // place the unboxed nullable-int payload into the tagged-scalar payload register
+            ctx.emitter.instruction("mov x1, x9");                              // place the unboxed Mixed tag into the tagged-scalar tag register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, rax"); // preserve the unboxed Mixed tag before moving the payload
-            ctx.emitter.instruction("mov rax, rdi"); // place the unboxed nullable-int payload into the tagged-scalar payload register
-            ctx.emitter.instruction("mov rdx, r10"); // place the unboxed Mixed tag into the tagged-scalar tag register
+            ctx.emitter.instruction("mov r10, rax");                            // preserve the unboxed Mixed tag before moving the payload
+            ctx.emitter.instruction("mov rax, rdi");                            // place the unboxed nullable-int payload into the tagged-scalar payload register
+            ctx.emitter.instruction("mov rdx, r10");                            // place the unboxed Mixed tag into the tagged-scalar tag register
         }
     }
     ctx.store_result_value(result)
@@ -2275,8 +2275,8 @@ fn emit_runtime_callable_name_compare(
             abi::emit_symbol_address(ctx.emitter, "x3", &candidate_label);
             abi::emit_load_int_immediate(ctx.emitter, "x4", candidate_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("cmp x0, #0"); // did the runtime string callable name match this user function?
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label)); // dispatch to this user function when names match case-insensitively
+            ctx.emitter.instruction("cmp x0, #0");                              // did the runtime string callable name match this user function?
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // dispatch to this user function when names match case-insensitively
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
@@ -2284,8 +2284,8 @@ fn emit_runtime_callable_name_compare(
             abi::emit_symbol_address(ctx.emitter, "rdx", &candidate_label);
             abi::emit_load_int_immediate(ctx.emitter, "rcx", candidate_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("test rax, rax"); // did the runtime string callable name match this user function?
-            ctx.emitter.instruction(&format!("je {}", matched_label)); // dispatch to this user function when names match case-insensitively
+            ctx.emitter.instruction("test rax, rax");                           // did the runtime string callable name match this user function?
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // dispatch to this user function when names match case-insensitively
         }
     }
 }
@@ -2342,7 +2342,7 @@ fn emit_undefined_runtime_string_call_fatal(ctx: &mut FunctionContext<'_>) {
     let (message_label, message_len) = ctx.data.add_string(message);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the undefined dynamic-call diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #2");                              // write the undefined dynamic-call diagnostic to stderr
             ctx.emitter.adrp("x1", &message_label); // load the dynamic-call diagnostic string page
             ctx.emitter.add_lo12("x1", "x1", &message_label); // resolve the dynamic-call diagnostic string address
             ctx.emitter
@@ -2351,12 +2351,12 @@ fn emit_undefined_runtime_string_call_fatal(ctx: &mut FunctionContext<'_>) {
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the undefined dynamic-call diagnostic to Linux stderr
+            ctx.emitter.instruction("mov edi, 2");                              // write the undefined dynamic-call diagnostic to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the dynamic-call diagnostic byte length to write
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the fatal diagnostic before terminating
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the fatal diagnostic before terminating
             abi::emit_exit(ctx.emitter, 1);
         }
     }

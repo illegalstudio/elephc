@@ -53,8 +53,8 @@ fn emit_aarch64_descriptor_callback_wrapper(
     emitter.instruction(&format!("stp x21, x22, [sp, #{}]", saved_runtime_offset)); // preserve runtime-loop callee-saved registers across descriptor invocation
 
     let env_reg = incoming_env_reg(emitter, &wrapper.visible_arg_types);
-    emitter.instruction(&format!("mov x20, {}", env_reg)); // keep the descriptor callback environment pointer across nested calls
-    emitter.instruction("ldr x19, [x20]"); // load the selected callable descriptor from env slot zero
+    emitter.instruction(&format!("mov x20, {}", env_reg));                      // keep the descriptor callback environment pointer across nested calls
+    emitter.instruction("ldr x19, [x20]");                                      // load the selected callable descriptor from env slot zero
 
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, wrapper, frame_size, "x20");
@@ -93,8 +93,8 @@ fn emit_x86_64_descriptor_callback_wrapper(
     abi::store_at_offset(emitter, "r15", saved_runtime_count_offset);
 
     let env_reg = incoming_env_reg(emitter, &wrapper.visible_arg_types);
-    emitter.instruction(&format!("mov r13, {}", env_reg)); // keep the descriptor callback environment pointer across nested calls
-    emitter.instruction("mov r12, QWORD PTR [r13]"); // load the selected callable descriptor from env slot zero
+    emitter.instruction(&format!("mov r13, {}", env_reg));                      // keep the descriptor callback environment pointer across nested calls
+    emitter.instruction("mov r12, QWORD PTR [r13]");                            // load the selected callable descriptor from env slot zero
 
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     emit_build_descriptor_invoker_arg_array(emitter, wrapper, frame_size, "r13");

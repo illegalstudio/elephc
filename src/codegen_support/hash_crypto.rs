@@ -51,7 +51,7 @@ pub(crate) fn publish_elephc_crypto_function_pointers(emitter: &mut Emitter) {
                 let extern_sym = emitter.target.extern_symbol(c_name);
                 abi::emit_extern_symbol_address(emitter, "x9", &extern_sym);
                 abi::emit_symbol_address(emitter, "x10", slot);
-                emitter.instruction("str x9, [x10]"); // publish the elephc-crypto hash entry into its runtime slot
+                emitter.instruction("str x9, [x10]");                           // publish the elephc-crypto hash entry into its runtime slot
             }
         }
         Arch::X86_64 => {
@@ -88,40 +88,40 @@ pub(crate) fn emit_throw_unknown_algorithm_value_error(
 
 /// Emits the AArch64 allocation and unwinder handoff for the `hash()` `\ValueError`.
 fn emit_throw_value_error_aarch64(emitter: &mut Emitter, message_symbol: &str, message_len: usize) {
-    emitter.instruction("mov x0, #32"); // request Throwable payload storage
-    emitter.instruction("bl __rt_heap_alloc"); // allocate the ValueError object payload
-    emitter.instruction("mov x9, #6"); // heap kind 6 = object instance
-    emitter.instruction("str x9, [x0, #-8]"); // stamp allocation as a runtime object
+    emitter.instruction("mov x0, #32");                                         // request Throwable payload storage
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the ValueError object payload
+    emitter.instruction("mov x9, #6");                                          // heap kind 6 = object instance
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp allocation as a runtime object
     abi::emit_symbol_address(emitter, "x9", "_spl_value_error_class_id");
-    emitter.instruction("ldr x9, [x9]"); // load ValueError's runtime class id for this program
-    emitter.instruction("str x9, [x0]"); // store class id at the object header
+    emitter.instruction("ldr x9, [x9]");                                        // load ValueError's runtime class id for this program
+    emitter.instruction("str x9, [x0]");                                        // store class id at the object header
     abi::emit_symbol_address(emitter, "x9", message_symbol);
-    emitter.instruction("str x9, [x0, #8]"); // store static ValueError message pointer
-    emitter.instruction(&format!("mov x9, #{}", message_len)); // load static ValueError message length
-    emitter.instruction("str x9, [x0, #16]"); // store exception message length
-    emitter.instruction("str xzr, [x0, #24]"); // exception code defaults to zero
+    emitter.instruction("str x9, [x0, #8]");                                    // store static ValueError message pointer
+    emitter.instruction(&format!("mov x9, #{}", message_len));                  // load static ValueError message length
+    emitter.instruction("str x9, [x0, #16]");                                   // store exception message length
+    emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
     abi::emit_symbol_address(emitter, "x9", "_exc_value");
-    emitter.instruction("str x0, [x9]"); // publish the active exception object
-    emitter.instruction("b __rt_throw_current"); // enter the standard exception unwinder
+    emitter.instruction("str x0, [x9]");                                        // publish the active exception object
+    emitter.instruction("b __rt_throw_current");                                // enter the standard exception unwinder
 }
 
 /// Emits the Linux x86_64 allocation and unwinder handoff for the `hash()` `\ValueError`.
 fn emit_throw_value_error_x86_64(emitter: &mut Emitter, message_symbol: &str, message_len: usize) {
-    emitter.instruction("push rbp"); // preserve caller frame pointer for exception allocation
-    emitter.instruction("mov rbp, rsp"); // establish aligned helper frame
-    emitter.instruction("sub rsp, 16"); // keep the nested heap allocation call 16-byte aligned
-    emitter.instruction("mov rax, 32"); // request Throwable payload storage
-    emitter.instruction("call __rt_heap_alloc"); // allocate the ValueError object payload
-    emitter.instruction("mov r10, 0x4548504c00000006"); // x86_64 heap-kind word: HE LP magic + kind 6 object
-    emitter.instruction("mov QWORD PTR [rax - 8], r10"); // stamp allocation as a runtime object
+    emitter.instruction("push rbp");                                            // preserve caller frame pointer for exception allocation
+    emitter.instruction("mov rbp, rsp");                                        // establish aligned helper frame
+    emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned
+    emitter.instruction("mov rax, 32");                                         // request Throwable payload storage
+    emitter.instruction("call __rt_heap_alloc");                                // allocate the ValueError object payload
+    emitter.instruction("mov r10, 0x4548504c00000006");                         // x86_64 heap-kind word: HE LP magic + kind 6 object
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as a runtime object
     abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_value_error_class_id", 0); // load ValueError's runtime class id for this program
-    emitter.instruction("mov QWORD PTR [rax], r10"); // store class id at the object header
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at the object header
     abi::emit_symbol_address(emitter, "r10", message_symbol); // materialize static ValueError message pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10"); // store static ValueError message pointer
+    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store static ValueError message pointer
     emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static ValueError message length
-    emitter.instruction("mov QWORD PTR [rax + 24], 0"); // exception code defaults to zero
+    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0); // publish the active exception object
-    emitter.instruction("mov rsp, rbp"); // release helper frame before throwing
-    emitter.instruction("pop rbp"); // restore caller frame pointer before throwing
-    emitter.instruction("jmp __rt_throw_current"); // enter the standard exception unwinder
+    emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
+    emitter.instruction("jmp __rt_throw_current");                              // enter the standard exception unwinder
 }

@@ -81,8 +81,8 @@ pub(crate) fn lower_fdiv(
         }
         Arch::X86_64 => {
             abi::emit_pop_float_reg(ctx.emitter, "xmm1");
-            ctx.emitter.instruction("divsd xmm1, xmm0"); // compute dividend divided by divisor in the scratch register
-            ctx.emitter.instruction("movsd xmm0, xmm1"); // move the floating quotient into the result register
+            ctx.emitter.instruction("divsd xmm1, xmm0");                        // compute dividend divided by divisor in the scratch register
+            ctx.emitter.instruction("movsd xmm0, xmm1");                        // move the floating quotient into the result register
         }
     }
     store_if_result(ctx, inst)
@@ -182,13 +182,13 @@ fn emit_intdiv_overflow_check_arm64(
 ) {
     let int_min_label = ctx.next_label("intdiv_int_min");
     let neg_one = abi::symbol_scratch_reg(ctx.emitter);
-    ctx.emitter.instruction(&format!("mov {}, #-1", neg_one));                    // materialize -1 for comparison
-    ctx.emitter.instruction(&format!("cmp {}, {}", divisor_reg, neg_one));        // check whether the divisor is -1
-    ctx.emitter.instruction(&format!("b.ne {}", int_min_label));                  // skip overflow check when the divisor is not -1
+    ctx.emitter.instruction(&format!("mov {}, #-1", neg_one));                  // materialize -1 for comparison
+    ctx.emitter.instruction(&format!("cmp {}, {}", divisor_reg, neg_one));      // check whether the divisor is -1
+    ctx.emitter.instruction(&format!("b.ne {}", int_min_label));                // skip overflow check when the divisor is not -1
     let scratch = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_load_int_immediate(ctx.emitter, scratch, i64::MIN);
-    ctx.emitter.instruction(&format!("cmp {}, {}", dividend_reg, scratch));      // check whether the dividend is PHP_INT_MIN
-    ctx.emitter.instruction(&format!("b.eq {}", overflow_label));                // branch to the overflow throw when INT_MIN / -1
+    ctx.emitter.instruction(&format!("cmp {}, {}", dividend_reg, scratch));     // check whether the dividend is PHP_INT_MIN
+    ctx.emitter.instruction(&format!("b.eq {}", overflow_label));               // branch to the overflow throw when INT_MIN / -1
     ctx.emitter.label(&int_min_label);
 }
 
@@ -201,11 +201,11 @@ fn emit_intdiv_overflow_check_x86_64(
     overflow_label: &str,
 ) {
     let not_neg_one_label = ctx.next_label("intdiv_not_neg_one");
-    ctx.emitter.instruction(&format!("cmp {}, -1", divisor_reg));                 // check whether the divisor is -1
-    ctx.emitter.instruction(&format!("jne {}", not_neg_one_label));               // skip overflow check when the divisor is not -1
-    ctx.emitter.instruction(&format!("mov r10, 0x8000000000000000"));             // materialize i64::MIN (PHP_INT_MIN)
-    ctx.emitter.instruction(&format!("cmp {}, r10", dividend_reg));               // check whether the dividend is PHP_INT_MIN
-    ctx.emitter.instruction(&format!("je {}", overflow_label));                   // branch to the overflow throw when INT_MIN / -1
+    ctx.emitter.instruction(&format!("cmp {}, -1", divisor_reg));               // check whether the divisor is -1
+    ctx.emitter.instruction(&format!("jne {}", not_neg_one_label));             // skip overflow check when the divisor is not -1
+    ctx.emitter.instruction(&format!("mov r10, 0x8000000000000000"));           // materialize i64::MIN (PHP_INT_MIN)
+    ctx.emitter.instruction(&format!("cmp {}, r10", dividend_reg));             // check whether the dividend is PHP_INT_MIN
+    ctx.emitter.instruction(&format!("je {}", overflow_label));                 // branch to the overflow throw when INT_MIN / -1
     ctx.emitter.label(&not_neg_one_label);
 }
 
@@ -216,41 +216,41 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
         .add_string(b"Division of PHP_INT_MIN by -1 is not an integer");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #32");                                // request Throwable payload storage for the ArithmeticError
-            ctx.emitter.instruction("bl __rt_heap_alloc");                         // allocate the ArithmeticError object payload
-            ctx.emitter.instruction("mov x9, #6");                                  // heap kind 6 marks an object instance allocation
-            ctx.emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation header as a runtime object
+            ctx.emitter.instruction("mov x0, #32");                             // request Throwable payload storage for the ArithmeticError
+            ctx.emitter.instruction("bl __rt_heap_alloc");                      // allocate the ArithmeticError object payload
+            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks an object instance allocation
+            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation header as a runtime object
             abi::emit_symbol_address(ctx.emitter, "x9", "_spl_arithmetic_error_class_id");
-            ctx.emitter.instruction("ldr x9, [x9]");                                // load ArithmeticError's runtime class id for this program
-            ctx.emitter.instruction("str x9, [x0]");                                // store the ArithmeticError class id in the Throwable header
+            ctx.emitter.instruction("ldr x9, [x9]");                            // load ArithmeticError's runtime class id for this program
+            ctx.emitter.instruction("str x9, [x0]");                            // store the ArithmeticError class id in the Throwable header
             ctx.emitter.adrp("x9", &msg_label);
             ctx.emitter.add_lo12("x9", "x9", &msg_label);
-            ctx.emitter.instruction("str x9, [x0, #8]");                            // store the static ArithmeticError message pointer
-            ctx.emitter.instruction(&format!("mov x9, #{}", msg_len));              // materialize the static ArithmeticError message length
-            ctx.emitter.instruction("str x9, [x0, #16]");                           // store the exception message length
-            ctx.emitter.instruction("str xzr, [x0, #24]");                          // store the default zero exception code
+            ctx.emitter.instruction("str x9, [x0, #8]");                        // store the static ArithmeticError message pointer
+            ctx.emitter.instruction(&format!("mov x9, #{}", msg_len));          // materialize the static ArithmeticError message length
+            ctx.emitter.instruction("str x9, [x0, #16]");                       // store the exception message length
+            ctx.emitter.instruction("str xzr, [x0, #24]");                      // store the default zero exception code
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
-            ctx.emitter.instruction("str x0, [x9]");                               // publish the active ArithmeticError object
-            ctx.emitter.instruction("b __rt_throw_current");                        // enter the standard exception unwinder
+            ctx.emitter.instruction("str x0, [x9]");                            // publish the active ArithmeticError object
+            ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("push rbp");                                    // preserve caller frame pointer for exception allocation
-            ctx.emitter.instruction("mov rbp, rsp");                                // establish an aligned helper frame for heap allocation
-            ctx.emitter.instruction("sub rsp, 16");                                 // keep the nested heap allocation call 16-byte aligned
-            ctx.emitter.instruction("mov rax, 32");                                  // request Throwable payload storage for the ArithmeticError
-            ctx.emitter.instruction("call __rt_heap_alloc");                        // allocate the ArithmeticError object payload
+            ctx.emitter.instruction("push rbp");                                // preserve caller frame pointer for exception allocation
+            ctx.emitter.instruction("mov rbp, rsp");                            // establish an aligned helper frame for heap allocation
+            ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
+            ctx.emitter.instruction("mov rax, 32");                             // request Throwable payload storage for the ArithmeticError
+            ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the ArithmeticError object payload
             ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 6)); // materialize the x86_64 object heap-kind header
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                 // stamp the allocation header as a runtime object
+            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a runtime object
             ctx.emitter.instruction("mov r10, QWORD PTR [rip + _spl_arithmetic_error_class_id]"); // load ArithmeticError's runtime class id for this program
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                    // store the ArithmeticError class id in the Throwable header
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the ArithmeticError class id in the Throwable header
             ctx.emitter.instruction(&format!("lea r10, [rip + {}]", msg_label));    // materialize the static ArithmeticError message pointer
-            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store the static ArithmeticError message pointer
+            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the static ArithmeticError message pointer
             ctx.emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", msg_len)); // store the exception message length
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                  // store the default zero exception code
-            ctx.emitter.instruction("mov QWORD PTR [rip + _exc_value], rax");        // publish the active ArithmeticError object
-            ctx.emitter.instruction("mov rsp, rbp");                                 // release the helper frame before throwing
-            ctx.emitter.instruction("pop rbp");                                      // restore caller frame pointer before throwing
-            ctx.emitter.instruction("jmp __rt_throw_current");                      // enter the standard exception unwinder
+            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // store the default zero exception code
+            ctx.emitter.instruction("mov QWORD PTR [rip + _exc_value], rax");   // publish the active ArithmeticError object
+            ctx.emitter.instruction("mov rsp, rbp");                            // release the helper frame before throwing
+            ctx.emitter.instruction("pop rbp");                                 // restore caller frame pointer before throwing
+            ctx.emitter.instruction("jmp __rt_throw_current");                  // enter the standard exception unwinder
         }
     }
 }

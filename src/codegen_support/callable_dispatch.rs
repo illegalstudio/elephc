@@ -277,8 +277,8 @@ fn emit_string_name_compare(
             abi::emit_symbol_address(emitter, "x3", &candidate_label);
             abi::emit_load_int_immediate(emitter, "x4", candidate_len as i64);
             abi::emit_call_label(emitter, "__rt_strcasecmp");
-            emitter.instruction("cmp x0, #0"); // did the runtime string callback name match this userland target?
-            emitter.instruction(&format!("b.eq {}", matched_label)); // select this callable case when names match case-insensitively
+            emitter.instruction("cmp x0, #0");                                  // did the runtime string callback name match this userland target?
+            emitter.instruction(&format!("b.eq {}", matched_label));            // select this callable case when names match case-insensitively
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(emitter, "rdi", ptr_offset);
@@ -286,8 +286,8 @@ fn emit_string_name_compare(
             abi::emit_symbol_address(emitter, "rdx", &candidate_label);
             abi::emit_load_int_immediate(emitter, "rcx", candidate_len as i64);
             abi::emit_call_label(emitter, "__rt_strcasecmp");
-            emitter.instruction("test rax, rax"); // did the runtime string callback name match this userland target?
-            emitter.instruction(&format!("je {}", matched_label)); // select this callable case when names match case-insensitively
+            emitter.instruction("test rax, rax");                               // did the runtime string callback name match this userland target?
+            emitter.instruction(&format!("je {}", matched_label));              // select this callable case when names match case-insensitively
         }
     }
 }

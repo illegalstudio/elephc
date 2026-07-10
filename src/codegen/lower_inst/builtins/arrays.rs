@@ -183,7 +183,7 @@ pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
     require_array_flip_result_type(&value_elem_ty, &inst.result_php_type.codegen_repr())?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax"); // pass the source indexed-array pointer as the flip helper argument
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the flip helper argument
     }
     abi::emit_call_label(ctx.emitter, array_flip_runtime_helper(&value_elem_ty));
     store_if_result(ctx, inst)
@@ -197,7 +197,7 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
         eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax"); // pass the source indexed-array pointer as the reverse helper argument
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the reverse helper argument
     }
     abi::emit_call_label(ctx.emitter, array_reverse_runtime_helper(&elem_ty));
     store_if_result(ctx, inst)
@@ -211,7 +211,7 @@ pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instructi
         eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax"); // pass the source indexed-array pointer as the dedup helper argument
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the dedup helper argument
     }
     abi::emit_call_label(ctx.emitter, array_unique_runtime_helper(&elem_ty));
     store_if_result(ctx, inst)
@@ -539,10 +539,10 @@ fn reserve_descriptor_callback_env(
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str x0, [sp]"); // store the runtime callable descriptor for the descriptor callback wrapper
+            ctx.emitter.instruction("str x0, [sp]");                            // store the runtime callable descriptor for the descriptor callback wrapper
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov QWORD PTR [rsp], rax"); // store the runtime callable descriptor for the descriptor callback wrapper
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // store the runtime callable descriptor for the descriptor callback wrapper
         }
     }
     Ok(16)
@@ -655,7 +655,7 @@ fn emit_dynamic_string_callback_abort(ctx: &mut FunctionContext<'_>, owner: &str
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the unresolved runtime callback diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #2");                              // write the unresolved runtime callback diagnostic to stderr
             ctx.emitter.adrp("x1", &message_label); // load the runtime callback diagnostic page
             ctx.emitter.add_lo12("x1", "x1", &message_label); // resolve the runtime callback diagnostic address
             ctx.emitter
@@ -664,12 +664,12 @@ fn emit_dynamic_string_callback_abort(ctx: &mut FunctionContext<'_>, owner: &str
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the unresolved runtime callback diagnostic to Linux stderr
+            ctx.emitter.instruction("mov edi, 2");                              // write the unresolved runtime callback diagnostic to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the runtime callback diagnostic byte length to write
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the fatal diagnostic before terminating
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the fatal diagnostic before terminating
             abi::emit_exit(ctx.emitter, 1);
         }
     }
@@ -1013,7 +1013,7 @@ pub(crate) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction
     require_indexed_array_builtin(ctx.value_php_type(array)?, "array_rand")?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax"); // pass the indexed-array pointer as the random-key helper argument
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the random-key helper argument
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_rand");
     store_if_result(ctx, inst)
@@ -1035,11 +1035,11 @@ pub(crate) fn lower_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     resolve_int_operand_to_result(ctx, end, "range end")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, x0"); // move the resolved range end into the second runtime argument
+            ctx.emitter.instruction("mov x1, x0");                              // move the resolved range end into the second runtime argument
             abi::emit_pop_reg(ctx.emitter, "x0"); // restore the resolved range start into the first runtime argument
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, rax"); // move the resolved range end into the second runtime argument
+            ctx.emitter.instruction("mov rsi, rax");                            // move the resolved range end into the second runtime argument
             abi::emit_pop_reg(ctx.emitter, "rdi"); // restore the resolved range start into the first runtime argument
         }
     }
@@ -1230,7 +1230,7 @@ fn two_hash_operand_needs_conversion(ty: PhpType, name: &str) -> Result<bool> {
 /// register already is that register, but on x86_64 the value lives in `rax` and must move to `rdi`.
 fn emit_convert_indexed_to_hash(ctx: &mut FunctionContext<'_>) {
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax"); // move the array pointer into the first SysV argument register
+        ctx.emitter.instruction("mov rdi, rax");                                // move the array pointer into the first SysV argument register
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
 }
@@ -1272,17 +1272,17 @@ fn lower_two_hash_arg_builtin(
         // -- fast path: both inputs are already hashes, no temporaries to free --
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction("mov x1, x0"); // second hash pointer into the second argument register
+                ctx.emitter.instruction("mov x1, x0");                          // second hash pointer into the second argument register
                 abi::emit_pop_reg(ctx.emitter, "x0");
                 if let Some(m) = mode {
-                    ctx.emitter.instruction(&format!("mov x2, #{}", m)); // mode selector into the third argument register
+                    ctx.emitter.instruction(&format!("mov x2, #{}", m));        // mode selector into the third argument register
                 }
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("mov rsi, rax"); // second hash pointer into the second SysV argument register
+                ctx.emitter.instruction("mov rsi, rax");                        // second hash pointer into the second SysV argument register
                 abi::emit_pop_reg(ctx.emitter, "rdi");
                 if let Some(m) = mode {
-                    ctx.emitter.instruction(&format!("mov edx, {}", m)); // mode selector into the third SysV argument register
+                    ctx.emitter.instruction(&format!("mov edx, {}", m));        // mode selector into the third SysV argument register
                 }
             }
         }
@@ -1294,43 +1294,43 @@ fn lower_two_hash_arg_builtin(
     abi::emit_push_reg(ctx.emitter, result_reg);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x0, [sp, #16]"); // first hash pointer kept on the stack for freeing
-            ctx.emitter.instruction("ldr x1, [sp]"); // second hash pointer kept on the stack for freeing
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // first hash pointer kept on the stack for freeing
+            ctx.emitter.instruction("ldr x1, [sp]");                            // second hash pointer kept on the stack for freeing
             if let Some(m) = mode {
-                ctx.emitter.instruction(&format!("mov x2, #{}", m)); // mode selector into the third argument register
+                ctx.emitter.instruction(&format!("mov x2, #{}", m));            // mode selector into the third argument register
             }
             abi::emit_call_label(ctx.emitter, runtime_label);
-            ctx.emitter.instruction("str x0, [sp, #-16]!"); // spill the result; stack holds [result, h2, h1]
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // spill the result; stack holds [result, h2, h1]
             if conv1 {
-                ctx.emitter.instruction("ldr x0, [sp, #16]"); // reload the converted second hash temporary
+                ctx.emitter.instruction("ldr x0, [sp, #16]");                   // reload the converted second hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             if conv0 {
-                ctx.emitter.instruction("ldr x0, [sp, #32]"); // reload the converted first hash temporary
+                ctx.emitter.instruction("ldr x0, [sp, #32]");                   // reload the converted first hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
-            ctx.emitter.instruction("ldr x0, [sp], #16"); // restore the result hash pointer
-            ctx.emitter.instruction("add sp, sp, #32"); // discard the two spilled input hash pointers
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the result hash pointer
+            ctx.emitter.instruction("add sp, sp, #32");                         // discard the two spilled input hash pointers
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]"); // first hash pointer kept on the stack for freeing
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]"); // second hash pointer kept on the stack for freeing
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // first hash pointer kept on the stack for freeing
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                // second hash pointer kept on the stack for freeing
             if let Some(m) = mode {
-                ctx.emitter.instruction(&format!("mov edx, {}", m)); // mode selector into the third SysV argument register
+                ctx.emitter.instruction(&format!("mov edx, {}", m));            // mode selector into the third SysV argument register
             }
             abi::emit_call_label(ctx.emitter, runtime_label);
-            ctx.emitter.instruction("sub rsp, 16"); // reserve a slot for the result
-            ctx.emitter.instruction("mov QWORD PTR [rsp], rax"); // spill the result; stack holds [result, h2, h1]
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve a slot for the result
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // spill the result; stack holds [result, h2, h1]
             if conv1 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]"); // reload the converted second hash temporary
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");       // reload the converted second hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             if conv0 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]"); // reload the converted first hash temporary
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");       // reload the converted first hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]"); // restore the result hash pointer
-            ctx.emitter.instruction("add rsp, 48"); // discard the result slot and the two spilled inputs
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the result hash pointer
+            ctx.emitter.instruction("add rsp, 48");                             // discard the result slot and the two spilled inputs
         }
     }
     store_if_result(ctx, inst)
@@ -1877,7 +1877,7 @@ fn lower_indexed_array_aggregate(
     require_supported_indexed_array(ctx.value_php_type(array)?, name)?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax"); // pass the indexed-array pointer as the runtime helper argument
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the runtime helper argument
     }
     abi::emit_call_label(ctx.emitter, helper);
     store_if_result(ctx, inst)
@@ -3562,15 +3562,15 @@ fn shift_callback_args_after_hidden_aarch64(
 ) {
     match visible_arg_types {
         [ty] if matches!(ty.codegen_repr(), PhpType::Str) => {
-            ctx.emitter.instruction("mov x2, x1"); // shift the callback string length after the hidden receiver/class id
-            ctx.emitter.instruction("mov x1, x0"); // shift the callback string pointer after the hidden receiver/class id
+            ctx.emitter.instruction("mov x2, x1");                              // shift the callback string length after the hidden receiver/class id
+            ctx.emitter.instruction("mov x1, x0");                              // shift the callback string pointer after the hidden receiver/class id
         }
         [_] => {
-            ctx.emitter.instruction("mov x1, x0"); // shift the scalar callback argument after the hidden receiver/class id
+            ctx.emitter.instruction("mov x1, x0");                              // shift the scalar callback argument after the hidden receiver/class id
         }
         [_, _] => {
-            ctx.emitter.instruction("mov x2, x1"); // shift the second scalar callback argument after the hidden receiver/class id
-            ctx.emitter.instruction("mov x1, x0"); // shift the first scalar callback argument after the hidden receiver/class id
+            ctx.emitter.instruction("mov x2, x1");                              // shift the second scalar callback argument after the hidden receiver/class id
+            ctx.emitter.instruction("mov x1, x0");                              // shift the first scalar callback argument after the hidden receiver/class id
         }
         _ => {}
     }
@@ -3583,15 +3583,15 @@ fn shift_callback_args_after_hidden_x86_64(
 ) {
     match visible_arg_types {
         [ty] if matches!(ty.codegen_repr(), PhpType::Str) => {
-            ctx.emitter.instruction("mov rdx, rsi"); // shift the callback string length after the hidden receiver/class id
-            ctx.emitter.instruction("mov rsi, rdi"); // shift the callback string pointer after the hidden receiver/class id
+            ctx.emitter.instruction("mov rdx, rsi");                            // shift the callback string length after the hidden receiver/class id
+            ctx.emitter.instruction("mov rsi, rdi");                            // shift the callback string pointer after the hidden receiver/class id
         }
         [_] => {
-            ctx.emitter.instruction("mov rsi, rdi"); // shift the scalar callback argument after the hidden receiver/class id
+            ctx.emitter.instruction("mov rsi, rdi");                            // shift the scalar callback argument after the hidden receiver/class id
         }
         [_, _] => {
-            ctx.emitter.instruction("mov rdx, rsi"); // shift the second scalar callback argument after the hidden receiver/class id
-            ctx.emitter.instruction("mov rsi, rdi"); // shift the first scalar callback argument after the hidden receiver/class id
+            ctx.emitter.instruction("mov rdx, rsi");                            // shift the second scalar callback argument after the hidden receiver/class id
+            ctx.emitter.instruction("mov rsi, rdi");                            // shift the first scalar callback argument after the hidden receiver/class id
         }
         _ => {}
     }
@@ -3627,22 +3627,22 @@ fn emit_static_method_callback_wrapper_aarch64(
         ctx.emitter.target,
         callback_arg_abi_slots(visible_arg_types),
     );
-    ctx.emitter.instruction("sub sp, sp, #16"); // reserve wrapper spill space for the runtime callback return address
-    ctx.emitter.instruction("str x30, [sp, #8]"); // preserve the runtime helper return address across the static method call
+    ctx.emitter.instruction("sub sp, sp, #16");                                 // reserve wrapper spill space for the runtime callback return address
+    ctx.emitter.instruction("str x30, [sp, #8]");                               // preserve the runtime helper return address across the static method call
     match target.called_class {
         StaticCallbackCalledClass::Immediate(class_id) => {
             abi::emit_load_int_immediate(ctx.emitter, "x3", class_id as i64);
         }
         StaticCallbackCalledClass::Env => {
-            ctx.emitter.instruction(&format!("ldr x3, [{}]", env_reg)); // load the late-static called-class id from the callback environment
+            ctx.emitter.instruction(&format!("ldr x3, [{}]", env_reg));         // load the late-static called-class id from the callback environment
         }
     }
     shift_callback_args_after_hidden_aarch64(ctx, visible_arg_types);
-    ctx.emitter.instruction("mov x0, x3"); // pass the called-class id as the hidden static method argument
+    ctx.emitter.instruction("mov x0, x3");                                      // pass the called-class id as the hidden static method argument
     emit_static_callback_dispatch(ctx, target);
-    ctx.emitter.instruction("ldr x30, [sp, #8]"); // restore the runtime helper return address after the static method call
-    ctx.emitter.instruction("add sp, sp, #16"); // release the wrapper spill space before returning to the runtime helper
-    ctx.emitter.instruction("ret"); // return the static method result to the runtime callback helper
+    ctx.emitter.instruction("ldr x30, [sp, #8]");                               // restore the runtime helper return address after the static method call
+    ctx.emitter.instruction("add sp, sp, #16");                                 // release the wrapper spill space before returning to the runtime helper
+    ctx.emitter.instruction("ret");                                             // return the static method result to the runtime callback helper
 }
 
 /// Emits the x86_64 static-method callback ABI adapter.
@@ -3655,8 +3655,8 @@ fn emit_static_method_callback_wrapper_x86_64(
         ctx.emitter.target,
         callback_arg_abi_slots(visible_arg_types),
     );
-    ctx.emitter.instruction("push rbp"); // preserve the runtime helper frame pointer for the nested static method call
-    ctx.emitter.instruction("mov rbp, rsp"); // establish a wrapper frame while shifting callback arguments
+    ctx.emitter.instruction("push rbp");                                        // preserve the runtime helper frame pointer for the nested static method call
+    ctx.emitter.instruction("mov rbp, rsp");                                    // establish a wrapper frame while shifting callback arguments
     match target.called_class {
         StaticCallbackCalledClass::Immediate(class_id) => {
             abi::emit_load_int_immediate(ctx.emitter, "rcx", class_id as i64);
@@ -3667,10 +3667,10 @@ fn emit_static_method_callback_wrapper_x86_64(
         }
     }
     shift_callback_args_after_hidden_x86_64(ctx, visible_arg_types);
-    ctx.emitter.instruction("mov rdi, rcx"); // pass the called-class id as the hidden static method argument
+    ctx.emitter.instruction("mov rdi, rcx");                                    // pass the called-class id as the hidden static method argument
     emit_static_callback_dispatch(ctx, target);
-    ctx.emitter.instruction("pop rbp"); // restore the runtime helper frame pointer before returning
-    ctx.emitter.instruction("ret"); // return the static method result to the runtime callback helper
+    ctx.emitter.instruction("pop rbp");                                         // restore the runtime helper frame pointer before returning
+    ctx.emitter.instruction("ret");                                             // return the static method result to the runtime callback helper
 }
 
 /// Emits a local wrapper that prepends the captured object receiver.
@@ -3705,15 +3705,15 @@ fn emit_instance_method_callback_wrapper_aarch64(
         ctx.emitter.target,
         callback_arg_abi_slots(visible_arg_types),
     );
-    ctx.emitter.instruction("sub sp, sp, #16"); // reserve wrapper spill space for the runtime callback return address
-    ctx.emitter.instruction("str x30, [sp, #8]"); // preserve the runtime helper return address across the instance method call
-    ctx.emitter.instruction(&format!("ldr x3, [{}]", env_reg)); // load the captured object receiver from the callback environment
+    ctx.emitter.instruction("sub sp, sp, #16");                                 // reserve wrapper spill space for the runtime callback return address
+    ctx.emitter.instruction("str x30, [sp, #8]");                               // preserve the runtime helper return address across the instance method call
+    ctx.emitter.instruction(&format!("ldr x3, [{}]", env_reg));                 // load the captured object receiver from the callback environment
     shift_callback_args_after_hidden_aarch64(ctx, visible_arg_types);
-    ctx.emitter.instruction("mov x0, x3"); // pass the captured object receiver as the method receiver
+    ctx.emitter.instruction("mov x0, x3");                                      // pass the captured object receiver as the method receiver
     abi::emit_call_label(ctx.emitter, &target.entry_label);
-    ctx.emitter.instruction("ldr x30, [sp, #8]"); // restore the runtime helper return address after the instance method call
-    ctx.emitter.instruction("add sp, sp, #16"); // release the wrapper spill space before returning to the runtime helper
-    ctx.emitter.instruction("ret"); // return the instance method result to the runtime callback helper
+    ctx.emitter.instruction("ldr x30, [sp, #8]");                               // restore the runtime helper return address after the instance method call
+    ctx.emitter.instruction("add sp, sp, #16");                                 // release the wrapper spill space before returning to the runtime helper
+    ctx.emitter.instruction("ret");                                             // return the instance method result to the runtime callback helper
 }
 
 /// Emits the x86_64 instance-method callback ABI adapter.
@@ -3726,15 +3726,15 @@ fn emit_instance_method_callback_wrapper_x86_64(
         ctx.emitter.target,
         callback_arg_abi_slots(visible_arg_types),
     );
-    ctx.emitter.instruction("push rbp"); // preserve the runtime helper frame pointer for the nested instance method call
-    ctx.emitter.instruction("mov rbp, rsp"); // establish a wrapper frame while shifting callback arguments
+    ctx.emitter.instruction("push rbp");                                        // preserve the runtime helper frame pointer for the nested instance method call
+    ctx.emitter.instruction("mov rbp, rsp");                                    // establish a wrapper frame while shifting callback arguments
     ctx.emitter
         .instruction(&format!("mov rcx, QWORD PTR [{}]", env_reg)); // load the captured object receiver from the callback environment
     shift_callback_args_after_hidden_x86_64(ctx, visible_arg_types);
-    ctx.emitter.instruction("mov rdi, rcx"); // pass the captured object receiver as the method receiver
+    ctx.emitter.instruction("mov rdi, rcx");                                    // pass the captured object receiver as the method receiver
     abi::emit_call_label(ctx.emitter, &target.entry_label);
-    ctx.emitter.instruction("pop rbp"); // restore the runtime helper frame pointer before returning
-    ctx.emitter.instruction("ret"); // return the instance method result to the runtime callback helper
+    ctx.emitter.instruction("pop rbp");                                         // restore the runtime helper frame pointer before returning
+    ctx.emitter.instruction("ret");                                             // return the instance method result to the runtime callback helper
 }
 
 /// Emits either a direct static-method callback call or a late-static vtable call.
@@ -3823,10 +3823,10 @@ fn reserve_static_callback_env(
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str x0, [sp]"); // store the callback environment payload for the runtime helper
+            ctx.emitter.instruction("str x0, [sp]");                            // store the callback environment payload for the runtime helper
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov QWORD PTR [rsp], rax"); // store the callback environment payload for the runtime helper
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // store the callback environment payload for the runtime helper
         }
     }
     Ok(16)
@@ -4303,8 +4303,8 @@ fn materialize_array_fill_assoc_value_words(
             ctx.load_value_to_result(value)?;
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("fmov {}, d0", lo_reg)); // pass the floating-point fill bits as the assoc-fill value low word
-                    ctx.emitter.instruction(&format!("mov {}, #0", hi_reg)); // clear the unused assoc-fill value high word
+                    ctx.emitter.instruction(&format!("fmov {}, d0", lo_reg));   // pass the floating-point fill bits as the assoc-fill value low word
+                    ctx.emitter.instruction(&format!("mov {}, #0", hi_reg));    // clear the unused assoc-fill value high word
                 }
                 Arch::X86_64 => {
                     ctx.emitter.instruction(&format!("movq {}, xmm0", lo_reg)); // pass the floating-point fill bits as the assoc-fill value low word
@@ -4318,7 +4318,7 @@ fn materialize_array_fill_assoc_value_words(
             ctx.load_value_to_reg(value, lo_reg)?;
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("mov {}, #0", hi_reg)); // clear the unused assoc-fill value high word
+                    ctx.emitter.instruction(&format!("mov {}, #0", hi_reg));    // clear the unused assoc-fill value high word
                 }
                 Arch::X86_64 => {
                     ctx.emitter
@@ -4798,20 +4798,20 @@ fn lower_mixed_array_slice_aarch64(
     ctx.load_value_to_reg(array, "x0")?;
     abi::emit_push_reg(ctx.emitter, "x0");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp x0, #4"); // require an indexed-array payload before slicing the Mixed cell
-    ctx.emitter.instruction(&format!("b.ne {}", empty_label)); // return an empty slice for non-array Mixed payloads
-    ctx.emitter.instruction(&format!("cbz x1, {}", empty_label)); // return an empty slice for null array payloads
-    ctx.emitter.instruction("mov x0, x1"); // pass the unboxed indexed-array payload to the Mixed conversion helper
-    ctx.emitter.instruction("ldr x1, [x0, #-8]"); // load indexed-array metadata before Mixed-slot conversion
-    ctx.emitter.instruction("lsr x1, x1, #8"); // move the runtime value_type tag into the low bits
-    ctx.emitter.instruction("and x1, x1, #0x7f"); // isolate the indexed-array value_type tag
+    ctx.emitter.instruction("cmp x0, #4");                                      // require an indexed-array payload before slicing the Mixed cell
+    ctx.emitter.instruction(&format!("b.ne {}", empty_label));                  // return an empty slice for non-array Mixed payloads
+    ctx.emitter.instruction(&format!("cbz x1, {}", empty_label));               // return an empty slice for null array payloads
+    ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed-array payload to the Mixed conversion helper
+    ctx.emitter.instruction("ldr x1, [x0, #-8]");                               // load indexed-array metadata before Mixed-slot conversion
+    ctx.emitter.instruction("lsr x1, x1, #8");                                  // move the runtime value_type tag into the low bits
+    ctx.emitter.instruction("and x1, x1, #0x7f");                               // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     abi::emit_pop_reg(ctx.emitter, "x10");
-    ctx.emitter.instruction("str x0, [x10, #8]"); // publish the converted unique array back into the Mixed cell
+    ctx.emitter.instruction("str x0, [x10, #8]");                               // publish the converted unique array back into the Mixed cell
     abi::emit_push_reg(ctx.emitter, "x0");
     materialize_mixed_slice_args(ctx, offset, length, "array_slice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_slice_refcounted");
-    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the empty-array fallback after slicing the boxed payload
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array fallback after slicing the boxed payload
     ctx.emitter.label(&empty_label);
     abi::emit_pop_reg(ctx.emitter, "x9");
     allocate_empty_mixed_array_result(ctx);
@@ -4831,20 +4831,20 @@ fn lower_mixed_array_slice_x86_64(
     ctx.load_value_to_reg(array, "rax")?;
     abi::emit_push_reg(ctx.emitter, "rax");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp rax, 4"); // require an indexed-array payload before slicing the Mixed cell
-    ctx.emitter.instruction(&format!("jne {}", empty_label)); // return an empty slice for non-array Mixed payloads
-    ctx.emitter.instruction("test rdi, rdi"); // verify the unboxed indexed-array payload is present
-    ctx.emitter.instruction(&format!("je {}", empty_label)); // return an empty slice for null array payloads
-    ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]"); // load indexed-array metadata before Mixed-slot conversion
-    ctx.emitter.instruction("shr rsi, 8"); // move the runtime value_type tag into the low bits
-    ctx.emitter.instruction("and rsi, 0x7f"); // isolate the indexed-array value_type tag
+    ctx.emitter.instruction("cmp rax, 4");                                      // require an indexed-array payload before slicing the Mixed cell
+    ctx.emitter.instruction(&format!("jne {}", empty_label));                   // return an empty slice for non-array Mixed payloads
+    ctx.emitter.instruction("test rdi, rdi");                                   // verify the unboxed indexed-array payload is present
+    ctx.emitter.instruction(&format!("je {}", empty_label));                    // return an empty slice for null array payloads
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");                    // load indexed-array metadata before Mixed-slot conversion
+    ctx.emitter.instruction("shr rsi, 8");                                      // move the runtime value_type tag into the low bits
+    ctx.emitter.instruction("and rsi, 0x7f");                                   // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax"); // publish the converted unique array back into the Mixed cell
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // publish the converted unique array back into the Mixed cell
     abi::emit_push_reg(ctx.emitter, "rax");
     materialize_mixed_slice_args(ctx, offset, length, "array_slice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_slice_refcounted");
-    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the empty-array fallback after slicing the boxed payload
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array fallback after slicing the boxed payload
     ctx.emitter.label(&empty_label);
     abi::emit_pop_reg(ctx.emitter, "r11");
     allocate_empty_mixed_array_result(ctx);
@@ -4864,20 +4864,20 @@ fn lower_mixed_array_splice_aarch64(
     ctx.load_value_to_reg(array, "x0")?;
     abi::emit_push_reg(ctx.emitter, "x0");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp x0, #4"); // require an indexed-array payload before splicing the Mixed cell
-    ctx.emitter.instruction(&format!("b.ne {}", drop_label)); // return an empty removed-elements array for non-array Mixed payloads
-    ctx.emitter.instruction(&format!("cbz x1, {}", drop_label)); // return an empty removed-elements array for null array payloads
-    ctx.emitter.instruction("mov x0, x1"); // pass the unboxed indexed-array payload to the Mixed conversion helper
-    ctx.emitter.instruction("ldr x1, [x0, #-8]"); // load indexed-array metadata before Mixed-slot conversion
-    ctx.emitter.instruction("lsr x1, x1, #8"); // move the runtime value_type tag into the low bits
-    ctx.emitter.instruction("and x1, x1, #0x7f"); // isolate the indexed-array value_type tag
+    ctx.emitter.instruction("cmp x0, #4");                                      // require an indexed-array payload before splicing the Mixed cell
+    ctx.emitter.instruction(&format!("b.ne {}", drop_label));                   // return an empty removed-elements array for non-array Mixed payloads
+    ctx.emitter.instruction(&format!("cbz x1, {}", drop_label));                // return an empty removed-elements array for null array payloads
+    ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed-array payload to the Mixed conversion helper
+    ctx.emitter.instruction("ldr x1, [x0, #-8]");                               // load indexed-array metadata before Mixed-slot conversion
+    ctx.emitter.instruction("lsr x1, x1, #8");                                  // move the runtime value_type tag into the low bits
+    ctx.emitter.instruction("and x1, x1, #0x7f");                               // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     abi::emit_pop_reg(ctx.emitter, "x10");
-    ctx.emitter.instruction("str x0, [x10, #8]"); // publish the converted unique array back into the Mixed cell
+    ctx.emitter.instruction("str x0, [x10, #8]");                               // publish the converted unique array back into the Mixed cell
     abi::emit_push_reg(ctx.emitter, "x0");
     materialize_mixed_slice_args(ctx, offset, length, "array_splice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_splice_refcounted");
-    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the empty-array fallback after splicing the boxed payload
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array fallback after splicing the boxed payload
     ctx.emitter.label(&drop_label);
     abi::emit_pop_reg(ctx.emitter, "x9");
     allocate_empty_mixed_array_result(ctx);
@@ -4897,20 +4897,20 @@ fn lower_mixed_array_splice_x86_64(
     ctx.load_value_to_reg(array, "rax")?;
     abi::emit_push_reg(ctx.emitter, "rax");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp rax, 4"); // require an indexed-array payload before splicing the Mixed cell
-    ctx.emitter.instruction(&format!("jne {}", drop_label)); // return an empty removed-elements array for non-array Mixed payloads
-    ctx.emitter.instruction("test rdi, rdi"); // verify the unboxed indexed-array payload is present
-    ctx.emitter.instruction(&format!("je {}", drop_label)); // return an empty removed-elements array for null array payloads
-    ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]"); // load indexed-array metadata before Mixed-slot conversion
-    ctx.emitter.instruction("shr rsi, 8"); // move the runtime value_type tag into the low bits
-    ctx.emitter.instruction("and rsi, 0x7f"); // isolate the indexed-array value_type tag
+    ctx.emitter.instruction("cmp rax, 4");                                      // require an indexed-array payload before splicing the Mixed cell
+    ctx.emitter.instruction(&format!("jne {}", drop_label));                    // return an empty removed-elements array for non-array Mixed payloads
+    ctx.emitter.instruction("test rdi, rdi");                                   // verify the unboxed indexed-array payload is present
+    ctx.emitter.instruction(&format!("je {}", drop_label));                     // return an empty removed-elements array for null array payloads
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");                    // load indexed-array metadata before Mixed-slot conversion
+    ctx.emitter.instruction("shr rsi, 8");                                      // move the runtime value_type tag into the low bits
+    ctx.emitter.instruction("and rsi, 0x7f");                                   // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax"); // publish the converted unique array back into the Mixed cell
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // publish the converted unique array back into the Mixed cell
     abi::emit_push_reg(ctx.emitter, "rax");
     materialize_mixed_slice_args(ctx, offset, length, "array_splice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_splice_refcounted");
-    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the empty-array fallback after splicing the boxed payload
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array fallback after splicing the boxed payload
     ctx.emitter.label(&drop_label);
     abi::emit_pop_reg(ctx.emitter, "r11");
     allocate_empty_mixed_array_result(ctx);
@@ -5009,10 +5009,10 @@ fn lower_array_pad_call(
 fn emit_array_slice_until_end_sentinel(ctx: &mut FunctionContext<'_>, reg: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, #-1", reg)); // use -1 as the array_slice() runtime sentinel for length until the end
+            ctx.emitter.instruction(&format!("mov {}, #-1", reg));              // use -1 as the array_slice() runtime sentinel for length until the end
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, -1", reg)); // use -1 as the x86_64 array_slice() runtime sentinel for length until the end
+            ctx.emitter.instruction(&format!("mov {}, -1", reg));               // use -1 as the x86_64 array_slice() runtime sentinel for length until the end
         }
     }
 }
@@ -5064,11 +5064,11 @@ fn normalize_indexed_array_result(
         let source_tag = runtime_value_tag(name, source_elem_ty)?;
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("mov x1, #{}", source_tag)); // pass the source slot value_type tag to widen the indexed-array result to Mixed
+                ctx.emitter.instruction(&format!("mov x1, #{}", source_tag));   // pass the source slot value_type tag to widen the indexed-array result to Mixed
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("mov rdi, rax"); // pass the produced indexed-array pointer to the Mixed-widening helper
-                ctx.emitter.instruction(&format!("mov rsi, {}", source_tag)); // pass the source slot value_type tag to widen the indexed-array result to Mixed
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the produced indexed-array pointer to the Mixed-widening helper
+                ctx.emitter.instruction(&format!("mov rsi, {}", source_tag));   // pass the source slot value_type tag to widen the indexed-array result to Mixed
             }
         }
         abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
@@ -5178,13 +5178,13 @@ fn lower_array_pop_aarch64(
     let empty_label = ctx.next_label("array_pop_empty");
     let done_label = ctx.next_label("array_pop_done");
     ctx.load_value_to_reg(array, "x0")?;
-    ctx.emitter.instruction("ldr x9, [x0]"); // load the indexed-array length before deciding whether pop is empty
-    ctx.emitter.instruction(&format!("cbz x9, {}", empty_label)); // return boxed null when array_pop() runs on an empty array
-    ctx.emitter.instruction("sub x9, x9, #1"); // convert the old length into the removed last-element index
-    ctx.emitter.instruction("str x9, [x0]"); // persist the shortened indexed-array length in the header
+    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the indexed-array length before deciding whether pop is empty
+    ctx.emitter.instruction(&format!("cbz x9, {}", empty_label));               // return boxed null when array_pop() runs on an empty array
+    ctx.emitter.instruction("sub x9, x9, #1");                                  // convert the old length into the removed last-element index
+    ctx.emitter.instruction("str x9, [x0]");                                    // persist the shortened indexed-array length in the header
     emit_array_pop_value_aarch64(ctx, elem_ty)?;
     crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, elem_ty);
-    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the empty-array boxed-null path after loading the removed value
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array boxed-null path after loading the removed value
     ctx.emitter.label(&empty_label);
     emit_array_pop_null(ctx);
     ctx.emitter.label(&done_label);
@@ -5200,14 +5200,14 @@ fn lower_array_pop_x86_64(
     let empty_label = ctx.next_label("array_pop_empty");
     let done_label = ctx.next_label("array_pop_done");
     ctx.load_value_to_reg(array, "rax")?;
-    ctx.emitter.instruction("mov r10, QWORD PTR [rax]"); // load the indexed-array length before deciding whether pop is empty
-    ctx.emitter.instruction("test r10, r10"); // check whether the indexed array has any live elements
-    ctx.emitter.instruction(&format!("jz {}", empty_label)); // return boxed null when array_pop() runs on an empty array
-    ctx.emitter.instruction("sub r10, 1"); // convert the old length into the removed last-element index
-    ctx.emitter.instruction("mov QWORD PTR [rax], r10"); // persist the shortened indexed-array length in the header
+    ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the indexed-array length before deciding whether pop is empty
+    ctx.emitter.instruction("test r10, r10");                                   // check whether the indexed array has any live elements
+    ctx.emitter.instruction(&format!("jz {}", empty_label));                    // return boxed null when array_pop() runs on an empty array
+    ctx.emitter.instruction("sub r10, 1");                                      // convert the old length into the removed last-element index
+    ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // persist the shortened indexed-array length in the header
     emit_array_pop_value_x86_64(ctx, elem_ty)?;
     crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, elem_ty);
-    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the empty-array boxed-null path after loading the removed value
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array boxed-null path after loading the removed value
     ctx.emitter.label(&empty_label);
     emit_array_pop_null(ctx);
     ctx.emitter.label(&done_label);
@@ -5218,26 +5218,26 @@ fn lower_array_pop_x86_64(
 fn emit_array_pop_value_aarch64(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
     match elem_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
-            ctx.emitter.instruction("add x10, x0, #24"); // compute the first pointer-sized payload slot in the indexed array
-            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]"); // load the removed pointer-sized payload into the result register
+            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first pointer-sized payload slot in the indexed array
+            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the removed pointer-sized payload into the result register
         }
         PhpType::Float => {
-            ctx.emitter.instruction("add x10, x0, #24"); // compute the first float payload slot in the indexed array
-            ctx.emitter.instruction("ldr d0, [x10, x9, lsl #3]"); // load the removed float payload into the result register
+            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first float payload slot in the indexed array
+            ctx.emitter.instruction("ldr d0, [x10, x9, lsl #3]");               // load the removed float payload into the result register
         }
         PhpType::Str => {
-            ctx.emitter.instruction("lsl x10, x9, #4"); // scale the removed index by the 16-byte string slot size
-            ctx.emitter.instruction("add x10, x0, x10"); // advance from the array base to the removed string slot
-            ctx.emitter.instruction("add x10, x10, #24"); // skip the indexed-array header before loading string payloads
-            ctx.emitter.instruction("ldr x1, [x10]"); // load the removed string pointer into the mixed payload register
-            ctx.emitter.instruction("ldr x2, [x10, #8]"); // load the removed string length into the mixed payload high word
+            ctx.emitter.instruction("lsl x10, x9, #4");                         // scale the removed index by the 16-byte string slot size
+            ctx.emitter.instruction("add x10, x0, x10");                        // advance from the array base to the removed string slot
+            ctx.emitter.instruction("add x10, x10, #24");                       // skip the indexed-array header before loading string payloads
+            ctx.emitter.instruction("ldr x1, [x10]");                           // load the removed string pointer into the mixed payload register
+            ctx.emitter.instruction("ldr x2, [x10, #8]");                       // load the removed string length into the mixed payload high word
         }
         PhpType::Void | PhpType::Never => {
-            ctx.emitter.instruction("mov x0, #0"); // materialize a null payload for impossible void-array live elements
+            ctx.emitter.instruction("mov x0, #0");                              // materialize a null payload for impossible void-array live elements
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction("add x10, x0, #24"); // compute the first refcounted payload slot in the indexed array
-            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]"); // load the removed heap pointer into the result register
+            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first refcounted payload slot in the indexed array
+            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the removed heap pointer into the result register
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -5253,27 +5253,27 @@ fn emit_array_pop_value_aarch64(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType
 fn emit_array_pop_value_x86_64(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
     match elem_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
-            ctx.emitter.instruction("lea r11, [rax + 24]"); // compute the first pointer-sized payload slot in the indexed array
+            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first pointer-sized payload slot in the indexed array
             ctx.emitter
                 .instruction("mov rax, QWORD PTR [r11 + r10 * 8]"); // load the removed pointer-sized payload into the result register
         }
         PhpType::Float => {
-            ctx.emitter.instruction("lea r11, [rax + 24]"); // compute the first float payload slot in the indexed array
+            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first float payload slot in the indexed array
             ctx.emitter
                 .instruction("movsd xmm0, QWORD PTR [r11 + r10 * 8]"); // load the removed float payload into the result register
         }
         PhpType::Str => {
-            ctx.emitter.instruction("lea r11, [rax + 24]"); // compute the first string payload slot in the indexed array
-            ctx.emitter.instruction("shl r10, 4"); // scale the removed index by the 16-byte string slot size
-            ctx.emitter.instruction("add r11, r10"); // advance to the removed string slot payload
-            ctx.emitter.instruction("mov rax, QWORD PTR [r11]"); // load the removed string pointer into the string result register
-            ctx.emitter.instruction("mov rdx, QWORD PTR [r11 + 8]"); // load the removed string length into the string result register
+            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first string payload slot in the indexed array
+            ctx.emitter.instruction("shl r10, 4");                              // scale the removed index by the 16-byte string slot size
+            ctx.emitter.instruction("add r11, r10");                            // advance to the removed string slot payload
+            ctx.emitter.instruction("mov rax, QWORD PTR [r11]");                // load the removed string pointer into the string result register
+            ctx.emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");            // load the removed string length into the string result register
         }
         PhpType::Void | PhpType::Never => {
-            ctx.emitter.instruction("xor eax, eax"); // materialize a null payload for impossible void-array live elements
+            ctx.emitter.instruction("xor eax, eax");                            // materialize a null payload for impossible void-array live elements
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction("lea r11, [rax + 24]"); // compute the first refcounted payload slot in the indexed array
+            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first refcounted payload slot in the indexed array
             ctx.emitter
                 .instruction("mov rax, QWORD PTR [r11 + r10 * 8]"); // load the removed heap pointer into the result register
         }
@@ -5389,16 +5389,16 @@ fn lower_array_search_string_aarch64(
     let done_label = ctx.next_label("array_search_str_done");
 
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]"); // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24"); // point at the first indexed string-array payload slot
-    ctx.emitter.instruction("mov x12, #0"); // start the string search at index zero
+    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed string-array payload slot
+    ctx.emitter.instruction("mov x12, #0");                                     // start the string search at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x12, x9"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("b.ge {}", miss_label)); // finish with false after all string elements are scanned
-    ctx.emitter.instruction("lsl x13, x12, #4"); // scale the element index by the 16-byte string slot width
-    ctx.emitter.instruction("ldr x1, [x10, x13]"); // load the current string element pointer for comparison
-    ctx.emitter.instruction("add x14, x13, #8"); // compute the current string element length-slot offset
-    ctx.emitter.instruction("ldr x2, [x10, x14]"); // load the current string element length for comparison
+    ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("b.ge {}", miss_label));                   // finish with false after all string elements are scanned
+    ctx.emitter.instruction("lsl x13, x12, #4");                                // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("ldr x1, [x10, x13]");                              // load the current string element pointer for comparison
+    ctx.emitter.instruction("add x14, x13, #8");                                // compute the current string element length-slot offset
+    ctx.emitter.instruction("ldr x2, [x10, x14]");                              // load the current string element length for comparison
     abi::emit_push_reg_pair(ctx.emitter, "x9", "x10");
     abi::emit_push_reg(ctx.emitter, "x12");
     ctx.load_string_value_to_regs(needle, "x3", "x4")?;
@@ -5407,14 +5407,14 @@ fn lower_array_search_string_aarch64(
     abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");
     ctx.emitter
         .instruction(&format!("cbnz x0, {}", found_label)); // stop as soon as the searched string matches an element
-    ctx.emitter.instruction("add x12, x12, #1"); // advance to the next indexed string element
-    ctx.emitter.instruction(&format!("b {}", loop_label)); // continue scanning remaining string payload slots
+    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning remaining string payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov x1, x12"); // move the found index into the mixed helper payload register
-    ctx.emitter.instruction("mov x2, #0"); // integer mixed payloads do not use a high word
-    ctx.emitter.instruction("mov x0, #0"); // runtime tag 0 = integer
+    ctx.emitter.instruction("mov x1, x12");                                     // move the found index into the mixed helper payload register
+    ctx.emitter.instruction("mov x2, #0");                                      // integer mixed payloads do not use a high word
+    ctx.emitter.instruction("mov x0, #0");                                      // runtime tag 0 = integer
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-    ctx.emitter.instruction(&format!("b {}", done_label)); // skip false boxing after producing the found index
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip false boxing after producing the found index
     ctx.emitter.label(&miss_label);
     box_array_search_miss(ctx);
     ctx.emitter.label(&done_label);
@@ -5433,15 +5433,15 @@ fn lower_array_search_string_x86_64(
     let done_label = ctx.next_label("array_search_str_done");
 
     ctx.load_value_to_reg(array, "r10")?;
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]"); // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("lea r12, [r10 + 24]"); // point at the first indexed string-array payload slot
-    ctx.emitter.instruction("xor r13d, r13d"); // start the string search at index zero
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("lea r12, [r10 + 24]");                             // point at the first indexed string-array payload slot
+    ctx.emitter.instruction("xor r13d, r13d");                                  // start the string search at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp r13, r11"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("jge {}", miss_label)); // finish with false after all string elements are scanned
-    ctx.emitter.instruction("mov rcx, r13"); // copy the scan index before scaling it to a byte offset
-    ctx.emitter.instruction("shl rcx, 4"); // scale the element index by the 16-byte string slot width
-    ctx.emitter.instruction("mov rdi, QWORD PTR [r12 + rcx]"); // load the current string element pointer for comparison
+    ctx.emitter.instruction("cmp r13, r11");                                    // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("jge {}", miss_label));                    // finish with false after all string elements are scanned
+    ctx.emitter.instruction("mov rcx, r13");                                    // copy the scan index before scaling it to a byte offset
+    ctx.emitter.instruction("shl rcx, 4");                                      // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("mov rdi, QWORD PTR [r12 + rcx]");                  // load the current string element pointer for comparison
     ctx.emitter
         .instruction("mov rsi, QWORD PTR [r12 + rcx + 8]"); // load the current string element length for comparison
     abi::emit_push_reg_pair(ctx.emitter, "r11", "r12");
@@ -5450,16 +5450,16 @@ fn lower_array_search_string_x86_64(
     abi::emit_call_label(ctx.emitter, "__rt_str_eq");
     abi::emit_pop_reg(ctx.emitter, "r13");
     abi::emit_pop_reg_pair(ctx.emitter, "r11", "r12");
-    ctx.emitter.instruction("test rax, rax"); // check whether the current string element matched the needle
-    ctx.emitter.instruction(&format!("jne {}", found_label)); // stop as soon as the searched string matches an element
-    ctx.emitter.instruction("add r13, 1"); // advance to the next indexed string element
-    ctx.emitter.instruction(&format!("jmp {}", loop_label)); // continue scanning remaining string payload slots
+    ctx.emitter.instruction("test rax, rax");                                   // check whether the current string element matched the needle
+    ctx.emitter.instruction(&format!("jne {}", found_label));                   // stop as soon as the searched string matches an element
+    ctx.emitter.instruction("add r13, 1");                                      // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning remaining string payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov rdi, r13"); // move the found index into the mixed helper payload register
-    ctx.emitter.instruction("xor esi, esi"); // integer mixed payloads do not use a high word
-    ctx.emitter.instruction("xor eax, eax"); // runtime tag 0 = integer
+    ctx.emitter.instruction("mov rdi, r13");                                    // move the found index into the mixed helper payload register
+    ctx.emitter.instruction("xor esi, esi");                                    // integer mixed payloads do not use a high word
+    ctx.emitter.instruction("xor eax, eax");                                    // runtime tag 0 = integer
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip false boxing after producing the found index
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip false boxing after producing the found index
     ctx.emitter.label(&miss_label);
     box_array_search_miss(ctx);
     ctx.emitter.label(&done_label);
@@ -5472,26 +5472,26 @@ fn box_array_search_result(ctx: &mut FunctionContext<'_>) {
     let end_label = ctx.next_label("array_search_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #0"); // distinguish a found index from the array_search() not-found sentinel
-            ctx.emitter.instruction(&format!("b.ge {}", found_label)); // box a found index as an integer mixed result
+            ctx.emitter.instruction("cmp x0, #0");                              // distinguish a found index from the array_search() not-found sentinel
+            ctx.emitter.instruction(&format!("b.ge {}", found_label));          // box a found index as an integer mixed result
             box_array_search_miss(ctx);
-            ctx.emitter.instruction(&format!("b {}", end_label)); // skip integer boxing after producing false for a miss
+            ctx.emitter.instruction(&format!("b {}", end_label));               // skip integer boxing after producing false for a miss
             ctx.emitter.label(&found_label);
-            ctx.emitter.instruction("mov x1, x0"); // move the found index into the mixed helper payload register
-            ctx.emitter.instruction("mov x2, #0"); // integer mixed payloads do not use a high word
-            ctx.emitter.instruction("mov x0, #0"); // runtime tag 0 = integer
+            ctx.emitter.instruction("mov x1, x0");                              // move the found index into the mixed helper payload register
+            ctx.emitter.instruction("mov x2, #0");                              // integer mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 = integer
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&end_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 0"); // distinguish a found index from the array_search() not-found sentinel
-            ctx.emitter.instruction(&format!("jge {}", found_label)); // box a found index as an integer mixed result
+            ctx.emitter.instruction("cmp rax, 0");                              // distinguish a found index from the array_search() not-found sentinel
+            ctx.emitter.instruction(&format!("jge {}", found_label));           // box a found index as an integer mixed result
             box_array_search_miss(ctx);
-            ctx.emitter.instruction(&format!("jmp {}", end_label)); // skip integer boxing after producing false for a miss
+            ctx.emitter.instruction(&format!("jmp {}", end_label));             // skip integer boxing after producing false for a miss
             ctx.emitter.label(&found_label);
-            ctx.emitter.instruction("mov rdi, rax"); // move the found index into the mixed helper payload register
-            ctx.emitter.instruction("xor esi, esi"); // integer mixed payloads do not use a high word
-            ctx.emitter.instruction("xor eax, eax"); // runtime tag 0 = integer
+            ctx.emitter.instruction("mov rdi, rax");                            // move the found index into the mixed helper payload register
+            ctx.emitter.instruction("xor esi, esi");                            // integer mixed payloads do not use a high word
+            ctx.emitter.instruction("xor eax, eax");                            // runtime tag 0 = integer
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&end_label);
         }
@@ -5502,15 +5502,15 @@ fn box_array_search_result(ctx: &mut FunctionContext<'_>) {
 fn box_array_search_miss(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, #0"); // false mixed payload is zero
-            ctx.emitter.instruction("mov x2, #0"); // bool mixed payloads do not use a high word
-            ctx.emitter.instruction("mov x0, #3"); // runtime tag 3 = bool
+            ctx.emitter.instruction("mov x1, #0");                              // false mixed payload is zero
+            ctx.emitter.instruction("mov x2, #0");                              // bool mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = bool
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("xor edi, edi"); // false mixed payload is zero
-            ctx.emitter.instruction("xor esi, esi"); // bool mixed payloads do not use a high word
-            ctx.emitter.instruction("mov eax, 3"); // runtime tag 3 = bool
+            ctx.emitter.instruction("xor edi, edi");                            // false mixed payload is zero
+            ctx.emitter.instruction("xor esi, esi");                            // bool mixed payloads do not use a high word
+            ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = bool
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
         }
     }
@@ -5643,16 +5643,16 @@ fn lower_in_array_scalar(
             ctx.load_value_to_reg(array, "x0")?;
             ctx.load_value_to_reg(needle, "x1")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_search");
-            ctx.emitter.instruction("cmp x0, #0"); // check whether indexed-array search returned a non-negative match index
-            ctx.emitter.instruction("cset x0, ge"); // materialize in_array() as true for any found index
+            ctx.emitter.instruction("cmp x0, #0");                              // check whether indexed-array search returned a non-negative match index
+            ctx.emitter.instruction("cset x0, ge");                             // materialize in_array() as true for any found index
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(array, "rdi")?;
             ctx.load_value_to_reg(needle, "rsi")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_search");
-            ctx.emitter.instruction("cmp rax, 0"); // check whether indexed-array search returned a non-negative match index
-            ctx.emitter.instruction("setge al"); // materialize in_array() as true for any found index
-            ctx.emitter.instruction("movzx rax, al"); // widen the membership flag into the integer result register
+            ctx.emitter.instruction("cmp rax, 0");                              // check whether indexed-array search returned a non-negative match index
+            ctx.emitter.instruction("setge al");                                // materialize in_array() as true for any found index
+            ctx.emitter.instruction("movzx rax, al");                           // widen the membership flag into the integer result register
         }
     }
     Ok(())
@@ -5684,23 +5684,23 @@ fn lower_in_array_scalar_truthy_aarch64(
     ctx.load_value_to_reg(needle, "x11")?;
     emit_reg_nonzero_bool(ctx, "x11");
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]"); // load indexed scalar-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24"); // point at the first indexed scalar payload slot
-    ctx.emitter.instruction("mov x12, #0"); // start the scalar membership scan at index zero
+    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed scalar-array length before scanning payload slots
+    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed scalar payload slot
+    ctx.emitter.instruction("mov x12, #0");                                     // start the scalar membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x12, x9"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("b.ge {}", end_label)); // finish with false after all scalar elements are scanned
-    ctx.emitter.instruction("ldr x13, [x10, x12, lsl #3]"); // load the current scalar element
+    ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false after all scalar elements are scanned
+    ctx.emitter.instruction("ldr x13, [x10, x12, lsl #3]");                     // load the current scalar element
     emit_reg_nonzero_bool(ctx, "x13");
-    ctx.emitter.instruction("cmp x13, x11"); // compare element truthiness against needle truthiness
-    ctx.emitter.instruction(&format!("b.eq {}", found_label)); // stop as soon as a loosely equal element is found
-    ctx.emitter.instruction("add x12, x12, #1"); // advance to the next indexed scalar element
-    ctx.emitter.instruction(&format!("b {}", loop_label)); // continue scanning remaining scalar payload slots
+    ctx.emitter.instruction("cmp x13, x11");                                    // compare element truthiness against needle truthiness
+    ctx.emitter.instruction(&format!("b.eq {}", found_label));                  // stop as soon as a loosely equal element is found
+    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next indexed scalar element
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning remaining scalar payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov x0, #1"); // return true after finding a loosely equal scalar
-    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding a loosely equal scalar
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("mov x0, #0"); // return false when no indexed scalar element matches
+    ctx.emitter.instruction("mov x0, #0");                                      // return false when no indexed scalar element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -5719,23 +5719,23 @@ fn lower_in_array_scalar_truthy_x86_64(
     ctx.load_value_to_reg(needle, "r10")?;
     emit_reg_nonzero_bool(ctx, "r10");
     ctx.load_value_to_reg(array, "r11")?;
-    ctx.emitter.instruction("mov r12, QWORD PTR [r11]"); // load indexed scalar-array length before scanning payload slots
-    ctx.emitter.instruction("lea r11, [r11 + 24]"); // point at the first indexed scalar payload slot
-    ctx.emitter.instruction("xor r13d, r13d"); // start the scalar membership scan at index zero
+    ctx.emitter.instruction("mov r12, QWORD PTR [r11]");                        // load indexed scalar-array length before scanning payload slots
+    ctx.emitter.instruction("lea r11, [r11 + 24]");                             // point at the first indexed scalar payload slot
+    ctx.emitter.instruction("xor r13d, r13d");                                  // start the scalar membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp r13, r12"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("jge {}", end_label)); // finish with false after all scalar elements are scanned
-    ctx.emitter.instruction("mov rax, QWORD PTR [r11 + r13*8]"); // load the current scalar element
+    ctx.emitter.instruction("cmp r13, r12");                                    // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false after all scalar elements are scanned
+    ctx.emitter.instruction("mov rax, QWORD PTR [r11 + r13*8]");                // load the current scalar element
     emit_reg_nonzero_bool(ctx, "rax");
-    ctx.emitter.instruction("cmp rax, r10"); // compare element truthiness against needle truthiness
-    ctx.emitter.instruction(&format!("je {}", found_label)); // stop as soon as a loosely equal element is found
-    ctx.emitter.instruction("add r13, 1"); // advance to the next indexed scalar element
-    ctx.emitter.instruction(&format!("jmp {}", loop_label)); // continue scanning remaining scalar payload slots
+    ctx.emitter.instruction("cmp rax, r10");                                    // compare element truthiness against needle truthiness
+    ctx.emitter.instruction(&format!("je {}", found_label));                    // stop as soon as a loosely equal element is found
+    ctx.emitter.instruction("add r13, 1");                                      // advance to the next indexed scalar element
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning remaining scalar payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov rax, 1"); // return true after finding a loosely equal scalar
-    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding a loosely equal scalar
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("xor eax, eax"); // return false when no indexed scalar element matches
+    ctx.emitter.instruction("xor eax, eax");                                    // return false when no indexed scalar element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -5765,27 +5765,27 @@ fn lower_in_array_string_needle_int_array_aarch64(
 
     ctx.load_string_value_to_regs(needle, "x1", "x2")?;
     abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
-    ctx.emitter.instruction("cmp x0, #0"); // reject non-numeric strings for PHP number/string loose equality
-    ctx.emitter.instruction(&format!("b.eq {}", end_label)); // a non-numeric string needle cannot equal an int element
-    ctx.emitter.instruction("fmov d1, d0"); // preserve the parsed numeric-string value for the scan
+    ctx.emitter.instruction("cmp x0, #0");                                      // reject non-numeric strings for PHP number/string loose equality
+    ctx.emitter.instruction(&format!("b.eq {}", end_label));                    // a non-numeric string needle cannot equal an int element
+    ctx.emitter.instruction("fmov d1, d0");                                     // preserve the parsed numeric-string value for the scan
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]"); // load indexed int-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24"); // point at the first indexed int payload slot
-    ctx.emitter.instruction("mov x12, #0"); // start the numeric membership scan at index zero
+    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed int-array length before scanning payload slots
+    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed int payload slot
+    ctx.emitter.instruction("mov x12, #0");                                     // start the numeric membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x12, x9"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("b.ge {}", end_label)); // finish with false after all integer elements are scanned
-    ctx.emitter.instruction("ldr x13, [x10, x12, lsl #3]"); // load the current integer element
-    ctx.emitter.instruction("scvtf d0, x13"); // promote the integer element for PHP numeric comparison
-    ctx.emitter.instruction("fcmp d0, d1"); // compare element number with parsed string number
-    ctx.emitter.instruction(&format!("b.eq {}", found_label)); // stop when the numeric values match
-    ctx.emitter.instruction("add x12, x12, #1"); // advance to the next indexed int element
-    ctx.emitter.instruction(&format!("b {}", loop_label)); // continue scanning remaining int payload slots
+    ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false after all integer elements are scanned
+    ctx.emitter.instruction("ldr x13, [x10, x12, lsl #3]");                     // load the current integer element
+    ctx.emitter.instruction("scvtf d0, x13");                                   // promote the integer element for PHP numeric comparison
+    ctx.emitter.instruction("fcmp d0, d1");                                     // compare element number with parsed string number
+    ctx.emitter.instruction(&format!("b.eq {}", found_label));                  // stop when the numeric values match
+    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next indexed int element
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning remaining int payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov x0, #1"); // return true after finding a loose numeric match
-    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding a loose numeric match
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("mov x0, #0"); // return false when no integer element matches
+    ctx.emitter.instruction("mov x0, #0");                                      // return false when no integer element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -5803,28 +5803,28 @@ fn lower_in_array_string_needle_int_array_x86_64(
 
     ctx.load_string_value_to_regs(needle, "rax", "rdx")?;
     abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
-    ctx.emitter.instruction("test rax, rax"); // reject non-numeric strings for PHP number/string loose equality
-    ctx.emitter.instruction(&format!("je {}", end_label)); // a non-numeric string needle cannot equal an int element
-    ctx.emitter.instruction("movapd xmm1, xmm0"); // preserve the parsed numeric-string value for the scan
+    ctx.emitter.instruction("test rax, rax");                                   // reject non-numeric strings for PHP number/string loose equality
+    ctx.emitter.instruction(&format!("je {}", end_label));                      // a non-numeric string needle cannot equal an int element
+    ctx.emitter.instruction("movapd xmm1, xmm0");                               // preserve the parsed numeric-string value for the scan
     ctx.load_value_to_reg(array, "r10")?;
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]"); // load indexed int-array length before scanning payload slots
-    ctx.emitter.instruction("lea r10, [r10 + 24]"); // point at the first indexed int payload slot
-    ctx.emitter.instruction("xor r12d, r12d"); // start the numeric membership scan at index zero
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load indexed int-array length before scanning payload slots
+    ctx.emitter.instruction("lea r10, [r10 + 24]");                             // point at the first indexed int payload slot
+    ctx.emitter.instruction("xor r12d, r12d");                                  // start the numeric membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp r12, r11"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("jge {}", end_label)); // finish with false after all integer elements are scanned
-    ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r12*8]"); // load the current integer element
-    ctx.emitter.instruction("cvtsi2sd xmm0, rax"); // promote the integer element for PHP numeric comparison
-    ctx.emitter.instruction("ucomisd xmm0, xmm1"); // compare element number with parsed string number
-    ctx.emitter.instruction(&format!("jp {}", end_label)); // unordered parsed values are never equal
-    ctx.emitter.instruction(&format!("je {}", found_label)); // stop when the numeric values match
-    ctx.emitter.instruction("add r12, 1"); // advance to the next indexed int element
-    ctx.emitter.instruction(&format!("jmp {}", loop_label)); // continue scanning remaining int payload slots
+    ctx.emitter.instruction("cmp r12, r11");                                    // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false after all integer elements are scanned
+    ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r12*8]");                // load the current integer element
+    ctx.emitter.instruction("cvtsi2sd xmm0, rax");                              // promote the integer element for PHP numeric comparison
+    ctx.emitter.instruction("ucomisd xmm0, xmm1");                              // compare element number with parsed string number
+    ctx.emitter.instruction(&format!("jp {}", end_label));                      // unordered parsed values are never equal
+    ctx.emitter.instruction(&format!("je {}", found_label));                    // stop when the numeric values match
+    ctx.emitter.instruction("add r12, 1");                                      // advance to the next indexed int element
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning remaining int payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov rax, 1"); // return true after finding a loose numeric match
-    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding a loose numeric match
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("xor eax, eax"); // return false when no integer element matches
+    ctx.emitter.instruction("xor eax, eax");                                    // return false when no integer element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -5854,18 +5854,18 @@ fn lower_in_array_int_needle_string_array_aarch64(
     let done_label = ctx.next_label("in_array_int_str_done");
 
     ctx.load_value_to_reg(needle, "x11")?;
-    ctx.emitter.instruction("scvtf d1, x11"); // promote the integer needle for PHP numeric-string comparison
+    ctx.emitter.instruction("scvtf d1, x11");                                   // promote the integer needle for PHP numeric-string comparison
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]"); // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24"); // point at the first indexed string payload slot
-    ctx.emitter.instruction("mov x12, #0"); // start the numeric-string membership scan at index zero
+    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed string payload slot
+    ctx.emitter.instruction("mov x12, #0");                                     // start the numeric-string membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x12, x9"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("b.ge {}", end_label)); // finish with false after all string elements are scanned
-    ctx.emitter.instruction("lsl x13, x12, #4"); // scale the element index by the 16-byte string slot width
-    ctx.emitter.instruction("ldr x1, [x10, x13]"); // load the current string element pointer for parsing
-    ctx.emitter.instruction("add x14, x13, #8"); // compute the current string element length-slot offset
-    ctx.emitter.instruction("ldr x2, [x10, x14]"); // load the current string element length for parsing
+    ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false after all string elements are scanned
+    ctx.emitter.instruction("lsl x13, x12, #4");                                // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("ldr x1, [x10, x13]");                              // load the current string element pointer for parsing
+    ctx.emitter.instruction("add x14, x13, #8");                                // compute the current string element length-slot offset
+    ctx.emitter.instruction("ldr x2, [x10, x14]");                              // load the current string element length for parsing
     abi::emit_push_reg_pair(ctx.emitter, "x9", "x10");
     abi::emit_push_reg(ctx.emitter, "x12");
     abi::emit_push_float_reg(ctx.emitter, "d1");
@@ -5873,19 +5873,19 @@ fn lower_in_array_int_needle_string_array_aarch64(
     abi::emit_pop_float_reg(ctx.emitter, "d1");
     abi::emit_pop_reg(ctx.emitter, "x12");
     abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");
-    ctx.emitter.instruction("cmp x0, #0"); // non-numeric string elements cannot equal an int needle
+    ctx.emitter.instruction("cmp x0, #0");                                      // non-numeric string elements cannot equal an int needle
     ctx.emitter
         .instruction(&format!("b.eq {}", not_numeric_label));
-    ctx.emitter.instruction("fcmp d1, d0"); // compare integer needle with parsed string element number
-    ctx.emitter.instruction(&format!("b.eq {}", found_label)); // stop when the numeric values match
+    ctx.emitter.instruction("fcmp d1, d0");                                     // compare integer needle with parsed string element number
+    ctx.emitter.instruction(&format!("b.eq {}", found_label));                  // stop when the numeric values match
     ctx.emitter.label(&not_numeric_label);
-    ctx.emitter.instruction("add x12, x12, #1"); // advance to the next indexed string element
-    ctx.emitter.instruction(&format!("b {}", loop_label)); // continue scanning remaining string payload slots
+    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning remaining string payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov x0, #1"); // return true after finding a loose numeric match
-    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding a loose numeric match
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("mov x0, #0"); // return false when no string element matches
+    ctx.emitter.instruction("mov x0, #0");                                      // return false when no string element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -5903,17 +5903,17 @@ fn lower_in_array_int_needle_string_array_x86_64(
     let done_label = ctx.next_label("in_array_int_str_done");
 
     ctx.load_value_to_reg(needle, "r10")?;
-    ctx.emitter.instruction("cvtsi2sd xmm1, r10"); // promote the integer needle for PHP numeric-string comparison
+    ctx.emitter.instruction("cvtsi2sd xmm1, r10");                              // promote the integer needle for PHP numeric-string comparison
     ctx.load_value_to_reg(array, "r11")?;
-    ctx.emitter.instruction("mov r12, QWORD PTR [r11]"); // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("lea r11, [r11 + 24]"); // point at the first indexed string payload slot
-    ctx.emitter.instruction("xor r13d, r13d"); // start the numeric-string membership scan at index zero
+    ctx.emitter.instruction("mov r12, QWORD PTR [r11]");                        // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("lea r11, [r11 + 24]");                             // point at the first indexed string payload slot
+    ctx.emitter.instruction("xor r13d, r13d");                                  // start the numeric-string membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp r13, r12"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("jge {}", end_label)); // finish with false after all string elements are scanned
-    ctx.emitter.instruction("mov rcx, r13"); // copy the scan index before scaling it to a byte offset
-    ctx.emitter.instruction("shl rcx, 4"); // scale the element index by the 16-byte string slot width
-    ctx.emitter.instruction("mov rax, QWORD PTR [r11 + rcx]"); // load the current string element pointer for parsing
+    ctx.emitter.instruction("cmp r13, r12");                                    // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false after all string elements are scanned
+    ctx.emitter.instruction("mov rcx, r13");                                    // copy the scan index before scaling it to a byte offset
+    ctx.emitter.instruction("shl rcx, 4");                                      // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("mov rax, QWORD PTR [r11 + rcx]");                  // load the current string element pointer for parsing
     ctx.emitter
         .instruction("mov rdx, QWORD PTR [r11 + rcx + 8]"); // load the current string element length for parsing
     abi::emit_push_reg_pair(ctx.emitter, "r11", "r12");
@@ -5923,21 +5923,21 @@ fn lower_in_array_int_needle_string_array_x86_64(
     abi::emit_pop_float_reg(ctx.emitter, "xmm1");
     abi::emit_pop_reg(ctx.emitter, "r13");
     abi::emit_pop_reg_pair(ctx.emitter, "r11", "r12");
-    ctx.emitter.instruction("test rax, rax"); // non-numeric string elements cannot equal an int needle
+    ctx.emitter.instruction("test rax, rax");                                   // non-numeric string elements cannot equal an int needle
     ctx.emitter
         .instruction(&format!("je {}", not_numeric_label));
-    ctx.emitter.instruction("ucomisd xmm1, xmm0"); // compare integer needle with parsed string element number
+    ctx.emitter.instruction("ucomisd xmm1, xmm0");                              // compare integer needle with parsed string element number
     ctx.emitter
         .instruction(&format!("jp {}", not_numeric_label)); // unordered parsed values are never equal
-    ctx.emitter.instruction(&format!("je {}", found_label)); // stop when the numeric values match
+    ctx.emitter.instruction(&format!("je {}", found_label));                    // stop when the numeric values match
     ctx.emitter.label(&not_numeric_label);
-    ctx.emitter.instruction("add r13, 1"); // advance to the next indexed string element
-    ctx.emitter.instruction(&format!("jmp {}", loop_label)); // continue scanning remaining string payload slots
+    ctx.emitter.instruction("add r13, 1");                                      // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning remaining string payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov rax, 1"); // return true after finding a loose numeric match
-    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding a loose numeric match
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("xor eax, eax"); // return false when no string element matches
+    ctx.emitter.instruction("xor eax, eax");                                    // return false when no string element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -6002,26 +6002,26 @@ fn lower_in_array_bool_needle_string_array_aarch64(
     ctx.load_value_to_reg(needle, "x11")?;
     emit_reg_nonzero_bool(ctx, "x11");
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]"); // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24"); // point at the first indexed string payload slot
-    ctx.emitter.instruction("mov x12, #0"); // start the string truthiness scan at index zero
+    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed string payload slot
+    ctx.emitter.instruction("mov x12, #0");                                     // start the string truthiness scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x12, x9"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("b.ge {}", end_label)); // finish with false after all string elements are scanned
-    ctx.emitter.instruction("lsl x13, x12, #4"); // scale the element index by the 16-byte string slot width
-    ctx.emitter.instruction("ldr x1, [x10, x13]"); // load the current string element pointer
-    ctx.emitter.instruction("add x14, x13, #8"); // compute the current string element length-slot offset
-    ctx.emitter.instruction("ldr x2, [x10, x14]"); // load the current string element length
+    ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false after all string elements are scanned
+    ctx.emitter.instruction("lsl x13, x12, #4");                                // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("ldr x1, [x10, x13]");                              // load the current string element pointer
+    ctx.emitter.instruction("add x14, x13, #8");                                // compute the current string element length-slot offset
+    ctx.emitter.instruction("ldr x2, [x10, x14]");                              // load the current string element length
     emit_string_regs_truthiness_to_reg(ctx, "x1", "x2", "x13");
-    ctx.emitter.instruction("cmp x13, x11"); // compare element truthiness against needle truthiness
-    ctx.emitter.instruction(&format!("b.eq {}", found_label)); // stop as soon as a loosely equal string is found
-    ctx.emitter.instruction("add x12, x12, #1"); // advance to the next indexed string element
-    ctx.emitter.instruction(&format!("b {}", loop_label)); // continue scanning remaining string payload slots
+    ctx.emitter.instruction("cmp x13, x11");                                    // compare element truthiness against needle truthiness
+    ctx.emitter.instruction(&format!("b.eq {}", found_label));                  // stop as soon as a loosely equal string is found
+    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning remaining string payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov x0, #1"); // return true after finding a loose truthiness match
-    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding a loose truthiness match
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("mov x0, #0"); // return false when no string element matches
+    ctx.emitter.instruction("mov x0, #0");                                      // return false when no string element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -6040,27 +6040,27 @@ fn lower_in_array_bool_needle_string_array_x86_64(
     ctx.load_value_to_reg(needle, "r10")?;
     emit_reg_nonzero_bool(ctx, "r10");
     ctx.load_value_to_reg(array, "r11")?;
-    ctx.emitter.instruction("mov r12, QWORD PTR [r11]"); // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("lea r11, [r11 + 24]"); // point at the first indexed string payload slot
-    ctx.emitter.instruction("xor r13d, r13d"); // start the string truthiness scan at index zero
+    ctx.emitter.instruction("mov r12, QWORD PTR [r11]");                        // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("lea r11, [r11 + 24]");                             // point at the first indexed string payload slot
+    ctx.emitter.instruction("xor r13d, r13d");                                  // start the string truthiness scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp r13, r12"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("jge {}", end_label)); // finish with false after all string elements are scanned
-    ctx.emitter.instruction("mov rcx, r13"); // copy the scan index before scaling it to a byte offset
-    ctx.emitter.instruction("shl rcx, 4"); // scale the element index by the 16-byte string slot width
-    ctx.emitter.instruction("mov rax, QWORD PTR [r11 + rcx]"); // load the current string element pointer
+    ctx.emitter.instruction("cmp r13, r12");                                    // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false after all string elements are scanned
+    ctx.emitter.instruction("mov rcx, r13");                                    // copy the scan index before scaling it to a byte offset
+    ctx.emitter.instruction("shl rcx, 4");                                      // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("mov rax, QWORD PTR [r11 + rcx]");                  // load the current string element pointer
     ctx.emitter
         .instruction("mov rdx, QWORD PTR [r11 + rcx + 8]"); // load the current string element length
     emit_string_regs_truthiness_to_reg(ctx, "rax", "rdx", "r14");
-    ctx.emitter.instruction("cmp r14, r10"); // compare element truthiness against needle truthiness
-    ctx.emitter.instruction(&format!("je {}", found_label)); // stop as soon as a loosely equal string is found
-    ctx.emitter.instruction("add r13, 1"); // advance to the next indexed string element
-    ctx.emitter.instruction(&format!("jmp {}", loop_label)); // continue scanning remaining string payload slots
+    ctx.emitter.instruction("cmp r14, r10");                                    // compare element truthiness against needle truthiness
+    ctx.emitter.instruction(&format!("je {}", found_label));                    // stop as soon as a loosely equal string is found
+    ctx.emitter.instruction("add r13, 1");                                      // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning remaining string payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov rax, 1"); // return true after finding a loose truthiness match
-    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding a loose truthiness match
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("xor eax, eax"); // return false when no string element matches
+    ctx.emitter.instruction("xor eax, eax");                                    // return false when no string element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -6074,13 +6074,13 @@ fn branch_if_bool_value_true(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(value, "x9")?;
-            ctx.emitter.instruction("cmp x9, #0"); // test the runtime strict flag
-            ctx.emitter.instruction(&format!("b.ne {}", label)); // non-zero strict flag selects `===` membership
+            ctx.emitter.instruction("cmp x9, #0");                              // test the runtime strict flag
+            ctx.emitter.instruction(&format!("b.ne {}", label));                // non-zero strict flag selects `===` membership
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(value, "r10")?;
-            ctx.emitter.instruction("test r10, r10"); // test the runtime strict flag
-            ctx.emitter.instruction(&format!("jne {}", label)); // non-zero strict flag selects `===` membership
+            ctx.emitter.instruction("test r10, r10");                           // test the runtime strict flag
+            ctx.emitter.instruction(&format!("jne {}", label));                 // non-zero strict flag selects `===` membership
         }
     }
     Ok(())
@@ -6090,13 +6090,13 @@ fn branch_if_bool_value_true(
 fn emit_reg_nonzero_bool(ctx: &mut FunctionContext<'_>, reg: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", reg)); // compare scalar value against zero for truthiness
-            ctx.emitter.instruction(&format!("cset {}, ne", reg)); // materialize nonzero truthiness in the same register
+            ctx.emitter.instruction(&format!("cmp {}, #0", reg));               // compare scalar value against zero for truthiness
+            ctx.emitter.instruction(&format!("cset {}, ne", reg));              // materialize nonzero truthiness in the same register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", reg, reg)); // compare scalar value against zero for truthiness
-            ctx.emitter.instruction("setne al"); // materialize nonzero truthiness in the low byte
-            ctx.emitter.instruction(&format!("movzx {}, al", reg)); // widen truthiness into the requested register
+            ctx.emitter.instruction(&format!("test {}, {}", reg, reg));         // compare scalar value against zero for truthiness
+            ctx.emitter.instruction("setne al");                                // materialize nonzero truthiness in the low byte
+            ctx.emitter.instruction(&format!("movzx {}, al", reg));             // widen truthiness into the requested register
         }
     }
 }
@@ -6115,31 +6115,31 @@ fn emit_string_regs_truthiness_to_reg(
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cbz {}, {}", len_reg, falsy_label)); // empty strings are falsy
-            ctx.emitter.instruction(&format!("cmp {}, #1", len_reg)); // check whether this can be the special string "0"
-            ctx.emitter.instruction(&format!("b.ne {}", truthy_label)); // non-empty strings longer than one byte are truthy
-            ctx.emitter.instruction(&format!("ldrb w15, [{}]", ptr_reg)); // load the only string byte for the PHP "0" exception
-            ctx.emitter.instruction("cmp w15, #48"); // compare the byte with ASCII '0'
-            ctx.emitter.instruction(&format!("b.eq {}", falsy_label)); // the exact string "0" is falsy
+            ctx.emitter.instruction(&format!("cmp {}, #1", len_reg));           // check whether this can be the special string "0"
+            ctx.emitter.instruction(&format!("b.ne {}", truthy_label));         // non-empty strings longer than one byte are truthy
+            ctx.emitter.instruction(&format!("ldrb w15, [{}]", ptr_reg));       // load the only string byte for the PHP "0" exception
+            ctx.emitter.instruction("cmp w15, #48");                            // compare the byte with ASCII '0'
+            ctx.emitter.instruction(&format!("b.eq {}", falsy_label));          // the exact string "0" is falsy
             ctx.emitter.label(&truthy_label);
-            ctx.emitter.instruction(&format!("mov {}, #1", out_reg)); // materialize string truthiness as true
-            ctx.emitter.instruction(&format!("b {}", done_label)); // skip the falsy path
+            ctx.emitter.instruction(&format!("mov {}, #1", out_reg));           // materialize string truthiness as true
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the falsy path
             ctx.emitter.label(&falsy_label);
-            ctx.emitter.instruction(&format!("mov {}, #0", out_reg)); // materialize string truthiness as false
+            ctx.emitter.instruction(&format!("mov {}, #0", out_reg));           // materialize string truthiness as false
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", len_reg, len_reg)); // empty strings are falsy
-            ctx.emitter.instruction(&format!("je {}", falsy_label)); // branch to the falsy path for empty strings
-            ctx.emitter.instruction(&format!("cmp {}, 1", len_reg)); // check whether this can be the special string "0"
-            ctx.emitter.instruction(&format!("jne {}", truthy_label)); // non-empty strings longer than one byte are truthy
+            ctx.emitter.instruction(&format!("je {}", falsy_label));            // branch to the falsy path for empty strings
+            ctx.emitter.instruction(&format!("cmp {}, 1", len_reg));            // check whether this can be the special string "0"
+            ctx.emitter.instruction(&format!("jne {}", truthy_label));          // non-empty strings longer than one byte are truthy
             ctx.emitter
                 .instruction(&format!("movzx r9d, BYTE PTR [{}]", ptr_reg)); // load the only string byte for the PHP "0" exception
-            ctx.emitter.instruction("cmp r9d, 48"); // compare the byte with ASCII '0'
-            ctx.emitter.instruction(&format!("je {}", falsy_label)); // the exact string "0" is falsy
+            ctx.emitter.instruction("cmp r9d, 48");                             // compare the byte with ASCII '0'
+            ctx.emitter.instruction(&format!("je {}", falsy_label));            // the exact string "0" is falsy
             ctx.emitter.label(&truthy_label);
-            ctx.emitter.instruction(&format!("mov {}, 1", out_reg)); // materialize string truthiness as true
-            ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the falsy path
+            ctx.emitter.instruction(&format!("mov {}, 1", out_reg));            // materialize string truthiness as true
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the falsy path
             ctx.emitter.label(&falsy_label);
             ctx.emitter
                 .instruction(&format!("xor {}, {}", out_reg, out_reg)); // materialize string truthiness as false
@@ -6160,22 +6160,22 @@ fn lower_in_array_bool_array_with_preloaded_needle_aarch64(
     let done_label = ctx.next_label("in_array_bool_done");
 
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]"); // load indexed bool-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24"); // point at the first indexed bool payload slot
-    ctx.emitter.instruction("mov x12, #0"); // start the bool membership scan at index zero
+    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed bool-array length before scanning payload slots
+    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed bool payload slot
+    ctx.emitter.instruction("mov x12, #0");                                     // start the bool membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x12, x9"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("b.ge {}", end_label)); // finish with false after all bool elements are scanned
-    ctx.emitter.instruction("ldr x13, [x10, x12, lsl #3]"); // load the current bool element
-    ctx.emitter.instruction(&format!("cmp x13, {}", needle_reg)); // compare element bool against needle bool
-    ctx.emitter.instruction(&format!("b.eq {}", found_label)); // stop as soon as a loosely equal bool is found
-    ctx.emitter.instruction("add x12, x12, #1"); // advance to the next indexed bool element
-    ctx.emitter.instruction(&format!("b {}", loop_label)); // continue scanning remaining bool payload slots
+    ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false after all bool elements are scanned
+    ctx.emitter.instruction("ldr x13, [x10, x12, lsl #3]");                     // load the current bool element
+    ctx.emitter.instruction(&format!("cmp x13, {}", needle_reg));               // compare element bool against needle bool
+    ctx.emitter.instruction(&format!("b.eq {}", found_label));                  // stop as soon as a loosely equal bool is found
+    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next indexed bool element
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning remaining bool payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov x0, #1"); // return true after finding a matching bool
-    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding a matching bool
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("mov x0, #0"); // return false when no bool element matches
+    ctx.emitter.instruction("mov x0, #0");                                      // return false when no bool element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -6192,22 +6192,22 @@ fn lower_in_array_bool_array_with_preloaded_needle_x86_64(
     let done_label = ctx.next_label("in_array_bool_done");
 
     ctx.load_value_to_reg(array, "r11")?;
-    ctx.emitter.instruction("mov r12, QWORD PTR [r11]"); // load indexed bool-array length before scanning payload slots
-    ctx.emitter.instruction("lea r11, [r11 + 24]"); // point at the first indexed bool payload slot
-    ctx.emitter.instruction("xor r13d, r13d"); // start the bool membership scan at index zero
+    ctx.emitter.instruction("mov r12, QWORD PTR [r11]");                        // load indexed bool-array length before scanning payload slots
+    ctx.emitter.instruction("lea r11, [r11 + 24]");                             // point at the first indexed bool payload slot
+    ctx.emitter.instruction("xor r13d, r13d");                                  // start the bool membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp r13, r12"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("jge {}", end_label)); // finish with false after all bool elements are scanned
-    ctx.emitter.instruction("mov rax, QWORD PTR [r11 + r13*8]"); // load the current bool element
-    ctx.emitter.instruction(&format!("cmp rax, {}", needle_reg)); // compare element bool against needle bool
-    ctx.emitter.instruction(&format!("je {}", found_label)); // stop as soon as a loosely equal bool is found
-    ctx.emitter.instruction("add r13, 1"); // advance to the next indexed bool element
-    ctx.emitter.instruction(&format!("jmp {}", loop_label)); // continue scanning remaining bool payload slots
+    ctx.emitter.instruction("cmp r13, r12");                                    // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false after all bool elements are scanned
+    ctx.emitter.instruction("mov rax, QWORD PTR [r11 + r13*8]");                // load the current bool element
+    ctx.emitter.instruction(&format!("cmp rax, {}", needle_reg));               // compare element bool against needle bool
+    ctx.emitter.instruction(&format!("je {}", found_label));                    // stop as soon as a loosely equal bool is found
+    ctx.emitter.instruction("add r13, 1");                                      // advance to the next indexed bool element
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning remaining bool payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov rax, 1"); // return true after finding a matching bool
-    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding a matching bool
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("xor eax, eax"); // return false when no bool element matches
+    ctx.emitter.instruction("xor eax, eax");                                    // return false when no bool element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -6238,16 +6238,16 @@ fn lower_in_array_string_aarch64(
     let done_label = ctx.next_label("in_array_str_done");
 
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]"); // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("add x10, x10, #24"); // point at the first indexed string-array payload slot
-    ctx.emitter.instruction("mov x12, #0"); // start the string membership scan at index zero
+    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed string-array payload slot
+    ctx.emitter.instruction("mov x12, #0");                                     // start the string membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x12, x9"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("b.ge {}", end_label)); // finish with false after all string elements are scanned
-    ctx.emitter.instruction("lsl x13, x12, #4"); // scale the element index by the 16-byte string slot width
-    ctx.emitter.instruction("ldr x1, [x10, x13]"); // load the current string element pointer for comparison
-    ctx.emitter.instruction("add x14, x13, #8"); // compute the current string element length-slot offset
-    ctx.emitter.instruction("ldr x2, [x10, x14]"); // load the current string element length for comparison
+    ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false after all string elements are scanned
+    ctx.emitter.instruction("lsl x13, x12, #4");                                // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("ldr x1, [x10, x13]");                              // load the current string element pointer for comparison
+    ctx.emitter.instruction("add x14, x13, #8");                                // compute the current string element length-slot offset
+    ctx.emitter.instruction("ldr x2, [x10, x14]");                              // load the current string element length for comparison
     abi::emit_push_reg_pair(ctx.emitter, "x9", "x10");
     abi::emit_push_reg(ctx.emitter, "x12");
     ctx.load_string_value_to_regs(needle, "x3", "x4")?;
@@ -6256,13 +6256,13 @@ fn lower_in_array_string_aarch64(
     abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");
     ctx.emitter
         .instruction(&format!("cbnz x0, {}", found_label)); // stop as soon as the searched string matches an element
-    ctx.emitter.instruction("add x12, x12, #1"); // advance to the next indexed string element
-    ctx.emitter.instruction(&format!("b {}", loop_label)); // continue scanning remaining string payload slots
+    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning remaining string payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov x0, #1"); // return true after finding the searched string
-    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding the searched string
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("mov x0, #0"); // return false when no indexed string element matches
+    ctx.emitter.instruction("mov x0, #0");                                      // return false when no indexed string element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -6298,36 +6298,36 @@ fn lower_in_array_mixed_string_aarch64(
     let done_label = ctx.next_label("in_array_mix_done");
 
     ctx.load_value_to_reg(array, "x10")?;
-    ctx.emitter.instruction("ldr x9, [x10]"); // load array<Mixed> length before scanning boxed slots
-    ctx.emitter.instruction("add x10, x10, #24"); // point at the first boxed Mixed cell slot
-    ctx.emitter.instruction("mov x12, #0"); // start the membership scan at index zero
+    ctx.emitter.instruction("ldr x9, [x10]");                                   // load array<Mixed> length before scanning boxed slots
+    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first boxed Mixed cell slot
+    ctx.emitter.instruction("mov x12, #0");                                     // start the membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x12, x9"); // compare the scan index against the array length
-    ctx.emitter.instruction(&format!("b.ge {}", end_label)); // finish with false once every cell is scanned
-    ctx.emitter.instruction("ldr x0, [x10, x12, lsl #3]"); // load the current boxed Mixed cell pointer from its 8-byte slot
+    ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against the array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false once every cell is scanned
+    ctx.emitter.instruction("ldr x0, [x10, x12, lsl #3]");                      // load the current boxed Mixed cell pointer from its 8-byte slot
     abi::emit_push_reg_pair(ctx.emitter, "x9", "x10");
     abi::emit_push_reg(ctx.emitter, "x12");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox"); // unbox the cell → x0=tag, x1=string ptr, x2=string len
-    ctx.emitter.instruction("cmp x0, #1"); // is this cell a string value (runtime tag 1)?
+    ctx.emitter.instruction("cmp x0, #1");                                      // is this cell a string value (runtime tag 1)?
     ctx.emitter
         .instruction(&format!("b.ne {}", not_string_label)); // non-string cells can never equal a string needle
     ctx.load_string_value_to_regs(needle, "x3", "x4")?;
     abi::emit_call_label(ctx.emitter, eq_helper); // compare the unboxed string element (x1/x2) against the needle (x3/x4)
-    ctx.emitter.instruction(&format!("b {}", have_flag_label)); // carry the str-eq result into the shared match-flag join
+    ctx.emitter.instruction(&format!("b {}", have_flag_label));                 // carry the str-eq result into the shared match-flag join
     ctx.emitter.label(&not_string_label);
-    ctx.emitter.instruction("mov x0, #0"); // a non-string cell yields a not-matched flag
+    ctx.emitter.instruction("mov x0, #0");                                      // a non-string cell yields a not-matched flag
     ctx.emitter.label(&have_flag_label);
     abi::emit_pop_reg(ctx.emitter, "x12");
     abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");
     ctx.emitter
         .instruction(&format!("cbnz x0, {}", found_label)); // stop as soon as a cell matches the needle
-    ctx.emitter.instruction("add x12, x12, #1"); // advance to the next boxed Mixed cell
-    ctx.emitter.instruction(&format!("b {}", loop_label)); // continue scanning the remaining cells
+    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next boxed Mixed cell
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning the remaining cells
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov x0, #1"); // return true after finding a matching cell
-    ctx.emitter.instruction(&format!("b {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding a matching cell
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("mov x0, #0"); // return false when no cell matches the needle
+    ctx.emitter.instruction("mov x0, #0");                                      // return false when no cell matches the needle
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -6347,37 +6347,37 @@ fn lower_in_array_mixed_string_x86_64(
     let done_label = ctx.next_label("in_array_mix_done");
 
     ctx.load_value_to_reg(array, "r10")?;
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]"); // load array<Mixed> length before scanning boxed slots
-    ctx.emitter.instruction("lea r12, [r10 + 24]"); // point at the first boxed Mixed cell slot
-    ctx.emitter.instruction("xor r13d, r13d"); // start the membership scan at index zero
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load array<Mixed> length before scanning boxed slots
+    ctx.emitter.instruction("lea r12, [r10 + 24]");                             // point at the first boxed Mixed cell slot
+    ctx.emitter.instruction("xor r13d, r13d");                                  // start the membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp r13, r11"); // compare the scan index against the array length
-    ctx.emitter.instruction(&format!("jge {}", end_label)); // finish with false once every cell is scanned
-    ctx.emitter.instruction("mov rax, QWORD PTR [r12 + r13*8]"); // load the boxed Mixed cell pointer into rax (the unbox input register)
+    ctx.emitter.instruction("cmp r13, r11");                                    // compare the scan index against the array length
+    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false once every cell is scanned
+    ctx.emitter.instruction("mov rax, QWORD PTR [r12 + r13*8]");                // load the boxed Mixed cell pointer into rax (the unbox input register)
     abi::emit_push_reg_pair(ctx.emitter, "r11", "r12");
     abi::emit_push_reg(ctx.emitter, "r13");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox"); // unbox the cell → rax=tag, rdi=string ptr, rdx=string len
-    ctx.emitter.instruction("cmp rax, 1"); // is this cell a string value (runtime tag 1)?
+    ctx.emitter.instruction("cmp rax, 1");                                      // is this cell a string value (runtime tag 1)?
     ctx.emitter
         .instruction(&format!("jne {}", not_string_label)); // non-string cells can never equal a string needle
-    ctx.emitter.instruction("mov rsi, rdx"); // move the unboxed string length into the comparison argument
+    ctx.emitter.instruction("mov rsi, rdx");                                    // move the unboxed string length into the comparison argument
     ctx.load_string_value_to_regs(needle, "rdx", "rcx")?;
     abi::emit_call_label(ctx.emitter, eq_helper); // compare the unboxed string element (rdi/rsi) against the needle (rdx/rcx)
-    ctx.emitter.instruction(&format!("jmp {}", have_flag_label)); // carry the str-eq result into the shared match-flag join
+    ctx.emitter.instruction(&format!("jmp {}", have_flag_label));               // carry the str-eq result into the shared match-flag join
     ctx.emitter.label(&not_string_label);
-    ctx.emitter.instruction("xor eax, eax"); // a non-string cell yields a not-matched flag
+    ctx.emitter.instruction("xor eax, eax");                                    // a non-string cell yields a not-matched flag
     ctx.emitter.label(&have_flag_label);
     abi::emit_pop_reg(ctx.emitter, "r13");
     abi::emit_pop_reg_pair(ctx.emitter, "r11", "r12");
-    ctx.emitter.instruction("test rax, rax"); // did the current cell match the needle?
-    ctx.emitter.instruction(&format!("jne {}", found_label)); // stop as soon as a cell matches the needle
-    ctx.emitter.instruction("add r13, 1"); // advance to the next boxed Mixed cell
-    ctx.emitter.instruction(&format!("jmp {}", loop_label)); // continue scanning the remaining cells
+    ctx.emitter.instruction("test rax, rax");                                   // did the current cell match the needle?
+    ctx.emitter.instruction(&format!("jne {}", found_label));                   // stop as soon as a cell matches the needle
+    ctx.emitter.instruction("add r13, 1");                                      // advance to the next boxed Mixed cell
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning the remaining cells
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov rax, 1"); // return true after finding a matching cell
-    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding a matching cell
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("xor eax, eax"); // return false when no cell matches the needle
+    ctx.emitter.instruction("xor eax, eax");                                    // return false when no cell matches the needle
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -6395,15 +6395,15 @@ fn lower_in_array_string_x86_64(
     let done_label = ctx.next_label("in_array_str_done");
 
     ctx.load_value_to_reg(array, "r10")?;
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]"); // load indexed string-array length before scanning payload slots
-    ctx.emitter.instruction("lea r12, [r10 + 24]"); // point at the first indexed string-array payload slot
-    ctx.emitter.instruction("xor r13d, r13d"); // start the string membership scan at index zero
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("lea r12, [r10 + 24]");                             // point at the first indexed string-array payload slot
+    ctx.emitter.instruction("xor r13d, r13d");                                  // start the string membership scan at index zero
     ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp r13, r11"); // compare the scan index against indexed-array length
-    ctx.emitter.instruction(&format!("jge {}", end_label)); // finish with false after all string elements are scanned
-    ctx.emitter.instruction("mov rcx, r13"); // copy the scan index before scaling it to a byte offset
-    ctx.emitter.instruction("shl rcx, 4"); // scale the element index by the 16-byte string slot width
-    ctx.emitter.instruction("mov rdi, QWORD PTR [r12 + rcx]"); // load the current string element pointer for comparison
+    ctx.emitter.instruction("cmp r13, r11");                                    // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false after all string elements are scanned
+    ctx.emitter.instruction("mov rcx, r13");                                    // copy the scan index before scaling it to a byte offset
+    ctx.emitter.instruction("shl rcx, 4");                                      // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("mov rdi, QWORD PTR [r12 + rcx]");                  // load the current string element pointer for comparison
     ctx.emitter
         .instruction("mov rsi, QWORD PTR [r12 + rcx + 8]"); // load the current string element length for comparison
     abi::emit_push_reg_pair(ctx.emitter, "r11", "r12");
@@ -6412,15 +6412,15 @@ fn lower_in_array_string_x86_64(
     abi::emit_call_label(ctx.emitter, eq_helper);
     abi::emit_pop_reg(ctx.emitter, "r13");
     abi::emit_pop_reg_pair(ctx.emitter, "r11", "r12");
-    ctx.emitter.instruction("test rax, rax"); // check whether the current string element matched the needle
-    ctx.emitter.instruction(&format!("jne {}", found_label)); // stop as soon as the searched string matches an element
-    ctx.emitter.instruction("add r13, 1"); // advance to the next indexed string element
-    ctx.emitter.instruction(&format!("jmp {}", loop_label)); // continue scanning remaining string payload slots
+    ctx.emitter.instruction("test rax, rax");                                   // check whether the current string element matched the needle
+    ctx.emitter.instruction(&format!("jne {}", found_label));                   // stop as soon as the searched string matches an element
+    ctx.emitter.instruction("add r13, 1");                                      // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning remaining string payload slots
     ctx.emitter.label(&found_label);
-    ctx.emitter.instruction("mov rax, 1"); // return true after finding the searched string
-    ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the not-found result after a match
+    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding the searched string
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the not-found result after a match
     ctx.emitter.label(&end_label);
-    ctx.emitter.instruction("xor eax, eax"); // return false when no indexed string element matches
+    ctx.emitter.instruction("xor eax, eax");                                    // return false when no indexed string element matches
     ctx.emitter.label(&done_label);
     Ok(())
 }

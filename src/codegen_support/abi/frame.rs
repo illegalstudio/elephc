@@ -34,10 +34,10 @@ pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
             // save frame pointer and return address in the fixed frame footer
             } else {
                 emit_sp_address(emitter, "x9", footer_offset);
-                emitter.instruction("stp x29, x30, [x9]"); // save frame pointer and return address through the computed footer pointer
+                emitter.instruction("stp x29, x30, [x9]");                      // save frame pointer and return address through the computed footer pointer
             }
             if footer_offset == 0 {
-                emitter.instruction("mov x29, sp"); // use the current stack pointer directly when the frame footer starts at sp
+                emitter.instruction("mov x29, sp");                             // use the current stack pointer directly when the frame footer starts at sp
             } else if footer_offset <= 4095 {
                 emitter.instruction(&format!("add x29, sp, #{}", footer_offset));
             // point the frame pointer at the nearby fixed frame footer
@@ -47,10 +47,10 @@ pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
         }
         Arch::X86_64 => {
             let local_bytes = frame_size.saturating_sub(16);
-            emitter.instruction("push rbp"); // save the caller frame pointer on the stack
-            emitter.instruction("mov rbp, rsp"); // establish the current stack pointer as the new frame base
+            emitter.instruction("push rbp");                                    // save the caller frame pointer on the stack
+            emitter.instruction("mov rbp, rsp");                                // establish the current stack pointer as the new frame base
             if local_bytes > 0 {
-                emitter.instruction(&format!("sub rsp, {}", local_bytes)); // reserve aligned stack space for local slots below rbp
+                emitter.instruction(&format!("sub rsp, {}", local_bytes));      // reserve aligned stack space for local slots below rbp
             }
         }
     }
@@ -72,23 +72,23 @@ pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
             // restore frame pointer and return address from the fixed frame footer
             } else {
                 emit_sp_address(emitter, "x9", footer_offset);
-                emitter.instruction("ldp x29, x30, [x9]"); // restore frame pointer and return address through the computed footer pointer
+                emitter.instruction("ldp x29, x30, [x9]");                      // restore frame pointer and return address through the computed footer pointer
             }
             emit_adjust_sp(emitter, frame_size, false);
         }
         Arch::X86_64 => {
             let local_bytes = frame_size.saturating_sub(16);
             if local_bytes > 0 {
-                emitter.instruction(&format!("add rsp, {}", local_bytes)); // release the aligned local-slot area below rbp
+                emitter.instruction(&format!("add rsp, {}", local_bytes));      // release the aligned local-slot area below rbp
             }
-            emitter.instruction("pop rbp"); // restore the caller frame pointer from the stack
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer from the stack
         }
     }
 }
 
 /// Emits the function return sequence using the platform `ret` instruction.
 pub fn emit_return(emitter: &mut Emitter) {
-    emitter.instruction("ret"); // return to the caller using the platform return instruction
+    emitter.instruction("ret");                                                 // return to the caller using the platform return instruction
 }
 
 /// Emits code that computes the address of a local frame slot and stores it in `dest`.
@@ -98,12 +98,12 @@ pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize)
     match emitter.target.arch {
         Arch::AArch64 => {
             if offset == 0 {
-                emitter.instruction(&format!("mov {}, x29", dest)); // copy the frame pointer when the requested slot is the frame base itself
+                emitter.instruction(&format!("mov {}, x29", dest));             // copy the frame pointer when the requested slot is the frame base itself
             } else if offset <= 4095 {
                 emitter.instruction(&format!("sub {}, x29, #{}", dest, offset));
             // compute the local-slot address directly from the frame pointer
             } else {
-                emitter.instruction(&format!("mov {}, x29", dest)); // seed the destination register from the frame pointer for a far local-slot address
+                emitter.instruction(&format!("mov {}, x29", dest));             // seed the destination register from the frame pointer for a far local-slot address
                 let mut remaining = offset;
                 while remaining > 0 {
                     let chunk = remaining.min(4095);
@@ -145,7 +145,7 @@ pub fn store_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, 
             // store via unscaled immediate offset
             } else {
                 emit_frame_slot_address(emitter, scratch, offset);
-                emitter.instruction(&format!("str {}, [{}]", reg, scratch)); // store via computed address
+                emitter.instruction(&format!("str {}, [{}]", reg, scratch));    // store via computed address
             }
         }
         Arch::X86_64 => {
@@ -182,7 +182,7 @@ pub fn load_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, s
             // load via unscaled immediate offset
             } else {
                 emit_frame_slot_address(emitter, scratch, offset);
-                emitter.instruction(&format!("ldr {}, [{}]", reg, scratch)); // load via computed address
+                emitter.instruction(&format!("ldr {}, [{}]", reg, scratch));    // load via computed address
             }
         }
         Arch::X86_64 => {
@@ -216,18 +216,18 @@ pub fn emit_reg_move(emitter: &mut Emitter, dst: &str, src: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
             if dst_float || src_float {
-                emitter.instruction(&format!("fmov {}, {}", dst, src)); // move between FP and/or GP registers
+                emitter.instruction(&format!("fmov {}, {}", dst, src));         // move between FP and/or GP registers
             } else {
-                emitter.instruction(&format!("mov {}, {}", dst, src)); // move integer/pointer register
+                emitter.instruction(&format!("mov {}, {}", dst, src));          // move integer/pointer register
             }
         }
         Arch::X86_64 => {
             if dst_float && src_float {
-                emitter.instruction(&format!("movsd {}, {}", dst, src)); // move scalar double between XMM registers
+                emitter.instruction(&format!("movsd {}, {}", dst, src));        // move scalar double between XMM registers
             } else if dst_float || src_float {
-                emitter.instruction(&format!("movq {}, {}", dst, src)); // move 64-bit payload between GP and XMM
+                emitter.instruction(&format!("movq {}, {}", dst, src));         // move 64-bit payload between GP and XMM
             } else {
-                emitter.instruction(&format!("mov {}, {}", dst, src)); // move integer/pointer register
+                emitter.instruction(&format!("mov {}, {}", dst, src));          // move integer/pointer register
             }
         }
     }
@@ -245,7 +245,7 @@ pub fn emit_load_from_address(
     match emitter.target.arch {
         Arch::AArch64 => {
             if byte_offset == 0 {
-                emitter.instruction(&format!("ldr {}, [{}]", reg, addr_reg)); // load the requested value directly from the computed address register
+                emitter.instruction(&format!("ldr {}, [{}]", reg, addr_reg));   // load the requested value directly from the computed address register
             } else {
                 emitter.instruction(&format!("ldr {}, [{}, #{}]", reg, addr_reg, byte_offset));
                 // load the requested value from the computed address register plus byte offset
@@ -275,7 +275,7 @@ pub fn emit_store_to_address(emitter: &mut Emitter, reg: &str, addr_reg: &str, b
     match emitter.target.arch {
         Arch::AArch64 => {
             if byte_offset == 0 {
-                emitter.instruction(&format!("str {}, [{}]", reg, addr_reg)); // store the requested value directly through the computed address register
+                emitter.instruction(&format!("str {}, [{}]", reg, addr_reg));   // store the requested value directly through the computed address register
             } else {
                 emitter.instruction(&format!("str {}, [{}, #{}]", reg, addr_reg, byte_offset));
                 // store the requested value through the computed address register plus byte offset
@@ -304,7 +304,7 @@ pub fn emit_store_zero_to_address(emitter: &mut Emitter, addr_reg: &str, byte_of
     match emitter.target.arch {
         Arch::AArch64 => {
             if byte_offset == 0 {
-                emitter.instruction(&format!("str xzr, [{}]", addr_reg)); // store architectural zero directly through the computed address register
+                emitter.instruction(&format!("str xzr, [{}]", addr_reg));       // store architectural zero directly through the computed address register
             } else {
                 emitter.instruction(&format!("str xzr, [{}, #{}]", addr_reg, byte_offset));
                 // store architectural zero through the computed address register plus byte offset
@@ -316,7 +316,7 @@ pub fn emit_store_zero_to_address(emitter: &mut Emitter, addr_reg: &str, byte_of
             } else {
                 format!("[{} + {}]", addr_reg, byte_offset)
             };
-            emitter.instruction(&format!("mov QWORD PTR {}, 0", slot)); // store an integer zero through the computed address register
+            emitter.instruction(&format!("mov QWORD PTR {}, 0", slot));         // store an integer zero through the computed address register
         }
     }
 }
@@ -331,14 +331,14 @@ pub fn load_from_caller_stack(emitter: &mut Emitter, reg: &str, offset: usize) {
                 emitter.instruction(&format!("ldr {}, [x29, #{}]", reg, offset));
             // load a spilled incoming argument from the caller stack
             } else {
-                emitter.instruction("mov x9, x29"); // seed a scratch pointer from the current frame base
+                emitter.instruction("mov x9, x29");                             // seed a scratch pointer from the current frame base
                 let mut remaining = offset;
                 while remaining > 0 {
                     let chunk = remaining.min(4080);
-                    emitter.instruction(&format!("add x9, x9, #{}", chunk)); // advance the scratch pointer toward the distant caller-stack slot
+                    emitter.instruction(&format!("add x9, x9, #{}", chunk));    // advance the scratch pointer toward the distant caller-stack slot
                     remaining -= chunk;
                 }
-                emitter.instruction(&format!("ldr {}, [x9]", reg)); // load the spilled incoming argument through the computed caller-stack pointer
+                emitter.instruction(&format!("ldr {}, [x9]", reg));             // load the spilled incoming argument through the computed caller-stack pointer
             }
         }
         Arch::X86_64 => {
@@ -437,9 +437,9 @@ pub(crate) fn emit_adjust_sp(emitter: &mut Emitter, amount: usize, subtract: boo
             while remaining > 0 {
                 let chunk = remaining.min(4080);
                 if subtract {
-                    emitter.instruction(&format!("sub sp, sp, #{}", chunk)); // reserve stack space for spilled outgoing call arguments
+                    emitter.instruction(&format!("sub sp, sp, #{}", chunk));    // reserve stack space for spilled outgoing call arguments
                 } else {
-                    emitter.instruction(&format!("add sp, sp, #{}", chunk)); // release temporary outgoing call-argument stack space
+                    emitter.instruction(&format!("add sp, sp, #{}", chunk));    // release temporary outgoing call-argument stack space
                 }
                 remaining -= chunk;
             }
@@ -449,9 +449,9 @@ pub(crate) fn emit_adjust_sp(emitter: &mut Emitter, amount: usize, subtract: boo
                 return;
             }
             if subtract {
-                emitter.instruction(&format!("sub rsp, {}", amount)); // reserve stack space for spilled outgoing call arguments
+                emitter.instruction(&format!("sub rsp, {}", amount));           // reserve stack space for spilled outgoing call arguments
             } else {
-                emitter.instruction(&format!("add rsp, {}", amount)); // release temporary outgoing call-argument stack space
+                emitter.instruction(&format!("add rsp, {}", amount));           // release temporary outgoing call-argument stack space
             }
         }
     }
@@ -463,7 +463,7 @@ pub(crate) fn emit_adjust_sp(emitter: &mut Emitter, amount: usize, subtract: boo
 pub(crate) fn emit_sp_address(emitter: &mut Emitter, scratch: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov {}, sp", scratch)); // seed a scratch pointer from the current stack pointer
+            emitter.instruction(&format!("mov {}, sp", scratch));               // seed a scratch pointer from the current stack pointer
             let mut remaining = offset;
             while remaining > 0 {
                 let chunk = remaining.min(4080);
@@ -473,7 +473,7 @@ pub(crate) fn emit_sp_address(emitter: &mut Emitter, scratch: &str, offset: usiz
         }
         Arch::X86_64 => {
             if offset == 0 {
-                emitter.instruction(&format!("mov {}, rsp", scratch)); // copy the current stack pointer when the requested stack slot is at rsp
+                emitter.instruction(&format!("mov {}, rsp", scratch));          // copy the current stack pointer when the requested stack slot is at rsp
             } else {
                 emitter.instruction(&format!("lea {}, [rsp + {}]", scratch, offset));
                 // materialize the temporary stack-slot address relative to rsp

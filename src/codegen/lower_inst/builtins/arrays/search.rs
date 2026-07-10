@@ -111,13 +111,13 @@ fn assoc_scalar_compare_truthiness(
 fn emit_reg_nonzero_bool(ctx: &mut FunctionContext<'_>, reg: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", reg)); // compare scalar value against zero for truthiness
-            ctx.emitter.instruction(&format!("cset {}, ne", reg)); // materialize nonzero truthiness in the same register
+            ctx.emitter.instruction(&format!("cmp {}, #0", reg));               // compare scalar value against zero for truthiness
+            ctx.emitter.instruction(&format!("cset {}, ne", reg));              // materialize nonzero truthiness in the same register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", reg, reg)); // compare scalar value against zero for truthiness
-            ctx.emitter.instruction("setne al"); // materialize nonzero truthiness in the low byte
-            ctx.emitter.instruction(&format!("movzx {}, al", reg)); // widen truthiness into the requested register
+            ctx.emitter.instruction(&format!("test {}, {}", reg, reg));         // compare scalar value against zero for truthiness
+            ctx.emitter.instruction("setne al");                                // materialize nonzero truthiness in the low byte
+            ctx.emitter.instruction(&format!("movzx {}, al", reg));             // widen truthiness into the requested register
         }
     }
 }

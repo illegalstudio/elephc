@@ -49,125 +49,125 @@ pub(crate) fn emit_read_arm64<F>(
     let write = next_label("iconv_write");
     let write_done = next_label("iconv_written");
 
-    emitter.instruction("sub sp, sp, #160"); // iconv scratch frame
-    emitter.instruction("stp x29, x30, [sp, #144]"); // save frame pointer and return address
-    emitter.instruction("add x29, sp, #144"); // establish the helper frame pointer
-    emitter.instruction("str x0, [sp, #0]"); // save the source file descriptor
+    emitter.instruction("sub sp, sp, #160");                                    // iconv scratch frame
+    emitter.instruction("stp x29, x30, [sp, #144]");                            // save frame pointer and return address
+    emitter.instruction("add x29, sp, #144");                                   // establish the helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the source file descriptor
 
     // -- slurp every byte from the descriptor into the scratch buffer --
-    emitter.instruction("str xzr, [sp, #8]"); // input length = 0
+    emitter.instruction("str xzr, [sp, #8]");                                   // input length = 0
     emitter.label(&slurp);
-    emitter.instruction("ldr x0, [sp, #0]"); // fd to read from
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd to read from
     abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
-    emitter.instruction("ldr x9, [sp, #8]"); // current input length
-    emitter.instruction("add x1, x1, x9"); // write pointer = scratch base + length
-    emitter.instruction(&format!("mov x2, #{}", FILTER_BUF_SIZE)); // scratch capacity
-    emitter.instruction("sub x2, x2, x9"); // remaining scratch capacity
+    emitter.instruction("ldr x9, [sp, #8]");                                    // current input length
+    emitter.instruction("add x1, x1, x9");                                      // write pointer = scratch base + length
+    emitter.instruction(&format!("mov x2, #{}", FILTER_BUF_SIZE));              // scratch capacity
+    emitter.instruction("sub x2, x2, x9");                                      // remaining scratch capacity
     emitter.syscall(3);
-    emitter.instruction("cmp x0, #0"); // did the read hit EOF or fail?
-    emitter.instruction(&format!("b.le {}", slurp_done)); // stop slurping at EOF or on error
-    emitter.instruction("ldr x9, [sp, #8]"); // reload the input length
-    emitter.instruction("add x9, x9, x0"); // advance by the bytes just read
-    emitter.instruction("str x9, [sp, #8]"); // store the updated input length
-    emitter.instruction(&format!("mov x10, #{}", FILTER_BUF_SIZE)); // scratch capacity
-    emitter.instruction("cmp x9, x10"); // is the scratch buffer full?
-    emitter.instruction(&format!("b.lt {}", slurp)); // room remains: keep slurping
+    emitter.instruction("cmp x0, #0");                                          // did the read hit EOF or fail?
+    emitter.instruction(&format!("b.le {}", slurp_done));                       // stop slurping at EOF or on error
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the input length
+    emitter.instruction("add x9, x9, x0");                                      // advance by the bytes just read
+    emitter.instruction("str x9, [sp, #8]");                                    // store the updated input length
+    emitter.instruction(&format!("mov x10, #{}", FILTER_BUF_SIZE));             // scratch capacity
+    emitter.instruction("cmp x9, x10");                                         // is the scratch buffer full?
+    emitter.instruction(&format!("b.lt {}", slurp));                            // room remains: keep slurping
     emitter.label(&slurp_done);
 
     // -- size and allocate the output buffer (4x input, min 64 KiB) --
-    emitter.instruction("ldr x9, [sp, #8]"); // input length
-    emitter.instruction("lsl x9, x9, #2"); // budget 4x the input size
-    emitter.instruction(&format!("mov x10, #{}", FILTER_BUF_SIZE)); // minimum output buffer size
-    emitter.instruction("cmp x9, x10"); // is the 4x budget larger?
-    emitter.instruction(&format!("b.gt {}", sized)); // keep the larger budget
-    emitter.instruction(&format!("mov x9, #{}", FILTER_BUF_SIZE)); // otherwise use the minimum size
+    emitter.instruction("ldr x9, [sp, #8]");                                    // input length
+    emitter.instruction("lsl x9, x9, #2");                                      // budget 4x the input size
+    emitter.instruction(&format!("mov x10, #{}", FILTER_BUF_SIZE));             // minimum output buffer size
+    emitter.instruction("cmp x9, x10");                                         // is the 4x budget larger?
+    emitter.instruction(&format!("b.gt {}", sized));                            // keep the larger budget
+    emitter.instruction(&format!("mov x9, #{}", FILTER_BUF_SIZE));              // otherwise use the minimum size
     emitter.label(&sized);
-    emitter.instruction("str x9, [sp, #24]"); // save the output buffer capacity
-    emitter.instruction("mov x0, x9"); // buffer size into the allocator argument
-    emitter.instruction("bl __rt_heap_alloc"); // allocate the converted-data buffer
-    emitter.instruction("mov x9, #1"); // heap kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]"); // stamp the buffer header
-    emitter.instruction("str x0, [sp, #16]"); // save the output buffer pointer
+    emitter.instruction("str x9, [sp, #24]");                                   // save the output buffer capacity
+    emitter.instruction("mov x0, x9");                                          // buffer size into the allocator argument
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the converted-data buffer
+    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the buffer header
+    emitter.instruction("str x0, [sp, #16]");                                   // save the output buffer pointer
 
     // -- iconv_open(tocode, fromcode): a -1 result leaves the stream unconverted --
     abi::emit_symbol_address(emitter, "x0", to_sym);
     abi::emit_symbol_address(emitter, "x1", from_sym);
     emitter.bl_c("iconv_open"); // open the charset conversion descriptor
-    emitter.instruction("cmn x0, #1"); // is the descriptor (iconv_t)-1?
-    emitter.instruction(&format!("b.eq {}", skip)); // iconv_open failed → skip the conversion
-    emitter.instruction("str x0, [sp, #40]"); // save the iconv conversion descriptor
+    emitter.instruction("cmn x0, #1");                                          // is the descriptor (iconv_t)-1?
+    emitter.instruction(&format!("b.eq {}", skip));                             // iconv_open failed → skip the conversion
+    emitter.instruction("str x0, [sp, #40]");                                   // save the iconv conversion descriptor
 
     // -- set up the iconv in/out cursors and remaining-byte counts --
     abi::emit_symbol_address(emitter, "x9", "_stream_filter_buf");
-    emitter.instruction("str x9, [sp, #48]"); // iconv inbuf = scratch base
-    emitter.instruction("ldr x9, [sp, #8]"); // input length
-    emitter.instruction("str x9, [sp, #56]"); // iconv inbytesleft = input length
-    emitter.instruction("ldr x9, [sp, #16]"); // output buffer pointer
-    emitter.instruction("str x9, [sp, #64]"); // iconv outbuf = output buffer
-    emitter.instruction("ldr x9, [sp, #24]"); // output buffer capacity
-    emitter.instruction("str x9, [sp, #72]"); // iconv outbytesleft = output capacity
+    emitter.instruction("str x9, [sp, #48]");                                   // iconv inbuf = scratch base
+    emitter.instruction("ldr x9, [sp, #8]");                                    // input length
+    emitter.instruction("str x9, [sp, #56]");                                   // iconv inbytesleft = input length
+    emitter.instruction("ldr x9, [sp, #16]");                                   // output buffer pointer
+    emitter.instruction("str x9, [sp, #64]");                                   // iconv outbuf = output buffer
+    emitter.instruction("ldr x9, [sp, #24]");                                   // output buffer capacity
+    emitter.instruction("str x9, [sp, #72]");                                   // iconv outbytesleft = output capacity
 
     // -- iconv(cd, &inbuf, &inbytesleft, &outbuf, &outbytesleft) --
-    emitter.instruction("ldr x0, [sp, #40]"); // conversion descriptor
-    emitter.instruction("add x1, sp, #48"); // &inbuf
-    emitter.instruction("add x2, sp, #56"); // &inbytesleft
-    emitter.instruction("add x3, sp, #64"); // &outbuf
-    emitter.instruction("add x4, sp, #72"); // &outbytesleft
+    emitter.instruction("ldr x0, [sp, #40]");                                   // conversion descriptor
+    emitter.instruction("add x1, sp, #48");                                     // &inbuf
+    emitter.instruction("add x2, sp, #56");                                     // &inbytesleft
+    emitter.instruction("add x3, sp, #64");                                     // &outbuf
+    emitter.instruction("add x4, sp, #72");                                     // &outbytesleft
     emitter.bl_c("iconv"); // transcode the whole input in one pass
-    emitter.instruction("ldr x9, [sp, #24]"); // output capacity
-    emitter.instruction("ldr x10, [sp, #72]"); // bytes still free in the output buffer
-    emitter.instruction("sub x9, x9, x10"); // converted length = capacity - free
-    emitter.instruction("str x9, [sp, #80]"); // save the converted length
-    emitter.instruction("ldr x0, [sp, #40]"); // conversion descriptor
+    emitter.instruction("ldr x9, [sp, #24]");                                   // output capacity
+    emitter.instruction("ldr x10, [sp, #72]");                                  // bytes still free in the output buffer
+    emitter.instruction("sub x9, x9, x10");                                     // converted length = capacity - free
+    emitter.instruction("str x9, [sp, #80]");                                   // save the converted length
+    emitter.instruction("ldr x0, [sp, #40]");                                   // conversion descriptor
     emitter.bl_c("iconv_close"); // release the iconv descriptor
 
     // -- back the descriptor with an anonymous temp file of the converted bytes --
-    emitter.instruction("bl __rt_tmpfile"); // create an unlinked temp file, x0 = fd
-    emitter.instruction("str x0, [sp, #32]"); // save the temp-file descriptor
+    emitter.instruction("bl __rt_tmpfile");                                     // create an unlinked temp file, x0 = fd
+    emitter.instruction("str x0, [sp, #32]");                                   // save the temp-file descriptor
 
     // -- write loop: copy every converted byte into the temp file --
-    emitter.instruction("str xzr, [sp, #88]"); // write offset = 0
+    emitter.instruction("str xzr, [sp, #88]");                                  // write offset = 0
     emitter.label(&write);
-    emitter.instruction("ldr x10, [sp, #80]"); // total converted length
-    emitter.instruction("ldr x9, [sp, #88]"); // current write offset
-    emitter.instruction("cmp x9, x10"); // copied every converted byte?
-    emitter.instruction(&format!("b.ge {}", write_done)); // the whole payload is written
-    emitter.instruction("ldr x0, [sp, #32]"); // temp-file descriptor
-    emitter.instruction("ldr x1, [sp, #16]"); // output buffer pointer
-    emitter.instruction("add x1, x1, x9"); // write pointer = buffer + offset
-    emitter.instruction("sub x2, x10, x9"); // remaining bytes to write
+    emitter.instruction("ldr x10, [sp, #80]");                                  // total converted length
+    emitter.instruction("ldr x9, [sp, #88]");                                   // current write offset
+    emitter.instruction("cmp x9, x10");                                         // copied every converted byte?
+    emitter.instruction(&format!("b.ge {}", write_done));                       // the whole payload is written
+    emitter.instruction("ldr x0, [sp, #32]");                                   // temp-file descriptor
+    emitter.instruction("ldr x1, [sp, #16]");                                   // output buffer pointer
+    emitter.instruction("add x1, x1, x9");                                      // write pointer = buffer + offset
+    emitter.instruction("sub x2, x10, x9");                                     // remaining bytes to write
     emitter.syscall(4);
-    emitter.instruction("cmp x0, #0"); // did the write make progress?
-    emitter.instruction(&format!("b.le {}", write_done)); // stop on a write error
-    emitter.instruction("ldr x9, [sp, #88]"); // reload the write offset
-    emitter.instruction("add x9, x9, x0"); // advance by the bytes just written
-    emitter.instruction("str x9, [sp, #88]"); // store the updated write offset
-    emitter.instruction(&format!("b {}", write)); // continue writing the payload
+    emitter.instruction("cmp x0, #0");                                          // did the write make progress?
+    emitter.instruction(&format!("b.le {}", write_done));                       // stop on a write error
+    emitter.instruction("ldr x9, [sp, #88]");                                   // reload the write offset
+    emitter.instruction("add x9, x9, x0");                                      // advance by the bytes just written
+    emitter.instruction("str x9, [sp, #88]");                                   // store the updated write offset
+    emitter.instruction(&format!("b {}", write));                               // continue writing the payload
     emitter.label(&write_done);
 
     // -- lseek(temp, 0, SEEK_SET): rewind so reads start at the converted bytes --
-    emitter.instruction("ldr x0, [sp, #32]"); // temp-file descriptor
-    emitter.instruction("mov x1, #0"); // offset = 0
-    emitter.instruction("mov x2, #0"); // whence = SEEK_SET
+    emitter.instruction("ldr x0, [sp, #32]");                                   // temp-file descriptor
+    emitter.instruction("mov x1, #0");                                          // offset = 0
+    emitter.instruction("mov x2, #0");                                          // whence = SEEK_SET
     emitter.syscall(199);
 
     // -- dup2(temp, fd): the descriptor now serves the converted bytes --
-    emitter.instruction("ldr x0, [sp, #32]"); // oldfd = temp file
-    emitter.instruction("ldr x1, [sp, #0]"); // newfd = the stream descriptor
+    emitter.instruction("ldr x0, [sp, #32]");                                   // oldfd = temp file
+    emitter.instruction("ldr x1, [sp, #0]");                                    // newfd = the stream descriptor
     emitter.bl_c("dup2"); // redirect the descriptor onto the temp file
 
     // -- close the now-redundant temp-file descriptor --
-    emitter.instruction("ldr x0, [sp, #32]"); // the temp-file descriptor
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the temp-file descriptor
     emitter.syscall(6);
 
     emitter.label(&skip);
     // -- re-box the descriptor as a resource, matching stream_filter_append --
-    emitter.instruction("ldr x0, [sp, #0]"); // reload the stream descriptor
-    emitter.instruction("ldp x29, x30, [sp, #144]"); // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #160"); // release the scratch frame
-    emitter.instruction("mov x1, x0"); // resource payload = the descriptor
-    emitter.instruction("mov x2, #0"); // resource mixed payloads have no high word
-    emitter.instruction("mov x0, #9"); // runtime tag 9 = resource
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the stream descriptor
+    emitter.instruction("ldp x29, x30, [sp, #144]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #160");                                    // release the scratch frame
+    emitter.instruction("mov x1, x0");                                          // resource payload = the descriptor
+    emitter.instruction("mov x2, #0");                                          // resource mixed payloads have no high word
+    emitter.instruction("mov x0, #9");                                          // runtime tag 9 = resource
     abi::emit_call_label(emitter, "__rt_mixed_from_value"); // re-box the stream as the filter resource
 }
 
@@ -187,120 +187,120 @@ pub(crate) fn emit_read_x86_64<F>(
     let write = next_label("iconv_write");
     let write_done = next_label("iconv_written");
 
-    emitter.instruction("sub rsp, 160"); // iconv scratch frame
-    emitter.instruction("mov QWORD PTR [rsp + 0], rax"); // save the source file descriptor
+    emitter.instruction("sub rsp, 160");                                        // iconv scratch frame
+    emitter.instruction("mov QWORD PTR [rsp + 0], rax");                        // save the source file descriptor
 
     // -- slurp every byte from the descriptor into the scratch buffer --
-    emitter.instruction("mov QWORD PTR [rsp + 8], 0"); // input length = 0
+    emitter.instruction("mov QWORD PTR [rsp + 8], 0");                          // input length = 0
     emitter.label(&slurp);
-    emitter.instruction("mov rdi, QWORD PTR [rsp + 0]"); // fd to read from
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                        // fd to read from
     abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf"); // scratch base address
-    emitter.instruction("add rsi, QWORD PTR [rsp + 8]"); // write pointer = scratch base + length
-    emitter.instruction(&format!("mov rdx, {}", FILTER_BUF_SIZE)); // scratch capacity
-    emitter.instruction("sub rdx, QWORD PTR [rsp + 8]"); // remaining scratch capacity
-    emitter.instruction("call read"); // read bytes through libc read()
-    emitter.instruction("cmp rax, 0"); // did the read hit EOF or fail?
-    emitter.instruction(&format!("jle {}", slurp_done)); // stop slurping at EOF or on error
-    emitter.instruction("mov r9, QWORD PTR [rsp + 8]"); // reload the input length
-    emitter.instruction("add r9, rax"); // advance by the bytes just read
-    emitter.instruction("mov QWORD PTR [rsp + 8], r9"); // store the updated input length
-    emitter.instruction(&format!("cmp r9, {}", FILTER_BUF_SIZE)); // is the scratch buffer full?
-    emitter.instruction(&format!("jl {}", slurp)); // room remains: keep slurping
+    emitter.instruction("add rsi, QWORD PTR [rsp + 8]");                        // write pointer = scratch base + length
+    emitter.instruction(&format!("mov rdx, {}", FILTER_BUF_SIZE));              // scratch capacity
+    emitter.instruction("sub rdx, QWORD PTR [rsp + 8]");                        // remaining scratch capacity
+    emitter.instruction("call read");                                           // read bytes through libc read()
+    emitter.instruction("cmp rax, 0");                                          // did the read hit EOF or fail?
+    emitter.instruction(&format!("jle {}", slurp_done));                        // stop slurping at EOF or on error
+    emitter.instruction("mov r9, QWORD PTR [rsp + 8]");                         // reload the input length
+    emitter.instruction("add r9, rax");                                         // advance by the bytes just read
+    emitter.instruction("mov QWORD PTR [rsp + 8], r9");                         // store the updated input length
+    emitter.instruction(&format!("cmp r9, {}", FILTER_BUF_SIZE));               // is the scratch buffer full?
+    emitter.instruction(&format!("jl {}", slurp));                              // room remains: keep slurping
     emitter.label(&slurp_done);
 
     // -- size and allocate the output buffer (4x input, min 64 KiB) --
-    emitter.instruction("mov r9, QWORD PTR [rsp + 8]"); // input length
-    emitter.instruction("shl r9, 2"); // budget 4x the input size
-    emitter.instruction(&format!("cmp r9, {}", FILTER_BUF_SIZE)); // is the 4x budget above the minimum?
-    emitter.instruction(&format!("jge {}", sized)); // keep the larger budget
-    emitter.instruction(&format!("mov r9, {}", FILTER_BUF_SIZE)); // otherwise use the minimum size
+    emitter.instruction("mov r9, QWORD PTR [rsp + 8]");                         // input length
+    emitter.instruction("shl r9, 2");                                           // budget 4x the input size
+    emitter.instruction(&format!("cmp r9, {}", FILTER_BUF_SIZE));               // is the 4x budget above the minimum?
+    emitter.instruction(&format!("jge {}", sized));                             // keep the larger budget
+    emitter.instruction(&format!("mov r9, {}", FILTER_BUF_SIZE));               // otherwise use the minimum size
     emitter.label(&sized);
-    emitter.instruction("mov QWORD PTR [rsp + 24], r9"); // save the output buffer capacity
-    emitter.instruction("mov rax, r9"); // buffer size into the allocator argument
-    emitter.instruction("call __rt_heap_alloc"); // allocate the converted-data buffer
+    emitter.instruction("mov QWORD PTR [rsp + 24], r9");                        // save the output buffer capacity
+    emitter.instruction("mov rax, r9");                                         // buffer size into the allocator argument
+    emitter.instruction("call __rt_heap_alloc");                                // allocate the converted-data buffer
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
         (X86_64_HEAP_MAGIC_HI32 << 32) | 1
     )); // owned-string heap-kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10"); // stamp the buffer header
-    emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // save the output buffer pointer
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer header
+    emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // save the output buffer pointer
 
     // -- iconv_open(tocode, fromcode): a -1 result leaves the stream unconverted --
     abi::emit_symbol_address(emitter, "rdi", &to_sym); // arg 0 = tocode
     abi::emit_symbol_address(emitter, "rsi", &from_sym); // arg 1 = fromcode
-    emitter.instruction("call iconv_open"); // open the charset conversion descriptor
-    emitter.instruction("cmp rax, -1"); // is the descriptor (iconv_t)-1?
-    emitter.instruction(&format!("je {}", skip)); // iconv_open failed → skip the conversion
-    emitter.instruction("mov QWORD PTR [rsp + 40], rax"); // save the iconv conversion descriptor
+    emitter.instruction("call iconv_open");                                     // open the charset conversion descriptor
+    emitter.instruction("cmp rax, -1");                                         // is the descriptor (iconv_t)-1?
+    emitter.instruction(&format!("je {}", skip));                               // iconv_open failed → skip the conversion
+    emitter.instruction("mov QWORD PTR [rsp + 40], rax");                       // save the iconv conversion descriptor
 
     // -- set up the iconv in/out cursors and remaining-byte counts --
     abi::emit_symbol_address(emitter, "r9", "_stream_filter_buf"); // scratch base address
-    emitter.instruction("mov QWORD PTR [rsp + 48], r9"); // iconv inbuf = scratch base
-    emitter.instruction("mov r9, QWORD PTR [rsp + 8]"); // input length
-    emitter.instruction("mov QWORD PTR [rsp + 56], r9"); // iconv inbytesleft = input length
-    emitter.instruction("mov r9, QWORD PTR [rsp + 16]"); // output buffer pointer
-    emitter.instruction("mov QWORD PTR [rsp + 64], r9"); // iconv outbuf = output buffer
-    emitter.instruction("mov r9, QWORD PTR [rsp + 24]"); // output buffer capacity
-    emitter.instruction("mov QWORD PTR [rsp + 72], r9"); // iconv outbytesleft = output capacity
+    emitter.instruction("mov QWORD PTR [rsp + 48], r9");                        // iconv inbuf = scratch base
+    emitter.instruction("mov r9, QWORD PTR [rsp + 8]");                         // input length
+    emitter.instruction("mov QWORD PTR [rsp + 56], r9");                        // iconv inbytesleft = input length
+    emitter.instruction("mov r9, QWORD PTR [rsp + 16]");                        // output buffer pointer
+    emitter.instruction("mov QWORD PTR [rsp + 64], r9");                        // iconv outbuf = output buffer
+    emitter.instruction("mov r9, QWORD PTR [rsp + 24]");                        // output buffer capacity
+    emitter.instruction("mov QWORD PTR [rsp + 72], r9");                        // iconv outbytesleft = output capacity
 
     // -- iconv(cd, &inbuf, &inbytesleft, &outbuf, &outbytesleft) --
-    emitter.instruction("mov rdi, QWORD PTR [rsp + 40]"); // conversion descriptor
-    emitter.instruction("lea rsi, [rsp + 48]"); // &inbuf
-    emitter.instruction("lea rdx, [rsp + 56]"); // &inbytesleft
-    emitter.instruction("lea rcx, [rsp + 64]"); // &outbuf
-    emitter.instruction("lea r8, [rsp + 72]"); // &outbytesleft
-    emitter.instruction("call iconv"); // transcode the whole input in one pass
-    emitter.instruction("mov r9, QWORD PTR [rsp + 24]"); // output capacity
-    emitter.instruction("sub r9, QWORD PTR [rsp + 72]"); // converted length = capacity - free
-    emitter.instruction("mov QWORD PTR [rsp + 80], r9"); // save the converted length
-    emitter.instruction("mov rdi, QWORD PTR [rsp + 40]"); // conversion descriptor
-    emitter.instruction("call iconv_close"); // release the iconv descriptor
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 40]");                       // conversion descriptor
+    emitter.instruction("lea rsi, [rsp + 48]");                                 // &inbuf
+    emitter.instruction("lea rdx, [rsp + 56]");                                 // &inbytesleft
+    emitter.instruction("lea rcx, [rsp + 64]");                                 // &outbuf
+    emitter.instruction("lea r8, [rsp + 72]");                                  // &outbytesleft
+    emitter.instruction("call iconv");                                          // transcode the whole input in one pass
+    emitter.instruction("mov r9, QWORD PTR [rsp + 24]");                        // output capacity
+    emitter.instruction("sub r9, QWORD PTR [rsp + 72]");                        // converted length = capacity - free
+    emitter.instruction("mov QWORD PTR [rsp + 80], r9");                        // save the converted length
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 40]");                       // conversion descriptor
+    emitter.instruction("call iconv_close");                                    // release the iconv descriptor
 
     // -- back the descriptor with an anonymous temp file of the converted bytes --
-    emitter.instruction("call __rt_tmpfile"); // create an unlinked temp file, rax = fd
-    emitter.instruction("mov QWORD PTR [rsp + 32], rax"); // save the temp-file descriptor
+    emitter.instruction("call __rt_tmpfile");                                   // create an unlinked temp file, rax = fd
+    emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // save the temp-file descriptor
 
     // -- write loop: copy every converted byte into the temp file --
-    emitter.instruction("mov QWORD PTR [rsp + 88], 0"); // write offset = 0
+    emitter.instruction("mov QWORD PTR [rsp + 88], 0");                         // write offset = 0
     emitter.label(&write);
-    emitter.instruction("mov r10, QWORD PTR [rsp + 80]"); // total converted length
-    emitter.instruction("mov r9, QWORD PTR [rsp + 88]"); // current write offset
-    emitter.instruction("cmp r9, r10"); // copied every converted byte?
-    emitter.instruction(&format!("jge {}", write_done)); // the whole payload is written
-    emitter.instruction("mov rdi, QWORD PTR [rsp + 32]"); // temp-file descriptor
-    emitter.instruction("mov rsi, QWORD PTR [rsp + 16]"); // output buffer pointer
-    emitter.instruction("add rsi, r9"); // write pointer = buffer + offset
-    emitter.instruction("mov rdx, r10"); // total converted length
-    emitter.instruction("sub rdx, r9"); // remaining bytes to write
-    emitter.instruction("call write"); // write the converted bytes via libc write()
-    emitter.instruction("cmp rax, 0"); // did the write make progress?
-    emitter.instruction(&format!("jle {}", write_done)); // stop on a write error
-    emitter.instruction("mov r9, QWORD PTR [rsp + 88]"); // reload the write offset
-    emitter.instruction("add r9, rax"); // advance by the bytes just written
-    emitter.instruction("mov QWORD PTR [rsp + 88], r9"); // store the updated write offset
-    emitter.instruction(&format!("jmp {}", write)); // continue writing the payload
+    emitter.instruction("mov r10, QWORD PTR [rsp + 80]");                       // total converted length
+    emitter.instruction("mov r9, QWORD PTR [rsp + 88]");                        // current write offset
+    emitter.instruction("cmp r9, r10");                                         // copied every converted byte?
+    emitter.instruction(&format!("jge {}", write_done));                        // the whole payload is written
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // temp-file descriptor
+    emitter.instruction("mov rsi, QWORD PTR [rsp + 16]");                       // output buffer pointer
+    emitter.instruction("add rsi, r9");                                         // write pointer = buffer + offset
+    emitter.instruction("mov rdx, r10");                                        // total converted length
+    emitter.instruction("sub rdx, r9");                                         // remaining bytes to write
+    emitter.instruction("call write");                                          // write the converted bytes via libc write()
+    emitter.instruction("cmp rax, 0");                                          // did the write make progress?
+    emitter.instruction(&format!("jle {}", write_done));                        // stop on a write error
+    emitter.instruction("mov r9, QWORD PTR [rsp + 88]");                        // reload the write offset
+    emitter.instruction("add r9, rax");                                         // advance by the bytes just written
+    emitter.instruction("mov QWORD PTR [rsp + 88], r9");                        // store the updated write offset
+    emitter.instruction(&format!("jmp {}", write));                             // continue writing the payload
     emitter.label(&write_done);
 
     // -- lseek(temp, 0, SEEK_SET): rewind so reads start at the converted bytes --
-    emitter.instruction("mov rdi, QWORD PTR [rsp + 32]"); // temp-file descriptor
-    emitter.instruction("xor esi, esi"); // offset = 0
-    emitter.instruction("xor edx, edx"); // whence = SEEK_SET
-    emitter.instruction("call lseek"); // rewind the temp file
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // temp-file descriptor
+    emitter.instruction("xor esi, esi");                                        // offset = 0
+    emitter.instruction("xor edx, edx");                                        // whence = SEEK_SET
+    emitter.instruction("call lseek");                                          // rewind the temp file
 
     // -- dup2(temp, fd): the descriptor now serves the converted bytes --
-    emitter.instruction("mov rdi, QWORD PTR [rsp + 32]"); // oldfd = temp file
-    emitter.instruction("mov rsi, QWORD PTR [rsp + 0]"); // newfd = the stream descriptor
-    emitter.instruction("call dup2"); // redirect the descriptor onto the temp file
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // oldfd = temp file
+    emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");                        // newfd = the stream descriptor
+    emitter.instruction("call dup2");                                           // redirect the descriptor onto the temp file
 
     // -- close the now-redundant temp-file descriptor --
-    emitter.instruction("mov rdi, QWORD PTR [rsp + 32]"); // the temp-file descriptor
-    emitter.instruction("call close"); // release the redundant descriptor
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // the temp-file descriptor
+    emitter.instruction("call close");                                          // release the redundant descriptor
 
     emitter.label(&skip);
     // -- re-box the descriptor as a resource, matching stream_filter_append --
-    emitter.instruction("mov rdi, QWORD PTR [rsp + 0]"); // reload the stream descriptor
-    emitter.instruction("add rsp, 160"); // release the scratch frame
-    emitter.instruction("xor esi, esi"); // resource mixed payloads have no high word
-    emitter.instruction("mov eax, 9"); // runtime tag 9 = resource
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                        // reload the stream descriptor
+    emitter.instruction("add rsp, 160");                                        // release the scratch frame
+    emitter.instruction("xor esi, esi");                                        // resource mixed payloads have no high word
+    emitter.instruction("mov eax, 9");                                          // runtime tag 9 = resource
     abi::emit_call_label(emitter, "__rt_mixed_from_value"); // re-box the stream as the filter resource
 }

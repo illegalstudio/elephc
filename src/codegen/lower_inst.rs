@@ -2223,15 +2223,15 @@ fn lower_mixed_to_mixed_indexed_array(ctx: &mut FunctionContext<'_>) -> Result<(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1"); // pass the unboxed indexed-array payload to the Mixed conversion helper
-            ctx.emitter.instruction("ldr x1, [x0, #-8]"); // load indexed-array metadata before Mixed-slot conversion
-            ctx.emitter.instruction("lsr x1, x1, #8"); // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and x1, x1, #0x7f"); // isolate the indexed-array value_type tag
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed-array payload to the Mixed conversion helper
+            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before Mixed-slot conversion
+            ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
+            ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]"); // load indexed-array metadata before Mixed-slot conversion
-            ctx.emitter.instruction("shr rsi, 8"); // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and rsi, 0x7f"); // isolate the indexed-array value_type tag
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load indexed-array metadata before Mixed-slot conversion
+            ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
+            ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
@@ -2244,7 +2244,7 @@ fn lower_mixed_to_mixed_assoc_array(ctx: &mut FunctionContext<'_>) -> Result<()>
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1"); // pass the unboxed associative-array payload to the Mixed conversion helper
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed associative-array payload to the Mixed conversion helper
         }
         Arch::X86_64 => {}
     }
@@ -2473,7 +2473,7 @@ fn lower_mixed_property_array_runtime_set_x86_64(
     hashes::materialize_hash_key_x86_64(ctx, key)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
     emit_property_array_target_get_x86_64(ctx, object, property, getter_label)?;
-    ctx.emitter.instruction("mov rdi, rax"); // pass the property Mixed cell as the array-write target
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the property Mixed cell as the array-write target
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
     abi::emit_pop_reg(ctx.emitter, "rcx");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
@@ -2562,43 +2562,43 @@ fn lower_mixed_cell_runtime_assign_aarch64(
     let copy_new = ctx.next_label("mixed_cell_assign_copy_new");
     let done = ctx.next_label("mixed_cell_assign_done");
 
-    ctx.emitter.instruction("sub sp, sp, #32"); // reserve temporary slots for target and replacement Mixed cells
-    ctx.emitter.instruction("str x0, [sp, #8]"); // preserve the boxed replacement while loading the target cell
+    ctx.emitter.instruction("sub sp, sp, #32");                                 // reserve temporary slots for target and replacement Mixed cells
+    ctx.emitter.instruction("str x0, [sp, #8]");                                // preserve the boxed replacement while loading the target cell
     ctx.load_value_to_reg(target, "x0")?;
-    ctx.emitter.instruction("str x0, [sp, #0]"); // preserve the target Mixed cell across payload-release helpers
-    ctx.emitter.instruction(&format!("cbz x0, {}", drop_new)); // drop the replacement when the target cell is missing
-    ctx.emitter.instruction("ldr x9, [x0]"); // inspect the old payload tag before overwriting the cell
-    ctx.emitter.instruction("cmp x9, #1"); // strings own a persisted heap payload that needs safe free
-    ctx.emitter.instruction(&format!("b.eq {}", release_string)); // release string payloads through the string-safe free path
-    ctx.emitter.instruction("cmp x9, #4"); // tags below array/hash/object/mixed are scalar payloads
-    ctx.emitter.instruction(&format!("b.lo {}", copy_new)); // scalar payloads can be overwritten directly
-    ctx.emitter.instruction("cmp x9, #7"); // tags above the refcounted payload range are not released here
-    ctx.emitter.instruction(&format!("b.hi {}", copy_new)); // unknown/null payload tags can be overwritten directly
-    ctx.emitter.instruction("ldr x0, [x0, #8]"); // pass the old refcounted child payload to the generic release helper
+    ctx.emitter.instruction("str x0, [sp, #0]");                                // preserve the target Mixed cell across payload-release helpers
+    ctx.emitter.instruction(&format!("cbz x0, {}", drop_new));                  // drop the replacement when the target cell is missing
+    ctx.emitter.instruction("ldr x9, [x0]");                                    // inspect the old payload tag before overwriting the cell
+    ctx.emitter.instruction("cmp x9, #1");                                      // strings own a persisted heap payload that needs safe free
+    ctx.emitter.instruction(&format!("b.eq {}", release_string));               // release string payloads through the string-safe free path
+    ctx.emitter.instruction("cmp x9, #4");                                      // tags below array/hash/object/mixed are scalar payloads
+    ctx.emitter.instruction(&format!("b.lo {}", copy_new));                     // scalar payloads can be overwritten directly
+    ctx.emitter.instruction("cmp x9, #7");                                      // tags above the refcounted payload range are not released here
+    ctx.emitter.instruction(&format!("b.hi {}", copy_new));                     // unknown/null payload tags can be overwritten directly
+    ctx.emitter.instruction("ldr x0, [x0, #8]");                                // pass the old refcounted child payload to the generic release helper
     abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-    ctx.emitter.instruction(&format!("b {}", copy_new)); // continue with replacement after releasing the old child
+    ctx.emitter.instruction(&format!("b {}", copy_new));                        // continue with replacement after releasing the old child
     ctx.emitter.label(&release_string);
-    ctx.emitter.instruction("ldr x0, [sp, #0]"); // reload the target cell before reading its string payload
-    ctx.emitter.instruction("ldr x0, [x0, #8]"); // pass the old string payload pointer to the safe free helper
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // reload the target cell before reading its string payload
+    ctx.emitter.instruction("ldr x0, [x0, #8]");                                // pass the old string payload pointer to the safe free helper
     abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-    ctx.emitter.instruction(&format!("b {}", copy_new)); // continue with replacement after freeing the old string
+    ctx.emitter.instruction(&format!("b {}", copy_new));                        // continue with replacement after freeing the old string
     ctx.emitter.label(&drop_new);
-    ctx.emitter.instruction("ldr x0, [sp, #8]"); // reload the unused replacement Mixed cell
+    ctx.emitter.instruction("ldr x0, [sp, #8]");                                // reload the unused replacement Mixed cell
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    ctx.emitter.instruction(&format!("b {}", done)); // skip payload copy because there is no target cell
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip payload copy because there is no target cell
     ctx.emitter.label(&copy_new);
-    ctx.emitter.instruction("ldr x10, [sp, #0]"); // reload the destination Mixed cell pointer
-    ctx.emitter.instruction("ldr x11, [sp, #8]"); // reload the replacement Mixed cell pointer
-    ctx.emitter.instruction("ldr x12, [x11]"); // copy the replacement runtime tag
-    ctx.emitter.instruction("str x12, [x10]"); // overwrite the target cell tag
-    ctx.emitter.instruction("ldr x12, [x11, #8]"); // copy the replacement low payload word
-    ctx.emitter.instruction("str x12, [x10, #8]"); // overwrite the target cell low payload word
-    ctx.emitter.instruction("ldr x12, [x11, #16]"); // copy the replacement high payload word
-    ctx.emitter.instruction("str x12, [x10, #16]"); // overwrite the target cell high payload word
-    ctx.emitter.instruction("mov x0, x11"); // pass the now-empty replacement cell storage to heap_free
+    ctx.emitter.instruction("ldr x10, [sp, #0]");                               // reload the destination Mixed cell pointer
+    ctx.emitter.instruction("ldr x11, [sp, #8]");                               // reload the replacement Mixed cell pointer
+    ctx.emitter.instruction("ldr x12, [x11]");                                  // copy the replacement runtime tag
+    ctx.emitter.instruction("str x12, [x10]");                                  // overwrite the target cell tag
+    ctx.emitter.instruction("ldr x12, [x11, #8]");                              // copy the replacement low payload word
+    ctx.emitter.instruction("str x12, [x10, #8]");                              // overwrite the target cell low payload word
+    ctx.emitter.instruction("ldr x12, [x11, #16]");                             // copy the replacement high payload word
+    ctx.emitter.instruction("str x12, [x10, #16]");                             // overwrite the target cell high payload word
+    ctx.emitter.instruction("mov x0, x11");                                     // pass the now-empty replacement cell storage to heap_free
     abi::emit_call_label(ctx.emitter, "__rt_heap_free");
     ctx.emitter.label(&done);
-    ctx.emitter.instruction("add sp, sp, #32"); // release replacement temporaries
+    ctx.emitter.instruction("add sp, sp, #32");                                 // release replacement temporaries
     Ok(())
 }
 
@@ -2612,44 +2612,44 @@ fn lower_mixed_cell_runtime_assign_x86_64(
     let copy_new = ctx.next_label("mixed_cell_assign_copy_new");
     let done = ctx.next_label("mixed_cell_assign_done");
 
-    ctx.emitter.instruction("sub rsp, 32"); // reserve aligned temporary slots for target and replacement Mixed cells
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax"); // preserve the boxed replacement while loading the target cell
+    ctx.emitter.instruction("sub rsp, 32");                                     // reserve aligned temporary slots for target and replacement Mixed cells
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // preserve the boxed replacement while loading the target cell
     ctx.load_value_to_reg(target, "rax")?;
-    ctx.emitter.instruction("mov QWORD PTR [rsp], rax"); // preserve the target Mixed cell across payload-release helpers
-    ctx.emitter.instruction("test rax, rax"); // check whether the nested lookup produced a writable cell
-    ctx.emitter.instruction(&format!("jz {}", drop_new)); // drop the replacement when the target cell is missing
-    ctx.emitter.instruction("mov r9, QWORD PTR [rax]"); // inspect the old payload tag before overwriting the cell
-    ctx.emitter.instruction("cmp r9, 1"); // strings own a persisted heap payload that needs safe free
-    ctx.emitter.instruction(&format!("je {}", release_string)); // release string payloads through the string-safe free path
-    ctx.emitter.instruction("cmp r9, 4"); // tags below array/hash/object/mixed are scalar payloads
-    ctx.emitter.instruction(&format!("jl {}", copy_new)); // scalar payloads can be overwritten directly
-    ctx.emitter.instruction("cmp r9, 7"); // tags above the refcounted payload range are not released here
-    ctx.emitter.instruction(&format!("jg {}", copy_new)); // unknown/null payload tags can be overwritten directly
-    ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]"); // pass the old refcounted child payload to the generic release helper
+    ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // preserve the target Mixed cell across payload-release helpers
+    ctx.emitter.instruction("test rax, rax");                                   // check whether the nested lookup produced a writable cell
+    ctx.emitter.instruction(&format!("jz {}", drop_new));                       // drop the replacement when the target cell is missing
+    ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                         // inspect the old payload tag before overwriting the cell
+    ctx.emitter.instruction("cmp r9, 1");                                       // strings own a persisted heap payload that needs safe free
+    ctx.emitter.instruction(&format!("je {}", release_string));                 // release string payloads through the string-safe free path
+    ctx.emitter.instruction("cmp r9, 4");                                       // tags below array/hash/object/mixed are scalar payloads
+    ctx.emitter.instruction(&format!("jl {}", copy_new));                       // scalar payloads can be overwritten directly
+    ctx.emitter.instruction("cmp r9, 7");                                       // tags above the refcounted payload range are not released here
+    ctx.emitter.instruction(&format!("jg {}", copy_new));                       // unknown/null payload tags can be overwritten directly
+    ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");                    // pass the old refcounted child payload to the generic release helper
     abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-    ctx.emitter.instruction(&format!("jmp {}", copy_new)); // continue with replacement after releasing the old child
+    ctx.emitter.instruction(&format!("jmp {}", copy_new));                      // continue with replacement after releasing the old child
     ctx.emitter.label(&release_string);
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp]"); // reload the target cell before reading its string payload
-    ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]"); // pass the old string payload pointer to the safe free helper
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                        // reload the target cell before reading its string payload
+    ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");                    // pass the old string payload pointer to the safe free helper
     abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-    ctx.emitter.instruction(&format!("jmp {}", copy_new)); // continue with replacement after freeing the old string
+    ctx.emitter.instruction(&format!("jmp {}", copy_new));                      // continue with replacement after freeing the old string
     ctx.emitter.label(&drop_new);
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]"); // reload the unused replacement Mixed cell
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                    // reload the unused replacement Mixed cell
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    ctx.emitter.instruction(&format!("jmp {}", done)); // skip payload copy because there is no target cell
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip payload copy because there is no target cell
     ctx.emitter.label(&copy_new);
-    ctx.emitter.instruction("mov r10, QWORD PTR [rsp]"); // reload the destination Mixed cell pointer
-    ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]"); // reload the replacement Mixed cell pointer
-    ctx.emitter.instruction("mov r9, QWORD PTR [r11]"); // copy the replacement runtime tag
-    ctx.emitter.instruction("mov QWORD PTR [r10], r9"); // overwrite the target cell tag
-    ctx.emitter.instruction("mov r9, QWORD PTR [r11 + 8]"); // copy the replacement low payload word
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r9"); // overwrite the target cell low payload word
-    ctx.emitter.instruction("mov r9, QWORD PTR [r11 + 16]"); // copy the replacement high payload word
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 16], r9"); // overwrite the target cell high payload word
-    ctx.emitter.instruction("mov rax, r11"); // pass the now-empty replacement cell storage to heap_free
+    ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                        // reload the destination Mixed cell pointer
+    ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]");                    // reload the replacement Mixed cell pointer
+    ctx.emitter.instruction("mov r9, QWORD PTR [r11]");                         // copy the replacement runtime tag
+    ctx.emitter.instruction("mov QWORD PTR [r10], r9");                         // overwrite the target cell tag
+    ctx.emitter.instruction("mov r9, QWORD PTR [r11 + 8]");                     // copy the replacement low payload word
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r9");                     // overwrite the target cell low payload word
+    ctx.emitter.instruction("mov r9, QWORD PTR [r11 + 16]");                    // copy the replacement high payload word
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 16], r9");                    // overwrite the target cell high payload word
+    ctx.emitter.instruction("mov rax, r11");                                    // pass the now-empty replacement cell storage to heap_free
     abi::emit_call_label(ctx.emitter, "__rt_heap_free");
     ctx.emitter.label(&done);
-    ctx.emitter.instruction("add rsp, 32"); // release replacement temporaries
+    ctx.emitter.instruction("add rsp, 32");                                     // release replacement temporaries
     Ok(())
 }
 
@@ -2672,7 +2672,7 @@ fn cast_loaded_mixed_pointer_to_result(
         }
     };
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
-        ctx.emitter.instruction("mov rdi, rax"); // pass the returned boxed Mixed pointer as the SysV first argument
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the returned boxed Mixed pointer as the SysV first argument
     }
     abi::emit_call_label(ctx.emitter, label);
     Ok(())
@@ -2989,14 +2989,14 @@ fn emit_mixed_method_object_payload_or_fatal(
 ) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6"); // require an object payload before method dispatch
-            ctx.emitter.instruction(&format!("b.ne {}", no_match_label)); // non-object Mixed receivers cannot call instance methods
+            ctx.emitter.instruction("cmp x0, #6");                              // require an object payload before method dispatch
+            ctx.emitter.instruction(&format!("b.ne {}", no_match_label));       // non-object Mixed receivers cannot call instance methods
             ctx.emitter
                 .instruction(&format!("mov {}, x1", receiver_reg)); // preserve the unboxed object payload across argument lowering
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6"); // require an object payload before method dispatch
-            ctx.emitter.instruction(&format!("jne {}", no_match_label)); // non-object Mixed receivers cannot call instance methods
+            ctx.emitter.instruction("cmp rax, 6");                              // require an object payload before method dispatch
+            ctx.emitter.instruction(&format!("jne {}", no_match_label));        // non-object Mixed receivers cannot call instance methods
             ctx.emitter
                 .instruction(&format!("mov {}, rdi", receiver_reg)); // preserve the unboxed object payload across argument lowering
         }
@@ -3017,8 +3017,8 @@ fn emit_mixed_method_class_dispatch(
                 .instruction(&format!("ldr x9, [{}]", receiver_reg)); // load the receiver class id for Mixed method dispatch
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp x9, x10"); // compare the receiver class id against this method candidate
-                ctx.emitter.instruction(&format!("b.eq {}", label)); // call this candidate when the runtime class id matches
+                ctx.emitter.instruction("cmp x9, x10");                         // compare the receiver class id against this method candidate
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // call this candidate when the runtime class id matches
             }
         }
         Arch::X86_64 => {
@@ -3026,8 +3026,8 @@ fn emit_mixed_method_class_dispatch(
                 .instruction(&format!("mov r11, QWORD PTR [{}]", receiver_reg)); // load the receiver class id for Mixed method dispatch
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp r11, r10"); // compare the receiver class id against this method candidate
-                ctx.emitter.instruction(&format!("je {}", label)); // call this candidate when the runtime class id matches
+                ctx.emitter.instruction("cmp r11, r10");                        // compare the receiver class id against this method candidate
+                ctx.emitter.instruction(&format!("je {}", label));              // call this candidate when the runtime class id matches
             }
         }
     }
@@ -3245,7 +3245,7 @@ fn emit_method_call_on_null_fatal(ctx: &mut FunctionContext<'_>, method_name: &s
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the member-call-on-null fatal to stderr
+            ctx.emitter.instruction("mov x0, #2");                              // write the member-call-on-null fatal to stderr
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
@@ -3254,12 +3254,12 @@ fn emit_method_call_on_null_fatal(ctx: &mut FunctionContext<'_>, method_name: &s
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the member-call-on-null fatal to Linux stderr
+            ctx.emitter.instruction("mov edi, 2");                              // write the member-call-on-null fatal to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the member-call-on-null fatal byte length
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the member-call-on-null fatal before exiting
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the member-call-on-null fatal before exiting
             abi::emit_exit(ctx.emitter, 1);
         }
     }
@@ -3548,16 +3548,16 @@ fn emit_value_as_owned_mixed(ctx: &mut FunctionContext<'_>, value: ValueId) -> R
 fn emit_owned_null_mixed(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #8"); // runtime tag 8 = PHP null
-            ctx.emitter.instruction("mov x1, #0"); // null has no low payload word
-            ctx.emitter.instruction("mov x2, #0"); // null has no high payload word
-            ctx.emitter.instruction("bl __rt_mixed_from_value"); // allocate a boxed Mixed null cell
+            ctx.emitter.instruction("mov x0, #8");                              // runtime tag 8 = PHP null
+            ctx.emitter.instruction("mov x1, #0");                              // null has no low payload word
+            ctx.emitter.instruction("mov x2, #0");                              // null has no high payload word
+            ctx.emitter.instruction("bl __rt_mixed_from_value");                // allocate a boxed Mixed null cell
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rax, 8"); // runtime tag 8 = PHP null
-            ctx.emitter.instruction("xor edi, edi"); // null has no low payload word
-            ctx.emitter.instruction("xor esi, esi"); // null has no high payload word
-            ctx.emitter.instruction("call __rt_mixed_from_value"); // allocate a boxed Mixed null cell
+            ctx.emitter.instruction("mov rax, 8");                              // runtime tag 8 = PHP null
+            ctx.emitter.instruction("xor edi, edi");                            // null has no low payload word
+            ctx.emitter.instruction("xor esi, esi");                            // null has no high payload word
+            ctx.emitter.instruction("call __rt_mixed_from_value");              // allocate a boxed Mixed null cell
         }
     }
 }
@@ -3885,8 +3885,8 @@ fn emit_store_fiber_start_args_aarch64(
         }
         let source_reg = abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg);
         let offset = runtime::FIBER_START_ARGS_OFFSET + (idx as i32) * 8;
-        ctx.emitter.instruction(&format!("cmp x9, #{}", idx + 1)); // is this start() slot allowed for user arguments?
-        ctx.emitter.instruction(&format!("b.lt {}", skip_label)); // stop once wrapper-reserved slots would be overwritten
+        ctx.emitter.instruction(&format!("cmp x9, #{}", idx + 1));              // is this start() slot allowed for user arguments?
+        ctx.emitter.instruction(&format!("b.lt {}", skip_label));               // stop once wrapper-reserved slots would be overwritten
         ctx.emitter
             .instruction(&format!("str {}, [x0, #{}]", source_reg, offset)); // store the boxed Mixed start() argument
     }
@@ -3914,8 +3914,8 @@ fn emit_store_fiber_start_args_x86_64(
     let mut overflow_slot = 0usize;
     for (idx, assignment) in assignments.iter().take(supplied_arg_count).enumerate() {
         let offset = runtime::FIBER_START_ARGS_OFFSET + (idx as i32) * 8;
-        ctx.emitter.instruction(&format!("cmp r11, {}", idx + 1)); // is this start() slot allowed for user arguments?
-        ctx.emitter.instruction(&format!("jl {}", skip_label)); // stop once wrapper-reserved slots would be overwritten
+        ctx.emitter.instruction(&format!("cmp r11, {}", idx + 1));              // is this start() slot allowed for user arguments?
+        ctx.emitter.instruction(&format!("jl {}", skip_label));                 // stop once wrapper-reserved slots would be overwritten
         if assignment.in_register() {
             let source_reg = abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg);
             ctx.emitter
@@ -3924,7 +3924,7 @@ fn emit_store_fiber_start_args_x86_64(
         } else {
             let stack_offset = overflow_slot * 16;
             if stack_offset == 0 {
-                ctx.emitter.instruction("mov r10, QWORD PTR [rsp]"); // load the first stack-passed boxed Mixed start() argument
+                ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");            // load the first stack-passed boxed Mixed start() argument
             } else {
                 ctx.emitter
                     .instruction(&format!("mov r10, QWORD PTR [rsp + {}]", stack_offset));
@@ -4091,26 +4091,26 @@ fn emit_mixed_fiber_receiver_to_arg(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6"); // continue only when the Mixed receiver holds an object
-            ctx.emitter.instruction(&format!("b.eq {}", object_label)); // inspect the object class before calling the Fiber predicate
+            ctx.emitter.instruction("cmp x0, #6");                              // continue only when the Mixed receiver holds an object
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // inspect the object class before calling the Fiber predicate
             emit_method_call_on_null_fatal(ctx, method_name);
             ctx.emitter.label(&object_label);
-            ctx.emitter.instruction("ldr x9, [x1]"); // load the receiver object's runtime class id
-            ctx.emitter.instruction(&format!("cmp x9, #{}", class_id)); // verify the boxed object is a Fiber instance
-            ctx.emitter.instruction(&format!("b.eq {}", fiber_label)); // call the Fiber predicate only for real Fiber receivers
+            ctx.emitter.instruction("ldr x9, [x1]");                            // load the receiver object's runtime class id
+            ctx.emitter.instruction(&format!("cmp x9, #{}", class_id));         // verify the boxed object is a Fiber instance
+            ctx.emitter.instruction(&format!("b.eq {}", fiber_label));          // call the Fiber predicate only for real Fiber receivers
             emit_method_call_on_null_fatal(ctx, method_name);
             ctx.emitter.label(&fiber_label);
             ctx.emitter
                 .instruction(&format!("mov {}, x1", receiver_arg)); // pass the unboxed Fiber object to the runtime predicate
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6"); // continue only when the Mixed receiver holds an object
-            ctx.emitter.instruction(&format!("je {}", object_label)); // inspect the object class before calling the Fiber predicate
+            ctx.emitter.instruction("cmp rax, 6");                              // continue only when the Mixed receiver holds an object
+            ctx.emitter.instruction(&format!("je {}", object_label));           // inspect the object class before calling the Fiber predicate
             emit_method_call_on_null_fatal(ctx, method_name);
             ctx.emitter.label(&object_label);
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]"); // load the receiver object's runtime class id
-            ctx.emitter.instruction(&format!("cmp r10, {}", class_id)); // verify the boxed object is a Fiber instance
-            ctx.emitter.instruction(&format!("je {}", fiber_label)); // call the Fiber predicate only for real Fiber receivers
+            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load the receiver object's runtime class id
+            ctx.emitter.instruction(&format!("cmp r10, {}", class_id));         // verify the boxed object is a Fiber instance
+            ctx.emitter.instruction(&format!("je {}", fiber_label));            // call the Fiber predicate only for real Fiber receivers
             emit_method_call_on_null_fatal(ctx, method_name);
             ctx.emitter.label(&fiber_label);
         }
@@ -4133,10 +4133,10 @@ fn emit_fiber_state_predicate_call(
     if matches!(state, FiberStatePredicate::Started) {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction("eor x0, x0, #1"); // invert not-started into PHP's isStarted predicate
+                ctx.emitter.instruction("eor x0, x0, #1");                      // invert not-started into PHP's isStarted predicate
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("xor rax, 1"); // invert not-started into PHP's isStarted predicate
+                ctx.emitter.instruction("xor rax, 1");                          // invert not-started into PHP's isStarted predicate
             }
         }
     }
@@ -5165,14 +5165,14 @@ fn emit_mixed_result_as_tagged_scalar(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x9, x0"); // preserve the unboxed Mixed tag before moving the payload
-            ctx.emitter.instruction("mov x0, x1"); // place the unboxed payload into the tagged-scalar payload register
-            ctx.emitter.instruction("mov x1, x9"); // place the unboxed Mixed tag into the tagged-scalar tag register
+            ctx.emitter.instruction("mov x9, x0");                              // preserve the unboxed Mixed tag before moving the payload
+            ctx.emitter.instruction("mov x0, x1");                              // place the unboxed payload into the tagged-scalar payload register
+            ctx.emitter.instruction("mov x1, x9");                              // place the unboxed Mixed tag into the tagged-scalar tag register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, rax"); // preserve the unboxed Mixed tag before moving the payload
-            ctx.emitter.instruction("mov rax, rdi"); // place the unboxed payload into the tagged-scalar payload register
-            ctx.emitter.instruction("mov rdx, r10"); // place the unboxed Mixed tag into the tagged-scalar tag register
+            ctx.emitter.instruction("mov r10, rax");                            // preserve the unboxed Mixed tag before moving the payload
+            ctx.emitter.instruction("mov rax, rdi");                            // place the unboxed payload into the tagged-scalar payload register
+            ctx.emitter.instruction("mov rdx, r10");                            // place the unboxed Mixed tag into the tagged-scalar tag register
         }
     }
 }
@@ -5423,12 +5423,12 @@ fn emit_branch_if_cleanup_temp_aliases_result(
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", cleanup_reg, result_reg)); // compare the temporary Mixed cell with the saved call result
-            ctx.emitter.instruction(&format!("b.eq {}", skip_label)); // keep the temp alive when ownership moved to the result
+            ctx.emitter.instruction(&format!("b.eq {}", skip_label));           // keep the temp alive when ownership moved to the result
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", cleanup_reg, result_reg)); // compare the temporary Mixed cell with the saved call result
-            ctx.emitter.instruction(&format!("je {}", skip_label)); // keep the temp alive when ownership moved to the result
+            ctx.emitter.instruction(&format!("je {}", skip_label));             // keep the temp alive when ownership moved to the result
         }
     }
     Ok(())
@@ -5454,7 +5454,7 @@ fn emit_loaded_indexed_array_to_mixed(ctx: &mut FunctionContext<'_>, source_elem
         }
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rsi", value_tag);
-            ctx.emitter.instruction("mov rdi, rax"); // pass the loaded indexed-array argument to the Mixed conversion helper
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the loaded indexed-array argument to the Mixed conversion helper
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
@@ -5936,23 +5936,23 @@ pub(super) fn emit_mixed_string_for_persistent_store(ctx: &mut FunctionContext<'
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #1"); // check whether the Mixed payload already holds a string
-            ctx.emitter.instruction(&format!("b.ne {}", non_string)); // non-string casts need scratch conversion before persistence
+            ctx.emitter.instruction("cmp x0, #1");                              // check whether the Mixed payload already holds a string
+            ctx.emitter.instruction(&format!("b.ne {}", non_string));           // non-string casts need scratch conversion before persistence
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            ctx.emitter.instruction(&format!("b {}", done)); // skip the generic cast path after the direct string persist
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the generic cast path after the direct string persist
             ctx.emitter.label(&non_string);
             abi::emit_pop_reg(ctx.emitter, mixed_arg);
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 1"); // check whether the Mixed payload already holds a string
-            ctx.emitter.instruction(&format!("jne {}", non_string)); // non-string casts need scratch conversion before persistence
+            ctx.emitter.instruction("cmp rax, 1");                              // check whether the Mixed payload already holds a string
+            ctx.emitter.instruction(&format!("jne {}", non_string));            // non-string casts need scratch conversion before persistence
             abi::emit_release_temporary_stack(ctx.emitter, 16);
-            ctx.emitter.instruction("mov rax, rdi"); // move the unboxed string pointer into str_persist's input register
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed string pointer into str_persist's input register
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            ctx.emitter.instruction(&format!("jmp {}", done)); // skip the generic cast path after the direct string persist
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the generic cast path after the direct string persist
             ctx.emitter.label(&non_string);
             abi::emit_pop_reg(ctx.emitter, mixed_arg);
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
@@ -6345,14 +6345,14 @@ fn release_local_ref_cell_owner(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset_scratch(ctx.emitter, "x9", owner_offset, "x11");
-            ctx.emitter.instruction(&format!("cbz x9, {}", done)); // skip release when this variable no longer owns a fallback ref-cell
+            ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip release when this variable no longer owns a fallback ref-cell
             abi::emit_release_local_ref_cell(ctx.emitter, "x9", value_ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, owner_offset);
         }
         Arch::X86_64 => {
             abi::load_at_offset_scratch(ctx.emitter, "r11", owner_offset, "r10");
-            ctx.emitter.instruction("test r11, r11"); // check whether this variable owns a fallback ref-cell
-            ctx.emitter.instruction(&format!("je {}", done)); // skip release when the fallback owner is already clear
+            ctx.emitter.instruction("test r11, r11");                           // check whether this variable owns a fallback ref-cell
+            ctx.emitter.instruction(&format!("je {}", done));                   // skip release when the fallback owner is already clear
             abi::emit_release_local_ref_cell(ctx.emitter, "r11", value_ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, owner_offset);
         }
@@ -6496,7 +6496,7 @@ fn coerce_ref_cell_store_value(
                 // Save int result to placeholder (at sp+16).
                 match ctx.emitter.target.arch {
                     Arch::AArch64 => {
-                        ctx.emitter.instruction("str x0, [sp, #16]");              // save the int result to the placeholder slot above the saved Mixed pointer
+                        ctx.emitter.instruction("str x0, [sp, #16]");           // save the int result to the placeholder slot above the saved Mixed pointer
                     }
                     Arch::X86_64 => {
                         ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");    // save the int result to the placeholder slot above the saved Mixed pointer
@@ -6518,7 +6518,7 @@ fn coerce_ref_cell_store_value(
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
                 match ctx.emitter.target.arch {
                     Arch::AArch64 => {
-                        ctx.emitter.instruction("str x0, [sp, #16]");              // save the bool result to the placeholder slot
+                        ctx.emitter.instruction("str x0, [sp, #16]");           // save the bool result to the placeholder slot
                     }
                     Arch::X86_64 => {
                         ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");    // save the bool result to the placeholder slot
@@ -6538,7 +6538,7 @@ fn coerce_ref_cell_store_value(
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
                 match ctx.emitter.target.arch {
                     Arch::AArch64 => {
-                        ctx.emitter.instruction("str d0, [sp, #16]");               // save the float result to the placeholder slot
+                        ctx.emitter.instruction("str d0, [sp, #16]");           // save the float result to the placeholder slot
                     }
                     Arch::X86_64 => {
                         ctx.emitter.instruction("movsd QWORD PTR [rsp + 16], xmm0"); // save the float result to the placeholder slot
@@ -6548,11 +6548,11 @@ fn coerce_ref_cell_store_value(
                 abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
                 match ctx.emitter.target.arch {
                     Arch::AArch64 => {
-                        ctx.emitter.instruction("ldr d0, [sp], #16");              // restore the float result and release the placeholder slot
+                        ctx.emitter.instruction("ldr d0, [sp], #16");           // restore the float result and release the placeholder slot
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction("movsd xmm0, QWORD PTR [rsp]");     // restore the float result from the placeholder
-                        ctx.emitter.instruction("add rsp, 16");                    // release the float result placeholder slot
+                        ctx.emitter.instruction("movsd xmm0, QWORD PTR [rsp]"); // restore the float result from the placeholder
+                        ctx.emitter.instruction("add rsp, 16");                 // release the float result placeholder slot
                     }
                 }
                 return Ok(());
@@ -6862,19 +6862,19 @@ fn emit_missing_tostring_fatal(ctx: &mut FunctionContext<'_>, class_name: &str) 
     let (label, len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the object string-cast fatal to stderr
+            ctx.emitter.instruction("mov x0, #2");                              // write the object string-cast fatal to stderr
             ctx.emitter.adrp("x1", &label);
             ctx.emitter.add_lo12("x1", "x1", &label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", len)); // pass the object string-cast fatal byte length
+            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the object string-cast fatal byte length
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the object string-cast fatal to Linux stderr
+            ctx.emitter.instruction("mov edi, 2");                              // write the object string-cast fatal to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            ctx.emitter.instruction(&format!("mov edx, {}", len)); // pass the object string-cast fatal byte length
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the object string-cast fatal before exiting
+            ctx.emitter.instruction(&format!("mov edx, {}", len));              // pass the object string-cast fatal byte length
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the object string-cast fatal before exiting
             abi::emit_exit(ctx.emitter, 1);
         }
     }
@@ -6919,7 +6919,7 @@ fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> R
                         abi::int_result_reg(ctx.emitter),
                         sentinel_reg
                     )); // compare integer value against the runtime null sentinel
-                    ctx.emitter.instruction(&format!("b.eq {}", skip_label)); // skip integer echo when the value represents null
+                    ctx.emitter.instruction(&format!("b.eq {}", skip_label));   // skip integer echo when the value represents null
                 }
                 Arch::X86_64 => {
                     ctx.emitter.instruction(&format!(
@@ -6927,7 +6927,7 @@ fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> R
                         abi::int_result_reg(ctx.emitter),
                         sentinel_reg
                     )); // compare integer value against the runtime null sentinel
-                    ctx.emitter.instruction(&format!("je {}", skip_label)); // skip integer echo when the value represents null
+                    ctx.emitter.instruction(&format!("je {}", skip_label));     // skip integer echo when the value represents null
                 }
             }
             abi::emit_write_stdout(ctx.emitter, ty);
