@@ -714,7 +714,15 @@ fn builtin_reflection_class_new_instance_args_method() -> ClassMethod {
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: vec![("args".to_string(), Some(array_type()), empty_array(), false)],
+        // `iterable` rather than bare `array`: the checker resolves `array`
+        // to a string-keyed map, which would reject indexed argument lists;
+        // Iterable accepts both array shapes.
+        params: vec![(
+            "args".to_string(),
+            Some(TypeExpr::Iterable),
+            empty_array(),
+            false,
+        )],
         param_attributes: Vec::new(),
         variadic: None,
         variadic_by_ref: false,
