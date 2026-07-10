@@ -37,8 +37,10 @@ echo is_callable("eval") ? "1" : "0";
 #[test]
 fn test_eval_codegen_requires_eval_bridge() {
     let dir = make_cli_test_dir("elephc_magician_bridge_asm");
+    // Indexed writes into a caller array still require bridge semantics;
+    // read-only foreach fragments now compile through the scope-read AOT path.
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
-        "<?php $items = [1]; eval('foreach ($items as $x) { echo $x; }');",
+        "<?php $items = [1]; eval('$items[0] = 7; foreach ($items as $x) { echo $x; }');",
         &dir,
         8_388_608,
         false,
@@ -55,7 +57,7 @@ fn test_eval_codegen_requires_eval_bridge() {
     assert!(
         user_asm
             .contains("eval literal AOT fallback: array/iterable semantics need bridge fallback"),
-        "unsupported foreach literal eval should explain the fallback reason:\n{user_asm}"
+        "unsupported array-write literal eval should explain the fallback reason:\n{user_asm}"
     );
     assert!(
         user_asm.contains("__elephc_eval_context_new"),
@@ -4525,8 +4527,10 @@ echo ChOp("value\f");
 #[test]
 fn test_eval_runtime_feature_links_magician_once() {
     let dir = make_cli_test_dir("elephc_eval_bridge_once");
+    // Dynamic eval arguments force the interpreter bridge; literal fragments
+    // would compile through the AOT paths without linking magician at all.
     let (_user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
-        "<?php eval('$a = 1;'); eval('$b = 2;'); eval('$c = $a + $b;');",
+        "<?php $one = '$a = 1;'; $two = '$b = 2;'; eval($one); eval($two); eval('$c = $a + $b;');",
         &dir,
         8_388_608,
         false,
