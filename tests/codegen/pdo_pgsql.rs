@@ -197,3 +197,15 @@ echo ":" . (($db->exec("ALSO BAD") === false) ? "false" : "other");
     ));
     assert_eq!(out, "caught:false");
 }
+
+/// `Pdo\Pgsql::getPid()` returns the live PostgreSQL backend process id (a positive
+/// integer). Constructed as the driver subclass directly, since `getPid` is not on
+/// the base `PDO`, and driven against the live server.
+#[test]
+#[ignore]
+fn test_pgsql_get_pid() {
+    let out = compile_and_run(
+        "<?php\n$db = new \\Pdo\\Pgsql((string) getenv(\"ELEPHC_PG_DSN\"));\necho $db->getPid() > 0 ? \"pid-ok\" : \"pid-bad\";\n",
+    );
+    assert_eq!(out, "pid-ok");
+}

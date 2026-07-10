@@ -84,6 +84,11 @@ extern "elephc_pdo" {
     function elephc_pdo_set_busy_timeout(int $conn, int $ms): int;
     function elephc_pdo_server_version(int $conn): string;
     function elephc_pdo_last_insert_id_text(int $conn, string $name): string;
+    // v8: driver-specific accessors. backend_pid backs Pdo\Pgsql::getPid();
+    // warning_count backs Pdo\Mysql::getWarningCount(). Each returns 0 for a
+    // connection of a different driver.
+    function elephc_pdo_backend_pid(int $conn): int;
+    function elephc_pdo_warning_count(int $conn): int;
 }
 
 class PDOException extends RuntimeException {
@@ -403,6 +408,15 @@ class PDO {
             return new \Pdo\Pgsql($dsn, $username, $password, $options);
         }
         throw new PDOException("could not find driver");
+    }
+
+    protected function connectionId(): int {
+        // The raw bridge connection handle, exposed to driver subclasses (e.g.
+        // Pdo\Pgsql::getPid, Pdo\Mysql::getWarningCount) so they can reach the
+        // connection without widening the private $conn property. Called through
+        // normal inherited method dispatch, so it reads $conn in the base class's
+        // own scope.
+        return $this->conn;
     }
 
     public function errorCode(): ?string {
@@ -1029,6 +1043,12 @@ namespace Pdo {
         const ATTR_MULTI_STATEMENTS = 1013;
         const ATTR_SSL_VERIFY_SERVER_CERT = 1014;
         const ATTR_LOCAL_INFILE_DIRECTORY = 1015;
+
+        public function getWarningCount(): int {
+            // The number of warnings raised by the last statement executed on this
+            // connection (MySQL/MariaDB `@@warning_count`).
+            return \elephc_pdo_warning_count($this->connectionId());
+        }
     }
 
     class Pgsql extends \PDO {
@@ -1051,6 +1071,12 @@ namespace Pdo {
             // a ValueError; that pathological case is not guarded here.)
             $_doubled = \str_replace("\"", "\"\"", $input);
             return "\"" . $_doubled . "\"";
+        }
+
+        public function getPid(): int {
+            // The PostgreSQL backend process id serving this connection
+            // (`pg_backend_pid()`).
+            return \elephc_pdo_backend_pid($this->connectionId());
         }
     }
 }

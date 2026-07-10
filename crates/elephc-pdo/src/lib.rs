@@ -261,10 +261,11 @@ fn open_persistent_dsn(dsn: &str) -> i64 {
 /// Returns the bridge ABI version. Bumped when the C ABI shape changes. v7 adds
 /// connection/statement SQLSTATE + statement error accessors, boolean/blob binds,
 /// a busy-timeout setter, server version reporting, and a text-valued last-insert
-/// id.
+/// id. v8 adds the PostgreSQL backend-pid and MySQL warning-count accessors that
+/// back `Pdo\Pgsql::getPid()` / `Pdo\Mysql::getWarningCount()`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    7
+    8
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -556,6 +557,33 @@ pub extern "C" fn elephc_pdo_server_version(conn_id: i64) -> *const c_char {
         }
     };
     store_cstr(server_version_cell(), &version)
+}
+
+/// Returns the PostgreSQL backend process id for a `pgsql:` connection (backs
+/// `Pdo\Pgsql::getPid()`); 0 for a SQLite/MySQL connection or an unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_backend_pid(conn_id: i64) -> i64 {
+    let mut guard = conns().lock().unwrap();
+    match guard.get_mut(&conn_id) {
+        Some(Conn::Postgres(c)) => c.backend_pid(),
+        Some(Conn::Sqlite(_)) => 0,
+        Some(Conn::Mysql(_)) => 0,
+        None => 0,
+    }
+}
+
+/// Returns the number of warnings from the last statement on a `mysql:` connection
+/// (backs `Pdo\Mysql::getWarningCount()`); 0 for a SQLite/PostgreSQL connection or
+/// an unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_warning_count(conn_id: i64) -> i64 {
+    let mut guard = conns().lock().unwrap();
+    match guard.get_mut(&conn_id) {
+        Some(Conn::Mysql(c)) => c.warning_count(),
+        Some(Conn::Sqlite(_)) => 0,
+        Some(Conn::Postgres(_)) => 0,
+        None => 0,
+    }
 }
 
 /// Prepares a statement (`PDO::prepare` / `PDO::query`) and returns an `i64`

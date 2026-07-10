@@ -370,6 +370,23 @@ impl MyConn {
         format!("{major}.{minor}.{patch}")
     }
 
+    /// Returns the number of warnings raised by the last statement executed on this
+    /// connection (`SELECT @@warning_count`), which PHP's
+    /// `Pdo\Mysql::getWarningCount()` returns. `SELECT @@warning_count` does not
+    /// itself clear the count and runs on a connection left clean by a preceding
+    /// direct `exec()`/DML statement (no open result set), so it observes that
+    /// statement's warnings. Divergence: an intervening prepared-statement
+    /// `COM_STMT_CLOSE` — e.g. a `query()` result discarded before this call — resets
+    /// the session count, so getWarningCount is reliable immediately after a direct
+    /// exec()/DML statement (the pure-Rust client also does not surface the EOF-packet
+    /// warnings of a SELECT). Backs `Pdo\Mysql::getWarningCount()`.
+    pub fn warning_count(&mut self) -> i64 {
+        match self.conn.query_first::<u64, _>("SELECT @@warning_count") {
+            Ok(Some(n)) => n as i64,
+            _ => 0,
+        }
+    }
+
     /// Prepares a statement: translates placeholders and prepares it server-side
     /// for column metadata. Returns the statement or an error message.
     pub fn prepare(&mut self, sql: &str) -> Result<MyStmt, String> {

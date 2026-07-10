@@ -405,6 +405,16 @@ impl PgConn {
         }
     }
 
+    /// Returns the PostgreSQL backend process id serving this connection
+    /// (`SELECT pg_backend_pid()`), or 0 if the query fails. Backs
+    /// `Pdo\Pgsql::getPid()`.
+    pub fn backend_pid(&mut self) -> i64 {
+        match self.client.query_one("SELECT pg_backend_pid()", &[]) {
+            Ok(row) => row.try_get::<_, i32>(0).map(i64::from).unwrap_or(0),
+            Err(_) => 0,
+        }
+    }
+
     /// Prepares a statement: translates placeholders and prepares it server-side
     /// for column metadata. Returns the statement or an error message.
     pub fn prepare(&mut self, sql: &str) -> Result<PgStmt, String> {

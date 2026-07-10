@@ -209,3 +209,18 @@ echo ":" . (($db->exec("ALSO BAD") === false) ? "false" : "other");
     ));
     assert_eq!(out, "caught:false");
 }
+
+/// `Pdo\Mysql::getWarningCount()` reports the warning count of the last statement,
+/// cached from that statement's terminal OK packet. `CREATE TABLE IF NOT EXISTS`
+/// on an existing table raises one "table already exists" warning (an OK-terminated
+/// DDL statement, so the count is surfaced — unlike a SELECT warning, which sits in
+/// an EOF packet the pure-Rust client does not expose). Driven against the live
+/// server as the driver subclass directly.
+#[test]
+#[ignore]
+fn test_mysql_get_warning_count() {
+    let out = compile_and_run(
+        "<?php\n$db = new \\Pdo\\Mysql((string) getenv(\"ELEPHC_MY_DSN\"));\n$db->exec(\"DROP TABLE IF EXISTS elephc_warn_probe\");\n$db->exec(\"CREATE TABLE elephc_warn_probe (id INT)\");\n$db->exec(\"CREATE TABLE IF NOT EXISTS elephc_warn_probe (id INT)\");\n$n = $db->getWarningCount();\n$db->exec(\"DROP TABLE elephc_warn_probe\");\necho $n;\n",
+    );
+    assert_eq!(out, "1");
+}
