@@ -732,10 +732,7 @@ fn declared_target_ty<'a>(sig: Option<&'a FunctionSig>, param_idx: usize) -> Opt
     sig.and_then(|sig| {
         let target_ty = sig.params.get(param_idx).map(|(_, ty)| ty)?;
         if sig.declared_params.get(param_idx).copied().unwrap_or(false)
-            || matches!(
-                target_ty.codegen_repr(),
-                PhpType::Mixed | PhpType::Union(_)
-            )
+            || matches!(target_ty.codegen_repr(), PhpType::Mixed)
         {
             Some(target_ty)
         } else {

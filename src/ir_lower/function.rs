@@ -1109,13 +1109,17 @@ pub(crate) fn eir_signature_with_php_param_contracts(
     eir_signature
 }
 
-/// Returns the signature stored as runtime metadata on lowered functions.
-///
-/// `declared_params` keeps its source meaning ("the parameter has a written
-/// type hint") so reflection metadata stays faithful; runtime invokers detect
-/// boxed Mixed/Union ABI parameters from the parameter types directly.
+/// Marks boxed ABI parameters as materialization targets for reused runtime invokers.
 fn eir_runtime_metadata_signature(signature: &FunctionSig) -> FunctionSig {
-    signature.clone()
+    let mut signature = signature.clone();
+    for (index, (_, php_type)) in signature.params.iter().enumerate() {
+        if matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            if let Some(declared) = signature.declared_params.get_mut(index) {
+                *declared = true;
+            }
+        }
+    }
+    signature
 }
 
 /// Returns true when an inferred untyped parameter has an EIR-safe concrete ABI contract.
