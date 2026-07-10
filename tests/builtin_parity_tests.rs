@@ -64,8 +64,10 @@ const EVAL_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &[
 /// Eval supports extra optional by-reference parameters before the static backend does.
 const EVAL_BY_REF_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["is_callable", "preg_match_all"];
 
-/// Eval supports variadic debug output before the static backend does.
-const EVAL_VARIADIC_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["var_dump"];
+/// Eval supports variadic behavior before the static backend does. Empty: the
+/// static `var_dump` signature is variadic, so its former entry became an exact
+/// shape match; keep the slice for the next genuine variadic extension.
+const EVAL_VARIADIC_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &[];
 
 /// Builtins migrated to magician's declarative eval registry.
 const EVAL_DECLARATIVE_REGISTRY_BUILTINS: &[&str] = &[

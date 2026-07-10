@@ -177,6 +177,30 @@ return function_exists("preg_match") && function_exists("preg_match_all") && fun
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies `mb_ereg_match()` anchors at the subject start and honors the `i` option.
+#[test]
+fn execute_program_dispatches_mb_ereg_match() {
+    let program = parse_fragment(
+        br#"echo (mb_ereg_match('ab', 'abc') ? "y" : "n") . ":";
+echo (mb_ereg_match('bc', 'abc') ? "y" : "n") . ":";
+echo (mb_ereg_match('^[A-Z][A-Za-z0-9]*$', 'Foo') ? "y" : "n") . ":";
+echo (mb_ereg_match('[a-z]+\z', 'abc123') ? "y" : "n") . ":";
+echo (mb_ereg_match('ab', 'AB') ? "y" : "n") . ":";
+echo (mb_ereg_match('ab', 'AB', 'i') ? "y" : "n") . ":";
+echo (mb_ereg_match('ab', 'AB', null) ? "y" : "n") . ":";
+echo (call_user_func("mb_ereg_match", "ab", "abx") ? "y" : "n") . ":";
+return function_exists("mb_ereg_match");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "y:n:y:n:n:y:n:y:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies `preg_replace_callback()` accepts the same callable forms as other callback builtins.
 #[test]
 fn execute_program_preg_replace_callback_accepts_general_callables() {

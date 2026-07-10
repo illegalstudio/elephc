@@ -12,6 +12,7 @@
 
 mod captures;
 mod engine;
+mod mb_ereg_match;
 mod preg_match;
 mod preg_match_all;
 mod pattern;
@@ -24,6 +25,7 @@ mod targets;
 
 pub(in crate::interpreter) use captures::*;
 pub(in crate::interpreter) use engine::*;
+pub(in crate::interpreter) use mb_ereg_match::*;
 pub(in crate::interpreter) use preg_match::*;
 pub(in crate::interpreter) use preg_match_all::*;
 pub(in crate::interpreter) use pattern::*;
