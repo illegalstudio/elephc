@@ -196,7 +196,13 @@ pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
     let mut fcc_sig = callable_wrapper_sig(&sig);
     refine_first_class_callable_sig(name, &mut fcc_sig);
     fcc_sig.declared_return = true;
-    fcc_sig.declared_params = vec![true; fcc_sig.params.len()];
+    // Mark params declared for reflection hasType, but keep by-ref params
+    // undeclared: their registry type is Mixed by generality, and a declared
+    // Mixed by-ref param would make the checker demand boxed storage from
+    // every argument variable (regressing e.g. `sort(...)` on plain arrays).
+    fcc_sig.declared_params = (0..fcc_sig.params.len())
+        .map(|index| !fcc_sig.ref_params.get(index).copied().unwrap_or(false))
+        .collect();
     Some(fcc_sig)
 }
 
