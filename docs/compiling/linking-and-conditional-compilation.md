@@ -2,7 +2,7 @@
 title: "Linking, heap, and conditional compilation"
 description: "Linking native libraries and frameworks for FFI, sizing the runtime heap, and defining compile-time symbols for ifdef branches."
 sidebar:
-  order: 7
+  order: 8
 ---
 
 These flags control how the binary is linked, how much heap the program gets, and

@@ -259,10 +259,25 @@ src/
 │       ├── yield_validation/  Generator return coercion and yield-scope validation
 │       └── ...
 │
+├── codegen/
+│   ├── mod.rs                 Active EIR → target assembly entry point
+│   ├── context.rs             Per-function lowering state and value placement
+│   ├── frame.rs               EIR frame layout and local/temporary slots
+│   ├── block_emit.rs          Basic-block scheduling and emission
+│   ├── lower_inst.rs          EIR instruction lowering dispatcher
+│   ├── lower_inst/            Target-aware instruction, builtin, callable, object, ownership, and conversion lowerers
+│   ├── lower_term.rs          EIR terminator lowering
+│   ├── value_placement.rs     Linear-scan register and stack value placement
+│   ├── runtime_callable_invoker.rs Runtime callable-descriptor invocation lowering
+│   ├── fibers.rs              Fiber-aware EIR codegen integration
+│   └── web.rs                 `--web` program-entry lowering
+│
 ├── codegen_support/
 │   ├── mod.rs                 Shared codegen metadata registries and support re-exports
 │   ├── driver_support.rs      Runtime object, deferred callable, boxing, and hash-key helpers
 │   ├── arrays.rs              Shared array value-type metadata stamping helpers
+│   ├── callable_descriptor.rs Callable descriptor metadata and materialization
+│   ├── callable_dispatch.rs   Runtime callable dispatch-table emission
 │   ├── callable_invoker_args.rs Descriptor-invoker argument cloning and Mixed boxing helpers
 │   ├── value_boxing.rs        Shared runtime-value and owned-value boxing into Mixed cells
 │   ├── wrappers/              Shared callback and fiber wrapper emitters
@@ -272,46 +287,6 @@ src/
 │   ├── prescan.rs             Constant pre-scan feeding EIR lowering
 │   ├── program_usage.rs       Required-class analysis feeding metadata emission
 │   ├── program_usage/         Required-class scanners
-│   ├── functions/generator/   Closure generator wrapper and resume state-machine lowering
-│   ├── expr.rs                Expression codegen dispatcher
-│   ├── expr/                  Expression submodules
-│   │   ├── arrays.rs          Array-expression dispatch
-│   │   ├── arrays/            `access.rs`, `indexed.rs`, `assoc.rs`
-│   │   ├── assignment.rs      Assignment expression lowering
-│   │   ├── binops/            `arithmetic.rs`, `array_union.rs`, `comparison.rs`, `target.rs`, `mod.rs`
-│   │   ├── calls.rs           Call-expression dispatch
-│   │   ├── calls/             `function.rs`, `closure.rs`, `first_class.rs`, `indirect.rs`, `args/`
-│   │   ├── chains.rs          Mixed nullsafe/member postfix-chain lowering
-│   │   ├── coerce.rs          Truthiness / string / null coercions
-│   │   ├── compare/           Comparison and widening helpers
-│   │   ├── diagnostics.rs     Error-control / runtime-diagnostic expression helpers
-│   │   ├── helpers.rs         Shared expression-codegen utilities
-│   │   ├── objects.rs         Object-expression dispatch
-│   │   ├── objects/           `allocation.rs`, `access.rs`, `instanceof.rs`, `nullsafe.rs`, `static_properties.rs`, `dispatch/`
-│   │   ├── ownership.rs       Result ownership classification
-│   │   ├── scalars.rs         Literal / negate / bit-not / logical-not lowering
-│   │   ├── ternary.rs         Full and short ternary lowering
-│   │   └── variables.rs       Variable load / increment / decrement helpers
-│   ├── stmt.rs                Statement codegen dispatcher
-│   ├── stmt/                  Statement submodules
-│   │   ├── arrays.rs          Array statement dispatch
-│   │   ├── arrays/            `assign/`, `push.rs`, `unpack.rs`
-│   │   ├── assignments.rs     Variable / property assignment dispatch
-│   │   ├── assignments/       `locals.rs`, `properties.rs`, `properties/`, `static_properties.rs`, `static_properties/`
-│   │   ├── control_flow.rs    Control-flow dispatch
-│   │   ├── control_flow/      `branching/`, `foreach/`, `loops/`, `exceptions/`
-│   │   ├── helpers.rs         Shared statement-codegen helpers
-│   │   ├── includes.rs        Runtime guard flags for *_once and include-loaded function variants
-│   │   ├── io.rs              Echo / print helpers
-│   │   ├── null_coalesce_assign.rs `??=` read-modify-write helpers for non-local targets
-│   │   ├── storage.rs         Global / static / extern-global dispatch
-│   │   └── storage/           `locals.rs`, `extern_globals.rs`
-│   ├── functions/             User function emission
-│   │   ├── mod.rs             Function lowering entry point
-│   │   ├── cleanup.rs         Epilogue / ownership cleanup helpers
-│   │   ├── control_flow.rs    Return / early-exit lowering
-│   │   ├── locals.rs          Local slot layout
-│   │   └── types/             Function-local type inference helpers
 │   ├── abi/                   Target-aware calling convention helpers
 │   │   ├── mod.rs             Public ABI helpers
 │   │   ├── bootstrap.rs       Program entry / bootstrap helpers
@@ -327,24 +302,11 @@ src/
 │   │   ├── target.rs          Platform / Arch / Target definitions and derived codegen properties
 │   │   ├── linux_transform.rs Linux post-emit transforms, syscall mapping, C-symbol remapping
 │   │   └── toolchain.rs       Assembler / linker invocation
-│   ├── ffi.rs                 Extern function/global/class codegen
 │   ├── cdylib.rs              C-ABI export trampolines + lifecycle symbols for --emit cdylib
 │   ├── visibility.rs          ELF .hidden directives for internal globals in cdylib emission
 │   ├── sentinels.rs           Null representation selection (sentinel vs tagged) and constants
-│   ├── context.rs             Variables, labels, loop/finally stacks, ownership lattice
 │   ├── data_section.rs        String/float literal .data section
 │   ├── emit.rs                Assembly text buffer
-│   │
-│   ├── builtins/              Built-in function codegen (one file per language function)
-│   │   ├── mod.rs             Dispatcher — chains to category modules
-│   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (75 files)
-│   │   ├── arrays/            count, array_push, buffer_len/free, sort, array_map, usort, ... (64 files)
-│   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (33 files)
-│   │   ├── types/             is_*, gettype, empty, unset, settype, class introspection, ... (27 files)
-│   │   ├── io/                fopen, fwrite, file_get_contents, streams, sockets, scandir, ... (142 files)
-│   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ... (16 files)
-│   │   ├── spl/               iterator_to_array, iterator_count, iterator_apply, iterator_common (5 files)
-│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, attribute reflection, ... (38 files)
 │   │
 │   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Runtime module boundary; re-exports the emission entry points
@@ -352,18 +314,19 @@ src/
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
 │       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (71 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (145 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (148 files)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (4 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (113 files)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (114 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (6 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, preg_*, ... (42 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, preg_*, ... (43 files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 files) + `api/` (target-aware public API helpers)
 │       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding, destructor dispatch, new-by-name helpers (6 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
-│       └── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
+│       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
+│       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
 │
 │
 └── errors/

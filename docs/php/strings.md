@@ -52,7 +52,14 @@ $p = new Point();
 echo "x = $p->x\n";             // simple: one $var->prop
 
 echo "Sum: {$user['age']}\n";   // complex: {$expr} allows full expressions
+
+// PHP 8.x deprecated forms are accepted for compatibility:
+echo "Hello, ${name}\n";        // deprecated ${var}
+echo "Sum: ${1 + 2}\n";         // deprecated ${expr}
 ```
+
+The `${var}` and `${expr}` forms behave like PHP 8.x: they still work, but are
+deprecated. Prefer `$var` or `{$expr}` in new code.
 
 Variable and identifier names may contain non-ASCII letters, matching PHP:
 
