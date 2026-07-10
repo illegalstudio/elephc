@@ -497,6 +497,27 @@ impl PgConn {
         }
     }
 
+    /// Polls for a pending LISTEN/NOTIFY notification, returning it as a
+    /// tab-separated `channel\tpid\tpayload` string, or an empty string if none
+    /// arrives within `timeout_ms` (a zero/negative timeout polls once for an
+    /// already-buffered notification). Backs `Pdo\Pgsql::getNotify()`; the prelude
+    /// shapes the parts into the requested array form.
+    pub fn get_notify(&mut self, timeout_ms: i64) -> String {
+        use postgres::fallible_iterator::FallibleIterator;
+        use std::time::Duration;
+        let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
+        let mut notifications = self.client.notifications();
+        let next = if timeout.is_zero() {
+            notifications.iter().next()
+        } else {
+            notifications.timeout_iter(timeout).next()
+        };
+        match next {
+            Ok(Some(n)) => format!("{}\t{}\t{}", n.channel(), n.process_id(), n.payload()),
+            _ => String::new(),
+        }
+    }
+
     /// Prepares a statement: translates placeholders and prepares it server-side
     /// for column metadata. Returns the statement or an error message.
     pub fn prepare(&mut self, sql: &str) -> Result<PgStmt, String> {

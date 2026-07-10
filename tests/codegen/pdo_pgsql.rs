@@ -246,3 +246,21 @@ echo $ok . ":" . count($rows) . ":" . (strpos($joined, "Ada") !== false ? "y" : 
     );
     assert_eq!(out, "1:2:yy");
 }
+
+/// `Pdo\Pgsql::getNotify()` receives a LISTEN/NOTIFY notification: the session
+/// listens on a channel, notifies it, and getNotify returns [channel, pid, payload]
+/// (the numerically-indexed shape elephc produces). Driven against the live server.
+#[test]
+#[ignore]
+fn test_pgsql_get_notify() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
+$db->exec("LISTEN elephc_ch");
+$db->exec("NOTIFY elephc_ch, 'hi'");
+$n = $db->getNotify(\PDO::FETCH_NUM, 1000);
+echo (count($n) === 0) ? "none" : ($n[0] . ":" . $n[2]);
+"#,
+    );
+    assert_eq!(out, "elephc_ch:hi");
+}

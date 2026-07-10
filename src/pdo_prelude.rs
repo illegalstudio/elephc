@@ -99,6 +99,9 @@ extern "elephc_pdo" {
     // loading. column_decltype is empty for a non-SQLite/expression column.
     function elephc_pdo_column_decltype(int $stmt, int $i): string;
     function elephc_pdo_load_extension(int $conn, string $path): int;
+    // v11: PostgreSQL LISTEN/NOTIFY poll — returns `channel\tpid\tpayload`, empty if
+    // none within the timeout.
+    function elephc_pdo_get_notify(int $conn, int $timeout_ms): string;
 }
 
 class PDOException extends RuntimeException {
@@ -1187,6 +1190,30 @@ namespace Pdo {
                 . $this->copyOptions($separator, $nullAs);
             $_raw = \elephc_pdo_copy_out($this->connectionId(), $_sql);
             return \file_put_contents($filename, $_raw) !== false;
+        }
+
+        public function getNotify(int $fetchMode = 0, int $timeoutMilliseconds = 0): array {
+            // Polls for a pending LISTEN/NOTIFY notification, returning it as a
+            // numerically-indexed array [0=>channel, 1=>pid, 2=>payload], or an empty
+            // array if none arrived within the timeout. Divergences from PHP: (1) an
+            // empty array is returned rather than false for "no notification" (both
+            // are falsy, so `while ($n = $db->getNotify())` still terminates); (2)
+            // $fetchMode is accepted for signature compatibility but the result is
+            // always the numerically-indexed (FETCH_NUM) shape — elephc's EIR array
+            // backend cannot return a string-keyed array alongside an empty array from
+            // one method, so the associative shapes are not produced.
+            $_unused = $fetchMode;
+            $_raw = \elephc_pdo_get_notify($this->connectionId(), $timeoutMilliseconds);
+            if ($_raw === "") {
+                return [];
+            }
+            // elephc's explode takes no limit argument, so a tab in the payload is
+            // not preserved beyond its first segment (channel names and the pid never
+            // contain tabs, and NOTIFY payloads virtually never do).
+            $_parts = \explode("\t", $_raw);
+            $_pid = isset($_parts[1]) ? (int) $_parts[1] : 0;
+            $_payload = isset($_parts[2]) ? $_parts[2] : "";
+            return [$_parts[0], $_pid, $_payload];
         }
     }
 }

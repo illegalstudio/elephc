@@ -281,9 +281,10 @@ fn open_persistent_dsn(dsn: &str) -> i64 {
 /// `Pdo\Pgsql::lobCreate()` / `lobUnlink()` / `copyFrom*()` / `copyTo*()`. v10 adds
 /// the SQLite column-decltype and load-extension accessors backing
 /// `PDOStatement::getColumnMeta()`'s native type and `Pdo\Sqlite::loadExtension()`.
+/// v11 adds the PostgreSQL LISTEN/NOTIFY poll backing `Pdo\Pgsql::getNotify()`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    10
+    11
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -676,6 +677,22 @@ pub unsafe extern "C" fn elephc_pdo_copy_out(
         let mut guard = conns().lock().unwrap();
         match guard.get_mut(&conn_id) {
             Some(Conn::Postgres(c)) => c.copy_out(sql),
+            _ => String::new(),
+        }
+    };
+    store_cstr(pg_text_result_cell(), &text)
+}
+
+/// Polls a `pgsql:` connection for a pending LISTEN/NOTIFY notification
+/// (`Pdo\Pgsql::getNotify()`), returning it as `channel\tpid\tpayload`, or an empty
+/// string if none arrives within `timeout_ms` (or for a non-PostgreSQL connection /
+/// unknown handle).
+#[no_mangle]
+pub extern "C" fn elephc_pdo_get_notify(conn_id: i64, timeout_ms: i64) -> *const c_char {
+    let text = {
+        let mut guard = conns().lock().unwrap();
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Postgres(c)) => c.get_notify(timeout_ms),
             _ => String::new(),
         }
     };

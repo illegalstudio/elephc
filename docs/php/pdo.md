@@ -331,10 +331,10 @@ or at program exit. You do not need to close them explicitly.
   `Pdo\Pgsql::getPid()` (backend process id), `Pdo\Mysql::getWarningCount()`
   (warnings from the last statement), `Pdo\Pgsql::lobCreate()` / `lobUnlink()`
   (large-object create/delete), `Pdo\Pgsql::copyFromArray()` / `copyFromFile()` /
-  `copyToArray()` / `copyToFile()` (COPY), and `Pdo\Sqlite::loadExtension()` (load a
-  SQLite extension by path). The remaining connection-backed methods (`getNotify`
-  and the stream-returning `openBlob` / `lobOpen`) and the callback methods are not
-  yet provided (see Limitations).
+  `copyToArray()` / `copyToFile()` (COPY), `Pdo\Sqlite::loadExtension()` (load a
+  SQLite extension by path), and `Pdo\Pgsql::getNotify()` (poll LISTEN/NOTIFY). The
+  remaining stream-returning methods (`openBlob` / `lobOpen`) and the callback
+  methods are not yet provided (see Limitations).
 
 ## Limitations
 
@@ -361,13 +361,17 @@ or at program exit. You do not need to close them explicitly.
   their driver-specific constants. Implemented driver methods:
   `Pdo\Pgsql::escapeIdentifier()`, `getPid()`, `lobCreate()` / `lobUnlink()`,
   `copyFromArray()` / `copyFromFile()` / `copyToArray()` / `copyToFile()`,
-  `Pdo\Sqlite::loadExtension()`, and `Pdo\Mysql::getWarningCount()` (which reflects a
-  preceding direct `exec()`/DML statement; the pure-Rust client does not surface a
-  SELECT's EOF-packet warnings). `copyToArray()` returns an empty array both for an
-  empty table and a transport error (check `errorInfo()`); `loadExtension()` runs
-  native code from the named library, weakening the standalone-binary guarantee.
-  Still missing: the remaining **connection-backed** methods (`Pdo\Pgsql::getNotify`
-  and the stream-returning `openBlob` / `lobOpen`) and the **callback** methods
+  `Pdo\Sqlite::loadExtension()`, `Pdo\Pgsql::getNotify()`, and
+  `Pdo\Mysql::getWarningCount()` (which reflects a preceding direct `exec()`/DML
+  statement; the pure-Rust client does not surface a SELECT's EOF-packet warnings).
+  `copyToArray()` returns an empty array both for an empty table and a transport
+  error (check `errorInfo()`); `loadExtension()` runs native code from the named
+  library, weakening the standalone-binary guarantee; `getNotify()` returns a
+  numerically-indexed `[channel, pid, payload]` array (an empty array, not `false`,
+  when none is pending — elephc's EIR array backend cannot mix a string-keyed and an
+  empty array across one method's return paths). Still missing: the
+  stream-returning **connection-backed** methods (`Pdo\Sqlite::openBlob`,
+  `Pdo\Pgsql::lobOpen`) and the **callback** methods
   (`Pdo\Sqlite::createFunction` / `createAggregate` / `createCollation`,
   `Pdo\Pgsql::setNoticeCallback`), the latter needing a PHP-callable-to-C trampoline
   elephc's FFI does not yet provide. `PDO::connect()` selects the subclass from the
