@@ -1165,3 +1165,60 @@ echo $mysql_errmode . ":" . $pgsql_fetch;
     );
     assert_eq!(out, "2:2");
 }
+
+/// `PDO::connect()` (PHP 8.4 static factory): a `sqlite:` DSN dispatches to a
+/// working `Pdo\Sqlite`. The returned object opens the connection and drives a
+/// query through its inherited base methods, and it satisfies `instanceof` for
+/// both the concrete `\Pdo\Sqlite` it is and the `\PDO` base it extends — proving
+/// the factory returns the real subclass instance, not a bare base `PDO`.
+#[test]
+fn test_pdo_connect_sqlite_returns_working_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+$db = \PDO::connect("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+$db->exec("INSERT INTO t (name) VALUES ('Ada')");
+$name = $db->query("SELECT name FROM t")->fetchColumn();
+$is_sqlite = $db instanceof \Pdo\Sqlite ? "1" : "0";
+$is_pdo = $db instanceof \PDO ? "1" : "0";
+echo $name . ":" . $is_sqlite . $is_pdo;
+"#,
+    );
+    assert_eq!(out, "Ada:11");
+}
+
+/// `PDO::connect()` with a DSN whose prefix matches no known driver throws a
+/// `PDOException` ("could not find driver"), matching PHP's factory behavior.
+#[test]
+fn test_pdo_connect_unknown_driver_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    \PDO::connect("bogus:host=localhost");
+    echo "no-throw";
+} catch (\PDOException $e) {
+    echo "caught";
+}
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// The `PDO` return type of `PDO::connect()` threads through a `\PDO`-typed
+/// parameter: the subclass instance is accepted where a base `\PDO` is expected
+/// and its inherited methods dispatch, confirming the subclass-to-base upcast on
+/// the declared return type is sound across a function boundary.
+#[test]
+fn test_pdo_connect_result_threads_as_base_pdo() {
+    let out = compile_and_run(
+        r#"<?php
+function seed(\PDO $db): int {
+    $db->exec("CREATE TABLE t (id INTEGER PRIMARY KEY, n INTEGER)");
+    $db->exec("INSERT INTO t (n) VALUES (7)");
+    return (int) $db->query("SELECT n FROM t")->fetchColumn();
+}
+echo seed(\PDO::connect("sqlite::memory:"));
+"#,
+    );
+    assert_eq!(out, "7");
+}

@@ -288,7 +288,7 @@ per-request heap reset the web runtime performs between requests.
 - **PDO**: `__construct`, `exec`, `query`, `prepare`, `quote`, `lastInsertId`,
   `beginTransaction`, `commit`, `rollBack`, `inTransaction`, `errorCode`,
   `errorInfo`, `getAttribute`, `setAttribute`, `getAvailableDrivers` (static),
-  `__destruct`. Starting a nested transaction, or committing / rolling back with
+  `connect` (static factory), `__destruct`. Starting a nested transaction, or committing / rolling back with
   none active, throws a `PDOException`; `__destruct` rolls back an open
   transaction before closing.
 - **PDOStatement**: `execute`, `bindValue`, `bindParam`, `setFetchMode`, `fetch`,
@@ -321,7 +321,9 @@ or at program exit. You do not need to close them explicitly.
 - **Driver subclasses**: `Pdo\Sqlite`, `Pdo\Mysql`, and `Pdo\Pgsql` (PHP 8.4)
   extend `PDO` and inherit its full base surface, so `new \Pdo\Sqlite("sqlite::…")`
   works like `new \PDO(...)` and the instance is `instanceof \PDO`. A program that
-  names only a subclass — never the base `PDO` — still injects the prelude.
+  names only a subclass — never the base `PDO` — still injects the prelude, and the
+  PHP 8.4 `PDO::connect($dsn, …)` factory returns the matching subclass for the
+  DSN's driver prefix (an unknown prefix throws `PDOException`).
   Driver-specific methods are not yet provided (see Limitations).
 
 ## Limitations
@@ -344,11 +346,12 @@ or at program exit. You do not need to close them explicitly.
   difference moot in practice.
 - **Namespaced driver subclasses** `Pdo\Sqlite`, `Pdo\Mysql`, and `Pdo\Pgsql`
   (PHP 8.4) exist and extend `PDO`: they are auto-detected (a program that names
-  only a subclass still injects the prelude), are directly instantiable, and
-  inherit the full base connection surface. Their **driver-specific methods**
-  (e.g. `Pdo\Sqlite::createFunction`, `Pdo\Mysql::getWarningCount`) and the
-  `PDO::connect()` factory that returns a driver-specific instance are not yet
-  implemented.
+  only a subclass still injects the prelude), are directly instantiable, inherit
+  the full base connection surface, and are what `PDO::connect()` returns. Their
+  **driver-specific methods** (e.g. `Pdo\Sqlite::createFunction`,
+  `Pdo\Mysql::getWarningCount`) are not yet implemented. `PDO::connect()` selects
+  the subclass from the DSN prefix, so a subclass-qualified call with a mismatched
+  DSN (`Pdo\Sqlite::connect("mysql:…")`) is not rejected as PHP would.
 - **`FETCH_GROUP` / `FETCH_UNIQUE`** result shaping and **`createFunction()`** are
   not yet implemented — their constants exist but the behaviors either fail loudly
   or are absent.

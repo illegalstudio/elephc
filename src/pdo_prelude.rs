@@ -381,6 +381,30 @@ class PDO {
         return ["mysql", "pgsql", "sqlite"];
     }
 
+    public static function connect(string $dsn, ?string $username = null, ?string $password = null, ?array $options = null): PDO {
+        // PHP 8.4 static factory: dispatch on the DSN driver prefix and return an
+        // instance of the matching driver-specific subclass. Each subclass inherits
+        // the whole \PDO surface, so the returned object opens the connection and
+        // behaves exactly like `new PDO($dsn, ...)`; only its concrete class differs,
+        // so `PDO::connect("sqlite:...") instanceof \Pdo\Sqlite` is true. Declared to
+        // return the base \PDO because the subclasses ARE \PDO and elephc has no
+        // `static` return type; the runtime object is the exact subclass. An
+        // unrecognized prefix throws, matching PHP's "could not find driver".
+        // Divergence: the DSN prefix, not the receiver class, selects the driver, so
+        // a subclass-qualified mismatched call (`Pdo\Sqlite::connect("mysql:...")`)
+        // is not rejected here as PHP would.
+        if (str_starts_with($dsn, "sqlite:")) {
+            return new \Pdo\Sqlite($dsn, $username, $password, $options);
+        }
+        if (str_starts_with($dsn, "mysql:")) {
+            return new \Pdo\Mysql($dsn, $username, $password, $options);
+        }
+        if (str_starts_with($dsn, "pgsql:")) {
+            return new \Pdo\Pgsql($dsn, $username, $password, $options);
+        }
+        throw new PDOException("could not find driver");
+    }
+
     public function errorCode(): ?string {
         // The 5-character SQLSTATE for the connection's last operation ("00000"
         // on success). Divergence from PHP: this returns "00000" rather than null
@@ -870,10 +894,11 @@ class PDOStatement implements Iterator {
     }
 }
 
-// PHP 8.4 driver-specific PDO subclasses. In PHP they are returned by
-// PDO::connect() and can also be constructed directly; each inherits the full
-// base PDO connection surface (constructor, exec/query/prepare, transactions,
-// quoting) from \PDO. Only the shared base is provided here: driver-specific
+// PHP 8.4 driver-specific PDO subclasses. They are returned by the DSN-dispatching
+// `PDO::connect()` factory (defined above) and can also be constructed directly;
+// each inherits the full base PDO connection surface (constructor, exec/query/
+// prepare, transactions, quoting) from \PDO. Only the shared base is provided
+// here: driver-specific
 // methods (e.g. Pdo\Sqlite::createFunction, Pdo\Mysql::getWarningCount,
 // Pdo\Pgsql::escapeIdentifier) require callable/driver plumbing and are tracked
 // as a follow-up.
