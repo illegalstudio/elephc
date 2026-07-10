@@ -31,3 +31,4 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `mb_ereg_match` is implemented in the compiler, see [the internals page](../../../internals/builtins/regex/mb_ereg_match.md).
+

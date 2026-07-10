@@ -4176,6 +4176,7 @@ fn resolve_packed_field_slot(
 fn ensure_property_type_supported(php_type: &PhpType, inst: &Instruction) -> Result<()> {
     match php_type {
         PhpType::Bool
+        | PhpType::False
         | PhpType::Int
         | PhpType::Float
         | PhpType::Str
@@ -4469,7 +4470,7 @@ fn emit_property_load(
             let float_reg = abi::float_result_reg(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, float_reg, base_reg, slot.offset);
         }
-        PhpType::Bool | PhpType::Int | PhpType::Void | PhpType::Never => {
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Void | PhpType::Never => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
         }
@@ -4528,7 +4529,11 @@ fn emit_packed_field_load(
             let float_reg = abi::float_result_reg(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, float_reg, base_reg, slot.offset);
         }
-        PhpType::Bool | PhpType::Int | PhpType::Pointer(_) | PhpType::Resource(_) => {
+        PhpType::Bool
+        | PhpType::False
+        | PhpType::Int
+        | PhpType::Pointer(_)
+        | PhpType::Resource(_) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
         }
@@ -4601,7 +4606,7 @@ fn emit_property_store(
             abi::emit_store_to_address(ctx.emitter, float_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
         }
-        PhpType::Bool | PhpType::Int | PhpType::Void | PhpType::Never => {
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Void | PhpType::Never => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
             load_property_store_value_to_result(ctx, value, &slot.php_type)?;
@@ -4926,6 +4931,7 @@ fn emit_packed_field_store(
             abi::emit_store_to_address(ctx.emitter, float_reg, base_reg, slot.offset);
         }
         PhpType::Bool
+        | PhpType::False
         | PhpType::Int
         | PhpType::Void
         | PhpType::Never

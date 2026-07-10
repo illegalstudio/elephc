@@ -104,7 +104,7 @@ fn apply_static_property(
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         state.declared_static_properties.remove(&prop.name);
-        infer_expr_type_syntactic(default)
+        infer_untyped_property_default_type(default)
     } else {
         state.declared_static_properties.remove(&prop.name);
         PhpType::Int
@@ -257,7 +257,7 @@ fn apply_instance_property(
         state.declared_properties.insert(prop.name.clone());
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
-        infer_expr_type_syntactic(default)
+        infer_untyped_property_default_type(default)
     } else {
         PhpType::Int
     };
@@ -350,7 +350,7 @@ fn apply_instance_property_redeclaration(
         state.declared_properties.insert(prop.name.clone());
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
-        infer_expr_type_syntactic(default)
+        infer_untyped_property_default_type(default)
     } else {
         PhpType::Int
     };
@@ -677,10 +677,36 @@ fn php_property_types_invariant(parent: &PhpType, child: &PhpType) -> bool {
 fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option<&Expr>) -> PhpType {
     if let (PhpType::Array(_), Some(default)) = (&declared_ty, default) {
         if matches!(default.kind, ExprKind::ArrayLiteralAssoc(_)) {
-            return infer_expr_type_syntactic(default);
+            return infer_untyped_property_default_type(default);
         }
     }
     declared_ty
+}
+
+/// Infers storage for an untyped property default while widening the literal `false` subtype.
+/// Mutable untyped properties initialized with `false` must continue accepting later boolean
+/// writes; explicit `false` property declarations retain their narrower contract.
+fn infer_untyped_property_default_type(default: &Expr) -> PhpType {
+    widen_false_literal_storage_type(infer_expr_type_syntactic(default))
+}
+
+/// Recursively widens literal `false` members to `bool` for mutable property storage shapes.
+fn widen_false_literal_storage_type(ty: PhpType) -> PhpType {
+    match ty {
+        PhpType::False => PhpType::Bool,
+        PhpType::Array(element) => PhpType::Array(Box::new(widen_false_literal_storage_type(*element))),
+        PhpType::AssocArray { key, value } => PhpType::AssocArray {
+            key: Box::new(widen_false_literal_storage_type(*key)),
+            value: Box::new(widen_false_literal_storage_type(*value)),
+        },
+        PhpType::Union(members) => PhpType::Union(
+            members
+                .into_iter()
+                .map(widen_false_literal_storage_type)
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 /// Resolves the declared type for a property from its `type_expr` using

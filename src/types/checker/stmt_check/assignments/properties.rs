@@ -411,7 +411,9 @@ fn check_pointer_property_write(
             ));
         }
     } else if let Some(field_ty) = checker.packed_field_type(class_name, property) {
-        if &field_ty != val_ty {
+        if &field_ty != val_ty
+            && !matches!((&field_ty, val_ty), (PhpType::Bool, PhpType::False))
+        {
             return Err(CompileError::new(
                 span,
                 &format!(

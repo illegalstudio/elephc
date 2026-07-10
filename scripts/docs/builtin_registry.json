@@ -3328,7 +3328,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_boolval",
-      "codegen_line": 586,
+      "codegen_line": 587,
       "notes": [
         "Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`."
       ],
@@ -4524,7 +4524,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_count",
-      "codegen_line": 439,
+      "codegen_line": 440,
       "notes": [
         "Lowers `count(array)` for concrete array values by reading the runtime length header.",
         "Called from `crate::builtins::array::count` (the registry home) via a thin wrapper.",
@@ -5168,7 +5168,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 618,
+      "codegen_line": 619,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -6291,7 +6291,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_floatval",
-      "codegen_line": 556,
+      "codegen_line": 557,
       "notes": [
         "Lowers `floatval()` for concrete scalar operands."
       ],
@@ -9312,7 +9312,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_intval",
-      "codegen_line": 523,
+      "codegen_line": 524,
       "notes": [
         "Lowers `intval()` for concrete scalar operands."
       ],
@@ -9443,7 +9443,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_array",
-      "codegen_line": 1002,
+      "codegen_line": 1004,
       "notes": [
         "Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value",
         "whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is",
@@ -9482,7 +9482,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_static_type_predicate",
-      "codegen_line": 736,
+      "codegen_line": 737,
       "notes": [
         "Lowers a static `is_*` predicate for concrete non-Mixed values."
       ],
@@ -9721,7 +9721,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_static_type_predicate",
-      "codegen_line": 736,
+      "codegen_line": 737,
       "notes": [
         "Lowers a static `is_*` predicate for concrete non-Mixed values."
       ],
@@ -9795,7 +9795,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_static_type_predicate",
-      "codegen_line": 736,
+      "codegen_line": 737,
       "notes": [
         "Lowers a static `is_*` predicate for concrete non-Mixed values."
       ],
@@ -9832,7 +9832,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_iterable",
-      "codegen_line": 794,
+      "codegen_line": 795,
       "notes": [
         "Lowers `is_iterable()` for concrete values and boxed Mixed payloads."
       ],
@@ -9948,7 +9948,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_null_builtin",
-      "codegen_line": 992,
+      "codegen_line": 994,
       "notes": [
         "Lowers `is_null()` for concrete scalar values and boxed Mixed payloads."
       ],
@@ -10022,7 +10022,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_object",
-      "codegen_line": 1017,
+      "codegen_line": 1019,
       "notes": [
         "Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose",
         "runtime tag is an object (6)."
@@ -10138,7 +10138,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_scalar",
-      "codegen_line": 1033,
+      "codegen_line": 1035,
       "notes": [
         "Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed",
         "Mixed/Union value whose runtime tag is int (0), string (1), float (2), or bool (3). Null,",
@@ -10177,7 +10177,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_static_type_predicate",
-      "codegen_line": 736,
+      "codegen_line": 737,
       "notes": [
         "Lowers a static `is_*` predicate for concrete non-Mixed values."
       ],
@@ -17623,7 +17623,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_strlen",
-      "codegen_line": 493,
+      "codegen_line": 494,
       "notes": [
         "Lowers `strlen()` by coercing string-like values and returning the byte length."
       ],
