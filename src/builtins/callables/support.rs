@@ -31,17 +31,10 @@ pub(crate) fn check_class_like_exists(cx: &mut BuiltinCheckCtx) -> Result<PhpTyp
             &format!("{}() first argument must be a string literal in AOT mode", cx.name),
         ));
     }
-    if let Some(autoload_arg) = cx.args.get(1) {
-        if !matches!(
-            autoload_arg.kind,
-            ExprKind::BoolLiteral(_) | ExprKind::IntLiteral(_)
-        ) {
-            return Err(CompileError::new(
-                cx.span,
-                &format!("{}() autoload argument must be a literal bool or int in AOT mode", cx.name),
-            ));
-        }
-    }
+    // The optional autoload flag may be dynamic: it never contributes an AOT
+    // autoload demand (the demand walker treats non-literals as false), and
+    // existence still folds from the literal class name. The registry common
+    // path has already inferred it.
     Ok(PhpType::Bool)
 }
 
