@@ -237,10 +237,19 @@ fn test_attribute_on_arrow_function_parameter() {
 /// Verifies stacked attributes on parameter.
 #[test]
 fn test_stacked_attributes_on_parameter() {
-    // Stacked `#[A] #[B]` on a parameter parse without error and do not alter the AST.
+    // Stacked `#[A] #[B]` on a parameter persist as two ordered attribute groups.
     let with_attr = parse_source("<?php function f(#[A] #[B] int $x): void {}");
-    let without = parse_source("<?php function f(int $x): void {}");
-    assert_eq!(with_attr, without);
+    match &with_attr[0].kind {
+        StmtKind::FunctionDecl {
+            param_attributes, ..
+        } => {
+            assert_eq!(param_attributes.len(), 1);
+            assert_eq!(param_attributes[0].len(), 2);
+            assert_eq!(param_attributes[0][0].attributes[0].name.as_str(), "A");
+            assert_eq!(param_attributes[0][1].attributes[0].name.as_str(), "B");
+        }
+        other => panic!("expected FunctionDecl, got {:?}", other),
+    }
 }
 
 // -- Persistence: attributes are now captured in the AST --
