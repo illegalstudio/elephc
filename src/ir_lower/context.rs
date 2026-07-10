@@ -1166,6 +1166,36 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             )
     }
 
+    /// Returns whether an index-read receiver is itself an owned intermediate
+    /// produced by an index read, i.e. the inner step of a chained subscript
+    /// read such as `$a[$i][$j]`.
+    ///
+    /// Container reads of refcounted or boxed-Mixed elements return a +1 caller
+    /// reference (the `array_get`/`hash_get` emitters incref pointer payloads and
+    /// box Mixed cells), so when that result is consumed directly as the receiver
+    /// of another index read there is no local slot whose release machinery would
+    /// ever drop the reference — the consuming read must release it explicitly.
+    /// String results are excluded: they are borrowed pointers into the container
+    /// payload and carry no reference of their own.
+    pub(crate) fn value_is_owned_index_read_temp(&self, value: LoweredValue) -> bool {
+        let php_type = self.builder.value_php_type(value.value).codegen_repr();
+        if !(matches!(php_type, PhpType::Mixed | PhpType::Union(_))
+            || (php_type.is_refcounted() && php_type != PhpType::Str))
+        {
+            return false;
+        }
+        matches!(
+            self.builder.value_defining_op(value.value),
+            Some(
+                Op::ArrayGet
+                    | Op::ArrayGetSilent
+                    | Op::HashGet
+                    | Op::ArrayGetMixedKey
+                    | Op::ArrayGetMixedKeySilent
+            )
+        )
+    }
+
     /// Returns true for builtin calls whose return value is newly allocated for the caller.
     fn value_is_owning_builtin_temporary(&self, value: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(value) else {

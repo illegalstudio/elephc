@@ -7248,14 +7248,27 @@ fn lower_array_access_from_value(
         _ => Op::RuntimeCall,
     };
     let result_type = array_access_result_type(ctx, array_value.value, op, expr);
-    ctx.emit_value(
+    let result = ctx.emit_value(
         op,
         vec![array_value.value, index_value.value],
         None,
         result_type,
         op.default_effects(),
         Some(expr.span),
-    )
+    );
+    // A chained subscript read (`$a[$i][$j]`) consumes the inner read's result
+    // directly as its receiver. That intermediate carries a +1 reference (the
+    // get emitters incref refcounted payloads and box Mixed cells), and unlike
+    // the hoisted form `$inner = $a[$i]; $inner[$j]` no local-slot release
+    // machinery ever drops it, so the materialized inner container leaks on
+    // every evaluation. Release it once the consuming read has extracted its
+    // result: the parent container still holds its own reference to the
+    // intermediate, so this cannot free storage the just-extracted result may
+    // borrow (e.g. a string element pointing into the inner array's payload).
+    if ctx.value_is_owned_index_read_temp(array_value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(expr.span));
+    }
+    result
 }
 
 /// Lowers nullable receiver indexing without evaluating the index on a null receiver.
