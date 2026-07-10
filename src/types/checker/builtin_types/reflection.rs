@@ -5115,12 +5115,10 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     make_reflection_variadic_optional(sig);
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("invokeArgs")) {
+                    // Keep the shell's (object, args) parameters: ReflectionMethod::invokeArgs
+                    // takes the receiver first, and replacing the params with a
+                    // lone args array breaks invoke dispatch.
                     sig.return_type = PhpType::Mixed;
-                    sig.params = vec![("args".to_string(), PhpType::Array(Box::new(PhpType::Mixed)))];
-                    sig.param_type_exprs = vec![Some(array_type())];
-                    sig.defaults = vec![None];
-                    sig.ref_params = vec![false];
-                    sig.declared_params = vec![true];
                 }
                 if let Some(sig) =
                     class_info.methods.get_mut(&php_symbol_key("createFromMethodName"))
