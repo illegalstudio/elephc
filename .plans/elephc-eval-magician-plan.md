@@ -41,6 +41,18 @@
   builtins, and static-only builtins not yet present in magician.
 - [ ] Reduce the remaining manual AOT mini-codegen and converge on internal EIR
   functions for supported literal fragments.
+- [ ] Add a shared PHP-fragment grammar corpus that must parse consistently on
+  the main compiler frontend and on magician (and stay aligned with AOT
+  acceptance where the fragment is a compile-time literal).
+- [ ] Document allowed grammar divergences between main and magician (no `<?php`
+  in eval fragments, no elephc-only extensions in magician, different
+  error/recovery models) and treat any other pure-PHP disagreement as a bug.
+- [ ] Add a fix policy: PHP-visible syntax fixes on main that can appear in eval
+  must either update magician in the same change or land with an explicit
+  divergence note plus a corpus case.
+- [ ] Consider a thin pure-PHP `elephc-php-syntax` crate only if dual-parser
+  maintenance cost remains high after stable magician fallback lands on main.
+  This is opportunistic and is not a merge prerequisite.
 - [ ] Define dynamic-name semantics and fallback boundaries for variable
   variables, dynamic instance properties, dynamic static properties, dynamic
   member access, and `isset`/`empty`/`unset` over those forms.
@@ -90,6 +102,18 @@ Eval support has two paths:
    `__elephc_eval_execute`.
 2. Literal eval AOT, when the fragment is a compile-time-known string and the
    classifier considers it semantically safe.
+
+These paths intentionally use different frontends today:
+
+- literal AOT reuses the **compiler** lexer/parser (`src/lexer/`, `src/parser/`)
+  and then classifies the resulting AST;
+- runtime fallback uses the **magician** lexer/parser
+  (`crates/elephc-magician/src/lexer/`, `crates/elephc-magician/src/parser/`)
+  and lowers into EvalIR for the interpreter.
+
+They must not silently disagree on pure PHP fragment validity. Magician remains
+a separate staticlib and must not depend on the full `elephc` crate or ship the
+compiler into user binaries.
 
 After the rebase onto `main`, the active backend is the EIR path under
 `src/ir_lower/`, `src/ir_passes/`, and `src/codegen/lower_inst/`. Historical
@@ -154,7 +178,7 @@ The compiler analyzes literal fragments at compile time:
 
 ```text
 literal string
-  -> parse as PHP fragment
+  -> parse as PHP fragment (compiler frontend)
   -> normalize/name-resolve compatibly with the context
   -> classify AOT eligibility
   -> plan reads/writes/calls/fallback
@@ -173,6 +197,22 @@ The AOT plan must preserve:
 
 AOT paths emit assembly markers such as `eval literal AOT compiled...`.
 Fallback paths emit markers with a readable reason where possible.
+
+### Dual frontends (compiler vs magician)
+
+Two frontends are an intentional architectural trade-off, not an accident to
+erase before landing:
+
+- magician links into user programs and must stay a small optional bridge;
+- magician emits EvalIR for by-name runtime execution, not the compile AST that
+  feeds type checking, optimization, and EIR lowering;
+- the compiler frontend also accepts elephc-only extensions (`ptr`, `buffer`,
+  `extern`, `packed class`, `ifdef`, …) that eval fragments must reject.
+
+Near-term governance is corpus + documented divergences + fix policy. A shared
+pure-PHP syntax crate is a later option only if maintenance cost justifies it.
+Do not merge the full compiler parser into magician, and do not make magician
+depend on the main `elephc` crate, as a prerequisite for landing eval.
 
 ## Completed Work
 
@@ -590,7 +630,72 @@ Update docs when the subset changes:
 - literal eval AOT does not embed the parser/compiler in the binary;
 - magician fallback remains compatibility semantics;
 - fully AOT programs do not link `elephc_magician`;
-- constructs that still fall back should be documented when user-visible.
+- constructs that still fall back should be documented when user-visible;
+- allowed dual-frontend grammar divergences stay documented when user-visible.
+
+### 7. Parser dual-stack governance
+
+#### Current state
+
+Eval has two intentional frontends:
+
+1. **Compiler frontend** (`src/lexer/`, `src/parser/`) for literal AOT analysis
+   and all ordinary compilation.
+2. **Magician frontend** (`crates/elephc-magician/src/lexer/`,
+   `crates/elephc-magician/src/parser/`) for runtime fragments, producing
+   EvalIR for the interpreter.
+
+Magician does not depend on the `elephc` crate. That keeps the optional
+staticlib free of the full compiler pipeline and avoids shipping compile-time
+machinery into user binaries.
+
+#### Near-term work (required)
+
+1. **Shared pure-PHP fragment grammar corpus**
+   - one source list of fragments and negative cases;
+   - must parse (or fail) consistently on main and magician for pure PHP;
+   - where a fragment is a compile-time literal candidate, AOT acceptance must
+     not disagree with magician on pure parse validity without an explicit
+     fallback reason that is about semantics/AOT coverage, not parse success.
+2. **Documented allowed divergences**
+   - eval fragments reject opening `<?` / `<?php` tags;
+   - magician rejects elephc-only extensions that the compiler accepts;
+   - error and recovery models may differ (`CompileError` multi-error recovery
+     vs magician `EvalParseError`);
+   - any pure-PHP disagreement outside that list is a bug.
+3. **Fix policy for PHP-visible syntax**
+   - a main-parser fix that changes pure PHP acceptance for forms usable in
+     eval must either update magician in the same change or add an explicit
+     divergence note plus a corpus case;
+   - prefer keeping pure PHP aligned over growing the divergence list.
+
+#### Near-term done criteria
+
+- the grammar corpus is checked in CI or an equivalent focused test gate;
+- the allowed-divergence list lives in docs or this plan and is short;
+- silent pure-PHP parse disagreements between main and magician are treated as
+  regressions.
+
+#### Non-goals
+
+- do not extract or merge the full compiler parser/AST pipeline into magician
+  before stable fallback lands on main;
+- do not make magician depend on the main `elephc` crate;
+- do not unify compile AST with EvalIR as a single IR;
+- do not require a shared syntax crate as a merge prerequisite for eval.
+
+#### Longer-term option (opportunistic)
+
+If dual-parser maintenance cost stays high after fallback is on main, consider a
+thin pure-PHP crate such as `elephc-php-syntax`:
+
+- lexer + parser for pure PHP only (no `ptr` / `extern` / `packed` / `ifdef`);
+- modes for full file vs eval fragment;
+- no type checker, optimizer, codegen, or name-resolution pipeline;
+- both elephc and magician depend on it;
+- magician still lowers pure-PHP AST into EvalIR for interpretation.
+
+This remains optional. Prefer corpus + policy first.
 
 ## Tests and Checks
 
@@ -633,6 +738,15 @@ cargo test --test codegen_tests <focused_eval_filter>
 git diff --check
 ```
 
+For grammar dual-frontend parity changes (once the corpus exists):
+
+```bash
+cargo check
+cargo test <grammar_parity_filter>
+cargo test -p elephc-magician <grammar_parity_filter>
+git diff --check
+```
+
 For manual benchmarks:
 
 ```bash
@@ -658,6 +772,11 @@ python3 scripts/benchmark_magician.py --case literal_scalar_aot --iterations 5 -
 - Magic property methods can turn apparently local object access into arbitrary
   user code.
 - Magician optimizations must not freeze context/scope/magic constants.
+- Dual frontends can accept or reject different pure PHP fragments, so AOT
+  (compiler parser) and runtime fallback (magician parser) can silently
+  diverge without a grammar corpus and fix policy.
+- Prematurely merging parsers or making magician depend on the full compiler
+  can bloat user binaries and create circular crate dependencies.
 - Every new path must stay target-aware on macOS ARM64, Linux ARM64, and Linux
   x86_64.
 
@@ -675,4 +794,7 @@ The eval/magician work can be considered closed when:
 7. prime-loop and algebra-heavy benchmarks remain correct and measurable;
 8. all three supported targets have focused coverage for every ABI/codegen
    change;
-9. docs and tests exactly reflect the supported subset and fallbacks.
+9. docs and tests exactly reflect the supported subset and fallbacks;
+10. pure-PHP fragment grammar is either shared by a thin syntax crate or kept
+    aligned by a green dual-frontend corpus with a short, documented
+    divergence list (full parser unification is not required).
