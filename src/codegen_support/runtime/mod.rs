@@ -34,6 +34,7 @@ mod zval;
 pub(crate) use data::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (symbols, constants, type metadata).
 pub(crate) use data::emit_runtime_data_user;
+pub(crate) use data::{is_user_filter_contract_method, is_user_wrapper_contract_method};
 /// Emit user-program-specific runtime data section.
 pub(crate) use emitters::emit_runtime;
 /// Emit full runtime helpers (orchestrates all runtime sections).

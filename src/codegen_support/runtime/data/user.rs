@@ -2009,6 +2009,18 @@ pub(crate) const USER_WRAPPER_VTABLE_SLOTS: usize = 23;
 /// branch with a single load + cmp.
 pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 5;
 
+/// Returns true when a method key belongs to the fixed-ABI stream-wrapper
+/// vtable surface dispatched by the runtime with raw arguments.
+pub(crate) fn is_user_wrapper_contract_method(method_key: &str) -> bool {
+    USER_WRAPPER_METHOD_NAMES.contains(&method_key)
+}
+
+/// Returns true when a method key belongs to the fixed-ABI user-filter
+/// vtable surface dispatched by the runtime with raw arguments.
+pub(crate) fn is_user_filter_contract_method(method_key: &str) -> bool {
+    USER_FILTER_METHOD_NAMES.contains(&method_key)
+}
+
 const USER_FILTER_METHOD_NAMES: [&str; 3] = [
     "filter",
     "oncreate",

@@ -167,7 +167,19 @@ fn normalize_method_map_for_eir(
     is_static: bool,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
 ) {
+    // Stream-wrapper and user-filter contract methods are invoked through
+    // runtime vtables with raw fixed-ABI arguments; widening their untyped
+    // params to boxed Mixed would desynchronize the dispatcher and the body.
+    let is_wrapper_class = methods.contains_key("stream_open");
+    let is_filter_class = methods.contains_key("filter");
     for (method_key, signature) in methods.iter_mut() {
+        if (is_wrapper_class
+            && crate::codegen_support::runtime::is_user_wrapper_contract_method(method_key))
+            || (is_filter_class
+                && crate::codegen_support::runtime::is_user_filter_contract_method(method_key))
+        {
+            continue;
+        }
         let owner_name = format!("{}::{}", class_name, method_key);
         let mut normalized = function::eir_signature_with_php_param_contracts(
             &owner_name,
