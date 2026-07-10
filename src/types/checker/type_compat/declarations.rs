@@ -190,6 +190,26 @@ impl Checker {
         Ok(())
     }
 
+    /// Validates a declaration default while class-like schema metadata is still being built.
+    /// Object-to-object checks are deferred because inheritance and interface relationships are
+    /// incomplete during this phase; every other type pair is validated immediately.
+    pub(crate) fn validate_schema_declared_default_type(
+        &self,
+        expected_ty: &PhpType,
+        default_expr: Option<&Expr>,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if let Some(default_expr) = default_expr {
+            let default_ty = infer_expr_type_syntactic(default_expr);
+            if matches!(expected_ty, PhpType::Object(_)) && matches!(default_ty, PhpType::Object(_))
+            {
+                return Ok(());
+            }
+        }
+        self.validate_declared_default_type(expected_ty, default_expr, span, context)
+    }
+
     /// Builds the initial parameter type list for a function declaration, resolving type hints,
     /// validating defaults, and inferring types for untyped parameters. Adds variadic parameter
     /// type as `PhpType::Array(Int)` if the function is variadic.

@@ -447,6 +447,21 @@ $box = new Box("bad");
     );
 }
 
+/// Verifies that an unrelated object default is rejected after class relationships are known.
+#[test]
+fn test_error_promoted_property_rejects_incompatible_object_default() {
+    expect_error(
+        r#"<?php
+class Expected {}
+class Unrelated {}
+class Box {
+    public function __construct(public Expected $value = new Unrelated()) {}
+}
+"#,
+        "Method parameter $value expects Object(\"Expected\"), got Object(\"Unrelated\")",
+    );
+}
+
 /// Verifies that assigning an incompatible value to a static property is rejected.
 /// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]

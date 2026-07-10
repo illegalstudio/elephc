@@ -62,7 +62,7 @@ pub(crate) fn build_method_sig(
         method.params.iter().zip(params.iter())
     {
         if type_ann.is_some() {
-            checker.validate_declared_default_type(
+            checker.validate_schema_declared_default_type(
                 resolved_ty,
                 default.as_ref(),
                 method.span,
