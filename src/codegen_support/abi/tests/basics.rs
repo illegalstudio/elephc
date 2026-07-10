@@ -12,7 +12,8 @@ use super::*;
 
 /// Tests frame setup and teardown for a small frame (64 bytes).
 /// Verifies that the prologue allocates 64 bytes, saves FP/LR at sp+#48,
-/// sets up x29 as the frame pointer, and that restore/return undo this correctly.
+/// sets up x29 as the frame pointer, and that restore/return undo this correctly
+/// via the frame-pointer-anchored restore (immune to mid-body sp drift).
 #[test]
 fn test_emit_frame_helpers_small_frame() {
     let mut emitter = test_emitter();
@@ -27,8 +28,9 @@ fn test_emit_frame_helpers_small_frame() {
             "    sub sp, sp, #64\n",
             "    stp x29, x30, [sp, #48]\n",
             "    add x29, sp, #48\n",
-            "    ldp x29, x30, [sp, #48]\n",
-            "    add sp, sp, #64\n",
+            "    mov x9, x29\n",
+            "    add sp, x9, #16\n",
+            "    ldp x29, x30, [x9]\n",
             "    ret\n",
         )
     );

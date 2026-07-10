@@ -42,6 +42,10 @@ pub enum Bind {
     Int(i64),
     Float(f64),
     Text(String),
+    /// Raw bytes, bound directly (bypassing the text re-encoding `Param::to_sql`
+    /// otherwise does) so a BLOB-style parameter round-trips embedded NUL bytes
+    /// and arbitrary binary content unchanged.
+    Bytes(Vec<u8>),
 }
 
 /// A live PostgreSQL connection plus the last operation's bookkeeping that PDO
@@ -51,6 +55,12 @@ pub struct PgConn {
     pub changes: i64,
     pub errmsg: String,
     pub errcode: i64,
+    /// 5-char SQLSTATE for the connection's last operation, taken from the
+    /// server's `ErrorResponse` (`tokio_postgres::error::Error::code`), which
+    /// already parses the wire protocol's `SQLSTATE` field ('C' code). "00000" on
+    /// success; "HY000" for an error that carries no SQLSTATE (a transport/
+    /// connection failure rather than a server-reported error).
+    pub sqlstate: String,
 }
 
 /// A live PostgreSQL prepared statement and its lazily-materialized result.
@@ -93,6 +103,14 @@ impl ToSql for Param {
         if let Bind::Null = self.bind {
             return Ok(IsNull::Yes);
         }
+        if let Bind::Bytes(b) = &self.bind {
+            // Raw bytes bind directly regardless of the inferred parameter type
+            // (calling `to_sql` rather than `to_sql_checked` skips the `accepts`
+            // gate), so a BLOB parameter's embedded NUL / non-UTF-8 bytes reach
+            // the server unchanged instead of going through the text re-encoding
+            // below.
+            return b.to_sql(ty, out);
+        }
         // PDO/PHP sends parameters as text and lets the server coerce them to the
         // column type. We replicate that: take the bound value's canonical string
         // form and re-encode it for the parameter type the prepared statement
@@ -102,6 +120,7 @@ impl ToSql for Param {
             Bind::Int(v) => v.to_string(),
             Bind::Float(v) => v.to_string(),
             Bind::Text(t) => t.clone(),
+            Bind::Bytes(_) => unreachable!("handled above"),
             Bind::Null => unreachable!(),
         };
         let st = s.trim();
@@ -272,6 +291,18 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>) {
     (out, named)
 }
 
+/// Extracts the 5-char SQLSTATE from a postgres driver error. `tokio_postgres`
+/// (the `postgres` crate's async foundation) already parses the server's
+/// `ErrorResponse` message and exposes its `SQLSTATE` field ('C' code) through
+/// `Error::code()`, so no manual wire-protocol parsing is needed here. Errors
+/// with no server-reported code (a connection/transport failure rather than a
+/// query error) fall back to the generic `HY000`.
+fn pg_sqlstate(e: &postgres::Error) -> String {
+    e.code()
+        .map(|c| c.code().to_string())
+        .unwrap_or_else(|| "HY000".to_string())
+}
+
 impl PgConn {
     /// Connects to PostgreSQL for a `pgsql:` DSN. Returns the connection or an
     /// error message for `last_open_error`.
@@ -283,11 +314,13 @@ impl PgConn {
             changes: 0,
             errmsg: String::new(),
             errcode: 0,
+            sqlstate: "00000".to_string(),
         })
     }
 
     /// Records an error message + a generic non-zero code, returning `-1`.
     fn fail(&mut self, e: postgres::Error) -> i64 {
+        self.sqlstate = pg_sqlstate(&e);
         self.errmsg = e.to_string();
         self.errcode = 1;
         -1
@@ -302,12 +335,14 @@ impl PgConn {
             Ok(n) => {
                 self.changes = n as i64;
                 self.errcode = 0;
+                self.sqlstate = "00000".to_string();
                 n as i64
             }
             Err(_) => match self.client.batch_execute(sql) {
                 Ok(()) => {
                     self.changes = 0;
                     self.errcode = 0;
+                    self.sqlstate = "00000".to_string();
                     0
                 }
                 Err(e) => self.fail(e),
@@ -320,6 +355,7 @@ impl PgConn {
         match self.client.batch_execute(sql) {
             Ok(()) => 1,
             Err(e) => {
+                self.sqlstate = pg_sqlstate(&e);
                 self.errmsg = e.to_string();
                 self.errcode = 1;
                 0
@@ -342,6 +378,33 @@ impl PgConn {
         }
     }
 
+    /// Like `last_insert_id`, but returns the sequence value as PostgreSQL's text
+    /// representation instead of parsing it as an `i64`: PostgreSQL sequences are
+    /// `bigint` by default but a caller-chosen sequence can be any integer type,
+    /// so a text round-trip avoids a lossy/failing numeric bridge. Empty string on
+    /// error.
+    pub fn last_insert_id_text(&mut self, name: Option<&str>) -> String {
+        let sql = match name {
+            Some(n) if !n.is_empty() => {
+                format!("SELECT currval('{}')::text", n.replace('\'', "''"))
+            }
+            _ => "SELECT lastval()::text".to_string(),
+        };
+        match self.client.query_one(&sql, &[]) {
+            Ok(row) => row.try_get::<_, String>(0).unwrap_or_default(),
+            Err(_) => String::new(),
+        }
+    }
+
+    /// Returns the PostgreSQL server's reported version string (`SHOW
+    /// server_version`), or an empty string if the query fails.
+    pub fn server_version(&mut self) -> String {
+        match self.client.query_one("SHOW server_version", &[]) {
+            Ok(row) => row.try_get::<_, String>(0).unwrap_or_default(),
+            Err(_) => String::new(),
+        }
+    }
+
     /// Prepares a statement: translates placeholders and prepares it server-side
     /// for column metadata. Returns the statement or an error message.
     pub fn prepare(&mut self, sql: &str) -> Result<PgStmt, String> {
@@ -354,6 +417,8 @@ impl PgConn {
                     .map(|c| c.name().to_string())
                     .collect();
                 let n_params = statement.params().len();
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
                 Ok(PgStmt {
                     conn_id: 0,
                     statement,
@@ -366,6 +431,7 @@ impl PgConn {
                 })
             }
             Err(e) => {
+                self.sqlstate = pg_sqlstate(&e);
                 self.errmsg = e.to_string();
                 self.errcode = 1;
                 Err(e.to_string())
@@ -429,10 +495,12 @@ impl PgStmt {
                 Ok(n) => {
                     conn.changes = n as i64;
                     conn.errcode = 0;
+                    conn.sqlstate = "00000".to_string();
                     self.executed = true;
                     Ok(())
                 }
                 Err(e) => {
+                    conn.sqlstate = pg_sqlstate(&e);
                     conn.errmsg = e.to_string();
                     conn.errcode = 1;
                     Err(-1)
@@ -444,10 +512,12 @@ impl PgStmt {
                     self.rows = rows.iter().map(|r| decode_row(r)).collect();
                     conn.changes = self.rows.len() as i64;
                     conn.errcode = 0;
+                    conn.sqlstate = "00000".to_string();
                     self.executed = true;
                     Ok(())
                 }
                 Err(e) => {
+                    conn.sqlstate = pg_sqlstate(&e);
                     conn.errmsg = e.to_string();
                     conn.errcode = 1;
                     Err(-1)

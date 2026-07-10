@@ -57,8 +57,17 @@ pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
 }
 
 /// Tears down the stack frame and restores the caller's frame state.
-/// On AArch64: restores x29/x30 from the footer and releases `frame_size` bytes.
-/// On x86_64: releases local bytes and pops rbp.
+/// On AArch64: restores sp/x29/x30 from the frame pointer footer. On x86_64: restores
+/// rsp from rbp and pops rbp (the `leave` idiom).
+///
+/// Both restores are anchored on the frame pointer (x29/rbp) rather than computed by
+/// adding `frame_size`/`local_bytes` back onto sp/rsp. The frame pointer is established
+/// once at function entry by `emit_frame_prologue` and is never repurposed mid-body (it
+/// is excluded from the register allocator's pools), so it stays reliable even when sp
+/// itself has drifted from a mid-body cross-block spill imbalance — e.g. a push whose
+/// matching pop was skipped on some taken control-flow path. Restoring through the frame
+/// pointer corrects that drift instead of reproducing it into the caller; for an already
+/// balanced body it yields the identical sp/rsp as the old size-based arithmetic.
 pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
     debug_assert!(
         frame_size >= 16,
@@ -66,22 +75,16 @@ pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
     );
     match emitter.target.arch {
         Arch::AArch64 => {
-            let footer_offset = frame_size - 16;
-            if footer_offset <= 504 {
-                emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", footer_offset));
-            // restore frame pointer and return address from the fixed frame footer
-            } else {
-                emit_sp_address(emitter, "x9", footer_offset);
-                emitter.instruction("ldp x29, x30, [x9]"); // restore frame pointer and return address through the computed footer pointer
-            }
-            emit_adjust_sp(emitter, frame_size, false);
+            // x29 == entry_sp - 16 (established by emit_frame_prologue), and the
+            // x29/x30 footer was stored at that same address, so [x29] always holds
+            // the caller's saved frame pointer and return address regardless of any
+            // mid-body sp drift.
+            emitter.instruction("mov x9, x29"); // anchor on the frame pointer before it is overwritten below
+            emitter.instruction("add sp, x9, #16"); // restore sp to the entry-time value, correcting any mid-body imbalance
+            emitter.instruction("ldp x29, x30, [x9]"); // reload the caller's frame pointer and return address from the frame footer
         }
         Arch::X86_64 => {
-            let local_bytes = frame_size.saturating_sub(16);
-            if local_bytes > 0 {
-                emitter.instruction(&format!("add rsp, {}", local_bytes)); // release the aligned local-slot area below rbp
-            }
-            emitter.instruction("pop rbp"); // restore the caller frame pointer from the stack
+            emitter.instruction("leave"); // restore rsp from rbp and pop the caller frame pointer, correcting any mid-body imbalance
         }
     }
 }

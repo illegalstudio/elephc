@@ -225,10 +225,16 @@ try {
 }
 ```
 
-`PDO::errorCode()` returns the driver's native result code as a string and
-`PDO::errorInfo()` returns `[code, code, message]`. Note that the first element
-is the native driver code, not a real 5-character `SQLSTATE` — the client
-libraries used here do not expose `SQLSTATE`s (see Limitations).
+`PDO::errorCode()` returns the 5-character `SQLSTATE` for the last operation
+(`"00000"` on success) and `PDO::errorInfo()` returns
+`[SQLSTATE, driver-specific code, message]`, with `["00000", null, null]` on
+success. Every driver surfaces a real `SQLSTATE`: SQLite through a
+php-src-matching table, MySQL from the `ERR` packet's `#`-marked field, and
+PostgreSQL from the `ErrorResponse` `C` field. `PDOStatement` tracks its own
+error state through the same `errorCode()` / `errorInfo()` pair, and a thrown
+`PDOException` carries the triple on its public `$errorInfo` property — read as
+`$e->errorInfo[0]` for the `SQLSTATE` (see Limitations for the `getCode()`
+divergence).
 
 The error mode is configurable through `ATTR_ERRMODE`:
 
@@ -257,14 +263,40 @@ with `setAttribute()` updates the reported attribute but does not reopen an
 already-created connection. Persistent connections are local to the running
 native process; there is no cross-process pool.
 
+## Under `--web`
+
+Each prefork worker holds its own connections: N workers means N independent
+SQLite handles on the same database file, so concurrent writes contend. For a
+write-heavy `--web` app, open the database in WAL mode and set a busy timeout so a
+contended write waits instead of failing immediately:
+
+```php
+<?php
+$db = new PDO("sqlite:/var/data/app.db", null, null, [PDO::ATTR_TIMEOUT => 5]);
+$db->exec("PRAGMA journal_mode=WAL");
+```
+
+`ATTR_TIMEOUT` is expressed in seconds (mapped to SQLite's millisecond
+busy-timeout). `ATTR_PERSISTENT` connections live in a per-worker pool keyed by
+DSN, so they persist across requests handled by the same worker but are never
+shared across workers or across a worker respawn. The bridge's connection and
+result state lives outside the per-request PHP heap, so it is unaffected by the
+per-request heap reset the web runtime performs between requests.
+
 ## Supported surface
 
 - **PDO**: `__construct`, `exec`, `query`, `prepare`, `quote`, `lastInsertId`,
-  `beginTransaction`, `commit`, `rollBack`, `errorCode`, `errorInfo`,
-  `getAttribute`, `setAttribute`, `__destruct`.
+  `beginTransaction`, `commit`, `rollBack`, `inTransaction`, `errorCode`,
+  `errorInfo`, `getAttribute`, `setAttribute`, `getAvailableDrivers` (static),
+  `__destruct`. Starting a nested transaction, or committing / rolling back with
+  none active, throws a `PDOException`; `__destruct` rolls back an open
+  transaction before closing.
 - **PDOStatement**: `execute`, `bindValue`, `bindParam`, `setFetchMode`, `fetch`,
-  `fetchAll`, `fetchColumn`, `rowCount`, `columnCount`, `__destruct`; Traversable,
-  so a statement can be walked with `foreach`.
+  `fetchAll`, `fetchColumn`, `fetchObject`, `closeCursor`, `errorCode`,
+  `errorInfo`, `rowCount`, `columnCount`, `__destruct`; Traversable, so a
+  statement can be walked with `foreach`. `fetch*()` on a statement that has not
+  been `execute()`d (or after `closeCursor()`) returns `false` rather than
+  stepping the query.
 
 Connections and prepared statements release their underlying bridge resources
 automatically through `__destruct`: a `PDO` closes its connection (finalizing any
@@ -273,28 +305,57 @@ released — at the end of its scope, when its variable is reassigned or `unset(
 or at program exit. You do not need to close them explicitly.
 - **Fetch modes**: `FETCH_ASSOC`, `FETCH_NUM`, `FETCH_BOTH`, `FETCH_OBJ`,
   `FETCH_COLUMN` (a single column as a scalar; the column index is the second
-  argument to `setFetchMode(PDO::FETCH_COLUMN, $col)`), `FETCH_CLASS`, and
-  `FETCH_INTO`.
-- **Parameters**: positional `?` and named `:name`; `PARAM_INT` / `PARAM_STR` /
-  `PARAM_NULL` / `PARAM_BOOL` constants.
-- **Constants**: the fetch-mode, parameter, `ATTR_ERRMODE`,
-  `ATTR_DRIVER_NAME`, `ATTR_PERSISTENT`, and `ERRMODE_*` constants used above.
+  argument to `setFetchMode(PDO::FETCH_COLUMN, $col)`), `FETCH_CLASS`,
+  `FETCH_INTO`, and `FETCH_KEY_PAIR` (a two-column result as a `[col0 => col1]`
+  map). `ATTR_DEFAULT_FETCH_MODE` sets the mode used when `fetch()` is called with
+  no argument. Unsupported modes (`FETCH_LAZY`, `FETCH_GROUP`, `FETCH_UNIQUE`)
+  fail loudly with a `PDOException` rather than silently returning wrong data.
+- **Parameters**: positional `?` and named `:name` (the leading `:` is optional in
+  the `execute([...])` array); `PARAM_INT` / `PARAM_STR` / `PARAM_NULL` /
+  `PARAM_BOOL` constants.
+- **Constants**: the full PHP 8.4 set — fetch-mode (base modes plus the OR-able
+  `FETCH_GROUP` / `FETCH_UNIQUE` / `FETCH_PROPS_LATE` / … flags), parameter,
+  cursor, case, null-handling, and `ATTR_*` constants (including `ATTR_TIMEOUT`,
+  `ATTR_DEFAULT_FETCH_MODE`, `ATTR_STRINGIFY_FETCHES`, `ATTR_EMULATE_PREPARES`),
+  plus `ERR_NONE` (`"00000"`).
+- **Driver subclasses**: `Pdo\Sqlite`, `Pdo\Mysql`, and `Pdo\Pgsql` (PHP 8.4)
+  extend `PDO` and inherit its full base surface, so `new \Pdo\Sqlite("sqlite::…")`
+  works like `new \PDO(...)` and the instance is `instanceof \PDO`. A program that
+  names only a subclass — never the base `PDO` — still injects the prelude.
+  Driver-specific methods are not yet provided (see Limitations).
 
 ## Limitations
 
 - **SQLite, PostgreSQL, and MySQL / MariaDB.** Other PDO drivers (Oracle, SQL
   Server, …) are not implemented; the bridge is structured to add more behind the
   same prelude.
-- **`PDO::quote()`** applies SQLite-style single-quote escaping for every driver;
-  it is not driver-aware (for MySQL it does not escape backslashes), so prefer
-  prepared statements (the recommended path for every driver).
-- **`errorCode()` / `errorInfo()`** report the driver's *native* error code, not a
-  real 5-character `SQLSTATE`: SQLite and MySQL expose native integer codes, and
-  the PostgreSQL client surfaces only a message (reported as a generic code).
-  `errorInfo()[0]` therefore mirrors the native code rather than a true `SQLSTATE`.
+- **`PDO::quote()`** is driver-aware: SQLite and PostgreSQL double single quotes
+  (PostgreSQL switches to the `E'…'` form when a backslash is present) and MySQL
+  backslash-escapes quotes, backslashes, and control bytes. Prepared statements
+  remain the recommended path for every driver.
+- **`PDOException::getCode()`** returns the base `Exception` integer code, not the
+  `SQLSTATE` string PHP puts there — elephc's built-in `Exception::$code` is
+  `int`-typed. Read the `SQLSTATE` from `$e->errorInfo[0]` (which frameworks do
+  and which is always populated).
+- **`errorCode()` before the first operation** returns `"00000"` rather than
+  PHP's `null` (the bridge reports a fresh handle as success).
+- **`fetch()`'s second argument** is a class/target (as with `setFetchMode`),
+  not PHP 8.4's cursor-orientation parameter; forward-only cursors make the
+  difference moot in practice.
+- **Namespaced driver subclasses** `Pdo\Sqlite`, `Pdo\Mysql`, and `Pdo\Pgsql`
+  (PHP 8.4) exist and extend `PDO`: they are auto-detected (a program that names
+  only a subclass still injects the prelude), are directly instantiable, and
+  inherit the full base connection surface. Their **driver-specific methods**
+  (e.g. `Pdo\Sqlite::createFunction`, `Pdo\Mysql::getWarningCount`) and the
+  `PDO::connect()` factory that returns a driver-specific instance are not yet
+  implemented.
+- **`FETCH_GROUP` / `FETCH_UNIQUE`** result shaping and **`createFunction()`** are
+  not yet implemented — their constants exist but the behaviors either fail loudly
+  or are absent.
 - **`bindParam()`** binds the current value, not a deferred by-reference read.
-- **`getAttribute` / `setAttribute`** support `ATTR_ERRMODE`,
-  `ATTR_DRIVER_NAME`, and `ATTR_PERSISTENT`; other attributes are stored and read
-  back but have no effect.
+- **`getAttribute` / `setAttribute`** act on `ATTR_ERRMODE`, `ATTR_DRIVER_NAME`,
+  `ATTR_PERSISTENT`, `ATTR_TIMEOUT` (SQLite busy-timeout, in seconds),
+  `ATTR_DEFAULT_FETCH_MODE`, and `ATTR_SERVER_VERSION`; other attributes are
+  stored and read back but have no effect.
 - Avoid `new PDOStatement(...)` directly — statements are created by `query()` /
   `prepare()`.

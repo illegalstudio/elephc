@@ -80,13 +80,95 @@ fn wait_until_ready(addr: &str) {
     panic!("server did not start listening on {}", addr);
 }
 
-/// Spawns the server binary on `addr`, waits until it accepts connections.
-fn spawn_server(bin: &Path, addr: &str, workers: &str) -> std::process::Child {
-    let child = Command::new(bin)
-        .arg("--listen").arg(addr)
-        .arg("--workers").arg(workers)
-        .spawn()
-        .expect("failed to spawn web server");
+/// RAII guard around a spawned web-server child process.
+///
+/// `std::process::Child` does *not* kill the process when its handle is
+/// dropped, so any test that panics before its manual `child.kill()` — a failed
+/// assertion, or an `unwrap` in `http_get`/`http_request`/`wait_until_ready` —
+/// leaks a resident server (plus its prefork workers, which stay alive while the
+/// master does). Under load that accumulation exhausts memory and triggers the
+/// OS OOM killer. Wrapping the child in this guard makes `Drop` reap it
+/// unconditionally, even while unwinding, so a failing test can never leak a
+/// server. Killing the master reaps its workers (verified: they exit on parent
+/// death), so the guard only needs to kill the master.
+struct ServerGuard {
+    child: std::process::Child,
+}
+
+impl ServerGuard {
+    /// Wraps an already-spawned server child so it is reaped on scope exit.
+    fn new(child: std::process::Child) -> Self {
+        Self { child }
+    }
+
+    /// Terminates the server gracefully so its prefork workers are reaped too.
+    ///
+    /// `std::process::Child::kill` sends `SIGKILL`, which the master cannot
+    /// trap — so its worker children are reparented to `launchd`/`init` and
+    /// survive as orphans (verified: `SIGKILL` on the master leaves the workers
+    /// running). Across a suite that spawns dozens of servers those orphans
+    /// accumulate and exhaust memory. Sending `SIGTERM` first lets the master
+    /// run its shutdown path and reap its own workers; a `SIGKILL` fallback
+    /// covers a wedged master after a short grace period. This inherent method
+    /// shadows `Child::kill` through the `Deref`, so every existing
+    /// `child.kill()` call site becomes graceful with no change. Idempotent: an
+    /// already-exited child returns `Ok` immediately.
+    fn kill(&mut self) -> std::io::Result<()> {
+        if matches!(self.child.try_wait(), Ok(Some(_))) {
+            return Ok(());
+        }
+        let pid = self.child.id().to_string();
+        let _ = Command::new("kill").arg("-TERM").arg(&pid).status();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Wedged master: force-kill. Its workers may briefly orphan, but this
+        // path is the rare exception, not the steady-state teardown.
+        self.child.kill()
+    }
+}
+
+impl std::ops::Deref for ServerGuard {
+    type Target = std::process::Child;
+    /// Exposes the wrapped child for read-only access (`id`, `stdout`).
+    fn deref(&self) -> &std::process::Child {
+        &self.child
+    }
+}
+
+impl std::ops::DerefMut for ServerGuard {
+    /// Exposes the wrapped child for `kill`/`wait`/`try_wait`/`stdout.take()`.
+    fn deref_mut(&mut self) -> &mut std::process::Child {
+        &mut self.child
+    }
+}
+
+impl Drop for ServerGuard {
+    /// Gracefully terminates and reaps the server unconditionally, even during a
+    /// panic unwind, so neither the master nor its workers leak. Best-effort: an
+    /// already-reaped child is a no-op.
+    fn drop(&mut self) {
+        let _ = self.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Spawns the server binary on `addr`, waits until it accepts connections, and
+/// returns an RAII [`ServerGuard`] that reaps it on scope exit. The child is
+/// wrapped in the guard *before* `wait_until_ready`, so a readiness-timeout
+/// panic still reaps the process instead of orphaning it.
+fn spawn_server(bin: &Path, addr: &str, workers: &str) -> ServerGuard {
+    let child = ServerGuard::new(
+        Command::new(bin)
+            .arg("--listen").arg(addr)
+            .arg("--workers").arg(workers)
+            .spawn()
+            .expect("failed to spawn web server"),
+    );
     wait_until_ready(addr);
     child
 }
@@ -587,10 +669,12 @@ fn web_body_size_limit_returns_413() {
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = Command::new(&bin)
-        .args(["--listen", &addr, "--workers", "1", "--max-body-size", "64"])
-        .spawn()
-        .expect("spawn");
+    let mut child = ServerGuard::new(
+        Command::new(&bin)
+            .args(["--listen", &addr, "--workers", "1", "--max-body-size", "64"])
+            .spawn()
+            .expect("spawn"),
+    );
     wait_until_ready(&addr);
     let small = http_request(&addr, "POST", "/", &[("Content-Type", "text/plain")], &"x".repeat(10));
     let big = http_request(&addr, "POST", "/", &[("Content-Type", "text/plain")], &"x".repeat(1000));
@@ -785,11 +869,13 @@ fn web_env_superglobal_populated() {
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = Command::new(&bin)
-        .args(["--listen", &addr, "--workers", "1"])
-        .env("ELEPHC_WEB_TEST_ENV", "present")
-        .spawn()
-        .expect("spawn");
+    let mut child = ServerGuard::new(
+        Command::new(&bin)
+            .args(["--listen", &addr, "--workers", "1"])
+            .env("ELEPHC_WEB_TEST_ENV", "present")
+            .spawn()
+            .expect("spawn"),
+    );
     wait_until_ready(&addr);
     let resp = http_request(&addr, "GET", "/", &[], "");
     let _ = child.kill();
@@ -827,10 +913,12 @@ fn web_max_requests_recycles_and_keeps_serving() {
     let bin = compile_web(&dir, "<?php echo 'ok';", "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = Command::new(&bin)
-        .args(["--listen", &addr, "--workers", "1", "--max-requests", "2"])
-        .spawn()
-        .expect("spawn");
+    let mut child = ServerGuard::new(
+        Command::new(&bin)
+            .args(["--listen", &addr, "--workers", "1", "--max-requests", "2"])
+            .spawn()
+            .expect("spawn"),
+    );
     wait_until_ready(&addr);
     // More requests than the cap: the server must keep serving across recycles.
     // A single-worker recycle has a brief no-listener window, so tolerate transient
@@ -880,10 +968,12 @@ fn web_max_execution_time_kills_runaway_handler() {
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = Command::new(&bin)
-        .args(["--listen", &addr, "--workers", "1", "--max-execution-time", "1"])
-        .spawn()
-        .expect("spawn");
+    let mut child = ServerGuard::new(
+        Command::new(&bin)
+            .args(["--listen", &addr, "--workers", "1", "--max-execution-time", "1"])
+            .spawn()
+            .expect("spawn"),
+    );
     wait_until_ready(&addr);
     assert!(http_request(&addr, "GET", "/", &[], "").ends_with("fast"));
     // The runaway request is killed by the watchdog (dropped connection); tolerate it.
@@ -910,10 +1000,12 @@ fn web_gzip_compresses_when_accepted() {
     let bin = compile_web(&dir, "<?php echo str_repeat('ABCD', 500);", "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = Command::new(&bin)
-        .args(["--listen", &addr, "--workers", "1", "--gzip"])
-        .spawn()
-        .expect("spawn");
+    let mut child = ServerGuard::new(
+        Command::new(&bin)
+            .args(["--listen", &addr, "--workers", "1", "--gzip"])
+            .spawn()
+            .expect("spawn"),
+    );
     wait_until_ready(&addr);
     // The gzipped body is binary, so read raw bytes and inspect the (ASCII) header
     // block rather than http_request's read_to_string.

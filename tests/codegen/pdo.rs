@@ -689,3 +689,479 @@ echo $row["id"];
     );
     assert_eq!(out, "7");
 }
+
+/// W1: after a successful operation, `errorCode()` reports the `"00000"` success
+/// SQLSTATE rather than a native integer code.
+#[test]
+fn test_pdo_error_code_success() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+echo $db->errorCode();
+"#,
+    );
+    assert_eq!(out, "00000");
+}
+
+/// W1: `errorInfo()` on success is the PHP-shaped triple `["00000", null, null]`.
+#[test]
+fn test_pdo_error_info_success() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$info = $db->errorInfo();
+echo $info[0] . "|" . ($info[1] === null ? "n" : "x") . "|" . ($info[2] === null ? "n" : "x");
+"#,
+    );
+    assert_eq!(out, "00000|n|n");
+}
+
+/// W1: a constraint violation surfaces the real SQLSTATE `23000` (php-src's
+/// SQLite mapping) through `errorInfo()[0]` in silent mode.
+#[test]
+fn test_pdo_error_info_on_constraint() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_SILENT);
+$db->exec("CREATE TABLE t (id INTEGER PRIMARY KEY)");
+$db->exec("INSERT INTO t (id) VALUES (1)");
+$db->exec("INSERT INTO t (id) VALUES (1)");
+$info = $db->errorInfo();
+echo $info[0];
+"#,
+    );
+    assert_eq!(out, "23000");
+}
+
+/// W1: in the default EXCEPTION mode a failed statement throws a `PDOException`
+/// whose `errorInfo[0]` carries the SQLSTATE frameworks parse.
+#[test]
+fn test_pdo_exception_carries_error_info() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER PRIMARY KEY)");
+$db->exec("INSERT INTO t (id) VALUES (1)");
+try {
+    $db->exec("INSERT INTO t (id) VALUES (1)");
+    echo "no-throw";
+} catch (PDOException $e) {
+    echo $e->errorInfo[0];
+}
+"#,
+    );
+    assert_eq!(out, "23000");
+}
+
+/// W1: a statement tracks its own error state independently of the connection.
+#[test]
+fn test_pdo_statement_error_info() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_SILENT);
+$db->exec("CREATE TABLE t (id INTEGER PRIMARY KEY)");
+$db->exec("INSERT INTO t (id) VALUES (1)");
+$stmt = $db->prepare("INSERT INTO t (id) VALUES (1)");
+$stmt->execute();
+$info = $stmt->errorInfo();
+echo $info[0];
+"#,
+    );
+    assert_eq!(out, "23000");
+}
+
+/// W2: `inTransaction()` tracks the transaction lifecycle across begin/commit.
+#[test]
+fn test_pdo_in_transaction_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+echo $db->inTransaction() ? "1" : "0";
+$db->beginTransaction();
+echo $db->inTransaction() ? "1" : "0";
+$db->commit();
+echo $db->inTransaction() ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "010");
+}
+
+/// W2: a committed transaction persists its writes.
+#[test]
+fn test_pdo_transaction_commit_persists() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$db->beginTransaction();
+$db->exec("INSERT INTO t (id) VALUES (42)");
+$db->commit();
+$row = $db->query("SELECT id FROM t")->fetch();
+echo $row["id"];
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// W2: starting a nested transaction is a logic error and throws.
+#[test]
+fn test_pdo_double_begin_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->beginTransaction();
+try {
+    $db->beginTransaction();
+    echo "no-throw";
+} catch (PDOException $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "There is already an active transaction");
+}
+
+/// W2: committing with no active transaction is a logic error and throws.
+#[test]
+fn test_pdo_commit_without_transaction_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+try {
+    $db->commit();
+    echo "no-throw";
+} catch (PDOException $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "There is no active transaction");
+}
+
+/// W2: `PDO::getAvailableDrivers()` is a static returning the dispatchable drivers.
+#[test]
+fn test_pdo_get_available_drivers() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", PDO::getAvailableDrivers());
+"#,
+    );
+    assert_eq!(out, "mysql,pgsql,sqlite");
+}
+
+/// W5: SQLite `quote()` wraps in single quotes and doubles embedded single quotes.
+#[test]
+fn test_pdo_quote_sqlite_doubles_single_quotes() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+echo $db->quote("O'Brien");
+"#,
+    );
+    assert_eq!(out, "'O''Brien'");
+}
+
+/// W3: `fetch()` on a statement that was never executed returns false instead of
+/// silently stepping the query with NULL binds.
+#[test]
+fn test_pdo_fetch_before_execute_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$db->exec("INSERT INTO t (id) VALUES (1)");
+$stmt = $db->prepare("SELECT id FROM t");
+$r = $stmt->fetch();
+echo $r === false ? "false" : "row";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// W3: `closeCursor()` requires a re-execute before the next fetch succeeds.
+#[test]
+fn test_pdo_close_cursor() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$db->exec("INSERT INTO t (id) VALUES (5)");
+$stmt = $db->query("SELECT id FROM t");
+$first = $stmt->fetch();
+$stmt->closeCursor();
+$after = $stmt->fetch();
+echo $first["id"] . "|" . ($after === false ? "false" : "row");
+"#,
+    );
+    assert_eq!(out, "5|false");
+}
+
+/// W3: `fetchObject()` builds a stdClass with one property per column.
+#[test]
+fn test_pdo_fetch_object() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t (id, name) VALUES (5, 'Zoe')");
+$o = $db->query("SELECT id, name FROM t")->fetchObject();
+echo $o->id . ":" . $o->name;
+"#,
+    );
+    assert_eq!(out, "5:Zoe");
+}
+
+/// W5: `ATTR_TIMEOUT` set via setAttribute() is stored and read back (seconds).
+#[test]
+fn test_pdo_attr_timeout_set_attribute() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_TIMEOUT, 5);
+echo $db->getAttribute(PDO::ATTR_TIMEOUT);
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// W5: `ATTR_TIMEOUT` passed as a constructor option is applied after the open.
+#[test]
+fn test_pdo_attr_timeout_constructor_option() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:", null, null, [PDO::ATTR_TIMEOUT => 3]);
+echo $db->getAttribute(PDO::ATTR_TIMEOUT);
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// W5: `lastInsertId()` returns the last auto-increment id via the text bridge.
+#[test]
+fn test_pdo_last_insert_id_text_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+$db->exec("INSERT INTO t (name) VALUES ('a')");
+$db->exec("INSERT INTO t (name) VALUES ('b')");
+echo $db->lastInsertId();
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// W6: the added PHP 8.4 constants resolve to their documented numeric values,
+/// including the OR-able fetch flags (hex).
+#[test]
+fn test_pdo_constants_present() {
+    let out = compile_and_run(
+        r#"<?php
+echo PDO::FETCH_KEY_PAIR . "," . PDO::FETCH_GROUP . "," . PDO::FETCH_UNIQUE . "," . PDO::ATTR_DEFAULT_FETCH_MODE . "," . PDO::ATTR_EMULATE_PREPARES . "," . PDO::CURSOR_SCROLL;
+"#,
+    );
+    assert_eq!(out, "12,65536,196608,19,20,1");
+}
+
+/// W4: `ATTR_DEFAULT_FETCH_MODE` set via setAttribute() governs a no-mode fetch().
+#[test]
+fn test_pdo_default_fetch_mode_set_attribute() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t (id, name) VALUES (1, 'Ada')");
+$row = $db->query("SELECT id, name FROM t")->fetch();
+echo $row["name"] . "|" . (isset($row[0]) ? "both" : "assoc");
+"#,
+    );
+    assert_eq!(out, "Ada|assoc");
+}
+
+/// W4: `ATTR_DEFAULT_FETCH_MODE` passed as a constructor option is honored.
+#[test]
+fn test_pdo_default_fetch_mode_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:", null, null, [PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_NUM]);
+$db->exec("CREATE TABLE t (id INTEGER)");
+$db->exec("INSERT INTO t (id) VALUES (9)");
+$row = $db->query("SELECT id FROM t")->fetch();
+echo $row[0];
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+/// W4: `getAttribute(ATTR_DEFAULT_FETCH_MODE)` reads back the stored default.
+#[test]
+fn test_pdo_get_default_fetch_mode() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_OBJ);
+echo $db->getAttribute(PDO::ATTR_DEFAULT_FETCH_MODE);
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// W4: `fetchAll(FETCH_KEY_PAIR)` maps a 2-column result to `[col0 => col1]`.
+#[test]
+fn test_pdo_fetch_all_key_pair() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t VALUES (1, 'Ada')");
+$db->exec("INSERT INTO t VALUES (2, 'Bob')");
+$pairs = $db->query("SELECT id, name FROM t ORDER BY id")->fetchAll(PDO::FETCH_KEY_PAIR);
+$out = count($pairs) . "|";
+foreach ($pairs as $k => $v) { $out .= $k . ":" . $v . ";"; }
+echo $out;
+"#,
+    );
+    assert_eq!(out, "2|1:Ada;2:Bob;");
+}
+
+/// W4: `FETCH_KEY_PAIR` on a result without exactly two columns throws.
+#[test]
+fn test_pdo_fetch_key_pair_wrong_column_count_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (a INTEGER, b INTEGER, c INTEGER)");
+$db->exec("INSERT INTO t VALUES (1, 2, 3)");
+try {
+    $db->query("SELECT a, b, c FROM t")->fetchAll(PDO::FETCH_KEY_PAIR);
+    echo "no-throw";
+} catch (PDOException $e) {
+    echo "threw";
+}
+"#,
+    );
+    assert_eq!(out, "threw");
+}
+
+/// W4/W6: an unsupported base fetch mode fails loudly instead of returning wrong
+/// data (FETCH_LAZY).
+#[test]
+fn test_pdo_fetch_lazy_unsupported_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$db->exec("INSERT INTO t (id) VALUES (1)");
+$stmt = $db->query("SELECT id FROM t");
+try {
+    $stmt->fetch(PDO::FETCH_LAZY);
+    echo "no-throw";
+} catch (PDOException $e) {
+    echo "threw";
+}
+"#,
+    );
+    assert_eq!(out, "threw");
+}
+
+/// W4: an OR-able reshaping flag (FETCH_GROUP) that is not yet implemented fails
+/// loudly rather than silently returning a flat list.
+#[test]
+fn test_pdo_fetch_group_unsupported_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$db->exec("INSERT INTO t (id) VALUES (1)");
+try {
+    $db->query("SELECT id FROM t")->fetchAll(PDO::FETCH_GROUP);
+    echo "no-throw";
+} catch (PDOException $e) {
+    echo "threw";
+}
+"#,
+    );
+    assert_eq!(out, "threw");
+}
+
+/// W7 namespace prerequisite (smoke test, no prelude change): a user-defined
+/// class in a block namespace can `extends \PDO`, inherit the real prelude
+/// `PDO::__construct` (a genuine emitted body, not a synthesized stub), dispatch
+/// inherited methods (`exec`/`query`/`fetch`) through the vtable, and satisfy
+/// `instanceof \PDO`. This proves the single unproven capability the shipped
+/// `Pdo\Sqlite`/`Mysql`/`Pgsql` subclasses depend on: a namespaced class whose
+/// method symbols mangle `\` to `_N_` links and inherits from the flat prelude
+/// class it extends.
+#[test]
+fn test_pdo_namespaced_subclass_extends_prelude_pdo() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App {
+    class MyPdo extends \PDO {}
+}
+namespace {
+    $db = new \App\MyPdo("sqlite::memory:");
+    $db->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+    $db->exec("INSERT INTO users (name) VALUES ('Ada')");
+    $row = $db->query("SELECT id, name FROM users")->fetch(\PDO::FETCH_ASSOC);
+    $is_pdo = $db instanceof \PDO ? "1" : "0";
+    echo $row["id"] . ":" . $row["name"] . ":" . $is_pdo;
+}
+"#,
+    );
+    assert_eq!(out, "1:Ada:1");
+}
+
+/// W7 prelude subclasses: a program that references only `Pdo\Sqlite` — never the
+/// base `PDO` name — still injects the prelude (driver-subclass detection) and the
+/// subclass drives an in-memory database through its inherited base methods.
+#[test]
+fn test_pdo_driver_subclass_sqlite_alone_triggers_injection() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+$db->exec("INSERT INTO t (name) VALUES ('Zed')");
+echo $db->query("SELECT name FROM t")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "Zed");
+}
+
+/// W7 prelude subclasses: a `Pdo\Sqlite` instance satisfies `instanceof` for both
+/// its own namespaced class and the base `\PDO` it extends, confirming the
+/// inheritance edge survives injection, name resolution, and `\`->`_N_` mangling.
+#[test]
+fn test_pdo_driver_subclass_instanceof_edges() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$is_sqlite = $db instanceof \Pdo\Sqlite ? "1" : "0";
+$is_pdo = $db instanceof \PDO ? "1" : "0";
+echo $is_sqlite . $is_pdo;
+"#,
+    );
+    assert_eq!(out, "11");
+}
+
+/// W7 prelude subclasses: `Pdo\Mysql` and `Pdo\Pgsql` are real, resolvable classes
+/// that inherit the base `PDO` constant surface. Static constant access errors on
+/// an undefined class at compile time (unlike `instanceof`, which the checker does
+/// not validate), so a passing result proves both subclasses exist and flatten
+/// `PDO`'s constants — without needing a live MySQL/PostgreSQL server.
+#[test]
+fn test_pdo_driver_subclass_mysql_pgsql_inherit_constants() {
+    let out = compile_and_run(
+        r#"<?php
+$mysql_errmode = \Pdo\Mysql::ERRMODE_EXCEPTION;
+$pgsql_fetch = \Pdo\Pgsql::FETCH_ASSOC;
+echo $mysql_errmode . ":" . $pgsql_fetch;
+"#,
+    );
+    assert_eq!(out, "2:2");
+}

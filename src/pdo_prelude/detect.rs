@@ -11,7 +11,9 @@
 //! - Runs before name resolution, so `Name`s are raw source text: a reference may
 //!   be written `PDO`, `\PDO`, or `\Some\PDO`, and PHP class names are
 //!   case-insensitive. The walk therefore matches the unqualified last segment
-//!   case-insensitively.
+//!   case-insensitively. The PHP 8.4 driver subclasses `Pdo\Sqlite`, `Pdo\Mysql`,
+//!   and `Pdo\Pgsql` are additionally matched as two-segment `Pdo\<driver>` names
+//!   so that a program referencing only a subclass still injects the prelude.
 //! - Soundness over precision: a missed reference would drop the prelude and break
 //!   compilation, so the `match`es are exhaustive (no wildcard arm). Adding an AST
 //!   node forces this file to be updated. False positives (e.g. a class literally
@@ -37,15 +39,35 @@ pub(super) fn program_uses_pdo(program: &[Stmt]) -> bool {
     program.iter().any(stmt_refs_pdo)
 }
 
-/// Returns whether `name`'s unqualified last segment is one of the PDO classes,
-/// compared case-insensitively to match PHP's case-insensitive class names and
-/// any namespace/leading-backslash form (`PDO`, `\PDO`, `\Some\PDO`).
+/// Returns whether `name`'s unqualified last segment is one of the base PDO
+/// classes, or whether `name` denotes a `Pdo\` driver subclass. The base classes
+/// are compared case-insensitively to match PHP's case-insensitive class names and
+/// any namespace/leading-backslash form (`PDO`, `\PDO`, `\Some\PDO`); the driver
+/// subclasses are matched by `name_is_pdo_driver_subclass`.
 fn name_is_pdo(name: &Name) -> bool {
     name.last_segment().is_some_and(|segment| {
         segment.eq_ignore_ascii_case("PDO")
             || segment.eq_ignore_ascii_case("PDOStatement")
             || segment.eq_ignore_ascii_case("PDOException")
-    })
+    }) || name_is_pdo_driver_subclass(name)
+}
+
+/// Returns whether `name` denotes one of PHP 8.4's `Pdo\` driver subclasses
+/// (`Pdo\Sqlite`, `Pdo\Mysql`, `Pdo\Pgsql`). Matched only as a two-segment name
+/// whose namespace segment is `Pdo` and short name is a driver, both compared
+/// case-insensitively, so `Pdo\Sqlite` and `\Pdo\Mysql` are recognized while an
+/// unrelated `App\Sqlite` or a deeper `Vendor\Pdo\Sqlite` is not. Injecting the
+/// prelude for these names is what makes the subclasses resolvable even when a
+/// program never mentions the base `PDO` class.
+fn name_is_pdo_driver_subclass(name: &Name) -> bool {
+    matches!(
+        name.parts.as_slice(),
+        [namespace, driver]
+            if namespace.eq_ignore_ascii_case("Pdo")
+                && (driver.eq_ignore_ascii_case("Sqlite")
+                    || driver.eq_ignore_ascii_case("Mysql")
+                    || driver.eq_ignore_ascii_case("Pgsql"))
+    )
 }
 
 /// Returns whether a static receiver names a PDO class (`PDO::...`). `self`,
@@ -587,6 +609,58 @@ mod tests {
     fn detects_fully_qualified() {
         assert!(program_uses_pdo(&parse(
             r#"<?php $db = new \PDO("sqlite::memory:");"#
+        )));
+    }
+
+    /// A `Pdo\Sqlite` driver-subclass reference (no base `PDO` mention) is
+    /// detected, so the prelude carrying the subclass is injected.
+    #[test]
+    fn detects_driver_subclass_qualified() {
+        assert!(program_uses_pdo(&parse(
+            r#"<?php $db = new Pdo\Sqlite("sqlite::memory:");"#
+        )));
+    }
+
+    /// A fully-qualified `\Pdo\Mysql` driver-subclass reference is detected.
+    #[test]
+    fn detects_driver_subclass_fully_qualified() {
+        assert!(program_uses_pdo(&parse(
+            r#"<?php $db = new \Pdo\Mysql("mysql:host=localhost");"#
+        )));
+    }
+
+    /// Driver-subclass matching is case-insensitive on both segments.
+    #[test]
+    fn detects_driver_subclass_case_insensitive() {
+        assert!(program_uses_pdo(&parse(
+            r#"<?php $db = new \pdo\PGSQL("pgsql:host=localhost");"#
+        )));
+    }
+
+    /// A `use Pdo\Pgsql;` import is detected through the import name, mirroring the
+    /// aliased-base-class case.
+    #[test]
+    fn detects_driver_subclass_use_import() {
+        assert!(program_uses_pdo(&parse(
+            r#"<?php use Pdo\Pgsql; $db = new Pgsql("pgsql:host=localhost");"#
+        )));
+    }
+
+    /// An unrelated two-segment name whose namespace is not `Pdo` is not detected,
+    /// even though its short name equals a driver.
+    #[test]
+    fn ignores_unrelated_namespace_with_driver_short_name() {
+        assert!(!program_uses_pdo(&parse(
+            r#"<?php $x = new App\Sqlite();"#
+        )));
+    }
+
+    /// A deeper `Vendor\Pdo\Sqlite` name is a different class and is not detected:
+    /// only the exact two-segment `Pdo\<driver>` form matches.
+    #[test]
+    fn ignores_deeper_pdo_path() {
+        assert!(!program_uses_pdo(&parse(
+            r#"<?php $x = new Vendor\Pdo\Sqlite();"#
         )));
     }
 

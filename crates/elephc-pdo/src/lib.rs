@@ -117,6 +117,36 @@ fn drivername_cell() -> &'static Mutex<CString> {
     C.get_or_init(|| Mutex::new(CString::default()))
 }
 
+/// Static buffer for the most recent `elephc_pdo_sqlstate` result.
+fn sqlstate_cell() -> &'static Mutex<CString> {
+    static C: OnceLock<Mutex<CString>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(CString::default()))
+}
+
+/// Static buffer for the most recent `elephc_pdo_stmt_sqlstate` result.
+fn stmt_sqlstate_cell() -> &'static Mutex<CString> {
+    static C: OnceLock<Mutex<CString>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(CString::default()))
+}
+
+/// Static buffer for the most recent `elephc_pdo_stmt_errmsg` result.
+fn stmt_errmsg_cell() -> &'static Mutex<CString> {
+    static C: OnceLock<Mutex<CString>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(CString::default()))
+}
+
+/// Static buffer for the most recent `elephc_pdo_server_version` result.
+fn server_version_cell() -> &'static Mutex<CString> {
+    static C: OnceLock<Mutex<CString>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(CString::default()))
+}
+
+/// Static buffer for the most recent `elephc_pdo_last_insert_id_text` result.
+fn last_insert_id_text_cell() -> &'static Mutex<CString> {
+    static C: OnceLock<Mutex<CString>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(CString::default()))
+}
+
 /// Stores `s` (NUL bytes stripped) into the per-result static `cell` and returns
 /// a pointer into it. Valid until the next call writing the same cell; elephc
 /// copies it into an owned PHP string on return.
@@ -152,6 +182,21 @@ unsafe fn cstr_arg<'a>(p: *const c_char) -> Option<&'a str> {
         return None;
     }
     CStr::from_ptr(p).to_str().ok()
+}
+
+/// Reads a raw byte-buffer argument (the shape elephc's `extern …` pointer +
+/// length parameters marshal to) into an owned `Vec<u8>`. Returns an empty vector
+/// for a null pointer or a non-positive length; unlike `cstr_arg` this preserves
+/// embedded NUL bytes and does not require valid UTF-8.
+///
+/// # Safety
+/// `p`, when non-null, must point to at least `len` readable bytes valid for the
+/// call.
+unsafe fn bytes_arg(p: *const c_char, len: i64) -> Vec<u8> {
+    if p.is_null() || len <= 0 {
+        return Vec::new();
+    }
+    std::slice::from_raw_parts(p as *const u8, len as usize).to_vec()
 }
 
 /// Opens the driver connection for a validated DSN string.
@@ -213,10 +258,13 @@ fn open_persistent_dsn(dsn: &str) -> i64 {
     }
 }
 
-/// Returns the bridge ABI version. Bumped when the C ABI shape changes.
+/// Returns the bridge ABI version. Bumped when the C ABI shape changes. v7 adds
+/// connection/statement SQLSTATE + statement error accessors, boolean/blob binds,
+/// a busy-timeout setter, server version reporting, and a text-valued last-insert
+/// id.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    6
+    7
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -359,6 +407,31 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id(conn_id: i64, name: *const c_
     }
 }
 
+/// Like `elephc_pdo_last_insert_id`, but returns a pointer to the id rendered as
+/// text: PostgreSQL sequence values are not always safe to round-trip as `i64`
+/// (a caller-chosen sequence can be any integer type), so text avoids a lossy or
+/// failing numeric bridge. Empty string on an unknown handle or error. Valid
+/// until the next `elephc_pdo_last_insert_id_text`.
+///
+/// # Safety
+/// `name`, when non-null, must point to a NUL-terminated string valid for the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_last_insert_id_text(
+    conn_id: i64,
+    name: *const c_char,
+) -> *const c_char {
+    let text = {
+        let mut guard = conns().lock().unwrap();
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.last_insert_id().to_string(),
+            Some(Conn::Postgres(c)) => c.last_insert_id_text(cstr_arg(name)),
+            Some(Conn::Mysql(c)) => c.last_insert_id(cstr_arg(name)).to_string(),
+            None => String::new(),
+        }
+    };
+    store_cstr(last_insert_id_text_cell(), &text)
+}
+
 /// Returns the number of rows changed by the most recent statement.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_changes(conn_id: i64) -> i64 {
@@ -433,6 +506,56 @@ pub extern "C" fn elephc_pdo_errmsg(conn_id: i64) -> *const c_char {
         }
     };
     store_cstr(errmsg_cell(), &msg)
+}
+
+/// Returns a pointer to the 5-char SQLSTATE for the connection's last operation
+/// (`"00000"` on success). Unknown handles also report `"00000"` (no operation
+/// has been recorded for them). Valid until the next `elephc_pdo_sqlstate`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_sqlstate(conn_id: i64) -> *const c_char {
+    let state = {
+        let guard = conns().lock().unwrap();
+        match guard.get(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.sqlstate(),
+            Some(Conn::Postgres(c)) => c.sqlstate.clone(),
+            Some(Conn::Mysql(c)) => c.sqlstate.clone(),
+            None => "00000".to_string(),
+        }
+    };
+    store_cstr(sqlstate_cell(), &state)
+}
+
+/// Sets the busy-wait timeout (in milliseconds) for lock contention: SQLite calls
+/// `sqlite3_busy_timeout`; PostgreSQL/MySQL have no equivalent client-side knob
+/// for this bridge's one-statement-at-a-time connections, so they no-op and
+/// report success. Returns `1`/`0`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_set_busy_timeout(conn_id: i64, ms: i64) -> i64 {
+    let guard = conns().lock().unwrap();
+    match guard.get(&conn_id) {
+        Some(Conn::Sqlite(c)) => c.set_busy_timeout(ms),
+        Some(Conn::Postgres(_)) => 1,
+        Some(Conn::Mysql(_)) => 1,
+        None => 0,
+    }
+}
+
+/// Returns a pointer to the connection's server/library version string: SQLite's
+/// bundled `sqlite3_libversion()`, or the PostgreSQL/MySQL server's reported
+/// version. Empty for an unknown handle. Valid until the next
+/// `elephc_pdo_server_version`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_server_version(conn_id: i64) -> *const c_char {
+    let version = {
+        let mut guard = conns().lock().unwrap();
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.server_version(),
+            Some(Conn::Postgres(c)) => c.server_version(),
+            Some(Conn::Mysql(c)) => c.server_version(),
+            None => String::new(),
+        }
+    };
+    store_cstr(server_version_cell(), &version)
 }
 
 /// Prepares a statement (`PDO::prepare` / `PDO::query`) and returns an `i64`
@@ -557,6 +680,65 @@ pub extern "C" fn elephc_pdo_bind_null(stmt_id: i64, idx: i64) -> i64 {
         Some(Stmt::Sqlite(s)) => s.bind_null(idx),
         Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Null),
         Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Null),
+        None => 0,
+    }
+}
+
+/// Binds a boolean to the 1-based placeholder `idx`: SQLite and MySQL bind it as
+/// an integer `0`/`1`; PostgreSQL binds a real boolean value through the text
+/// `'t'`/`'f'` parameter format PostgreSQL accepts for `bool` columns (and
+/// coerces from for untyped/text columns, matching PDO/PHP's text-parameter
+/// convention). Returns `1`/`0`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_bind_bool(stmt_id: i64, idx: i64, val: i64) -> i64 {
+    let truthy = (val != 0) as i64;
+    let mut guard = stmts().lock().unwrap();
+    match guard.get_mut(&stmt_id) {
+        Some(Stmt::Sqlite(s)) => s.bind_int(idx, truthy),
+        Some(Stmt::Postgres(s)) => {
+            let text = if truthy != 0 { "t" } else { "f" };
+            s.bind(idx, pg::Bind::Text(text.to_string()))
+        }
+        Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Int(truthy)),
+        None => 0,
+    }
+}
+
+/// Binds raw bytes (embedded NUL preserved) to the 1-based placeholder `idx`:
+/// SQLite copies them via `SQLITE_TRANSIENT` (`sqlite3_bind_blob`); PostgreSQL and
+/// MySQL bind them through each driver's raw-bytes value path (bypassing the
+/// text re-encoding the other bind functions use), so arbitrary binary content
+/// round-trips unchanged. Returns `1`/`0`.
+///
+/// # Safety
+/// `ptr`, when non-null, must point to at least `len` readable bytes valid for
+/// the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_bind_blob(
+    stmt_id: i64,
+    idx: i64,
+    ptr: *const c_char,
+    len: i64,
+) -> i64 {
+    let mut guard = stmts().lock().unwrap();
+    match guard.get_mut(&stmt_id) {
+        Some(Stmt::Sqlite(s)) => s.bind_blob(idx, ptr, len),
+        Some(Stmt::Postgres(s)) => {
+            let bind = if ptr.is_null() {
+                pg::Bind::Null
+            } else {
+                pg::Bind::Bytes(bytes_arg(ptr, len))
+            };
+            s.bind(idx, bind)
+        }
+        Some(Stmt::Mysql(s)) => {
+            let bind = if ptr.is_null() {
+                my::Bind::Null
+            } else {
+                my::Bind::Bytes(bytes_arg(ptr, len))
+            };
+            s.bind(idx, bind)
+        }
         None => 0,
     }
 }
@@ -755,6 +937,101 @@ pub extern "C" fn elephc_pdo_finalize(stmt_id: i64) -> i64 {
     }
 }
 
+/// Returns the native driver code for the statement's last operation. SQLite
+/// tracks this per-connection (mirrored here from the statement's own `db`
+/// pointer); PostgreSQL/MySQL statements share their connection's bookkeeping
+/// (looked up by the statement's `conn_id`, the same way `elephc_pdo_step`
+/// dispatches into the connection to execute). Unknown handles return `-1`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_stmt_errcode(stmt_id: i64) -> i64 {
+    let sguard = stmts().lock().unwrap();
+    match sguard.get(&stmt_id) {
+        Some(Stmt::Sqlite(s)) => s.errcode(),
+        Some(Stmt::Postgres(s)) => {
+            let conn_id = s.conn_id;
+            let cguard = conns().lock().unwrap();
+            match cguard.get(&conn_id) {
+                Some(Conn::Postgres(c)) => c.errcode,
+                _ => -1,
+            }
+        }
+        Some(Stmt::Mysql(s)) => {
+            let conn_id = s.conn_id;
+            let cguard = conns().lock().unwrap();
+            match cguard.get(&conn_id) {
+                Some(Conn::Mysql(c)) => c.errcode,
+                _ => -1,
+            }
+        }
+        None => -1,
+    }
+}
+
+/// Returns a pointer to the statement's last error message (see
+/// `elephc_pdo_stmt_errcode` for how PostgreSQL/MySQL statements share their
+/// connection's bookkeeping). Empty string for an unknown handle. Valid until the
+/// next `elephc_pdo_stmt_errmsg`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_stmt_errmsg(stmt_id: i64) -> *const c_char {
+    let msg = {
+        let sguard = stmts().lock().unwrap();
+        match sguard.get(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.errmsg(),
+            Some(Stmt::Postgres(s)) => {
+                let conn_id = s.conn_id;
+                let cguard = conns().lock().unwrap();
+                match cguard.get(&conn_id) {
+                    Some(Conn::Postgres(c)) => c.errmsg.clone(),
+                    _ => String::new(),
+                }
+            }
+            Some(Stmt::Mysql(s)) => {
+                let conn_id = s.conn_id;
+                let cguard = conns().lock().unwrap();
+                match cguard.get(&conn_id) {
+                    Some(Conn::Mysql(c)) => c.errmsg.clone(),
+                    _ => String::new(),
+                }
+            }
+            None => String::new(),
+        }
+    };
+    store_cstr(stmt_errmsg_cell(), &msg)
+}
+
+/// Returns a pointer to the 5-char SQLSTATE for the statement's last operation
+/// (see `elephc_pdo_stmt_errcode` for how PostgreSQL/MySQL statements share their
+/// connection's bookkeeping). Unknown handles report `"00000"`; a statement whose
+/// connection has since closed reports `"HY000"`. Valid until the next
+/// `elephc_pdo_stmt_sqlstate`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_stmt_sqlstate(stmt_id: i64) -> *const c_char {
+    let state = {
+        let sguard = stmts().lock().unwrap();
+        match sguard.get(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.sqlstate(),
+            Some(Stmt::Postgres(s)) => {
+                let conn_id = s.conn_id;
+                let cguard = conns().lock().unwrap();
+                match cguard.get(&conn_id) {
+                    Some(Conn::Postgres(c)) => c.sqlstate.clone(),
+                    _ => "HY000".to_string(),
+                }
+            }
+            Some(Stmt::Mysql(s)) => {
+                let conn_id = s.conn_id;
+                let cguard = conns().lock().unwrap();
+                match cguard.get(&conn_id) {
+                    Some(Conn::Mysql(c)) => c.sqlstate.clone(),
+                    _ => "HY000".to_string(),
+                }
+            }
+            None => "00000".to_string(),
+        }
+    };
+    store_cstr(stmt_sqlstate_cell(), &state)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -780,11 +1057,12 @@ mod tests {
         std::slice::from_raw_parts(p as *const u8, len as usize).to_vec()
     }
 
-    /// The ABI version constant is the v6 (sqlite + pgsql + mysql + raw data +
-    /// persistent open) surface.
+    /// The ABI version constant is the v7 (sqlite + pgsql + mysql + raw data +
+    /// persistent open + SQLSTATE/statement errors + bool/blob binds +
+    /// busy-timeout + server version + text-valued last-insert-id) surface.
     #[test]
-    fn version_is_v6() {
-        assert_eq!(elephc_pdo_version(), 6);
+    fn version_is_v7() {
+        assert_eq!(elephc_pdo_version(), 7);
     }
 
     /// A DSN for an unsupported driver is rejected with a driver error.
@@ -895,6 +1173,115 @@ mod tests {
         assert_eq!(elephc_pdo_finalize(stmt), 1);
     }
 
+    /// v7 SQLite coverage: a clean DDL/INSERT reports SQLSTATE `"00000"`;
+    /// `elephc_pdo_bind_bool` and `elephc_pdo_bind_blob` round-trip through
+    /// `column_int`/`column_data_ptr` (the blob preserving an embedded NUL byte);
+    /// `elephc_pdo_set_busy_timeout` reports success; `elephc_pdo_server_version`
+    /// returns the bundled SQLite version string; and a duplicate PRIMARY KEY
+    /// insert reports SQLSTATE `"23000"` (SQLite's `SQLITE_CONSTRAINT`).
+    #[test]
+    fn sqlite_v7_sqlstate_and_new_binds() {
+        let dsn = cs("sqlite::memory:");
+        let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+        assert!(conn > 0, "open failed");
+
+        assert_eq!(elephc_pdo_set_busy_timeout(conn, 5000), 1);
+
+        let version = unsafe { read(elephc_pdo_server_version(conn)) };
+        assert!(!version.is_empty(), "server_version was empty");
+        assert!(
+            version.chars().next().is_some_and(|c| c.is_ascii_digit()),
+            "got: {version}"
+        );
+
+        let ddl = cs("CREATE TABLE t (id INTEGER PRIMARY KEY, flag INTEGER, data BLOB)");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, ddl.as_ptr()) }, 0);
+        assert_eq!(unsafe { read(elephc_pdo_sqlstate(conn)) }, "00000");
+
+        let ins = cs("INSERT INTO t (id, flag, data) VALUES (?, ?, ?)");
+        let stmt = unsafe { elephc_pdo_prepare(conn, ins.as_ptr()) };
+        assert!(stmt > 0, "prepare failed");
+        assert_eq!(elephc_pdo_bind_int(stmt, 1, 1), 1);
+        assert_eq!(elephc_pdo_bind_bool(stmt, 2, 1), 1);
+        let blob = b"A\0B";
+        assert_eq!(
+            unsafe {
+                elephc_pdo_bind_blob(stmt, 3, blob.as_ptr() as *const c_char, blob.len() as i64)
+            },
+            1
+        );
+        assert_eq!(elephc_pdo_step(stmt), 0);
+        assert_eq!(elephc_pdo_finalize(stmt), 1);
+        assert_eq!(unsafe { read(elephc_pdo_sqlstate(conn)) }, "00000");
+        assert_eq!(
+            unsafe { read(elephc_pdo_last_insert_id_text(conn, std::ptr::null())) },
+            "1"
+        );
+
+        // The bound bool (as 0/1) and blob (with its embedded NUL) round-trip.
+        let sel = cs("SELECT flag, data FROM t WHERE id = 1");
+        let q = unsafe { elephc_pdo_prepare(conn, sel.as_ptr()) };
+        assert!(q > 0, "prepare failed");
+        assert_eq!(elephc_pdo_step(q), 1);
+        assert_eq!(elephc_pdo_column_int(q, 0), 1);
+        assert_eq!(elephc_pdo_column_data_len(q, 1), 3);
+        let ptr = elephc_pdo_column_data_ptr(q, 1);
+        assert_eq!(unsafe { read_bytes(ptr, 3) }, b"A\0B");
+        assert_eq!(elephc_pdo_finalize(q), 1);
+
+        // A duplicate PRIMARY KEY hits SQLite's SQLITE_CONSTRAINT, SQLSTATE
+        // "23000", visible through both the connection- and statement-level
+        // accessors right after the failing step. (SQLite only guarantees
+        // `sqlite3_errcode()` reflects the *most recently failed* call, so this
+        // reads it immediately rather than after any later successful call.)
+        let dup = cs("INSERT INTO t (id, flag, data) VALUES (?, 0, NULL)");
+        let dup_stmt = unsafe { elephc_pdo_prepare(conn, dup.as_ptr()) };
+        assert!(dup_stmt > 0, "prepare failed");
+        assert_eq!(elephc_pdo_bind_int(dup_stmt, 1, 1), 1);
+        assert_eq!(elephc_pdo_step(dup_stmt), -1);
+        assert_eq!(unsafe { read(elephc_pdo_sqlstate(conn)) }, "23000");
+        assert_eq!(unsafe { read(elephc_pdo_stmt_sqlstate(dup_stmt)) }, "23000");
+        assert_eq!(elephc_pdo_stmt_errcode(dup_stmt), elephc_pdo_errcode(conn));
+        assert_eq!(
+            unsafe { read(elephc_pdo_stmt_errmsg(dup_stmt)) },
+            unsafe { read(elephc_pdo_errmsg(conn)) }
+        );
+        assert_eq!(elephc_pdo_finalize(dup_stmt), 1);
+
+        elephc_pdo_close(conn);
+    }
+
+    /// Fixture test: the SQLite→SQLSTATE mapping mirrors php-src's
+    /// `pdo_sqlite_error` table (`ext/pdo_sqlite/sqlite_driver.c`). Pinning the
+    /// pairs here as data (rather than exercising them only indirectly through a
+    /// live error) turns any future drift from upstream's table into a
+    /// mechanical, one-line diff instead of a silent behavior change.
+    #[test]
+    fn sqlite_sqlstate_fixture_matches_php_src() {
+        use libsqlite3_sys as ffi;
+        let cases = [
+            (ffi::SQLITE_OK, "00000"),
+            (ffi::SQLITE_ERROR, "HY000"),
+            (ffi::SQLITE_CONSTRAINT, "23000"),
+            (ffi::SQLITE_BUSY, "HY000"),
+            (ffi::SQLITE_LOCKED, "HY000"),
+            (ffi::SQLITE_READONLY, "HY000"),
+            (ffi::SQLITE_PERM, "HY000"),
+            (ffi::SQLITE_NOTADB, "HY000"),
+            (ffi::SQLITE_NOTFOUND, "42S02"),
+            (ffi::SQLITE_INTERRUPT, "01002"),
+            (ffi::SQLITE_NOLFS, "IM001"),
+            (ffi::SQLITE_TOOBIG, "22001"),
+        ];
+        for (code, expected) in cases {
+            assert_eq!(
+                sqlite::sqlite_sqlstate(code),
+                expected,
+                "sqlite result code {code} mapped wrong"
+            );
+        }
+    }
+
     /// Placeholder translation: `?` → `$1`, `:name` → `$N` (deduped), with
     /// `'…'` literals and the `::` cast operator left untouched.
     #[test]
@@ -920,6 +1307,11 @@ mod tests {
     /// Full PostgreSQL round-trip against a live server. Ignored by default; run
     /// with `ELEPHC_PG_TEST_DSN` set, e.g.
     /// `ELEPHC_PG_TEST_DSN='pgsql:host=localhost;port=55432;dbname=testdb;user=test;password=test'`.
+    /// Also covers the v7 additions: `elephc_pdo_bind_bool`, `elephc_pdo_bind_blob`
+    /// (an embedded-NUL blob and a null-pointer→NULL bind), `elephc_pdo_sqlstate`/
+    /// `elephc_pdo_stmt_sqlstate` (`"00000"` after a success, a real SQLSTATE after
+    /// a forced duplicate-key error, and a reset back to `"00000"` after the next
+    /// successful `prepare()`), and `elephc_pdo_server_version`.
     #[test]
     #[ignore]
     fn pg_round_trip() {
@@ -930,29 +1322,61 @@ mod tests {
         let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
         assert!(conn > 0, "pg open failed");
 
+        let version = unsafe { read(elephc_pdo_server_version(conn)) };
+        assert!(!version.is_empty(), "server_version was empty");
+
         let drop = cs("DROP TABLE IF EXISTS pdo_rt");
         unsafe { elephc_pdo_exec(conn, drop.as_ptr()) };
-        let ddl =
-            cs("CREATE TABLE pdo_rt (id SERIAL PRIMARY KEY, name TEXT, score DOUBLE PRECISION)");
+        let ddl = cs(
+            "CREATE TABLE pdo_rt (id SERIAL PRIMARY KEY, name TEXT, score DOUBLE PRECISION, flag BOOLEAN, data BYTEA)",
+        );
         unsafe { elephc_pdo_exec(conn, ddl.as_ptr()) };
+        assert_eq!(unsafe { read(elephc_pdo_sqlstate(conn)) }, "00000");
 
-        let ins = cs("INSERT INTO pdo_rt (name, score) VALUES (:n, :s)");
+        let ins = cs("INSERT INTO pdo_rt (name, score, flag, data) VALUES (:n, :s, :f, :d)");
         let stmt = unsafe { elephc_pdo_prepare(conn, ins.as_ptr()) };
         assert!(stmt > 0, "pg prepare failed");
         let n = cs(":n");
         let ni = unsafe { elephc_pdo_bind_parameter_index(stmt, n.as_ptr()) };
         let s = cs(":s");
         let si = unsafe { elephc_pdo_bind_parameter_index(stmt, s.as_ptr()) };
+        let f = cs(":f");
+        let fi = unsafe { elephc_pdo_bind_parameter_index(stmt, f.as_ptr()) };
+        let d = cs(":d");
+        let di = unsafe { elephc_pdo_bind_parameter_index(stmt, d.as_ptr()) };
         let ada = cs("Ada");
         unsafe { elephc_pdo_bind_text(stmt, ni, ada.as_ptr()) };
         elephc_pdo_bind_double(stmt, si, 9.5);
+        elephc_pdo_bind_bool(stmt, fi, 1);
+        let blob = b"A\0B";
+        unsafe {
+            elephc_pdo_bind_blob(stmt, di, blob.as_ptr() as *const c_char, blob.len() as i64)
+        };
         assert_eq!(elephc_pdo_step(stmt), 0);
         elephc_pdo_finalize(stmt);
+        assert_eq!(unsafe { read(elephc_pdo_sqlstate(conn)) }, "00000");
 
         let lid = unsafe { elephc_pdo_last_insert_id(conn, std::ptr::null()) };
         assert_eq!(lid, 1);
 
-        let sel = cs("SELECT id, name, score FROM pdo_rt WHERE id = ?");
+        // Bug 1 regression coverage: a null-pointer blob bind stores SQL NULL
+        // rather than an empty blob.
+        let ins2 = cs("INSERT INTO pdo_rt (name, score, flag, data) VALUES (:n, :s, :f, :d)");
+        let stmt2 = unsafe { elephc_pdo_prepare(conn, ins2.as_ptr()) };
+        assert!(stmt2 > 0, "pg prepare failed");
+        let ni2 = unsafe { elephc_pdo_bind_parameter_index(stmt2, n.as_ptr()) };
+        let si2 = unsafe { elephc_pdo_bind_parameter_index(stmt2, s.as_ptr()) };
+        let fi2 = unsafe { elephc_pdo_bind_parameter_index(stmt2, f.as_ptr()) };
+        let di2 = unsafe { elephc_pdo_bind_parameter_index(stmt2, d.as_ptr()) };
+        let grace = cs("Grace");
+        unsafe { elephc_pdo_bind_text(stmt2, ni2, grace.as_ptr()) };
+        elephc_pdo_bind_double(stmt2, si2, 1.0);
+        elephc_pdo_bind_bool(stmt2, fi2, 0);
+        unsafe { elephc_pdo_bind_blob(stmt2, di2, std::ptr::null(), 0) };
+        assert_eq!(elephc_pdo_step(stmt2), 0);
+        elephc_pdo_finalize(stmt2);
+
+        let sel = cs("SELECT id, name, score, flag, data FROM pdo_rt WHERE id = ?");
         let q = unsafe { elephc_pdo_prepare(conn, sel.as_ptr()) };
         elephc_pdo_bind_int(q, 1, 1);
         assert_eq!(elephc_pdo_step(q), 1);
@@ -960,8 +1384,37 @@ mod tests {
         assert_eq!(unsafe { read(elephc_pdo_column_name(q, 1)) }, "name");
         assert_eq!(unsafe { read(elephc_pdo_column_text(q, 1)) }, "Ada");
         assert_eq!(elephc_pdo_column_double(q, 2), 9.5);
+        assert_eq!(elephc_pdo_column_int(q, 3), 1);
+        assert_eq!(elephc_pdo_column_data_len(q, 4), 3);
+        let ptr = elephc_pdo_column_data_ptr(q, 4);
+        assert_eq!(unsafe { read_bytes(ptr, 3) }, b"A\0B");
         assert_eq!(elephc_pdo_step(q), 0);
         elephc_pdo_finalize(q);
+
+        let sel2 = cs("SELECT data FROM pdo_rt WHERE id = 2");
+        let q2 = unsafe { elephc_pdo_prepare(conn, sel2.as_ptr()) };
+        assert!(q2 > 0, "pg prepare failed");
+        assert_eq!(elephc_pdo_step(q2), 1);
+        assert_eq!(elephc_pdo_column_type(q2, 0), 5, "null-pointer blob bind must read back as NULL");
+        elephc_pdo_finalize(q2);
+
+        // Bug 2 regression coverage: a forced duplicate-key error reports a
+        // non-"00000" SQLSTATE at both the connection and statement level, and
+        // the following successful prepare() resets it back to "00000".
+        let dup = cs("INSERT INTO pdo_rt (id, name) VALUES (1, 'dup')");
+        let dup_stmt = unsafe { elephc_pdo_prepare(conn, dup.as_ptr()) };
+        assert!(dup_stmt > 0, "pg prepare failed");
+        assert_eq!(elephc_pdo_step(dup_stmt), -1);
+        let dup_state = unsafe { read(elephc_pdo_sqlstate(conn)) };
+        assert_ne!(dup_state, "00000", "expected a real SQLSTATE, got: {dup_state}");
+        assert_eq!(unsafe { read(elephc_pdo_stmt_sqlstate(dup_stmt)) }, dup_state);
+        elephc_pdo_finalize(dup_stmt);
+
+        let sel3 = cs("SELECT 1");
+        let ok_stmt = unsafe { elephc_pdo_prepare(conn, sel3.as_ptr()) };
+        assert!(ok_stmt > 0, "pg prepare failed");
+        assert_eq!(unsafe { read(elephc_pdo_sqlstate(conn)) }, "00000");
+        elephc_pdo_finalize(ok_stmt);
 
         let cleanup = cs("DROP TABLE pdo_rt");
         unsafe { elephc_pdo_exec(conn, cleanup.as_ptr()) };
@@ -988,6 +1441,11 @@ mod tests {
     /// Full MySQL/MariaDB round-trip against a live server. Ignored by default; run
     /// with `ELEPHC_MY_TEST_DSN` set, e.g.
     /// `ELEPHC_MY_TEST_DSN='mysql:host=localhost;port=33060;dbname=testdb;user=test;password=test'`.
+    /// Also covers the v7 additions: `elephc_pdo_bind_bool`, `elephc_pdo_bind_blob`
+    /// (an embedded-NUL blob and a null-pointer→NULL bind), `elephc_pdo_sqlstate`/
+    /// `elephc_pdo_stmt_sqlstate` (`"00000"` after a success, a real SQLSTATE after
+    /// a forced duplicate-key error, and a reset back to `"00000"` after the next
+    /// successful `prepare()`), and `elephc_pdo_server_version`.
     #[test]
     #[ignore]
     fn my_round_trip() {
@@ -999,30 +1457,61 @@ mod tests {
         assert!(conn > 0, "mysql open failed");
         assert_eq!(unsafe { read(elephc_pdo_driver_name(conn)) }, "mysql");
 
+        let version = unsafe { read(elephc_pdo_server_version(conn)) };
+        assert!(!version.is_empty(), "server_version was empty");
+
         let drop = cs("DROP TABLE IF EXISTS pdo_rt");
         unsafe { elephc_pdo_exec(conn, drop.as_ptr()) };
         let ddl = cs(
-            "CREATE TABLE pdo_rt (id INTEGER PRIMARY KEY AUTO_INCREMENT, name TEXT, score DOUBLE)",
+            "CREATE TABLE pdo_rt (id INTEGER PRIMARY KEY AUTO_INCREMENT, name TEXT, score DOUBLE, flag TINYINT(1), data BLOB)",
         );
         unsafe { elephc_pdo_exec(conn, ddl.as_ptr()) };
+        assert_eq!(unsafe { read(elephc_pdo_sqlstate(conn)) }, "00000");
 
-        let ins = cs("INSERT INTO pdo_rt (name, score) VALUES (:n, :s)");
+        let ins = cs("INSERT INTO pdo_rt (name, score, flag, data) VALUES (:n, :s, :f, :d)");
         let stmt = unsafe { elephc_pdo_prepare(conn, ins.as_ptr()) };
         assert!(stmt > 0, "mysql prepare failed");
         let n = cs(":n");
         let ni = unsafe { elephc_pdo_bind_parameter_index(stmt, n.as_ptr()) };
         let s = cs(":s");
         let si = unsafe { elephc_pdo_bind_parameter_index(stmt, s.as_ptr()) };
+        let f = cs(":f");
+        let fi = unsafe { elephc_pdo_bind_parameter_index(stmt, f.as_ptr()) };
+        let d = cs(":d");
+        let di = unsafe { elephc_pdo_bind_parameter_index(stmt, d.as_ptr()) };
         let ada = cs("Ada");
         unsafe { elephc_pdo_bind_text(stmt, ni, ada.as_ptr()) };
         elephc_pdo_bind_double(stmt, si, 9.5);
+        elephc_pdo_bind_bool(stmt, fi, 1);
+        let blob = b"A\0B";
+        unsafe {
+            elephc_pdo_bind_blob(stmt, di, blob.as_ptr() as *const c_char, blob.len() as i64)
+        };
         assert_eq!(elephc_pdo_step(stmt), 0);
         elephc_pdo_finalize(stmt);
+        assert_eq!(unsafe { read(elephc_pdo_sqlstate(conn)) }, "00000");
 
         let lid = unsafe { elephc_pdo_last_insert_id(conn, std::ptr::null()) };
         assert_eq!(lid, 1);
 
-        let sel = cs("SELECT id, name, score FROM pdo_rt WHERE id = ?");
+        // Bug 1 regression coverage: a null-pointer blob bind stores SQL NULL
+        // rather than an empty blob.
+        let ins2 = cs("INSERT INTO pdo_rt (name, score, flag, data) VALUES (:n, :s, :f, :d)");
+        let stmt2 = unsafe { elephc_pdo_prepare(conn, ins2.as_ptr()) };
+        assert!(stmt2 > 0, "mysql prepare failed");
+        let ni2 = unsafe { elephc_pdo_bind_parameter_index(stmt2, n.as_ptr()) };
+        let si2 = unsafe { elephc_pdo_bind_parameter_index(stmt2, s.as_ptr()) };
+        let fi2 = unsafe { elephc_pdo_bind_parameter_index(stmt2, f.as_ptr()) };
+        let di2 = unsafe { elephc_pdo_bind_parameter_index(stmt2, d.as_ptr()) };
+        let grace = cs("Grace");
+        unsafe { elephc_pdo_bind_text(stmt2, ni2, grace.as_ptr()) };
+        elephc_pdo_bind_double(stmt2, si2, 1.0);
+        elephc_pdo_bind_bool(stmt2, fi2, 0);
+        unsafe { elephc_pdo_bind_blob(stmt2, di2, std::ptr::null(), 0) };
+        assert_eq!(elephc_pdo_step(stmt2), 0);
+        elephc_pdo_finalize(stmt2);
+
+        let sel = cs("SELECT id, name, score, flag, data FROM pdo_rt WHERE id = ?");
         let q = unsafe { elephc_pdo_prepare(conn, sel.as_ptr()) };
         elephc_pdo_bind_int(q, 1, 1);
         assert_eq!(elephc_pdo_step(q), 1);
@@ -1030,8 +1519,37 @@ mod tests {
         assert_eq!(unsafe { read(elephc_pdo_column_name(q, 1)) }, "name");
         assert_eq!(unsafe { read(elephc_pdo_column_text(q, 1)) }, "Ada");
         assert_eq!(elephc_pdo_column_double(q, 2), 9.5);
+        assert_eq!(elephc_pdo_column_int(q, 3), 1);
+        assert_eq!(elephc_pdo_column_data_len(q, 4), 3);
+        let ptr = elephc_pdo_column_data_ptr(q, 4);
+        assert_eq!(unsafe { read_bytes(ptr, 3) }, b"A\0B");
         assert_eq!(elephc_pdo_step(q), 0);
         elephc_pdo_finalize(q);
+
+        let sel2 = cs("SELECT data FROM pdo_rt WHERE id = 2");
+        let q2 = unsafe { elephc_pdo_prepare(conn, sel2.as_ptr()) };
+        assert!(q2 > 0, "mysql prepare failed");
+        assert_eq!(elephc_pdo_step(q2), 1);
+        assert_eq!(elephc_pdo_column_type(q2, 0), 5, "null-pointer blob bind must read back as NULL");
+        elephc_pdo_finalize(q2);
+
+        // Bug 2 regression coverage: a forced duplicate-key error reports a
+        // non-"00000" SQLSTATE at both the connection and statement level, and
+        // the following successful prepare() resets it back to "00000".
+        let dup = cs("INSERT INTO pdo_rt (id, name) VALUES (1, 'dup')");
+        let dup_stmt = unsafe { elephc_pdo_prepare(conn, dup.as_ptr()) };
+        assert!(dup_stmt > 0, "mysql prepare failed");
+        assert_eq!(elephc_pdo_step(dup_stmt), -1);
+        let dup_state = unsafe { read(elephc_pdo_sqlstate(conn)) };
+        assert_ne!(dup_state, "00000", "expected a real SQLSTATE, got: {dup_state}");
+        assert_eq!(unsafe { read(elephc_pdo_stmt_sqlstate(dup_stmt)) }, dup_state);
+        elephc_pdo_finalize(dup_stmt);
+
+        let sel3 = cs("SELECT 1");
+        let ok_stmt = unsafe { elephc_pdo_prepare(conn, sel3.as_ptr()) };
+        assert!(ok_stmt > 0, "mysql prepare failed");
+        assert_eq!(unsafe { read(elephc_pdo_sqlstate(conn)) }, "00000");
+        elephc_pdo_finalize(ok_stmt);
 
         let cleanup = cs("DROP TABLE pdo_rt");
         unsafe { elephc_pdo_exec(conn, cleanup.as_ptr()) };

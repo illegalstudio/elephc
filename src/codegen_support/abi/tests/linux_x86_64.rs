@@ -125,8 +125,9 @@ fn test_materialize_outgoing_string_args_for_linux_x86_64_preserves_live_rcx() {
 }
 
 /// Verifies that emit_frame_prologue emits push rbp / mov rbp, rsp / sub rsp, N
-/// for the x86_64 frame setup; emit_frame_restore emits add rsp, N / pop rbp;
-/// and emit_return emits the standard epilogue with ret. The test confirms the
+/// for the x86_64 frame setup; emit_frame_restore emits the `leave` idiom (restores
+/// rsp from rbp and pops rbp in one step, immune to mid-body rsp drift); and
+/// emit_return emits the standard epilogue with ret. The test confirms the
 /// 16-byte stack alignment requirement is respected.
 #[test]
 fn test_emit_frame_helpers_linux_x86_64() {
@@ -142,8 +143,7 @@ fn test_emit_frame_helpers_linux_x86_64() {
             "    push rbp\n",
             "    mov rbp, rsp\n",
             "    sub rsp, 32\n",
-            "    add rsp, 32\n",
-            "    pop rbp\n",
+            "    leave\n",
             "    ret\n",
         )
     );

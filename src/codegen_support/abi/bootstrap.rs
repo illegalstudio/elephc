@@ -28,6 +28,19 @@ pub fn emit_enable_heap_debug_flag(emitter: &mut Emitter) {
     emit_store_reg_to_symbol(emitter, scratch, "_heap_debug_enabled", 0);
 }
 
+/// Set the web heap-guard flag to 1 in global symbol storage.
+///
+/// Enables the cheap small-bin double-free detection in `--web` builds without the
+/// expensive per-allocation free-list validation that `--heap-debug` also turns on.
+/// A detected double free routes to `__rt_heap_debug_fail`, which writes the diagnostic
+/// and `_exit(1)`s the worker so the prefork master respawns it, containing the
+/// corruption to a single request rather than aborting the whole server.
+pub fn emit_enable_web_heap_guard_flag(emitter: &mut Emitter) {
+    let scratch = temp_int_reg(emitter.target);
+    emit_load_int_immediate(emitter, scratch, 1);
+    emit_store_reg_to_symbol(emitter, scratch, "_web_heap_guard_enabled", 0);
+}
+
 /// Copy the current frame pointer into the destination scratch register.
 #[cfg(test)]
 pub fn emit_copy_frame_pointer(emitter: &mut Emitter, dest: &str) {

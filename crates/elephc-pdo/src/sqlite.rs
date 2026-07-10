@@ -43,6 +43,26 @@ unsafe fn read_errmsg(db: *mut ffi::sqlite3) -> String {
     CStr::from_ptr(p).to_string_lossy().into_owned()
 }
 
+/// Maps a SQLite primary result code to its 5-char SQLSTATE, mirroring PHP's
+/// `pdo_sqlite` driver (`ext/pdo_sqlite/sqlite_driver.c`, `pdo_sqlite_error`):
+/// `SQLITE_NOTFOUND`/`SQLITE_INTERRUPT`/`SQLITE_NOLFS`/`SQLITE_TOOBIG`/
+/// `SQLITE_CONSTRAINT` get their own SQLSTATE, everything else (including
+/// `SQLITE_ERROR`, `SQLITE_BUSY`, `SQLITE_LOCKED`, and the permission/read-only
+/// family) falls back to the driver's generic `HY000`. `SQLITE_OK` is not part of
+/// that error-only table — it is the bridge's own "no error" default, added here
+/// so the mapping is total over every primary result code SQLite can report.
+pub fn sqlite_sqlstate(rc: c_int) -> &'static str {
+    match rc {
+        ffi::SQLITE_OK => "00000",
+        ffi::SQLITE_NOTFOUND => "42S02",
+        ffi::SQLITE_INTERRUPT => "01002",
+        ffi::SQLITE_NOLFS => "IM001",
+        ffi::SQLITE_TOOBIG => "22001",
+        ffi::SQLITE_CONSTRAINT => "23000",
+        _ => "HY000",
+    }
+}
+
 impl SqliteConn {
     /// Opens the SQLite database at `path` (the DSN body after `sqlite:`),
     /// returning the connection or an error message.
@@ -144,6 +164,30 @@ impl SqliteConn {
     pub fn close(&self) {
         unsafe { ffi::sqlite3_close(self.db) };
     }
+
+    /// Returns the 5-char SQLSTATE for the connection's last operation.
+    pub fn sqlstate(&self) -> String {
+        sqlite_sqlstate(unsafe { ffi::sqlite3_errcode(self.db) }).to_string()
+    }
+
+    /// Sets the number of milliseconds SQLite retries a locked database before
+    /// giving up with `SQLITE_BUSY` (`sqlite3_busy_timeout`). Returns `1`/`0`.
+    pub fn set_busy_timeout(&self, ms: i64) -> i64 {
+        let rc = unsafe { ffi::sqlite3_busy_timeout(self.db, ms as c_int) };
+        (rc == ffi::SQLITE_OK) as i64
+    }
+
+    /// Returns the bundled SQLite library's version string (e.g. `"3.46.0"`).
+    pub fn server_version(&self) -> String {
+        unsafe {
+            let p = ffi::sqlite3_libversion();
+            if p.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(p).to_string_lossy().into_owned()
+            }
+        }
+    }
 }
 
 impl SqliteStmt {
@@ -191,6 +235,35 @@ impl SqliteStmt {
     /// Binds SQL NULL to the 1-based placeholder `idx`. Returns `1`/`0`.
     pub fn bind_null(&self, idx: i64) -> i64 {
         let rc = unsafe { ffi::sqlite3_bind_null(self.ptr, idx as c_int) };
+        (rc == ffi::SQLITE_OK) as i64
+    }
+
+    /// Binds raw bytes (copied via `SQLITE_TRANSIENT`) to placeholder `idx`,
+    /// preserving embedded NUL bytes that `bind_text`'s NUL-terminated string
+    /// path cannot. A null pointer binds SQL NULL. A non-positive or
+    /// `c_int`-overflowing `len` is treated as a zero-length blob rather than
+    /// being cast as-is, which would silently wrap/truncate when handed to
+    /// `sqlite3_bind_blob`'s `c_int` length parameter. Returns `1`/`0`.
+    ///
+    /// # Safety
+    /// `ptr`, when non-null, must point to at least `len` readable bytes valid for
+    /// the call.
+    pub unsafe fn bind_blob(&self, idx: i64, ptr: *const c_char, len: i64) -> i64 {
+        if ptr.is_null() {
+            return (ffi::sqlite3_bind_null(self.ptr, idx as c_int) == ffi::SQLITE_OK) as i64;
+        }
+        let safe_len = if len <= 0 || len > c_int::MAX as i64 {
+            0
+        } else {
+            len as c_int
+        };
+        let rc = ffi::sqlite3_bind_blob(
+            self.ptr,
+            idx as c_int,
+            ptr as *const std::os::raw::c_void,
+            safe_len,
+            ffi::SQLITE_TRANSIENT(),
+        );
         (rc == ffi::SQLITE_OK) as i64
     }
 
@@ -274,5 +347,21 @@ impl SqliteStmt {
     /// Finalizes the statement.
     pub fn finalize(&self) {
         unsafe { ffi::sqlite3_finalize(self.ptr) };
+    }
+
+    /// Returns SQLite's primary result code for the statement's connection's last
+    /// operation (SQLite tracks error state per-connection, not per-statement).
+    pub fn errcode(&self) -> i64 {
+        unsafe { ffi::sqlite3_errcode(self.db) as i64 }
+    }
+
+    /// Returns the statement's connection's current error message (see `errcode`).
+    pub fn errmsg(&self) -> String {
+        unsafe { read_errmsg(self.db) }
+    }
+
+    /// Returns the 5-char SQLSTATE for the statement's last operation.
+    pub fn sqlstate(&self) -> String {
+        sqlite_sqlstate(unsafe { ffi::sqlite3_errcode(self.db) }).to_string()
     }
 }

@@ -24,6 +24,12 @@ const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 /// Each block carries a 16-byte header `[size:4][refcount:4][kind:8]` before the user pointer.
 /// Free blocks reuse the same header layout plus a `next_ptr:8` word for list chaining.
 ///
+/// The small-bin fast path validates every candidate before reuse with the same discipline
+/// as the general free list: the header must lie inside the live heap window (else the chain
+/// is truncated, since its next link cannot be trusted), and a parked block must be free
+/// (`refcount == 0` and no retained `kind`, else it is unlinked as poison). Under `--heap-debug`
+/// the same poison is caught loudly at alloc entry by `__rt_heap_debug_validate_free_list`.
+///
 /// Input: `x0` (ARM) / `rax` (x86_64) = requested payload bytes (minimum 8 enforced).
 /// Output: `x0` / `rax` = user pointer (header + 16).
 ///
@@ -75,7 +81,27 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.label("__rt_heap_alloc_small_bin_scan");
     emitter.instruction("ldr x10, [x16]");                                      // x10 = current cached block header or null when this bin is exhausted
     emitter.instruction("cbz x10, __rt_heap_alloc_small_bin_next_class");       // try the next larger bin when this bin has no fitting block
+    // -- reject cached entries that escaped the live heap window before dereferencing them --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_buf");
+    emitter.instruction("cmp x10, x12");                                        // does the cached block point below the heap buffer base?
+    emitter.instruction("b.lo __rt_heap_alloc_small_bin_drop_tail");            // wild pointer: truncate the chain, its next link cannot be trusted
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_heap_off");
+    emitter.instruction("ldr x14, [x14]");                                      // load the current heap bump offset before deriving the live heap end
+    emitter.instruction("add x14, x12, x14");                                   // x14 = current live heap end
+    emitter.instruction("cmp x10, x14");                                        // does the cached block point at or beyond the live heap end?
+    emitter.instruction("b.hs __rt_heap_alloc_small_bin_drop_tail");            // wild pointer: truncate the chain past the live heap window
+    // -- a parked cached block must be free: refcount 0 and no retained heap kind --
+    emitter.instruction("ldr w15, [x10, #4]");                                  // load the cached block refcount from its header
+    emitter.instruction("cbnz w15, __rt_heap_alloc_small_bin_unlink_invalid");  // a live refcount marks a poisoned entry, unlink it
+    emitter.instruction("ldr x15, [x10, #8]");                                  // load the cached block heap kind from its header
+    emitter.instruction("cbnz x15, __rt_heap_alloc_small_bin_unlink_invalid");  // a retained live kind marks a poisoned entry, unlink it
     emitter.instruction("ldr w11, [x10]");                                      // load the cached block payload size before reusing it
+    emitter.instruction("cmp x11, #8");                                         // is the cached block large enough to carry allocator metadata?
+    emitter.instruction("b.lo __rt_heap_alloc_small_bin_unlink_invalid");       // unlink cached entries with impossible payload sizes
+    emitter.instruction("add x15, x10, #16");                                   // x15 = start of this cached block payload
+    emitter.instruction("add x15, x15, x11");                                   // x15 = cached block claimed end address
+    emitter.instruction("cmp x15, x14");                                        // does the cached block stay inside the live heap window?
+    emitter.instruction("b.hi __rt_heap_alloc_small_bin_unlink_invalid");       // unlink cached entries whose recorded size overruns the live heap
     emitter.instruction("cmp x11, x0");                                         // does the cached block satisfy the requested payload size?
     emitter.instruction("b.hs __rt_heap_alloc_small_bin_found");                // yes — reuse this cached block safely
     emitter.instruction("add x16, x10, #16");                                   // advance the previous next-pointer slot to current->next
@@ -86,6 +112,14 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("add x13, x13, #8");                                    // advance to the next larger small-bin class
     emitter.instruction("add x9, x9, #8");                                      // move to the next bin-head slot
     emitter.instruction("b __rt_heap_alloc_small_bin_loop");                    // keep searching the remaining small bins
+
+    emitter.label("__rt_heap_alloc_small_bin_drop_tail");
+    emitter.instruction("str xzr, [x16]");                                      // drop the unreachable tail so no later scan follows the wild pointer
+    emitter.instruction("b __rt_heap_alloc_small_bin_next_class");              // this bin is exhausted from the truncation point, try the next class
+    emitter.label("__rt_heap_alloc_small_bin_unlink_invalid");
+    emitter.instruction("ldr x15, [x10, #16]");                                 // the poisoned block is in-heap, so its next link is a safe load
+    emitter.instruction("str x15, [x16]");                                      // unlink the poisoned block from this size-class chain
+    emitter.instruction("b __rt_heap_alloc_small_bin_scan");                    // reload the previous next slot and keep scanning this bin
 
     emitter.label("__rt_heap_alloc_small_bin_found");
     emitter.instruction("ldr x11, [x10, #16]");                                 // x11 = cached_small_block->next within this size class
@@ -287,7 +321,28 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rcx]");                            // r10 = current cached block header or null when this bin is exhausted
     emitter.instruction("test r10, r10");                                       // did this bin scan run out of cached blocks?
     emitter.instruction("jz __rt_heap_alloc_small_bin_next_class");             // try the next larger bin when this bin has no fitting block
+    // -- reject cached entries that escaped the live heap window before dereferencing them --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdx", "_heap_buf");
+    emitter.instruction("cmp r10, rdx");                                        // does the cached block point below the heap buffer base?
+    emitter.instruction("jb __rt_heap_alloc_small_bin_drop_tail");              // wild pointer: truncate the chain, its next link cannot be trusted
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_off");
+    emitter.instruction("mov rsi, QWORD PTR [rsi]");                            // load the current heap bump offset before deriving the live heap end
+    emitter.instruction("add rsi, rdx");                                        // rsi = current live heap end
+    emitter.instruction("cmp r10, rsi");                                        // does the cached block point at or beyond the live heap end?
+    emitter.instruction("jae __rt_heap_alloc_small_bin_drop_tail");             // wild pointer: truncate the chain past the live heap window
+    // -- a parked cached block must be free: refcount 0 and no retained heap kind --
+    emitter.instruction("mov edx, DWORD PTR [r10 + 4]");                        // load the cached block refcount from its header
+    emitter.instruction("test edx, edx");                                       // is the cached block still marked live rather than free?
+    emitter.instruction("jnz __rt_heap_alloc_small_bin_unlink_invalid");        // a live refcount marks a poisoned entry, unlink it
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the cached block heap kind from its header
+    emitter.instruction("test rdx, rdx");                                       // does the cached block retain a live heap kind?
+    emitter.instruction("jnz __rt_heap_alloc_small_bin_unlink_invalid");        // a retained live kind marks a poisoned entry, unlink it
     emitter.instruction("mov r11d, DWORD PTR [r10]");                           // load the cached block payload size before reusing it
+    emitter.instruction("cmp r11, 8");                                          // is the cached block large enough to carry allocator metadata?
+    emitter.instruction("jb __rt_heap_alloc_small_bin_unlink_invalid");         // unlink cached entries with impossible payload sizes
+    emitter.instruction("lea rdx, [r10 + r11 + 16]");                           // rdx = cached block claimed end address
+    emitter.instruction("cmp rdx, rsi");                                        // does the cached block stay inside the live heap window?
+    emitter.instruction("ja __rt_heap_alloc_small_bin_unlink_invalid");         // unlink cached entries whose recorded size overruns the live heap
     emitter.instruction("cmp r11, rax");                                        // does the cached block satisfy the requested payload size?
     emitter.instruction("jae __rt_heap_alloc_small_bin_found");                 // yes — reuse this cached block safely
     emitter.instruction("lea rcx, [r10 + 16]");                                 // advance the previous next-pointer slot to current->next
@@ -298,6 +353,14 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, 8");                                           // advance to the next larger small-bin class offset
     emitter.instruction("add r9, 8");                                           // move to the next small-bin head slot
     emitter.instruction("jmp __rt_heap_alloc_small_bin_loop");                  // keep scanning the remaining small bins
+
+    emitter.label("__rt_heap_alloc_small_bin_drop_tail");
+    emitter.instruction("mov QWORD PTR [rcx], 0");                              // drop the unreachable tail so no later scan follows the wild pointer
+    emitter.instruction("jmp __rt_heap_alloc_small_bin_next_class");            // this bin is exhausted from the truncation point, try the next class
+    emitter.label("__rt_heap_alloc_small_bin_unlink_invalid");
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // the poisoned block is in-heap, so its next link is a safe load
+    emitter.instruction("mov QWORD PTR [rcx], rdx");                            // unlink the poisoned block from this size-class chain
+    emitter.instruction("jmp __rt_heap_alloc_small_bin_scan");                  // reload the previous next slot and keep scanning this bin
 
     emitter.label("__rt_heap_alloc_small_bin_found");
     emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // load the cached block's next pointer within this size class

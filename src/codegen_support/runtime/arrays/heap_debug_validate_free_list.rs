@@ -16,7 +16,8 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// assembly (x86_64 or ARM64). For each free block the helper checks: address lies
 /// within the live heap window, payload size meets the minimum (8 bytes), and blocks
 /// are strictly ascending with proper coalescing. For each small-bin chain it additionally
-/// verifies the payload size falls within the size-class bounds.
+/// verifies the payload size falls within the size-class bounds and that every cached block
+/// is genuinely free (`refcount == 0` and no retained heap `kind`).
 ///
 /// # Arguments
 /// * `emitter` - Target-specific assembly emitter (mutated by emitting instructions).
@@ -111,6 +112,12 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
         emitter.instruction("lea rsi, [rdx + rsi + 16]");                       // compute the end address of the cached block including its header
         emitter.instruction("cmp rsi, r10");                                    // does the cached block overrun the current heap end?
         emitter.instruction("ja __rt_heap_debug_validate_free_list_fail");      // cached blocks must remain fully inside the live heap window
+        emitter.instruction("mov esi, DWORD PTR [rdx + 4]");                    // a cached block parked in a bin must have a cleared refcount
+        emitter.instruction("test esi, esi");                                   // is this cached block still marked live rather than free?
+        emitter.instruction("jnz __rt_heap_debug_validate_free_list_fail");     // a live refcount marks small-bin corruption
+        emitter.instruction("mov rsi, QWORD PTR [rdx + 8]");                    // a cached block parked in a bin must not retain a live heap kind
+        emitter.instruction("test rsi, rsi");                                   // does this cached block retain a live heap kind?
+        emitter.instruction("jnz __rt_heap_debug_validate_free_list_fail");     // a retained live kind marks small-bin corruption
         emitter.instruction("mov rdx, QWORD PTR [rdx + 16]");                   // advance to the next cached block in this size class
         emitter.instruction("jmp __rt_heap_debug_validate_small_bin_loop");     // continue validating this cached small-bin chain
 
@@ -217,6 +224,10 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     emitter.instruction("add x17, x17, #16");                                   // x17 = end of the cached block including its 16-byte header
     emitter.instruction("cmp x17, x10");                                        // does the cached block run past the current heap end?
     emitter.instruction("b.hi __rt_heap_debug_validate_free_list_fail");        // cached blocks must remain fully inside the live heap window
+    emitter.instruction("ldr w17, [x14, #4]");                                  // a cached block parked in a bin must have a cleared refcount
+    emitter.instruction("cbnz w17, __rt_heap_debug_validate_free_list_fail");   // a live refcount marks small-bin corruption
+    emitter.instruction("ldr x17, [x14, #8]");                                  // a cached block parked in a bin must not retain a live heap kind
+    emitter.instruction("cbnz x17, __rt_heap_debug_validate_free_list_fail");   // a retained live kind marks small-bin corruption
     emitter.instruction("ldr x14, [x14, #16]");                                 // advance to the next cached block in this size class
     emitter.instruction("b __rt_heap_debug_validate_small_bin_loop");           // continue validating this cached small-bin chain
 

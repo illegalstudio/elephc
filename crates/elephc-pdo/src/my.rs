@@ -45,6 +45,10 @@ pub enum Bind {
     Int(i64),
     Float(f64),
     Text(String),
+    /// Raw bytes, sent as-is (rather than through a lossy UTF-8 `String`) so a
+    /// BLOB-style parameter round-trips embedded NUL bytes and arbitrary binary
+    /// content unchanged.
+    Bytes(Vec<u8>),
 }
 
 /// How a result column's MySQL type should render as text — the temporal types
@@ -85,6 +89,12 @@ pub struct MyConn {
     pub changes: i64,
     pub errmsg: String,
     pub errcode: i64,
+    /// 5-char SQLSTATE for the connection's last operation, taken from the ERR
+    /// packet's SQLSTATE marker (`mysql::error::MySqlError::state`, which the
+    /// client already parses from the wire protocol's `#`-prefixed field).
+    /// "00000" on success; "HY000" for a transport/protocol error that carries no
+    /// SQL error (not a `MySqlError`).
+    pub sqlstate: String,
     /// The most recent non-zero AUTO_INCREMENT id, kept sticky across later
     /// non-INSERT statements (which would otherwise reset the protocol field) to
     /// match `PDO::lastInsertId()`.
@@ -120,6 +130,18 @@ fn err_code(e: &mysql::Error) -> i64 {
     match e {
         mysql::Error::MySqlError(me) => me.code as i64,
         _ => 1,
+    }
+}
+
+/// Extracts the 5-char SQLSTATE from a driver error. The `mysql` crate already
+/// parses the ERR packet's SQLSTATE marker (the `#` byte followed by 5 chars)
+/// into `MySqlError::state`, so no manual wire-protocol parsing is needed here.
+/// Falls back to the generic `HY000` for transport/protocol errors that carry no
+/// SQL error (not a `MySqlError`).
+fn err_sqlstate(e: &mysql::Error) -> String {
+    match e {
+        mysql::Error::MySqlError(me) => me.state.clone(),
+        _ => "HY000".to_string(),
     }
 }
 
@@ -269,6 +291,7 @@ impl MyConn {
             changes: 0,
             errmsg: String::new(),
             errcode: 0,
+            sqlstate: "00000".to_string(),
             last_id: 0,
         })
     }
@@ -309,9 +332,11 @@ impl MyConn {
                 self.note_last_id(last);
                 self.changes = affected;
                 self.errcode = 0;
+                self.sqlstate = "00000".to_string();
                 affected
             }
             Err(e) => {
+                self.sqlstate = err_sqlstate(&e);
                 self.errmsg = e.to_string();
                 self.errcode = err_code(&e);
                 -1
@@ -324,6 +349,7 @@ impl MyConn {
         match self.conn.query_drop(sql) {
             Ok(()) => 1,
             Err(e) => {
+                self.sqlstate = err_sqlstate(&e);
                 self.errmsg = e.to_string();
                 self.errcode = err_code(&e);
                 0
@@ -335,6 +361,13 @@ impl MyConn {
     /// name argument (it is a PostgreSQL/Oracle concept).
     pub fn last_insert_id(&self, _name: Option<&str>) -> i64 {
         self.last_id
+    }
+
+    /// Returns the MySQL/MariaDB server's reported version (`MAJOR.MINOR.PATCH`),
+    /// parsed from the handshake by the `mysql` client.
+    pub fn server_version(&self) -> String {
+        let (major, minor, patch) = self.conn.server_version();
+        format!("{major}.{minor}.{patch}")
     }
 
     /// Prepares a statement: translates placeholders and prepares it server-side
@@ -356,6 +389,8 @@ impl MyConn {
                 // Distinct slots run 1..=N contiguously, so the highest slot in
                 // `order` is the bound-value count.
                 let n_binds = order.iter().copied().max().unwrap_or(0) as usize;
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
                 Ok(MyStmt {
                     conn_id: 0,
                     statement,
@@ -370,6 +405,7 @@ impl MyConn {
                 })
             }
             Err(e) => {
+                self.sqlstate = err_sqlstate(&e);
                 self.errmsg = e.to_string();
                 self.errcode = err_code(&e);
                 Err(e.to_string())
@@ -483,6 +519,7 @@ impl MyStmt {
                 Bind::Int(v) => Value::Int(*v),
                 Bind::Float(v) => Value::Double(*v),
                 Bind::Text(s) => Value::Bytes(s.clone().into_bytes()),
+                Bind::Bytes(b) => Value::Bytes(b.clone()),
             })
             .collect()
     }
@@ -518,11 +555,13 @@ impl MyStmt {
                 };
                 conn.note_last_id(last);
                 conn.errcode = 0;
+                conn.sqlstate = "00000".to_string();
                 self.rows = rows;
                 self.executed = true;
                 Ok(())
             }
             Err(e) => {
+                conn.sqlstate = err_sqlstate(&e);
                 conn.errmsg = e.to_string();
                 conn.errcode = err_code(&e);
                 Err(-1)
