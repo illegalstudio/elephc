@@ -268,6 +268,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             value: Box::new(fold_expr(*value)),
         },
         ExprKind::Spread(inner) => ExprKind::Spread(Box::new(fold_expr(*inner))),
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(fold_expr(*inner))),
         ExprKind::ClosureCall { var, args } => ExprKind::ClosureCall {
             var,
             args: args.into_iter().map(fold_expr).collect(),

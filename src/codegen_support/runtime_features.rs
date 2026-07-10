@@ -340,6 +340,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         | ExprKind::ErrorSuppress(expr)
         | ExprKind::Print(expr)
         | ExprKind::Spread(expr)
+        | ExprKind::Clone(expr)
         | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. }
         | ExprKind::YieldFrom(expr) => expr_has_regex_call(expr),
@@ -651,6 +652,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         | ExprKind::ErrorSuppress(expr)
         | ExprKind::Print(expr)
         | ExprKind::Spread(expr)
+        | ExprKind::Clone(expr)
         | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. }
         | ExprKind::YieldFrom(expr) => expr_needs_descriptor_invoker(expr),

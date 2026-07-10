@@ -199,6 +199,9 @@ fn rewrite_expr(
         ExprKind::Spread(inner) => {
             ExprKind::Spread(Box::new(rewrite_expr(inner, class_name, parent_name)?))
         }
+        ExprKind::Clone(inner) => {
+            ExprKind::Clone(Box::new(rewrite_expr(inner, class_name, parent_name)?))
+        }
         ExprKind::ClosureCall { var, args } => ExprKind::ClosureCall {
             var: var.clone(),
             args: rewrite_expr_list(args, class_name, parent_name)?,

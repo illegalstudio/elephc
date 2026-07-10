@@ -200,7 +200,8 @@ impl Checker {
             | ExprKind::Throw(inner)
             | ExprKind::ErrorSuppress(inner)
             | ExprKind::Print(inner)
-            | ExprKind::Spread(inner) => {
+            | ExprKind::Spread(inner)
+            | ExprKind::Clone(inner) => {
                 self.infer_type_with_assignment_effects(inner, env)?;
                 self.infer_type(expr, env)
             }

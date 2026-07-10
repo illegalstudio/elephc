@@ -33,6 +33,8 @@ mod intersection_types;
 mod dynamic_dispatch;
 #[path = "oop/misc.rs"]
 mod misc;
+#[path = "oop/clone.rs"]
+mod clone;
 #[path = "oop/attributes.rs"]
 mod attributes;
 #[path = "oop/constants.rs"]

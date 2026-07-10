@@ -148,6 +148,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             value: Box::new(prune_expr(*value)),
         },
         ExprKind::Spread(inner) => ExprKind::Spread(Box::new(prune_expr(*inner))),
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(prune_expr(*inner))),
         ExprKind::ClosureCall { var, args } => ExprKind::ClosureCall {
             var,
             args: args.into_iter().map(prune_expr).collect(),

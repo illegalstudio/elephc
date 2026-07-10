@@ -147,6 +147,7 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
         | ExprKind::Spread(value)
+        | ExprKind::Clone(value)
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::BufferNew { len: value, .. } => expr_has_includes(value),
         ExprKind::NullCoalesce { value, default }

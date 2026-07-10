@@ -344,6 +344,7 @@ fn collect_arrow_expr_captures(
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::YieldFrom(inner) => collect_arrow_expr_captures(inner, bound, seen, captures),

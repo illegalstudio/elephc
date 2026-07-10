@@ -70,6 +70,35 @@ impl Checker {
                 self.infer_type(inner, env)?;
                 Ok(PhpType::Bool)
             }
+            // `clone $expr` — a shallow copy with the operand's own class. The class must be
+            // statically known (the backend computes the payload size from the class layout),
+            // and `__clone()` hooks are not modeled yet, so a class declaring one is rejected
+            // rather than silently skipping its hook.
+            ExprKind::Clone(inner) => {
+                let inner_ty = self.infer_type(inner, env)?;
+                let PhpType::Object(class_name) = &inner_ty else {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!("clone expects a statically-typed object, got {:?}", inner_ty),
+                    ));
+                };
+                if self
+                    .classes
+                    .get(class_name)
+                    .is_some_and(|info| {
+                        info.methods.contains_key(&crate::names::php_symbol_key("__clone"))
+                    })
+                {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!(
+                            "clone of {}: __clone() hooks are not supported yet",
+                            class_name
+                        ),
+                    ));
+                }
+                Ok(inner_ty)
+            }
             ExprKind::ErrorSuppress(inner) => self.infer_type(inner, env),
             ExprKind::Print(inner) => {
                 self.infer_type(inner, env)?;

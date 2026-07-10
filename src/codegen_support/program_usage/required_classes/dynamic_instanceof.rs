@@ -159,6 +159,7 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         | ExprKind::ErrorSuppress(expr)
         | ExprKind::Print(expr)
         | ExprKind::Spread(expr)
+        | ExprKind::Clone(expr)
         | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. }
         | ExprKind::NamedArg { value: expr, .. }

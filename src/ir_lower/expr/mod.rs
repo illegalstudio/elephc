@@ -123,6 +123,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::ExprCall { callee, args } => lower_expr_call(ctx, callee, args, expr),
         ExprKind::ConstRef(name) => constants::lower_const_ref(ctx, name, expr),
         ExprKind::NewObject { class_name, args } => lower_new_object(ctx, class_name, args, expr),
+        ExprKind::Clone(inner) => lower_clone(ctx, inner, expr),
         ExprKind::NewDynamic { name_expr, args } => {
             lower_new_dynamic(ctx, name_expr, args, expr)
         }
@@ -681,6 +682,7 @@ fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::NullsafeMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::NewObject { .. }
+        | ExprKind::Clone(..)
         | ExprKind::NewDynamic { .. }
         | ExprKind::NewDynamicObject { .. }
         | ExprKind::NewScopedObject { .. }
@@ -8319,6 +8321,28 @@ fn lower_new_object(ctx: &mut LoweringContext<'_, '_>, class_name: &Name, args: 
         Some(Immediate::Data(data)),
         php_type,
         Op::ObjectNew.default_effects(),
+        Some(expr.span),
+    )
+}
+
+/// Lowers PHP `clone $expr` into the shallow object-copy EIR opcode. The checker guarantees
+/// the operand is a statically-typed object, so the class name rides along as the immediate
+/// and the backend derives the payload layout from the class metadata. A non-object operand
+/// (unreachable past the checker) passes the source value through unchanged.
+fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
+    let source = lower_expr(ctx, inner);
+    let source_ty = ctx.builder.value_php_type(source.value);
+    let PhpType::Object(class_name) = source_ty.clone() else {
+        debug_assert!(false, "checker admitted clone of {:?}", source_ty);
+        return source;
+    };
+    let data = ctx.intern_class_name(&class_name);
+    ctx.emit_value(
+        Op::ObjectCloneShallow,
+        vec![source.value],
+        Some(Immediate::Data(data)),
+        PhpType::Object(class_name),
+        Op::ObjectCloneShallow.default_effects(),
         Some(expr.span),
     )
 }

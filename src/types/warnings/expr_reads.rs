@@ -47,6 +47,7 @@ pub(super) fn collect_expr_reads(
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::PtrCast { expr: inner, .. } => collect_expr_reads(inner, scope, warnings),
         ExprKind::NullCoalesce { value, default } => {
             collect_expr_reads(value, scope, warnings);

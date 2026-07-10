@@ -375,6 +375,12 @@ pub(super) fn resolve_expr(
             name: name.clone(),
             value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
         },
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(resolve_expr(
+            inner,
+            current_namespace,
+            imports,
+            symbols,
+        ))),
         _ => expr.kind.clone(),
     };
     Expr::new(kind, expr.span)

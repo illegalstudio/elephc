@@ -227,6 +227,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             value: Box::new(propagate_expr(*value, env)),
         },
         ExprKind::Spread(inner) => ExprKind::Spread(Box::new(propagate_expr(*inner, env))),
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(propagate_expr(*inner, env))),
         ExprKind::ClosureCall { var, args } => {
             let arg_env = (!callable_alias_effect(&var).has_side_effects).then_some(env);
             ExprKind::ClosureCall {

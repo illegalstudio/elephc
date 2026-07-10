@@ -112,6 +112,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::BufferNew { len: inner, .. }

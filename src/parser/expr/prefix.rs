@@ -206,6 +206,15 @@ pub(super) fn parse_prefix(
         Token::Function => parse_closure(tokens, pos, span, false),
         Token::Fn => parse_arrow_closure(tokens, pos, span, false),
         Token::AttrOpen => parse_attributed_closure(tokens, pos, span),
+        // `clone <expr>` — PHP's clone operator. `clone` is not a reserved token (it stays
+        // usable as a method/member name), so it is recognized contextually: an identifier
+        // spelled `clone` in prefix position followed by a token that can start its operand.
+        // `clone($x)` (parenthesized operand) lands here too, matching PHP.
+        Token::Identifier(name)
+            if name.eq_ignore_ascii_case("clone") && clone_operand_follows(tokens, *pos + 1) =>
+        {
+            parse_unary(tokens, pos, span, ExprKind::Clone, 35)
+        }
         Token::Identifier(_) | Token::Backslash => parse_named_expr(tokens, pos, span),
         Token::Self_ => {
             *pos += 1;
@@ -335,6 +344,26 @@ fn parse_unary(
     *pos += 1;
     let inner = parse_expr_bp(tokens, pos, bp)?;
     Ok(Expr::new(ctor(Box::new(inner)), span))
+}
+
+/// Returns true when the token at `pos` can begin a `clone` operand. This keeps the contextual
+/// `clone` recognition from swallowing an identifier merely SPELLED "clone" in non-operator
+/// positions (`clone;`, `clone,`, `clone)` …), which keeps parsing as a plain name.
+fn clone_operand_follows(tokens: &[(Token, Span)], pos: usize) -> bool {
+    match tokens.get(pos).map(|(token, _)| token) {
+        Some(
+            Token::Variable(_)
+            | Token::This
+            | Token::Identifier(_)
+            | Token::Backslash
+            | Token::New
+            | Token::Self_
+            | Token::Static
+            | Token::Parent
+            | Token::LParen,
+        ) => true,
+        _ => false,
+    }
 }
 
 /// Parses a prefix `++` or `--` increment/decrement operator. Consumes the operator,

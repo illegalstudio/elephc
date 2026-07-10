@@ -115,6 +115,8 @@ pub enum ExprKind {
         name: String,
         value: Box<Expr>,
     },
+    /// PHP's `clone $expr` unary operator — a shallow copy of an object instance.
+    Clone(Box<Expr>),
     /// A `require`/`include` used in expression position (e.g. `$x = require 'f.php';`).
     ///
     /// This is a transient node produced by the parser and fully expanded by the resolver into

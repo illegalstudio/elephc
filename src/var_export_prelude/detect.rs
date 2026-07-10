@@ -161,6 +161,7 @@ fn expr_refs_ve(expr: &Expr) -> bool {
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::YieldFrom(inner) => expr_refs_ve(inner),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {

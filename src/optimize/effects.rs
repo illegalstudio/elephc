@@ -263,6 +263,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::ExprCall { callee, args } => expr_effect(callee)
             .combine(combine_effects(args.iter().map(expr_effect)))
             .combine(expr_call_effect(callee)),
+        ExprKind::Clone(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
         ExprKind::NewObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()
             .with_may_throw(),

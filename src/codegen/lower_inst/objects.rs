@@ -227,6 +227,68 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
     Ok(())
 }
 
+/// Lowers `object_clone_shallow` (PHP `clone`): allocates a same-class payload and copies the
+/// class-id word plus every property slot pair from the source instance, unrolled at the
+/// statically-known payload size. Reference-property slots copy their CELL POINTER, which is
+/// PHP semantics (a reference property stays a reference shared with the original). Classes
+/// with dynamic properties are rejected — a plain payload copy would share the
+/// dynamic-property hash, which PHP does not do.
+pub(super) fn lower_object_clone_shallow(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let class_name = class_name_immediate(ctx, inst)?.to_string();
+    let payload_size = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get(&class_name)
+            .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", class_name)))?;
+        if class_info.allow_dynamic_properties {
+            return Err(CodegenIrError::unsupported(format!(
+                "clone of dynamic-properties class {}",
+                class_name
+            )));
+        }
+        dynamic_property_hash_offset(class_info.properties.len())
+    };
+    let source = expect_operand(inst, 0)?;
+    ctx.load_value_to_result(source)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", payload_size as i64); // request clone payload storage matching the source class layout
+            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks object instances for ownership helpers
+            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the clone payload
+            abi::emit_pop_reg(ctx.emitter, "x11");                              // reload the source object pointer
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rax", payload_size as i64); // request clone payload storage matching the source class layout
+            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            ctx.emitter.instruction(&format!(
+                "mov r10, 0x{:x}",
+                (X86_64_HEAP_MAGIC_HI32 << 32) | 4
+            )); // materialize the x86_64 object heap kind word
+            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the clone payload
+            abi::emit_pop_reg(ctx.emitter, "r11");                              // reload the source object pointer
+        }
+    }
+    let dst_reg = abi::int_result_reg(ctx.emitter);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    let src_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x11",
+        Arch::X86_64 => "r11",
+    };
+    let mut offset = 0usize;
+    while offset < payload_size {
+        abi::emit_load_from_address(ctx.emitter, scratch, src_reg, offset);
+        abi::emit_store_to_address(ctx.emitter, scratch, dst_reg, offset);
+        offset += 8;
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `new stdClass()` through the runtime helper that seeds its dynamic-property hash.
 fn lower_stdclass_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if !inst.operands.is_empty() {

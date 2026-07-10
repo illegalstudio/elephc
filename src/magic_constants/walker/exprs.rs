@@ -174,6 +174,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             required,
         },
         ExprKind::Spread(inner) => ExprKind::Spread(Box::new(walk_expr(*inner, pass))),
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(walk_expr(*inner, pass))),
         ExprKind::ClosureCall { var, args } => ExprKind::ClosureCall {
             var,
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
