@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/json_last_error.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/json_last_error.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/json.rs`:70](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/json.rs#L70) (`lower_json_last_error`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/json.rs`:70](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/json.rs#L70) (`lower_json_last_error`)
 - **Function symbol**: `lower_json_last_error()`
 
 

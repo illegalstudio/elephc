@@ -309,11 +309,13 @@ pub struct InterfaceInfo {
     pub method_declaring_interfaces: HashMap<String, String>,
     pub method_order: Vec<String>,
     pub method_slots: HashMap<String, usize>,
+    pub static_methods: HashMap<String, FunctionSig>, // static interface methods (PHP 8.3+)
+    pub static_method_order: Vec<String>,
     pub constants: HashMap<String, Expr>,   // interface constants (PHP 5.0+)
 }
 ```
 
-For each interface, the checker resolves `interface extends interface` transitively, rejects inheritance cycles, flattens required methods into a single signature map, and assigns a stable method ordering used by runtime metadata emission. `properties` records PHP 8.4 property hook contracts required by the interface, and `constants` carries interface constants inherited from parent interfaces.
+For each interface, the checker resolves `interface extends interface` transitively, rejects inheritance cycles, flattens required methods into a single signature map, and assigns a stable method ordering used by runtime metadata emission. `properties` records PHP 8.4 property hook contracts required by the interface, and `constants` carries interface constants inherited from parent interfaces. `static_methods` records PHP 8.3+ static interface methods separately from instance `methods`: static dispatch is by class, so they take no vtable slot. Conformance checking requires a concrete implementing class to declare a compatible static method (`Class {} must implement static interface method {}::{}` otherwise); abstract classes may defer.
 
 ## Class type checking
 

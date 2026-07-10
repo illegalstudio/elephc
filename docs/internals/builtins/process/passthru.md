@@ -2,7 +2,7 @@
 title: "passthru() — internals"
 description: "Compiler internals for passthru(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 303
+  order: 307
 ---
 
 ## `passthru()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/passthru.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/passthru.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L714) (`lower_passthru`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L714) (`lower_passthru`)
 - **Function symbol**: `lower_passthru()`
 
 

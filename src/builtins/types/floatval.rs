@@ -8,8 +8,8 @@
 //! - Pure-data builtin with no check hook; arity and arg inference are handled by the registry common path.
 //! - `lower` is a thin wrapper over the shared floatval emitter.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -24,5 +24,5 @@ builtin! {
 
 /// Lowers a `floatval` call by dispatching to the shared floatval emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::lower_floatval(ctx, inst)
+    crate::codegen::lower_inst::builtins::lower_floatval(ctx, inst)
 }

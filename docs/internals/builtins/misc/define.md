@@ -10,13 +10,13 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/define.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/define.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:83](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L83) (`lower_define`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:82](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L82) (`lower_define`)
 - **Function symbol**: `lower_define()`
 
 
 ### Lowering notes
 
-- Lowers `define("NAME", value)` with the legacy duplicate-name runtime guard.
+- Lowers `define("NAME", value)` with the duplicate-name runtime guard.
 
 ## Runtime helpers
 

@@ -47,6 +47,28 @@ class Product implements Named {
 - signature-only methods and PHP 8.4 property hook contracts; method and hook bodies are not allowed in interfaces
 - interface inheritance flattened transitively with cycle detection
 
+Interfaces may also declare `static` methods (PHP 8.3+). A concrete implementing
+class must provide a compatible public static method (an instance method does
+not satisfy the contract); an abstract class may defer it to a concrete child.
+Dispatch is by class name — static interface methods take no vtable slot.
+`#[\Override]` is accepted on a static implementation, matching the interface's
+static declaration.
+
+```php
+<?php
+interface Previewable {
+    public static function previews(): array;
+}
+
+class Card implements Previewable {
+    public static function previews(): array {
+        return ["front", "back"];
+    }
+}
+
+echo implode(",", Card::previews());
+```
+
 Interface properties must be hooked contracts. A concrete class can satisfy a `{ get; }` contract with a public readable property, a `{ set; }` contract with a public writable property, or both with an invariant public property. Get-only contracts allow covariant concrete types; set-only contracts allow contravariant concrete types.
 
 ```php
@@ -218,6 +240,8 @@ final class InvoiceNumber {
 - `final` properties, which can be read normally but cannot be redeclared by subclasses
 - Static properties with `public static`, `protected static`, or `private static`, including typed static properties
 - `readonly class` makes all instance properties readonly; static properties stay mutable
+
+Statically-known access violations — calling a `private`/`protected` method from an inaccessible scope, or writing a `readonly` property outside its declaring constructor — raise a catchable `Error` exception at runtime, matching PHP. Without a `try`/`catch` handler the exception is a fatal uncaught exit.
 
 ```php
 <?php
@@ -693,6 +717,10 @@ echo Color::Red->value;          // 1
 echo Color::from(2) === Color::Green; // 1
 ```
 Pure and backed enums. Every case exposes the read-only `->name` property (the case identifier); backed cases also expose `->value`. Plus `::from()`, `::tryFrom()`, `::cases()`. Only `int` and `string` backing types.
+
+Like PHP, an `int`-backed enum's `::from()` / `::tryFrom()` accept a numeric string and coerce it to the integer backing value (`Color::from("2")` returns `Color::Green`). A numeric string with no matching case throws `ValueError`; a non-numeric string (e.g. `"x"`, `"1abc"`, `"0x1"`, `"INF"`, or `"NAN"`) throws `TypeError`, matching PHP's coercive typing.
+
+A dynamically-typed (`mixed`) argument — such as a `foreach` value or an untyped parameter — is also accepted and coerced on its runtime type: an integer or numeric string resolves (or throws `ValueError`), a float truncates, a bool/null coerces, and an array/object/resource/closure throws `TypeError` naming the given type (objects report `object` rather than the class name).
 
 ### Enum methods, constants, and interfaces
 

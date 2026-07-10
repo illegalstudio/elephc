@@ -4,7 +4,7 @@
 //! under register pressure, with separate integer and float pools.
 //!
 //! Called from:
-//! - `crate::codegen_ir` per function, before instruction lowering.
+//! - `crate::codegen` per function, before instruction lowering.
 //!
 //! Key details:
 //! - Two register classes are allocated. Values whose live range never crosses a

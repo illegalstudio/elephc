@@ -15,8 +15,8 @@
 //! - `lower` is a thin wrapper over `io::lower_umask` in the EIR backend.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -32,5 +32,5 @@ builtin! {
 
 /// Lowers a `umask` call by dispatching to the shared io emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::io::lower_umask(ctx, inst)
+    crate::codegen::lower_inst::builtins::io::lower_umask(ctx, inst)
 }

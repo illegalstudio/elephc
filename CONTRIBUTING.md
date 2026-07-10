@@ -10,6 +10,18 @@ If you're planning to work on a significant feature or architectural change, ple
 
 This helps avoid duplicated work and ensures that the proposed solution aligns with the project's long-term direction.
 
+## AI-Assisted Contributions
+
+Contributions created with the help of AI tools are welcome. What matters to us is the quality and correctness of the result, not how it was produced — so the usual expectations still apply: the code must build, be covered by tests, follow the surrounding style, and come with a clear description. Please review anything an AI helps you write as carefully as you would your own work, since you remain responsible for whatever you submit.
+
+## Planning Larger Work
+
+If you're working toward something bigger than a single, self-contained change, we recommend writing a plan before you dive into the code. Plans live in the `.plans` directory of the repository.
+
+Start each plan with a checklist of the tasks it involves, then follow it with the detailed implementation notes for each of them. Keeping the task list up front makes the plan's progress easy to verify at a glance — whether it's complete is simply a matter of checking which tasks are marked done.
+
+Leave your plan in the repository until the work it describes is entirely finished. You don't have to land everything in one Pull Request: a plan may be split across several PRs, as long as the test suite stays green at every step. Once a plan is complete, the maintainers will clear it out during periodic cleanups, so there's no need to remove it yourself.
+
 ## Reporting Bugs
 
 When reporting a bug, please include as much information as possible:
@@ -24,6 +36,41 @@ When reporting a bug, please include as much information as possible:
 
 A minimal reproducible example is always appreciated.
 
+## Working locally
+
+Do your work on a dedicated branch — one branch per feature or fix — and prefer a
+separate **git worktree** per branch so your changes stay isolated from `main` and
+from any other work in progress. Worktrees let you keep several branches checked
+out at once without stashing or switching back and forth in a single checkout.
+
+Name the branch with a short, descriptive slug behind a type prefix that mirrors
+the commit-message prefixes used in this project:
+
+- `feat/` — a new feature
+- `fix/` — a bug fix
+- `docs/` — documentation only
+- `refactor/` — internal restructuring with no behavior change
+- `chore/` — tooling, CI, or housekeeping
+- `test/` — tests only
+
+When the work tracks a GitHub issue, include the issue number, e.g.
+`fix/369-tier2-range-analysis`.
+
+Worktrees can be managed by hand (`git worktree add`), but a small helper makes it
+painless. We recommend [`ggw`](https://github.com/illegalstudio/ggw), which
+creates, navigates, and pushes worktree-backed branches for you:
+
+```bash
+ggw create feat/my-feature      # create the branch and its worktree
+ggw cd feat/my-feature          # switch into the worktree
+# ... implement your change ...
+git commit -m "feat: add my feature"
+ggw push                        # push the branch and set its upstream
+```
+
+`ggw push` is equivalent to `git push -u <remote> feat/my-feature` — use whichever
+you prefer. Once the branch is pushed, open your Pull Request as described below.
+
 ## Pull Requests
 
 Before opening a Pull Request, please ensure that:
@@ -33,14 +80,140 @@ Before opening a Pull Request, please ensure that:
 * New functionality includes tests whenever possible.
 * Documentation is updated when appropriate.
 * Commits are reasonably organized and have meaningful commit messages.
+* When the Pull Request addresses an existing issue, reference it in the description.
 
-Please keep Pull Requests focused. Smaller PRs are much easier to review than very large ones.
+Please keep Pull Requests focused and self-contained. A Pull Request that solves a single, well-defined problem is far easier to review than a large one that bundles several unrelated changes together.
+
+### Draft until it's ready
+
+Open your Pull Request as a **draft** while you are still iterating, and keep it
+in draft until you are confident the implementation is complete and correct.
+
+Once you switch it to **ready for review**, please leave the Pull Request
+untouched — do not push further changes, and do not rebase or merge `main` into it
+to keep it aligned. From that point on the maintainers take over the Pull Request
+and will handle reviewing, updating, and integrating it.
 
 ## Coding Style
 
 Try to follow the style already used throughout the codebase.
 
 Consistency is generally more important than personal preference.
+
+### Assembly comment alignment
+
+The assembly elephc emits is meant to be read and understood by someone learning
+how compilers work, so **every `emitter.instruction(...)` call must carry an inline
+`//` comment** explaining what the instruction does — and those comments are aligned
+to a fixed column. A few rules keep them consistent:
+
+1. **Every instruction line gets a comment.** No exceptions: if you add an
+   `emitter.instruction(...)`, it gets a `// comment`.
+2. **The `//` starts at column 81.** Pad the line with spaces so the `//` sits at the
+   81st character (1-indexed). If the code itself already reaches 80 characters or
+   more, put exactly one space before the `//`.
+3. **Group related instructions under a block comment.** Put a standalone
+   `// -- description --` line before a block of related instructions (e.g.
+   `// -- set up stack frame --`).
+4. **Explain intent, not the mnemonic.** Write "store argc from OS", not "store x0 to
+   memory" — the reader can already see the instruction; the comment should say *why*
+   it's there.
+
+For example:
+
+```rust
+    // -- set up stack frame --
+    emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // set new frame pointer
+```
+
+To verify alignment, run `./scripts/check_asm_comments.py` against any codegen file you
+touch before opening a Pull Request. It flags every `emitter.instruction(...)` whose
+`//` comment is misaligned and exits non-zero if it finds any, so it also works in a
+pre-commit hook or CI:
+
+```bash
+./scripts/check_asm_comments.py src/codegen/lower_inst/your_file.rs
+```
+
+It accepts multiple files at once, e.g. `./scripts/check_asm_comments.py src/codegen/lower_inst/*.rs`.
+
+## Adding a new operator
+
+elephc parses expressions with a Pratt parser, so a new binary operator flows
+through the whole pipeline — lexer, parser, type checker, optimizer, EIR
+lowering, and target-aware codegen. Implement it end-to-end:
+
+1. Add the token to `src/lexer/token.rs`.
+2. Add scanning logic to `src/lexer/scan.rs`.
+3. Add the `BinOp` variant to `src/parser/ast.rs`.
+4. Add one line to `infix_bp()` in `src/parser/expr/pratt.rs` (the Pratt parser
+   binding-power table) so precedence and associativity match PHP.
+5. Add type checking/inference in the relevant `src/types/checker/` file, usually
+   under `inference/ops.rs` or expression inference.
+6. Add optimizer/effect handling when the operator can be folded, propagated,
+   pruned, or has side effects (`src/optimize/`). Keep folds PHP-equivalent —
+   cross-check edge cases with `php -r`.
+7. Add EIR lowering in the relevant `src/ir_lower/expr/` path and target-aware EIR
+   codegen under `src/codegen/lower_inst/` when the operator needs a new IR
+   instruction or lowering path.
+8. Add tests in all four test files (lexer, parser, codegen, error), including a
+   Pratt binding-power test that asserts precedence relative to adjacent operators.
+
+## Adding a new statement type
+
+A new statement kind must be threaded through parsing, the frontend passes, the
+type checker, the optimizer, and EIR lowering. Missing a pass usually produces
+silent miscompilation rather than a compile error, so also audit every
+AST-walking pass (see "Adding or changing an AST node" in `CLAUDE.md`):
+
+1. Add the `StmtKind` variant to `src/parser/ast.rs`.
+2. Add parser logic in `src/parser/stmt.rs`.
+3. Add resolver/name-resolver handling if the statement can contain names,
+   declarations, includes, function variants, or expressions.
+4. Add type checking in the relevant `src/types/checker/` module.
+5. Add optimizer/effects/warnings handling if the statement can be folded, pruned,
+   read variables, write variables, or alter control flow (`src/optimize/`).
+6. Add EIR lowering in `src/ir_lower/stmt/` and target-aware EIR codegen under
+   `src/codegen/` when the statement needs new instruction or terminator
+   support.
+7. If it introduces variables or hidden temporaries, update EIR local/temp
+   declaration in `src/ir_lower/context.rs` and any frame-layout allocation needed
+   before frame sizing.
+8. Add tests: at least one codegen test showing correct output, one for edge cases
+   (empty body, nested), and one error test for malformed syntax.
+
+## Adding a new EIR optimization pass
+
+IR-level (EIR) transformations run after EIR lowering/validation through a
+fixed-point driver, not in the AST optimizer (`src/optimize/`). Folds that need
+value identity, basic blocks, or dominance belong here.
+
+1. Implement the `IrPass` trait (`name()`, `run(&mut Function, &mut DataPool) ->
+   bool`) in a new `src/ir_passes/<pass>.rs`; `run` mutates the function in place
+   and returns whether it changed anything. The `DataPool` is the module's shared
+   literal pool for passes that intern new constants (e.g. peephole string-literal
+   concat folding); ignore it (`_data`) otherwise.
+2. Register the pass in `default_passes()` in `src/ir_passes/driver.rs`. Order
+   matters: the driver re-runs the whole set per function until none reports a
+   change, capped by `MAX_PASS_ITERATIONS`.
+3. Reuse `src/ir_passes/rewrite.rs` for value redirection (`replace_all_uses` for
+   RAUW) and the shared fold helpers (`resolve_chains`, `neutralize_to_nop`,
+   `defining_instruction`, `count_value_uses`) instead of re-walking
+   operands/terminators. Keep rewrites dominance-safe and PHP-equivalent;
+   cross-check edge cases (division by zero, signed-zero/`NaN` floats) with `php -r`.
+4. The driver re-validates each function with `validate_function` after every pass
+   in debug/test builds and panics (naming the pass) on malformed IR or
+   non-convergence; both guards compile out of `--release`. Rely on this during
+   development.
+5. Add unit tests under `src/ir_passes/tests/` (hand-built EIR via
+   `crate::ir::Builder`) and end-to-end tests under `tests/codegen/optimizer/`. In
+   e2e fixtures, use runtime-unknown values (e.g. `$argc`) so the targeted IR
+   construct survives AST-level folding and actually reaches EIR.
+6. Passes are gated by `--ir-opt=on|off` / `--no-ir-opt` (env `ELEPHC_IR_OPT`),
+   default on. Behavior must be identical with the flag on or off except for
+   performance; verify with `--emit-ir` and `--emit-ir --no-ir-opt`.
 
 ## Adding a built-in function
 
@@ -157,15 +330,15 @@ wrapper that dispatches to the actual emitter:
 
 ```rust
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::lower_strlen(ctx, inst)
+    crate::codegen::lower_inst::builtins::lower_strlen(ctx, inst)
 }
 ```
 
-Write the emitter itself under `src/codegen_ir/lower_inst/builtins/<area>/`, following
+Write the emitter itself under `src/codegen/lower_inst/builtins/<area>/`, following
 the target-aware codegen conventions in `CLAUDE.md` (support every target through
 `emitter.target`, one emitter per leaf file, an inline `//` comment on every
 `emitter.instruction(...)`). If the builtin needs a runtime routine, add it under
-`src/codegen/runtime/<category>/`. The registry dispatches `spec.lower` first, so no
+`src/codegen_support/runtime/<category>/`. The registry dispatches `spec.lower` first, so no
 match arm needs editing.
 
 ### 5. What derives automatically
@@ -198,8 +371,7 @@ when relevant:
   feature.
 - Document the PHP surface (signature, parameters, return type, a short example) on the
   relevant `docs/php/` page.
-- The signature/arity parity gates (`derived_signatures_match_legacy`,
-  `arity_messages_match_legacy` in `src/builtins/parity_tests.rs`) must stay green.
+- The signature/arity parity gates in `src/builtins/parity_tests.rs` must stay green.
 
 ### 8. Not every "builtin" is a function
 

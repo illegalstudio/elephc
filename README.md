@@ -42,6 +42,18 @@ elephc is built and maintained independently. You can support the project by eit
 - ⭐ **[Starring the repo](https://github.com/illegalstudio/elephc/stargazers)** — it helps others discover it and keeps the project going.
 - 💜 **[Sponsoring on GitHub](https://github.com/sponsors/nahime0)** — every contribution, big or small, makes a real difference.
 
+## Core Contributors
+
+<p>
+  <a href="https://github.com/nahime0"><img src="https://github.com/nahime0.png" width="40" alt="Vincenzo Petrucci"></a>
+  &nbsp;<a href="https://github.com/nahime0"><b>Vincenzo Petrucci</b></a>
+</p>
+
+<p>
+  <a href="https://github.com/Guikingone"><img src="https://github.com/Guikingone.png" width="40" alt="Guillaume Loulier"></a>
+  &nbsp;<a href="https://github.com/Guikingone"><b>Guillaume Loulier</b></a>
+</p>
+
 ## An async HTTP server in PHP
 
 An asynchronous HTTP/1.1 server — a non-blocking `poll()` event loop, one Fiber per connection, raw TCP sockets through `extern` FFI, plus an HTTP parser and a router — written entirely in PHP and compiled to a single native binary. No interpreter, no PHP-FPM, no Nginx.
@@ -101,7 +113,7 @@ elephc takes a narrower but cleaner route: it is a from-scratch compiler for a s
 
 That tradeoff is intentional:
 
-- **Less legacy compatibility** than a VM-backed PHP implementation.
+- **Less long-tail compatibility** than a VM-backed PHP implementation.
 - **More mechanical transparency**: readable assembly output, source maps, line-by-line commented codegen, and a documented memory model.
 - **No hidden runtime dependency**: the generated binary does not need PHP, the Zend Engine, a loader extension, or an embedded interpreter.
 - **Native-oriented extensions**: `extern`, `ptr`, `buffer<T>`, and `packed class` let PHP-shaped code cross into systems, FFI, game, and performance-sensitive workloads.
@@ -145,11 +157,8 @@ xattr -cr elephc
 
 ## Usage
 
-> **Important:** Starting with v0.23.10, elephc uses the new EIR backend by default.
-> The legacy AST backend is frozen: it will not receive new language or runtime
-> features, and it is scheduled for complete removal in v0.26.0. If you need to
-> compare behavior with the old backend during the transition, compile with
-> `--ast-backend`.
+> **Important:** elephc lowers every build through the EIR pipeline and the
+> target-aware assembly emitter.
 
 ```bash
 # Compile a PHP file to a native binary
@@ -512,21 +521,18 @@ src/
 │
 ├── ir/                  # EIR data model, builder, validator, and printer
 ├── ir_lower/            # Active AST → EIR lowering
-├── codegen_ir/          # Active EIR → target assembly backend
-├── codegen/             # Frozen legacy AST backend plus shared ABI/runtime/target helpers
-│   ├── mod.rs           # Pipeline entry, main/global codegen orchestration
-│   ├── driver_support.rs # Pipeline glue and orchestration helpers
-│   ├── prescan.rs       # Pre-pass collecting program-wide codegen metadata
-│   ├── program_usage.rs # Usage analysis feeding metadata emission
+├── codegen/             # Active EIR → target assembly backend
+├── codegen_support/     # Shared ABI/runtime/target helpers used by codegen
+│   ├── mod.rs           # Shared metadata registries and support re-exports
+│   ├── driver_support.rs # Runtime object, deferred callable, boxing, and hash-key helpers
+│   ├── prescan.rs       # Constant pre-scan feeding EIR lowering
+│   ├── program_usage.rs # Required-class usage analysis feeding metadata emission
 │   ├── expr.rs          # Expression codegen dispatcher
 │   ├── expr/            # Focused expression helpers (arrays, calls, objects, binops, ...)
 │   ├── stmt.rs          # Statement codegen dispatcher
 │   ├── stmt/            # Focused statement helpers (arrays, control_flow, io, storage, ...)
 │   ├── abi/             # Target-aware calling-convention, frame, and value helpers
-│   ├── functions/       # User function emission, wrappers, and epilogue cleanup
-│   ├── main_emission.rs # Top-level program emission
-│   ├── class_methods.rs # Class/static method emission orchestration
-│   ├── function_variants.rs # Include-loaded function dispatchers
+│   ├── functions/       # Closure/FCC wrapper emission and epilogue cleanup
 │   ├── interface_wrappers.rs # Interface dispatch return-shape adapters
 │   ├── callables.rs     # Top-level callable metadata and indirect-call helpers
 │   ├── ffi.rs           # Extern function/global/class codegen
@@ -601,3 +607,13 @@ MIT
 [![Nuno Maduro: PHP Is Getting a Compiler?](https://img.youtube.com/vi/x06307Ui3uY/maxresdefault.jpg)](https://www.youtube.com/watch?v=x06307Ui3uY)
 
 **[Nuno Maduro: PHP Is Getting a Compiler?](https://www.youtube.com/watch?v=x06307Ui3uY)**
+
+## Star History
+
+<a href="https://star-history.com/#illegalstudio/elephc&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=illegalstudio/elephc&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=illegalstudio/elephc&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=illegalstudio/elephc&type=Date" />
+ </picture>
+</a>

@@ -2,7 +2,7 @@
 title: "strcmp() — internals"
 description: "Compiler internals for strcmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 386
+  order: 391
 ---
 
 ## `strcmp()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strcmp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strcmp.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:139](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L139) (`lower_binary_string_runtime`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:157](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L157) (`lower_binary_string_runtime`)
 - **Function symbol**: `lower_binary_string_runtime()`
 
 

@@ -43,6 +43,10 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         package: "elephc-phar",
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_tz",
+        package: "elephc-tz",
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_image",
         package: "elephc-image",
     },
@@ -356,6 +360,9 @@ pub(crate) fn link_binary(
                 "linker failed:\n{}",
                 String::from_utf8_lossy(&ld_out.stderr)
             );
+        }
+        Platform::Windows => {
+            panic!("Windows target is not yet supported (see issue #379)");
         }
     }
 }

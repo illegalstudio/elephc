@@ -2,7 +2,7 @@
 title: "is_string() — internals"
 description: "Compiler internals for is_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 426
+  order: 431
 ---
 
 ## `is_string()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_string.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_string.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:737](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L737) (`lower_static_type_predicate`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:736](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L736) (`lower_static_type_predicate`)
 - **Function symbol**: `lower_static_type_predicate()`
 
 

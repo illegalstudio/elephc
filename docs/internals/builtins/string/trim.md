@@ -2,7 +2,7 @@
 title: "trim() — internals"
 description: "Compiler internals for trim(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 397
+  order: 402
 ---
 
 ## `trim()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/trim.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/trim.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:112](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L112) (`lower_trim_like`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:130](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L130) (`lower_trim_like`)
 - **Function symbol**: `lower_trim_like()`
 
 

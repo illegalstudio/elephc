@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/serialize.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/serialize.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/serialize.rs`:33](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/serialize.rs#L33) (`lower_serialize`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/serialize.rs`:33](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/serialize.rs#L33) (`lower_serialize`)
 - **Function symbol**: `lower_serialize()`
 
 

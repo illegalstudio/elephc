@@ -2,7 +2,7 @@
 title: "grapheme_strrev() — internals"
 description: "Compiler internals for grapheme_strrev(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 342
+  order: 347
 ---
 
 ## `grapheme_strrev()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/grapheme_strrev.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/grapheme_strrev.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:88](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L88) (`lower_grapheme_strrev`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:106](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L106) (`lower_grapheme_strrev`)
 - **Function symbol**: `lower_grapheme_strrev()`
 
 

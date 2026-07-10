@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_supports_lock.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_supports_lock.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2115](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2115) (`lower_stream_supports_lock`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2115](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2115) (`lower_stream_supports_lock`)
 - **Function symbol**: `lower_stream_supports_lock()`
 
 

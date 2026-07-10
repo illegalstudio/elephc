@@ -9,10 +9,10 @@
 //! - Pure-data builtin with zero parameters: return type (`Str`) is fully determined
 //!   by the declaration. elephc returns the compiler package version string.
 //! - `lower` delegates to the module-level `lower_phpversion` in
-//!   `src/codegen_ir/lower_inst/builtins.rs`.
+//!   `src/codegen/lower_inst/builtins.rs`.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -26,5 +26,5 @@ builtin! {
 
 /// Lowers a `phpversion` call by delegating to the shared module-level emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::lower_phpversion(ctx, inst)
+    crate::codegen::lower_inst::builtins::lower_phpversion(ctx, inst)
 }

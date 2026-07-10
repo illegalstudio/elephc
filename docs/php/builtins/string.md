@@ -32,8 +32,8 @@ sidebar:
 | [`hash_update()`](./string/hash_update.md) | `(resource $context, string $data): bool` | `bool` |
 | [`hex2bin()`](./string/hex2bin.md) | `(string $string): string` | `string` |
 | [`html_entity_decode()`](./string/html_entity_decode.md) | `(string $string): string` | `string` |
-| [`htmlentities()`](./string/htmlentities.md) | `(string $string): string` | `string` |
-| [`htmlspecialchars()`](./string/htmlspecialchars.md) | `(string $string): string` | `string` |
+| [`htmlentities()`](./string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` |
+| [`htmlspecialchars()`](./string/htmlspecialchars.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` |
 | [`implode()`](./string/implode.md) | `(string $separator, array $array = null): string` | `string` |
 | [`inet_ntop()`](./string/inet_ntop.md) | `(string $ip): mixed` | `mixed` |
 | [`inet_pton()`](./string/inet_pton.md) | `(string $ip): mixed` | `mixed` |

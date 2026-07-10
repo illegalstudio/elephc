@@ -13,8 +13,8 @@
 //!   this builtin's name.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -30,7 +30,7 @@ builtin! {
 
 /// Lowers an `interface_exists` call by dispatching to the shared class-like existence emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::lower_class_like_exists(
+    crate::codegen::lower_inst::builtins::lower_class_like_exists(
         ctx,
         inst,
         "interface_exists",

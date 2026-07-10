@@ -445,3 +445,38 @@ echo paint("x");
     );
     assert_eq!(out, "ok7<x>");
 }
+
+/// EC-12 (#495): a `new <ImportedAlias>` nested inside a NAMED ARGUMENT resolves the alias —
+/// the resolver's expression walk previously had no NamedArg arm, so the value expression
+/// escaped rewriting entirely ("Undefined class: Url" on the ward-component-catalog
+/// `new self(label: ..., url: new Url('/'))` previews pattern). Byte-parity vs PHP 8.5.
+#[test]
+fn test_named_argument_value_resolves_imported_alias() {
+    let out = compile_and_run(
+        r#"<?php
+
+namespace App\Url;
+
+final class Url {
+    public function __construct(public string $p) {}
+}
+
+namespace App\C;
+
+use App\Url\Url;
+
+final class K {
+    public function __construct(public string $label, public Url $t) {}
+
+    public static function mk(): K {
+        return new self(label: 'x', t: new Url('/'));
+    }
+}
+
+namespace Main;
+
+echo \App\C\K::mk()->t->p;
+"#,
+    );
+    assert_eq!(out, "/");
+}

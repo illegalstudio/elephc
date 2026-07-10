@@ -18,8 +18,8 @@ sidebar:
 | [`isset()`](./misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` |
 | [`php_uname()`](./misc/php_uname.md) | `(string $mode = 'a'): string` | `string` |
 | [`phpversion()`](./misc/phpversion.md) | `(): string` | `string` |
-| [`print_r()`](./misc/print_r.md) | `(mixed $value): void` | `void` |
+| [`print_r()`](./misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` |
 | [`serialize()`](./misc/serialize.md) | `(mixed $value): string` | `string` |
 | [`unserialize()`](./misc/unserialize.md) | `(string $data, mixed $options = []): mixed` | `mixed` |
 | [`unset()`](./misc/unset.md) | `(mixed $var, ...$vars): void` | `void` |
-| [`var_dump()`](./misc/var_dump.md) | `(mixed $value): void` | `void` |
+| [`var_dump()`](./misc/var_dump.md) | `(mixed $value, ...$values): void` | `void` |

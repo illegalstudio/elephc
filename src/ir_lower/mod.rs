@@ -1,14 +1,14 @@
 //! Purpose:
-//! Lowers a checked and optimized PHP AST into EIR for diagnostics and the
-//! future EIR backend track.
+//! Lowers a checked and optimized PHP AST into EIR for the active backend.
+//! Owns the AST-to-IR semantic boundary before validation and EIR codegen.
 //!
 //! Called from:
-//! - `crate::pipeline::compile()` when `--emit-ir` is requested.
+//! - `crate::pipeline::compile()` before optimization, register allocation, and codegen.
 //!
 //! Key details:
 //! - Lowering preserves PHP source evaluation order by walking the AST in
 //!   source order and emitting high-level EIR operations.
-//! - The legacy AST-to-ASM backend remains the production path.
+//! - EIR is the only production backend; unsupported lowering must fail explicitly.
 
 mod builtin_datetime;
 mod context;

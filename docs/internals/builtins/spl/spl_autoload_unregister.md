@@ -2,7 +2,7 @@
 title: "spl_autoload_unregister() — internals"
 description: "Compiler internals for spl_autoload_unregister(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 324
+  order: 329
 ---
 
 ## `spl_autoload_unregister()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/spl_autoload_unregister.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_autoload_unregister.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:135](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L135) (`lower_spl_autoload_bool`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/spl.rs`:135](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/spl.rs#L135) (`lower_spl_autoload_bool`)
 - **Function symbol**: `lower_spl_autoload_bool()`
 
 

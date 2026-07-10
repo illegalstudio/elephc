@@ -10,10 +10,9 @@
 //! - Fiber typing is modeled at compile time; runtime scheduling behavior remains outside this module.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Stmt, StmtKind};
 use crate::span::Span;
 
-use super::{FunctionSig, PhpType};
+use super::FunctionSig;
 
 /// Maximum number of start arguments a Fiber callback can accept.
 pub(crate) const FIBER_START_ARG_LIMIT: usize = 7;
@@ -23,45 +22,6 @@ pub(crate) const FIBER_START_ARG_LIMIT: usize = 7;
 /// it is `param_count + 1` to account for the variadic slot.
 pub(crate) fn visible_param_count(param_count: usize, variadic: bool) -> usize {
     param_count + usize::from(variadic)
-}
-
-/// Adapts a Fiber callback's `FunctionSig` in-place for the Fiber calling convention.
-/// Undeclared, non-reference fixed parameters are set to `PhpType::Mixed` so the
-/// caller can pass any type. An undeclared variadic tail is represented as
-/// `array<mixed>` because the Fiber wrapper builds it from boxed start values.
-/// If `no_terminal_return` is true and the signature has no declared return,
-/// the return type is set to `PhpType::Void`.
-pub(crate) fn adapt_entry_sig(
-    sig: &mut FunctionSig,
-    visible_param_count: usize,
-    no_terminal_return: bool,
-) {
-    for i in 0..visible_param_count.min(sig.params.len()) {
-        let declared = sig.declared_params.get(i).copied().unwrap_or(false);
-        let by_ref = sig.ref_params.get(i).copied().unwrap_or(false);
-        if !declared && !by_ref {
-            if sig
-                .variadic
-                .as_ref()
-                .is_some_and(|variadic| sig.params[i].0 == *variadic)
-            {
-                sig.params[i].1 = PhpType::Array(Box::new(PhpType::Mixed));
-            } else {
-                sig.params[i].1 = PhpType::Mixed;
-            }
-        }
-    }
-    if no_terminal_return && !sig.declared_return {
-        sig.return_type = PhpType::Void;
-    }
-}
-
-/// Returns `true` if the given statement list contains a `return` statement
-/// that is reachable from any path (including inside synthetic bodies, conditionals,
-/// loops, try-catch-finally, and switch). Used to determine whether a Fiber callback
-/// body has a terminal return.
-pub(crate) fn closure_body_has_return(body: &[Stmt]) -> bool {
-    body.iter().any(stmt_has_return)
 }
 
 /// Validates that a `FunctionSig` is a valid Fiber callback signature.
@@ -103,52 +63,4 @@ pub(crate) fn validate_callback_signature(
     }
 
     Ok(())
-}
-
-/// Returns `true` if the given statement contains a reachable `return` based on its variant.
-/// Recursively checks synthetic bodies, branches of `If`/`ElseIf`/`Else`, loop bodies,
-/// `Try`/`Catch`/`Finally`, and `Switch` cases. All other statement kinds return `false`.
-fn stmt_has_return(stmt: &Stmt) -> bool {
-    match &stmt.kind {
-        StmtKind::Return(_) => true,
-        StmtKind::Synthetic(stmts) => closure_body_has_return(stmts),
-        StmtKind::If {
-            then_body,
-            elseif_clauses,
-            else_body,
-            ..
-        } => {
-            closure_body_has_return(then_body)
-                || elseif_clauses
-                    .iter()
-                    .any(|(_, body)| closure_body_has_return(body))
-                || else_body
-                    .as_ref()
-                    .is_some_and(|body| closure_body_has_return(body))
-        }
-        StmtKind::While { body, .. }
-        | StmtKind::DoWhile { body, .. }
-        | StmtKind::For { body, .. }
-        | StmtKind::Foreach { body, .. } => closure_body_has_return(body),
-        StmtKind::Try {
-            try_body,
-            catches,
-            finally_body,
-        } => {
-            closure_body_has_return(try_body)
-                || catches
-                    .iter()
-                    .any(|catch_clause| closure_body_has_return(&catch_clause.body))
-                || finally_body
-                    .as_ref()
-                    .is_some_and(|body| closure_body_has_return(body))
-        }
-        StmtKind::Switch { cases, default, .. } => {
-            cases.iter().any(|(_, body)| closure_body_has_return(body))
-                || default
-                    .as_ref()
-                    .is_some_and(|body| closure_body_has_return(body))
-        }
-        _ => false,
-    }
 }

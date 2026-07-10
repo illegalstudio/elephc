@@ -12,8 +12,8 @@
 //! - `lower` is a thin wrapper over the shared `lower_wordwrap` emitter.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -33,5 +33,5 @@ builtin! {
 
 /// Lowers a `wordwrap` call by dispatching to the shared wordwrap emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_wordwrap(ctx, inst)
+    crate::codegen::lower_inst::builtins::strings::lower_wordwrap(ctx, inst)
 }

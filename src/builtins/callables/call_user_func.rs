@@ -14,8 +14,8 @@
 //!   with the canonical function name.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -48,5 +48,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 /// `ir_lower` could not resolve the callback; it rejects the instruction with a diagnostic
 /// to guide the user toward a statically resolvable form.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::arrays::lower_call_user_func_builtin_escape(ctx, inst, "call_user_func")
+    crate::codegen::lower_inst::builtins::arrays::lower_call_user_func_builtin_escape(ctx, inst, "call_user_func")
 }

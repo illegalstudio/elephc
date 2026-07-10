@@ -2,7 +2,7 @@
 title: "preg_split() — internals"
 description: "Compiler internals for preg_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 315
+  order: 320
 ---
 
 ## `preg_split()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_split.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_split.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/regex.rs`:374](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/regex.rs#L374) (`lower_preg_split`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/regex.rs`:405](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/regex.rs#L405) (`lower_preg_split`)
 - **Function symbol**: `lower_preg_split()`
 
 

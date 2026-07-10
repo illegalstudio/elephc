@@ -17,8 +17,8 @@
 //! - Arity is pre-validated by `check_arity`; the hook can assume exactly 2 args.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -57,7 +57,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers an `array_merge` call by delegating to the shared array-merge emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::arrays::lower_array_merge(ctx, inst)
+    crate::codegen::lower_inst::builtins::arrays::lower_array_merge(ctx, inst)
 }
 
 /// Infers the return type for `array_merge(first, second)`.

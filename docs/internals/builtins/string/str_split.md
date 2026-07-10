@@ -2,7 +2,7 @@
 title: "str_split() — internals"
 description: "Compiler internals for str_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 383
+  order: 388
 ---
 
 ## `str_split()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_split.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_split.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:176](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L176) (`lower_str_split`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:194](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L194) (`lower_str_split`)
 - **Function symbol**: `lower_str_split()`
 
 

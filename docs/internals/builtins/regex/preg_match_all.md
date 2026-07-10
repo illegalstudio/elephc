@@ -2,7 +2,7 @@
 title: "preg_match_all() — internals"
 description: "Compiler internals for preg_match_all(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 312
+  order: 317
 ---
 
 ## `preg_match_all()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_match_all.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_match_all.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/regex.rs`:52](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/regex.rs#L52) (`lower_preg_match_all`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/regex.rs`:66](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/regex.rs#L66) (`lower_preg_match_all`)
 - **Function symbol**: `lower_preg_match_all()`
 
 
@@ -22,6 +22,7 @@ sidebar:
 
 The following runtime helpers are referenced:
 - `__rt_preg_match_all`
+- `__rt_preg_replace`
 
 ## Signature summary
 

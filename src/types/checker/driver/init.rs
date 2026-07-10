@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::platform::Platform;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
@@ -24,9 +25,10 @@ impl Checker {
     /// Constructs a new `Checker` with pre-populated builtin constants and empty declaration tables.
     ///
     /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, pathinfo
-    /// constants, `FNM_*` flags, `STDIN`/`STDOUT`/`STDERR` stream resources, `LOCK_*` constants),
-    /// array constants, JSON integer constants, and preg flag constants. All other tables (function declarations,
-    /// classes, interfaces, enums, etc.) are initialized empty.
+    /// constants, `ENT_*` HTML-escaping flags, `FNM_*` flags, `STDIN`/`STDOUT`/`STDERR` stream
+    /// resources, `LOCK_*` constants), array constants, JSON integer constants, and preg flag
+    /// constants. All other tables (function declarations, classes, interfaces, enums, etc.)
+    /// are initialized empty.
     ///
     /// # Arguments
     /// * `target_platform` - The compilation target platform, stored for use in platform-specific
@@ -42,6 +44,9 @@ impl Checker {
         constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);
         constants.insert("PATHINFO_FILENAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_ALL".to_string(), PhpType::Int);
+        for (name, _value) in ENT_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
         constants.insert("FNM_NOESCAPE".to_string(), PhpType::Int);
         constants.insert("FNM_PATHNAME".to_string(), PhpType::Int);
         constants.insert("FNM_PERIOD".to_string(), PhpType::Int);
@@ -74,6 +79,7 @@ impl Checker {
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),
+            resolving_functions: HashSet::new(),
             constants,
             closure_return_types: HashMap::new(),
             callable_sigs: HashMap::new(),
@@ -109,6 +115,7 @@ impl Checker {
             finally_break_continue_bases: Vec::new(),
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
+            throw_access_sites: HashMap::new(),
         }
     }
 }

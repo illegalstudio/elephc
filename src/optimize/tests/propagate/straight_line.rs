@@ -176,3 +176,99 @@ fn test_propagate_constants_tracks_known_match_assignment() {
         Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
     );
 }
+
+/// A call to a user function whose body is pure must not clear the constant
+/// environment: it cannot write the caller's locals or global storage.
+#[test]
+fn test_pure_user_call_keeps_constants() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "pf".to_string(),
+                params: vec![("a".to_string(), None, None, false)],
+                variadic: None,
+                variadic_type: None,
+                return_type: None,
+                by_ref_return: false,
+                body: vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::binop(
+                        Expr::var("a"),
+                        BinOp::Add,
+                        Expr::int_lit(1),
+                    ))),
+                    Span::dummy(),
+                )],
+            },
+            Span::dummy(),
+        ),
+        Stmt::assign("x", Expr::int_lit(5)),
+        Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::from("pf"),
+                    args: vec![Expr::int_lit(1)],
+                },
+                Span::dummy(),
+            )),
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[3],
+        Stmt::echo(Expr::int_lit(6)),
+        "a pure user call must not clear the constant environment"
+    );
+}
+
+/// A user function with observable side effects still clears conservatively
+/// until targeted invalidation lands (and output alone stays conservative at
+/// the pre-invalidation stage this test locks in).
+#[test]
+fn test_global_writing_user_call_clears_constants_at_top_level() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "gw".to_string(),
+                params: Vec::new(),
+                variadic: None,
+                variadic_type: None,
+                return_type: None,
+                by_ref_return: false,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Global {
+                            vars: vec!["x".to_string()],
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::assign("x", Expr::int_lit(9)),
+                ],
+            },
+            Span::dummy(),
+        ),
+        Stmt::assign("x", Expr::int_lit(5)),
+        Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::from("gw"),
+                    args: Vec::new(),
+                },
+                Span::dummy(),
+            )),
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[3],
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1))),
+        "a global-writing callee can rewrite top-level locals"
+    );
+}

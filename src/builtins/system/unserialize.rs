@@ -14,8 +14,8 @@
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::builtins::system::json_support;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -53,5 +53,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers an `unserialize` call by dispatching to the shared serialize emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::serialize::lower_unserialize(ctx, inst)
+    crate::codegen::lower_inst::builtins::serialize::lower_unserialize(ctx, inst)
 }

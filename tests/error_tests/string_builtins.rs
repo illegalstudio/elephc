@@ -27,6 +27,30 @@ expect_builtin_arity_error!(
     "base64_decode() takes exactly 1 argument"
 );
 
+expect_builtin_arity_error!(
+    test_error_mb_ereg_match_wrong_args,
+    "<?php mb_ereg_match('ab');",
+    "mb_ereg_match() takes 2 or 3 arguments"
+);
+
+/// Verifies that `mb_ereg_match()` rejects a non-string pattern.
+#[test]
+fn test_error_mb_ereg_match_pattern_type() {
+    expect_error(
+        "<?php mb_ereg_match(123, 'abc');",
+        "mb_ereg_match() pattern argument must be string",
+    );
+}
+
+/// Verifies that `mb_ereg_match()` rejects non-string, non-null options.
+#[test]
+fn test_error_mb_ereg_match_options_type() {
+    expect_error(
+        "<?php mb_ereg_match('ab', 'abc', 1);",
+        "mb_ereg_match() options argument must be string or null",
+    );
+}
+
 /// Verifies that `grapheme_strrev()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_grapheme_strrev_wrong_args() {
@@ -176,11 +200,13 @@ fn test_error_sha1_wrong_args() {
 }
 
 /// Verifies that `htmlspecialchars()` with no arguments produces the correct arity error.
+/// htmlspecialchars() accepts optional `$flags` and `$encoding` arguments, so the message
+/// reports 1 to 3 args.
 #[test]
 fn test_error_htmlspecialchars_wrong_args() {
     expect_error(
         "<?php htmlspecialchars();",
-        "htmlspecialchars() takes exactly 1 argument",
+        "htmlspecialchars() takes 1 to 3 arguments",
     );
 }
 

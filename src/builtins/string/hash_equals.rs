@@ -10,8 +10,8 @@
 //!   bridge library is required (this is a pure timing-safe byte comparison).
 //! - Arity (exactly 2 args) is validated by the registry.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -26,5 +26,5 @@ builtin! {
 
 /// Lowers a `hash_equals` call by dispatching to the shared `lower_hash_equals` emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_hash_equals(ctx, inst)
+    crate::codegen::lower_inst::builtins::strings::lower_hash_equals(ctx, inst)
 }

@@ -9,6 +9,7 @@ sidebar:
 
 | Function | Signature | Returns |
 |---|---|---|
+| [`mb_ereg_match()`](./regex/mb_ereg_match.md) | `(string $pattern, string $subject, string $options = null): bool` | `bool` |
 | [`preg_match()`](./regex/preg_match.md) | `(string $pattern, string $subject, array $matches = []): int` | `int` |
 | [`preg_match_all()`](./regex/preg_match_all.md) | `(string $pattern, string $subject): int` | `int` |
 | [`preg_replace()`](./regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): string` | `string` |

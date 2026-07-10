@@ -3,6 +3,8 @@
 interface Named {
     public string $name { get; }
 
+    public static function kind();
+
     public function name();
 }
 
@@ -23,6 +25,11 @@ abstract class BasePrinter implements Labeled {
 class ProductPrinter extends BasePrinter {
     public string $name = "widget";
 
+    #[\Override]
+    public static function kind() {
+        return "product";
+    }
+
     public function name() {
         return $this->name;
     }
@@ -30,6 +37,7 @@ class ProductPrinter extends BasePrinter {
 
 $printer = new ProductPrinter();
 $printer->printLine();
+echo ProductPrinter::kind() . "\n";
 
 class OneSlotMap implements ArrayAccess {
     private string $value = "";

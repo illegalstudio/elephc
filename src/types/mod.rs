@@ -22,6 +22,8 @@ pub(crate) mod call_args;
 pub(crate) mod fibers;
 /// `ext/date` integer constants (e.g. `SUNFUNCS_RET_*`).
 pub(crate) mod date_constants;
+/// `ENT_*` HTML-escaping flag constants shared by checker and codegen.
+pub(crate) mod ent_constants;
 /// C FFI type mapping utilities.
 mod ffi;
 /// JSON literal constant type inference.
@@ -47,7 +49,7 @@ pub(crate) use array_keys::{
 };
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
-pub use result::{check_with_target, CheckResult};
+pub use result::{check_with_target, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,

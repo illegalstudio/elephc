@@ -2,7 +2,7 @@
 title: "hash_final() — internals"
 description: "Compiler internals for hash_final(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 351
+  order: 356
 ---
 
 ## `hash_final()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/hash_final.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_final.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:302](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L302) (`lower_hash_final`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:320](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L320) (`lower_hash_final`)
 - **Function symbol**: `lower_hash_final()`
 
 

@@ -90,6 +90,9 @@ pub(crate) fn lower_referenced_builtin_datetime_methods(
                 fiber_return_sigs,
             );
         }
+        for method in module.class_methods.iter_mut().skip(before) {
+            method.flags.is_synthetic = true;
+        }
         if module.class_methods.len() == before {
             break;
         }

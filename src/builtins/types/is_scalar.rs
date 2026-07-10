@@ -8,8 +8,8 @@
 //! - Pure-data builtin with no check hook; arity and arg inference are handled by the registry common path.
 //! - `lower` is a thin wrapper over the shared scalar-predicate emitter.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -24,5 +24,5 @@ builtin! {
 
 /// Lowers an `is_scalar` call by dispatching to the shared scalar-predicate emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::lower_is_scalar(ctx, inst)
+    crate::codegen::lower_inst::builtins::lower_is_scalar(ctx, inst)
 }

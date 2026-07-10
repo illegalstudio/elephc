@@ -9,8 +9,8 @@
 //! - No `check` hook is needed: `intdiv` is a pure-data builtin whose return type
 //!   (`Int`) is fully determined by its declaration.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -25,5 +25,5 @@ builtin! {
 
 /// Lowers an `intdiv` call by dispatching to the shared integer-division emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::math::lower_intdiv(ctx, inst)
+    crate::codegen::lower_inst::builtins::math::lower_intdiv(ctx, inst)
 }

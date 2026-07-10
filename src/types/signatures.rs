@@ -105,9 +105,16 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
 
         "strlen" | "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "strrev"
         | "grapheme_strrev" | "addslashes" | "stripslashes" | "nl2br" | "bin2hex"
-        | "hex2bin" | "htmlspecialchars" | "htmlentities" | "html_entity_decode"
+        | "hex2bin" | "html_entity_decode"
         | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode"
         | "base64_encode" | "base64_decode" => Some(fixed(&["string"])),
+        // Migrated to src/builtins/string/ — kept as the parity-gate golden. Defaults mirror the
+        // registry: flags = ENT_QUOTES|ENT_SUBSTITUTE|ENT_HTML401 (11), encoding = "UTF-8".
+        "htmlspecialchars" | "htmlentities" => Some(optional(
+            &["string", "flags", "encoding"],
+            1,
+            vec![int_lit(11), string_lit("UTF-8")],
+        )),
         "gzcompress" => Some(optional(&["data", "level"], 1, vec![int_lit(-1)])),
         "gzdeflate" => Some(optional(&["data", "level"], 1, vec![int_lit(-1)])),
         "gzinflate" => Some(optional(&["data", "max_length"], 1, vec![int_lit(0)])),
@@ -123,9 +130,15 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "intval" | "floatval" | "boolval" | "gettype" | "is_bool" | "is_null"
         | "is_float" | "is_int" | "is_iterable" | "is_string" | "is_numeric"
         | "is_array" | "is_object" | "is_scalar"
-        | "empty" | "var_dump" | "print_r" => {
+        | "empty" => {
             Some(fixed(&["value"]))
         }
+        "var_dump" => Some(variadic(&["value"], "values")),
+        "print_r" => Some(optional(
+            &["value", "return"],
+            1,
+            vec![bool_lit(false)],
+        )),
         "isset" => Some(variadic(&["var"], "vars")),
         "unset" => Some(variadic(&["var"], "vars")),
         "settype" => {
@@ -657,6 +670,8 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
         }
         "ptr_write_string" => Some(fixed(&["pointer", "string"])),
         "ptr_sizeof" => Some(fixed(&["type"])),
+        "zval_pack" => Some(fixed(&["value"])),
+        "zval_unpack" | "zval_type" | "zval_free" => Some(fixed(&["zval"])),
         "buffer_new" => Some(fixed(&["length"])),
         "buffer_len" | "buffer_free" => Some(fixed(&["buffer"])),
         _ => None,
@@ -759,9 +774,9 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             PhpType::Float,
         )),
         // NOTE: is_array/is_object/is_scalar are intentionally NOT first-class callable.
-        // The runtime callable wrapper for a builtin is emitted by the legacy backend, which
-        // has no codegen for these three predicates, so listing them here would emit an
-        // undefined `_fn_is_*` invoker reference in any program using dynamic string callbacks.
+        // No runtime callable wrapper is emitted for these three predicates, so listing
+        // them here would emit an undefined `_fn_is_*` invoker reference in any program
+        // using dynamic string callbacks.
         // Direct calls are fully supported; first-class/string-callback use is not (yet).
         "boolval" | "is_bool" | "is_null" | "is_float" | "is_int" | "is_iterable"
         | "is_string" | "is_numeric" | "is_nan" | "is_finite" | "is_infinite"
@@ -1010,6 +1025,26 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             name,
             &[PhpType::Pointer(None), PhpType::Str],
             PhpType::Int,
+        )),
+        "zval_pack" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed],
+            PhpType::Pointer(None),
+        )),
+        "zval_unpack" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None)],
+            PhpType::Mixed,
+        )),
+        "zval_type" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None)],
+            PhpType::Int,
+        )),
+        "zval_free" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None)],
+            PhpType::Void,
         )),
         _ => None,
     }

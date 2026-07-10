@@ -2,7 +2,7 @@
 title: "hash_update() — internals"
 description: "Compiler internals for hash_update(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 354
+  order: 359
 ---
 
 ## `hash_update()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/hash_update.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_update.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:277](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L277) (`lower_hash_update`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:295](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L295) (`lower_hash_update`)
 - **Function symbol**: `lower_hash_update()`
 
 

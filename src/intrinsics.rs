@@ -460,6 +460,7 @@ impl IntrinsicCall {
     }
 
     /// Returns whether this intrinsic is called on an instance or statically.
+    #[cfg(test)]
     pub fn form(self) -> IntrinsicCallForm {
         self.form
     }

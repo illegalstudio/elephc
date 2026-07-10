@@ -249,6 +249,23 @@ pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
     run_tool("Assembler", &mut as_cmd);
 }
 
+/// Makes `--debug-info` line tables reachable by debuggers after the user
+/// object file is deleted.
+///
+/// On macOS the linked binary only carries a debug map pointing at the object
+/// files, so `dsymutil` must bake the DWARF into a standalone `.dSYM` bundle
+/// while the object still exists. Returns `false` when that fails (the caller
+/// then keeps the object file so lldb can follow the debug map instead).
+/// On Linux the linker copies `.debug_line` into the binary itself, so there
+/// is nothing to do.
+pub(crate) fn bake_debug_info(target: Target, bin_path: &Path) -> bool {
+    if target.platform != Platform::MacOS {
+        return true;
+    }
+    let status = Command::new("dsymutil").arg(bin_path).status();
+    matches!(status, Ok(status) if status.success())
+}
+
 /// Links object files and runtime objects into a final binary.
 /// - `target`: Compiler target (controls platform, linker command, and flags).
 /// - `emit`: Output kind. `Executable` produces a standalone binary; `Cdylib`
@@ -358,6 +375,7 @@ pub(crate) fn link(
             }
             cmd
         }
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
     };
     // Search paths for the located bridge staticlibs.
     for (_, dir) in &needed_bridges {
@@ -434,6 +452,7 @@ pub(crate) fn link(
                 }
                 dedup_scratch = Some(scratch);
             }
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
     for lib in extra_link_libs {
@@ -466,6 +485,7 @@ pub(crate) fn link(
                         ld_cmd.arg(format!("-l{}", bridge.lib_name));
                         ld_cmd.arg("-Wl,--no-whole-archive");
                     }
+                    Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
                 }
             }
             None => {

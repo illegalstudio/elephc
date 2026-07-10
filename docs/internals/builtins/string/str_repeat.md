@@ -2,7 +2,7 @@
 title: "str_repeat() — internals"
 description: "Compiler internals for str_repeat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 381
+  order: 386
 ---
 
 ## `str_repeat()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_repeat.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_repeat.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:746](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L746) (`lower_str_repeat`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:764](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L764) (`lower_str_repeat`)
 - **Function symbol**: `lower_str_repeat()`
 
 

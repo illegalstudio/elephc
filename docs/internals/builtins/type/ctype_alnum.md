@@ -2,7 +2,7 @@
 title: "ctype_alnum() — internals"
 description: "Compiler internals for ctype_alnum(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 406
+  order: 411
 ---
 
 ## `ctype_alnum()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/ctype_alnum.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ctype_alnum.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/ctype.rs`:30](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/ctype.rs#L30) (`lower_ctype_alnum`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/ctype.rs`:30](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/ctype.rs#L30) (`lower_ctype_alnum`)
 - **Function symbol**: `lower_ctype_alnum()`
 
 

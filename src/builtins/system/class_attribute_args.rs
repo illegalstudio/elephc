@@ -15,8 +15,8 @@
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::system::attr_support::{class_attribute_args_unsupported, resolve_class_name};
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
@@ -89,5 +89,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers a `class_attribute_args` call by delegating to the shared attributes emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::attributes::lower_class_attribute_args(ctx, inst)
+    crate::codegen::lower_inst::builtins::attributes::lower_class_attribute_args(ctx, inst)
 }

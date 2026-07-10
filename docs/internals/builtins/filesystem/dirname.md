@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/dirname.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/dirname.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4575](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4575) (`lower_dirname`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4575](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4575) (`lower_dirname`)
 - **Function symbol**: `lower_dirname()`
 
 

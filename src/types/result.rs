@@ -14,11 +14,43 @@ use std::collections::HashMap;
 use crate::codegen::platform::{Platform, Target};
 use crate::errors::{CompileError, CompileWarning};
 use crate::parser::ast::Program;
+use crate::span::Span;
 
 use super::{
     checker, ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
     PackedClassInfo, PhpType, TypeEnv,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Describes a statically-known access violation that PHP raises as a catchable
+/// `Error` at runtime instead of a compile-time rejection.
+pub struct ThrowAccessInfo {
+    /// Source span of the offending call/assignment, used as the lookup key.
+    pub span: Span,
+    /// The kind of violation, selecting the PHP error message template.
+    pub kind: ThrowAccessKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Categorizes statically-decided access violations lowered to runtime `Error` throws.
+pub enum ThrowAccessKind {
+    /// A private/protected method call from an inaccessible scope.
+    PrivateMethod {
+        /// Visibility label (`private` or `protected`).
+        visibility: String,
+        /// Class holding the method (e.g. `C`).
+        class_name: String,
+        /// Method name without the trailing parentheses (e.g. `secret`).
+        method: String,
+    },
+    /// A write to a readonly property outside its declaring constructor.
+    ReadonlyProperty {
+        /// Class holding the property (e.g. `Box`).
+        class_name: String,
+        /// Property name without the leading `$` (e.g. `x`).
+        property: String,
+    },
+}
 
 #[derive(Debug)]
 /// Aggregate result of type checking, carrying type environments, declarations,
@@ -28,7 +60,9 @@ pub struct CheckResult {
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    #[allow(dead_code)]
     pub callable_return_sigs: HashMap<String, FunctionSig>,
+    #[allow(dead_code)]
     pub callable_array_return_sigs: HashMap<String, FunctionSig>,
     pub interfaces: HashMap<String, InterfaceInfo>,
     pub classes: HashMap<String, ClassInfo>,
@@ -39,6 +73,9 @@ pub struct CheckResult {
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
     pub warnings: Vec<CompileWarning>,
+    /// Statically-decided access violations lowered to runtime `Error` throws,
+    /// keyed by the source span of the offending call/assignment.
+    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).

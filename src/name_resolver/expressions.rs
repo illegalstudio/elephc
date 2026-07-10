@@ -368,6 +368,13 @@ pub(super) fn resolve_expr(
             element_type: resolve_type_expr(element_type, current_namespace, imports, symbols),
             len: Box::new(resolve_expr(len, current_namespace, imports, symbols)),
         },
+        // A named argument wraps its value expression — without this arm the value escaped
+        // resolution entirely, so e.g. `new self(url: new Url('/'))` left the imported `Url`
+        // alias unresolved ("Undefined class: Url").
+        ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
+            name: name.clone(),
+            value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
+        },
         _ => expr.kind.clone(),
     };
     Expr::new(kind, expr.span)

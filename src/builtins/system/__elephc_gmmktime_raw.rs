@@ -10,8 +10,8 @@
 //!   It is used by the synthetic DateTime body as a raw gmmktime alias.
 //! - The lower hook delegates to the same emitter as `gmmktime`.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -26,5 +26,5 @@ builtin! {
 
 /// Lowers an `__elephc_gmmktime_raw` call by delegating to the shared gmmktime emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::system::lower_gmmktime(ctx, inst)
+    crate::codegen::lower_inst::builtins::system::lower_gmmktime(ctx, inst)
 }

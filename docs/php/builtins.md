@@ -60,7 +60,7 @@ sidebar:
 | [`call_user_func()`](./builtins/array/call_user_func.md) | `(callable $callback, ...$args): mixed` | `mixed` |
 | [`call_user_func_array()`](./builtins/array/call_user_func_array.md) | `(callable $callback, array $args): mixed` | `mixed` |
 | [`count()`](./builtins/array/count.md) | `(array $value, int $mode = 0): int` | `int` |
-| [`in_array()`](./builtins/array/in_array.md) | `(mixed $needle, array $haystack, bool $strict = false): mixed` | `mixed` |
+| [`in_array()`](./builtins/array/in_array.md) | `(mixed $needle, array $haystack, bool $strict = false): bool` | `bool` |
 | [`krsort()`](./builtins/array/krsort.md) | `(array $array): bool` | `bool` |
 | [`ksort()`](./builtins/array/ksort.md) | `(array $array): bool` | `bool` |
 | [`natcasesort()`](./builtins/array/natcasesort.md) | `(array $array): bool` | `bool` |
@@ -288,11 +288,11 @@ sidebar:
 | [`isset()`](./builtins/misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` |
 | [`php_uname()`](./builtins/misc/php_uname.md) | `(string $mode = 'a'): string` | `string` |
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(): string` | `string` |
-| [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value): void` | `void` |
+| [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` |
 | [`serialize()`](./builtins/misc/serialize.md) | `(mixed $value): string` | `string` |
 | [`unserialize()`](./builtins/misc/unserialize.md) | `(string $data, mixed $options = []): mixed` | `mixed` |
 | [`unset()`](./builtins/misc/unset.md) | `(mixed $var, ...$vars): void` | `void` |
-| [`var_dump()`](./builtins/misc/var_dump.md) | `(mixed $value): void` | `void` |
+| [`var_dump()`](./builtins/misc/var_dump.md) | `(mixed $value, ...$values): void` | `void` |
 | [`ptr()`](./builtins/pointer/ptr.md) | `(mixed $value): mixed` | `mixed` |
 | [`ptr_get()`](./builtins/pointer/ptr_get.md) | `(pointer $pointer): int` | `int` |
 | [`ptr_is_null()`](./builtins/pointer/ptr_is_null.md) | `(pointer $pointer): bool` | `bool` |
@@ -308,6 +308,10 @@ sidebar:
 | [`ptr_write32()`](./builtins/pointer/ptr_write32.md) | `(pointer $pointer, int $value): void` | `void` |
 | [`ptr_write8()`](./builtins/pointer/ptr_write8.md) | `(pointer $pointer, int $value): void` | `void` |
 | [`ptr_write_string()`](./builtins/pointer/ptr_write_string.md) | `(pointer $pointer, string $string): int` | `int` |
+| [`zval_free()`](./builtins/pointer/zval_free.md) | `(pointer $zval): void` | `void` |
+| [`zval_pack()`](./builtins/pointer/zval_pack.md) | `(mixed $value): pointer` | `pointer` |
+| [`zval_type()`](./builtins/pointer/zval_type.md) | `(pointer $zval): int` | `int` |
+| [`zval_unpack()`](./builtins/pointer/zval_unpack.md) | `(pointer $zval): mixed` | `mixed` |
 | [`die()`](./builtins/process/die.md) | `(int $status): void` | `void` |
 | [`exec()`](./builtins/process/exec.md) | `(string $command): string` | `string` |
 | [`exit()`](./builtins/process/exit.md) | `(int $status): void` | `void` |
@@ -319,6 +323,7 @@ sidebar:
 | [`sleep()`](./builtins/process/sleep.md) | `(int $seconds): int` | `int` |
 | [`system()`](./builtins/process/system.md) | `(string $command): string` | `string` |
 | [`usleep()`](./builtins/process/usleep.md) | `(int $microseconds): void` | `void` |
+| [`mb_ereg_match()`](./builtins/regex/mb_ereg_match.md) | `(string $pattern, string $subject, string $options = null): bool` | `bool` |
 | [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = []): int` | `int` |
 | [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject): int` | `int` |
 | [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): string` | `string` |
@@ -365,8 +370,8 @@ sidebar:
 | [`hash_update()`](./builtins/string/hash_update.md) | `(resource $context, string $data): bool` | `bool` |
 | [`hex2bin()`](./builtins/string/hex2bin.md) | `(string $string): string` | `string` |
 | [`html_entity_decode()`](./builtins/string/html_entity_decode.md) | `(string $string): string` | `string` |
-| [`htmlentities()`](./builtins/string/htmlentities.md) | `(string $string): string` | `string` |
-| [`htmlspecialchars()`](./builtins/string/htmlspecialchars.md) | `(string $string): string` | `string` |
+| [`htmlentities()`](./builtins/string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` |
+| [`htmlspecialchars()`](./builtins/string/htmlspecialchars.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` |
 | [`implode()`](./builtins/string/implode.md) | `(string $separator, array $array = null): string` | `string` |
 | [`inet_ntop()`](./builtins/string/inet_ntop.md) | `(string $ip): mixed` | `mixed` |
 | [`inet_pton()`](./builtins/string/inet_pton.md) | `(string $ip): mixed` | `mixed` |

@@ -14,11 +14,11 @@
 //!   "count() takes exactly 1 argument" diagnostic. The 2-param golden is preserved for
 //!   FCC and parity.
 //! - `lower` is a thin wrapper over the module-level `lower_count` emitter in
-//!   `crate::codegen_ir::lower_inst::builtins`.
+//!   `crate::codegen::lower_inst::builtins`.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::checker::builtins::arrays::union_member_is_countable_array;
@@ -68,5 +68,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers a `count` call by dispatching to the shared module-level emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::lower_count(ctx, inst)
+    crate::codegen::lower_inst::builtins::lower_count(ctx, inst)
 }

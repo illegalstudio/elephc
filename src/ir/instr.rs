@@ -45,6 +45,30 @@ pub struct Instruction {
     pub result_ownership: Ownership,
     pub effects: Effects,
     pub span: Option<Span>,
+    /// Optimization-pass provenance: set when a pass rewrote this instruction
+    /// (const-fold) or moved it (LICM), so source maps can explain assembly
+    /// that no longer matches the source shape. `None` for instructions
+    /// lowered directly from the AST. A one-byte enum rather than a string:
+    /// `Instruction` sits in the recursive lowering paths' stack frames, and
+    /// growing it measurably shrinks the headroom before test threads overflow.
+    pub origin: Option<PassOrigin>,
+}
+
+/// Optimization pass recorded as an instruction's provenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassOrigin {
+    ConstFold,
+    Licm,
+}
+
+impl PassOrigin {
+    /// Returns the lower-case spelling used by source maps and the EIR printer.
+    pub fn name(self) -> &'static str {
+        match self {
+            PassOrigin::ConstFold => "const_fold",
+            PassOrigin::Licm => "licm",
+        }
+    }
 }
 
 impl Instruction {
@@ -70,6 +94,7 @@ impl Instruction {
             result_ownership,
             effects,
             span,
+            origin: None,
         }
     }
 
@@ -181,6 +206,9 @@ pub enum Op {
     IAdd,
     ISub,
     IMul,
+    ICheckedAdd,
+    ICheckedSub,
+    ICheckedMul,
     IDiv,
     ISDiv,
     ISMod,
@@ -249,6 +277,7 @@ pub enum Op {
     HashGet,
     ArrayIsset,
     HashIsset,
+    ArrayElemAddr,
     ArraySet,
     HashSet,
     HashUnset,
@@ -289,6 +318,11 @@ pub enum Op {
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return
     /// `$this->prop` by reference. Operand: object; immediate: property name data id.
     LoadPropRefCell,
+    /// Promotes an indexed-array element to a reference cell and returns the cell
+    /// pointer. Used to alias a local to `$a[idx]` (`$b =& $a[0]`). The returned pointer
+    /// addresses the element's inline storage within the array; the local aliases it
+    /// non-owning (the array owns the storage). Operands: array, index. No immediate.
+    LoadArrayElemRefCell,
     /// Binds a local slot as a non-owning reference alias to a ref-cell pointer value.
     /// Operand: the cell pointer (SSA value); immediate: target local slot. The local
     /// does not own the cell (no release at scope exit); the owner is the object/source.
@@ -300,6 +334,18 @@ pub enum Op {
     MethodLookup,
     MethodCall,
     StaticMethodCall,
+    /// Coerces a PHP numeric string operand to its integer value for an int-backed enum
+    /// `from()`/`tryFrom()` call. Operand: the string. Immediate: data id of the PHP
+    /// `TypeError` message thrown when the string is not numeric. Result: `I64`.
+    EnumBackingStringToInt,
+    /// Coerces a `Mixed` (dynamically-typed) operand to the integer backing value for an
+    /// int-backed enum `from()`/`tryFrom()` call, dispatching on the runtime tag: int/bool
+    /// forward the payload, float truncates, null becomes 0, a numeric string coerces (a
+    /// non-numeric string throws `TypeError`), and array/object/resource/callable throw
+    /// `TypeError`. Operand: the Mixed value. Immediate: data id of the PHP `TypeError`
+    /// message prefix (`"E::from(): Argument #1 ($value) must be of type int, "`), to which
+    /// codegen appends the runtime type word. Result: `I64`.
+    EnumBackingMixedToInt,
     ClassConstant,
     ScopedConstantGet,
     ClassAttrNames,
@@ -381,6 +427,7 @@ impl Op {
             | MixedTagOf | IsNull | IsTruthy | IsEmpty | FunctionVariantDispatch | PtrCast
             | PtrOffset | Move | Borrow | Nop => E::PURE,
             IDiv | ISDiv | ISMod | PtrCheckNonnull => E::MAY_FATAL,
+            ICheckedAdd | ICheckedSub | ICheckedMul => E::ALLOC_HEAP | E::READS_HEAP,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
@@ -416,12 +463,15 @@ impl Op {
             ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet | LoadPropRefCell => {
                 E::READS_HEAP
             }
+            LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArraySetMixedKey => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            ArrayElemAddr | ArraySetMixedKey => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
+            }
             ArrayGetMixedKey => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::MAY_WARN,
             ArrayGetMixedKeySilent => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
             ArrayUnion | HashUnion | ArrayHashUnion | HashArrayUnion | ArrayToHash => {
@@ -438,6 +488,9 @@ impl Op {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
+            EnumBackingStringToInt | EnumBackingMixedToInt => {
+                E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
+            }
             Call | FunctionVariantCall | BuiltinCall | RuntimeCall | ClosureCall | ExprCall
             | CallableDescriptorInvoke | PipeCall | FiberRuntimeCall => {
                 E::all().difference(E::REFCOUNT_OP)
@@ -507,6 +560,9 @@ impl Op {
             IAdd => "iadd",
             ISub => "isub",
             IMul => "imul",
+            ICheckedAdd => "ichecked_add",
+            ICheckedSub => "ichecked_sub",
+            ICheckedMul => "ichecked_mul",
             IDiv => "idiv",
             ISDiv => "isdiv",
             ISMod => "ismod",
@@ -575,6 +631,7 @@ impl Op {
             HashGet => "hash_get",
             ArrayIsset => "array_isset",
             HashIsset => "hash_isset",
+            ArrayElemAddr => "array_elem_addr",
             ArraySet => "array_set",
             HashSet => "hash_set",
             HashUnset => "hash_unset",
@@ -612,6 +669,7 @@ impl Op {
             PropGet => "prop_get",
             PropSet => "prop_set",
             LoadPropRefCell => "load_prop_ref_cell",
+            LoadArrayElemRefCell => "load_array_elem_ref_cell",
             BindRefCellPtr => "bind_ref_cell_ptr",
             DynamicPropGet => "dynamic_prop_get",
             DynamicPropSet => "dynamic_prop_set",
@@ -620,6 +678,8 @@ impl Op {
             MethodLookup => "method_lookup",
             MethodCall => "method_call",
             StaticMethodCall => "static_method_call",
+            EnumBackingStringToInt => "enum_backing_string_to_int",
+            EnumBackingMixedToInt => "enum_backing_mixed_to_int",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",
             ClassAttrNames => "class_attr_names",
@@ -687,5 +747,18 @@ impl Op {
             EnsureOwned => "ensure_owned",
             Nop => "nop",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `Instruction` is built by value inside the recursive AST->EIR lowering
+    /// paths, so its size feeds every lowering stack frame. Growing it past
+    /// main's 112 bytes shrank the headroom enough that 2 MiB test threads
+    /// overflowed on linux-aarch64. Keep provenance and future metadata inside
+    /// the existing padding.
+    #[test]
+    fn instruction_stays_112_bytes() {
+        assert!(std::mem::size_of::<super::Instruction>() <= 112);
     }
 }

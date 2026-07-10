@@ -9,8 +9,8 @@
 //! - Pure-data builtin: return type (`Str`) is fully determined by the declaration.
 //! - `lower` is a thin wrapper over `system::lower_exec` in the EIR backend.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -24,5 +24,5 @@ builtin! {
 
 /// Lowers an `exec` call by dispatching to the shared system emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::system::lower_exec(ctx, inst)
+    crate::codegen::lower_inst::builtins::system::lower_exec(ctx, inst)
 }

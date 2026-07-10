@@ -2,7 +2,7 @@
 title: "lcfirst() — internals"
 description: "Compiler internals for lcfirst(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 363
+  order: 368
 ---
 
 ## `lcfirst()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/lcfirst.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/lcfirst.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:104](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L104) (`lower_lcfirst`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:122](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L122) (`lower_lcfirst`)
 - **Function symbol**: `lower_lcfirst()`
 
 

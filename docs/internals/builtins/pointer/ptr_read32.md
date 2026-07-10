@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_read32.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_read32.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/pointers.rs`:129](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/pointers.rs#L129) (`lower_ptr_read32`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:129](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L129) (`lower_ptr_read32`)
 - **Function symbol**: `lower_ptr_read32()`
 
 

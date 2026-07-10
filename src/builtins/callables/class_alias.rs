@@ -13,8 +13,8 @@
 //! - `lower` is a thin wrapper over `types::lower_class_alias` (not parameterized).
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -43,5 +43,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers a `class_alias` call by dispatching to the shared class-alias emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::types::lower_class_alias(ctx, inst)
+    crate::codegen::lower_inst::builtins::types::lower_class_alias(ctx, inst)
 }

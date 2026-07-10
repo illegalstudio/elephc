@@ -1,4 +1,3 @@
-ignore = [
-    "src/codegen/runtime",
-    "src/codegen/builtins",
-]
+# Keep `cargo fmt` as a no-op in this repository. Large automatic rustfmt diffs
+# are intentionally avoided; use focused manual formatting for touched code.
+disable_all_formatting = true

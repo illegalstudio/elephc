@@ -63,8 +63,14 @@ impl Checker {
                     Ok(PhpType::Mixed)
                 } else if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
-                } else {
+                } else if let Some(literal_ty) =
+                    checked_literal_int_arithmetic_type(op, left, right)
+                {
+                    Ok(literal_ty)
+                } else if int_arithmetic_identity_is_always_int(op, left, right) {
                     Ok(PhpType::Int)
+                } else {
+                    Ok(PhpType::Mixed)
                 }
             }
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
@@ -79,10 +85,18 @@ impl Checker {
                 // Division always returns float (PHP compat: 10/3 → 3.333...)
                 if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
-                } else if matches!(op, BinOp::Sub | BinOp::Mul)
-                    && (uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt))
-                {
-                    Ok(PhpType::Mixed)
+                } else if matches!(op, BinOp::Sub | BinOp::Mul) {
+                    if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
+                        Ok(PhpType::Mixed)
+                    } else if let Some(literal_ty) =
+                        checked_literal_int_arithmetic_type(op, left, right)
+                    {
+                        Ok(literal_ty)
+                    } else if int_arithmetic_identity_is_always_int(op, left, right) {
+                        Ok(PhpType::Int)
+                    } else {
+                        Ok(PhpType::Mixed)
+                    }
                 } else {
                     Ok(PhpType::Int)
                 }
@@ -1217,6 +1231,52 @@ fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
 /// cannot be narrowed to a single concrete numeric type at compile time.
 fn uses_mixed_numeric_dispatch(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Mixed | PhpType::Union(_))
+}
+
+/// Returns the exact result type for literal-only checked integer arithmetic.
+fn checked_literal_int_arithmetic_type(op: &BinOp, left: &Expr, right: &Expr) -> Option<PhpType> {
+    let lhs = int_literal_value(left)?;
+    let rhs = int_literal_value(right)?;
+    let fits = match op {
+        BinOp::Add => lhs.checked_add(rhs).is_some(),
+        BinOp::Sub => lhs.checked_sub(rhs).is_some(),
+        BinOp::Mul => lhs.checked_mul(rhs).is_some(),
+        _ => return None,
+    };
+    Some(if fits { PhpType::Int } else { PhpType::Float })
+}
+
+/// Returns `true` when an integer arithmetic expression cannot overflow.
+fn int_arithmetic_identity_is_always_int(op: &BinOp, left: &Expr, right: &Expr) -> bool {
+    match op {
+        BinOp::Add => is_zero_int_literal(left) || is_zero_int_literal(right),
+        BinOp::Sub => is_zero_int_literal(right),
+        BinOp::Mul => {
+            is_zero_int_literal(left)
+                || is_zero_int_literal(right)
+                || is_one_int_literal(left)
+                || is_one_int_literal(right)
+        }
+        _ => false,
+    }
+}
+
+/// Extracts an integer literal value from a literal expression.
+fn int_literal_value(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        _ => None,
+    }
+}
+
+/// Returns `true` for the literal integer zero.
+fn is_zero_int_literal(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::IntLiteral(0))
+}
+
+/// Returns `true` for the literal integer one.
+fn is_one_int_literal(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::IntLiteral(1))
 }
 
 /// Returns `true` if `expr` is an empty array literal (`[]`).
