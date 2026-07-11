@@ -301,9 +301,12 @@ fn open_persistent_dsn(dsn: &str) -> i64 {
 /// v14 adds the SQLite scalar user-function registration
 /// (`elephc_pdo_create_function` + `elephc_pdo_udf_stash_bytes`) backing
 /// `Pdo\Sqlite::createFunction()`, sharing the same descriptor/adapter `ptr` shape.
+/// v15 adds the SQLite aggregate registration (`elephc_pdo_create_aggregate`) backing
+/// `Pdo\Sqlite::createAggregate()`, crossing a step + finalize (descriptor, adapter)
+/// pair with the per-group accumulator held in SQLite's aggregate context.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    14
+    15
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -1167,6 +1170,42 @@ pub unsafe extern "C" fn elephc_pdo_create_function(
     }
 }
 
+/// Registers an aggregate SQL function `name` backed by a compiled-PHP step +
+/// finalize pair (`Pdo\Sqlite::createAggregate`). `num_args` is the declared arity
+/// (-1 = variadic); each callable crosses as a (descriptor, adapter) pointer pair,
+/// produced by the prelude via `__elephc_callable_ptr` / `__elephc_pdo_adapter_addr`
+/// (kinds 2 and 3). Returns `1` on success, `0` on error or a non-SQLite handle.
+///
+/// # Safety
+/// `name` must be a NUL-terminated string valid for the call; the four pointers must
+/// be the live callable descriptors and adapter entries of the compiled program.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_create_aggregate(
+    conn_id: i64,
+    name: *const c_char,
+    num_args: i64,
+    step_descriptor: *mut c_void,
+    step_adapter: *mut c_void,
+    final_descriptor: *mut c_void,
+    final_adapter: *mut c_void,
+) -> i64 {
+    let Some(name) = cstr_arg(name) else {
+        return 0;
+    };
+    let guard = conns().lock().unwrap();
+    match guard.get(&conn_id) {
+        Some(Conn::Sqlite(c)) => c.create_aggregate(
+            name,
+            num_args,
+            step_descriptor,
+            step_adapter as *const c_void,
+            final_descriptor,
+            final_adapter as *const c_void,
+        ),
+        _ => 0,
+    }
+}
+
 /// Returns the current row's column `i` (0-based) as an integer.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_int(stmt_id: i64, i: i64) -> i64 {
@@ -1391,12 +1430,12 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v14 adds the
-    /// SQLite scalar user-function registration (`elephc_pdo_create_function`) backing
-    /// `Pdo\Sqlite::createFunction()`.
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v15 adds the
+    /// SQLite aggregate registration (`elephc_pdo_create_aggregate`) backing
+    /// `Pdo\Sqlite::createAggregate()`.
     #[test]
-    fn version_is_v14() {
-        assert_eq!(elephc_pdo_version(), 14);
+    fn version_is_v15() {
+        assert_eq!(elephc_pdo_version(), 15);
     }
 
     /// A DSN for an unsupported driver is rejected with a driver error.

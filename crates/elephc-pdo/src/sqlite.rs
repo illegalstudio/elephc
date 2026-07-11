@@ -347,6 +347,59 @@ impl SqliteConn {
             0
         }
     }
+
+    /// Registers an aggregate SQL function `name` backed by a compiled-PHP step +
+    /// finalize pair (`Pdo\Sqlite::createAggregate`). `num_args` is the declared
+    /// arity (-1 = variadic); each callable is decomposed into a descriptor pointer
+    /// and the address of its codegen adapter (`__rt_pdo_call_agg_step` /
+    /// `__rt_pdo_call_agg_final`). All four pointers are boxed in an `AggReg`
+    /// threaded through SQLite's per-registration `pApp`; the per-group accumulator
+    /// lives in the aggregate context (`AggCtx`), not here. Returns `1` on success,
+    /// `0` on error.
+    ///
+    /// # Safety
+    /// `descriptor`/`adapter` pointers must be the live callable descriptors and
+    /// adapter entries of the calling compiled program; both callables are kept alive
+    /// by the PDO object rooting them, so the bridge stores them as bare pointers.
+    pub unsafe fn create_aggregate(
+        &self,
+        name: &str,
+        num_args: i64,
+        step_descriptor: *mut c_void,
+        step_adapter: *const c_void,
+        final_descriptor: *mut c_void,
+        final_adapter: *const c_void,
+    ) -> i64 {
+        let Ok(c_name) = CString::new(name) else {
+            return 0;
+        };
+        let reg = Box::into_raw(Box::new(AggReg {
+            step_descriptor,
+            step_adapter,
+            final_descriptor,
+            final_adapter,
+        })) as *mut c_void;
+        // An aggregate supplies xStep + xFinal and NULL for xFunc. `_v2` invokes
+        // x_destroy_agg (freeing the box) even on failure, so only the success path
+        // must not free here. PDO's createAggregate has no DETERMINISTIC/flags arg,
+        // so the text encoding is a bare SQLITE_UTF8.
+        let rc = ffi::sqlite3_create_function_v2(
+            self.db,
+            c_name.as_ptr(),
+            num_args as c_int,
+            ffi::SQLITE_UTF8,
+            reg,
+            None,
+            Some(x_agg_step),
+            Some(x_agg_final),
+            Some(x_destroy_agg),
+        );
+        if rc == ffi::SQLITE_OK {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// The C-ABI adapter that re-enters a compiled-PHP collation comparator. Emitted
@@ -620,6 +673,176 @@ unsafe extern "C" fn x_scalar(
     udf_result_stash_clear();
     adapter(reg.descriptor, vals.as_ptr(), vals.len() as i64, &mut out);
     dispatch_scalar_result(ctx, &out);
+}
+
+/// A registered SQLite aggregate: the step and finalize callables each as a
+/// (descriptor, adapter) pair. Boxed and handed to SQLite as the registration's
+/// `pApp`, recovered by both `x_agg_step` and `x_agg_final` via
+/// `sqlite3_user_data`, and freed by `x_destroy_agg`. Distinct from `UdfReg`
+/// (which holds a single pair): an aggregate needs both callables, so a
+/// same-`pApp` widening would mis-size the `Box` free — hence a separate struct
+/// and a separate destroy.
+#[repr(C)]
+struct AggReg {
+    /// The step callable's compiled-PHP descriptor pointer.
+    step_descriptor: *mut c_void,
+    /// The codegen step adapter entry (`__rt_pdo_call_agg_step`).
+    step_adapter: *const c_void,
+    /// The finalize callable's compiled-PHP descriptor pointer.
+    final_descriptor: *mut c_void,
+    /// The codegen finalize adapter entry (`__rt_pdo_call_agg_final`).
+    final_adapter: *const c_void,
+}
+
+/// The per-group aggregate state SQLite keeps in `sqlite3_aggregate_context`. A
+/// `#[repr(C)]` POD so the fixed 16-byte block is shared unambiguously across step
+/// calls and the final call within one aggregation group. `row_count` is the
+/// running number of `xStep` invocations so far (the `$rownumber` passed to the
+/// callbacks); `accumulator` is the boxed-Mixed PHP value the last step returned
+/// (null before the first step). SQLite owns and auto-frees this 16-byte block when
+/// the aggregation concludes; the bridge/adapters own the pointed-to accumulator box
+/// (which lives in the compiled program's heap) and release it inside `x_agg_final`.
+#[repr(C)]
+struct AggCtx {
+    /// Running `xStep` count within the group (0 before the first step).
+    row_count: i64,
+    /// The boxed-Mixed accumulator the last step returned (null = none yet).
+    accumulator: *mut c_void,
+}
+
+/// The C-ABI adapter that re-enters a compiled-PHP aggregate step callback. Emitted
+/// by codegen as `__rt_pdo_call_agg_step`; the bridge only stores and calls its
+/// address. It boxes `[accumulator, rownumber, ...rowValues]` as the invoker's
+/// arguments, invokes the step callable, and returns the OWNED boxed-Mixed new
+/// accumulator (the bridge stores it back into `AggCtx.accumulator`). On a thrown
+/// callback the adapter's firewall catches the longjmp, preserves the accumulator
+/// (so `x_agg_final` still frees it), sets `*threw = 1`, and returns null.
+type StepAdapter = unsafe extern "C" fn(
+    descriptor: *mut c_void,
+    accumulator: *mut c_void,
+    rownumber: i64,
+    argv: *const ElephcVal,
+    argc: i64,
+    threw: *mut i64,
+) -> *mut c_void;
+
+/// The C-ABI adapter that re-enters a compiled-PHP aggregate finalize callback.
+/// Emitted by codegen as `__rt_pdo_call_agg_final`; the bridge only stores and calls
+/// its address. It boxes `[accumulator, rownumber]`, invokes the finalize callable,
+/// writes the aggregate result into `*out` (an `ElephcResult`, decoded exactly like
+/// the scalar path), and — since finalize is terminal for the group — releases the
+/// accumulator box. A thrown callback is reported as `out.tag = -1`.
+type FinalAdapter = unsafe extern "C" fn(
+    descriptor: *mut c_void,
+    accumulator: *mut c_void,
+    rownumber: i64,
+    out: *mut ElephcResult,
+);
+
+/// SQLite aggregate step dispatcher (`xStep`). Recovers the `AggReg` via
+/// `sqlite3_user_data` and the per-group `AggCtx` via `sqlite3_aggregate_context`
+/// (16 bytes, zeroed on the first step of a group). Decodes the row arguments, calls
+/// the codegen step adapter with the current accumulator + row number, and stores the
+/// new accumulator back. A thrown step callback (`threw != 0`) surfaces a SQL error;
+/// SQLite then aborts the aggregation but still runs `xFinal`, which frees the
+/// accumulator the adapter preserved.
+///
+/// # Safety
+/// `ctx`/`argv` are the live SQLite call context and argument vector; the registered
+/// `pApp` is a live `Box<AggReg>` pointer.
+unsafe extern "C" fn x_agg_step(
+    ctx: *mut ffi::sqlite3_context,
+    argc: c_int,
+    argv: *mut *mut ffi::sqlite3_value,
+) {
+    let p_arg = ffi::sqlite3_user_data(ctx);
+    if p_arg.is_null() {
+        return;
+    }
+    let reg = &*(p_arg as *const AggReg);
+    let slot =
+        ffi::sqlite3_aggregate_context(ctx, std::mem::size_of::<AggCtx>() as c_int) as *mut AggCtx;
+    if slot.is_null() {
+        // Out of memory: the group cannot be aggregated. SQLite reports the OOM.
+        return;
+    }
+    let mut vals: Vec<ElephcVal> = Vec::with_capacity(argc.max(0) as usize);
+    for idx in 0..argc {
+        vals.push(decode_value(*argv.offset(idx as isize)));
+    }
+    let adapter: StepAdapter = std::mem::transmute(reg.step_adapter);
+    let mut threw: i64 = 0;
+    let new_acc = adapter(
+        reg.step_descriptor,
+        (*slot).accumulator,
+        (*slot).row_count,
+        vals.as_ptr(),
+        vals.len() as i64,
+        &mut threw,
+    );
+    if threw != 0 {
+        // The adapter preserved the accumulator (did not release the slot's ref) and
+        // returned null. Surface a SQL error; xFinal still runs and frees it.
+        let msg = c"PDO aggregate step callback raised an exception";
+        ffi::sqlite3_result_error(ctx, msg.as_ptr(), -1);
+    } else {
+        (*slot).accumulator = new_acc;
+    }
+    (*slot).row_count += 1;
+}
+
+/// SQLite aggregate finalize dispatcher (`xFinal`). Recovers the `AggReg` and reads
+/// the per-group `AggCtx` with `sqlite3_aggregate_context(ctx, 0)` — passing 0 so an
+/// empty group (no `xStep` ever ran) returns a NULL slot rather than allocating,
+/// which the dispatcher treats as `{row_count: 0, accumulator: null}` (PHP null
+/// context). Calls the codegen finalize adapter to produce the result and release the
+/// accumulator, writes it through `dispatch_scalar_result`, then nulls the slot so no
+/// freed pointer dangles before SQLite frees the block.
+///
+/// # Safety
+/// `ctx` is the live SQLite call context; the registered `pApp` is a live
+/// `Box<AggReg>` pointer.
+unsafe extern "C" fn x_agg_final(ctx: *mut ffi::sqlite3_context) {
+    let p_arg = ffi::sqlite3_user_data(ctx);
+    if p_arg.is_null() {
+        ffi::sqlite3_result_null(ctx);
+        return;
+    }
+    let reg = &*(p_arg as *const AggReg);
+    // nBytes 0: do NOT allocate for an empty group; a NULL slot means "never stepped".
+    let slot = ffi::sqlite3_aggregate_context(ctx, 0) as *mut AggCtx;
+    let (accumulator, row_count) = if slot.is_null() {
+        (ptr::null_mut(), 0i64)
+    } else {
+        ((*slot).accumulator, (*slot).row_count)
+    };
+    let adapter: FinalAdapter = std::mem::transmute(reg.final_adapter);
+    let mut out = ElephcResult {
+        tag: 0,
+        i: 0,
+        f: 0.0,
+    };
+    udf_result_stash_clear();
+    adapter(reg.final_descriptor, accumulator, row_count, &mut out);
+    dispatch_scalar_result(ctx, &out);
+    // The adapter released the accumulator box; null the slot so the now-freed
+    // pointer never dangles (SQLite frees the 16-byte block right after this returns).
+    if !slot.is_null() {
+        (*slot).accumulator = ptr::null_mut();
+    }
+}
+
+/// Frees a `Box<AggReg>` when SQLite deletes an aggregate registration. Registered as
+/// every aggregate's `xDestroy`. Distinct from `x_destroy` (which frees a `UdfReg`):
+/// `AggReg` is a different, larger type, so freeing it through the wrong `Box` type
+/// would pass a mismatched `Layout` to the allocator.
+///
+/// # Safety
+/// `p_arg` must be a pointer produced by `Box::into_raw` for an `AggReg`.
+unsafe extern "C" fn x_destroy_agg(p_arg: *mut c_void) {
+    if !p_arg.is_null() {
+        drop(Box::from_raw(p_arg as *mut AggReg));
+    }
 }
 
 impl SqliteStmt {

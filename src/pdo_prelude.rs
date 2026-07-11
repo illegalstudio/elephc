@@ -119,6 +119,12 @@ extern "elephc_pdo" {
     // (-1 = variadic) and `flags` carries the SQLITE_DETERMINISTIC bit. Returns 1 on
     // success, 0 on error.
     function elephc_pdo_create_function(int $conn, string $name, int $num_args, int $flags, ptr $descriptor, ptr $adapter): int;
+    // v15: custom SQLite aggregate registration (Pdo\Sqlite::createAggregate). The step
+    // and finalize callables are each decomposed into a descriptor pointer + shared
+    // codegen adapter address, so this extern takes four plain `ptr` args and never a
+    // `callable`. `num_args` is the declared arity (-1 = variadic). Returns 1 on
+    // success, 0 on error.
+    function elephc_pdo_create_aggregate(int $conn, string $name, int $num_args, ptr $step_descriptor, ptr $step_adapter, ptr $final_descriptor, ptr $final_adapter): int;
 }
 
 class PDOException extends RuntimeException {
@@ -1152,6 +1158,28 @@ namespace Pdo {
             $_descriptor = \__elephc_callable_ptr($callback);
             $_adapter = \__elephc_pdo_adapter_addr(1);
             return \elephc_pdo_create_function($this->connectionId(), $name, $numArgs, $flags, $_descriptor, $_adapter) === 1;
+        }
+
+        public function createAggregate(string $name, callable $step, callable $finalize, int $numArgs = -1): bool {
+            // Registers an aggregate SQL function `$name` backed by a compiled-PHP
+            // step + finalize pair: `$step($context, $rownumber, ...$values): mixed`
+            // runs once per row (returning the new accumulator, null-seeded on the
+            // first row) and `$finalize($context, $rownumber): mixed` produces the
+            // group result. Each callable is decomposed into its descriptor pointer
+            // and the shared codegen adapter address (kinds 2 and 3), so the bridge
+            // extern receives four plain `ptr` args and never a `callable`. Both
+            // callables are rooted in $this->udfCallbacks (under distinct keys so
+            // neither evicts the other's GC root) because SQLite keeps a C pointer to
+            // each descriptor for the connection's lifetime. Only closures and
+            // first-class callables are supported; a string or array callable is
+            // rejected at compile time by __elephc_callable_ptr.
+            $this->udfCallbacks["aggregate_step:" . $name] = $step;
+            $this->udfCallbacks["aggregate_final:" . $name] = $finalize;
+            $_stepDesc = \__elephc_callable_ptr($step);
+            $_stepAdapter = \__elephc_pdo_adapter_addr(2);
+            $_finalDesc = \__elephc_callable_ptr($finalize);
+            $_finalAdapter = \__elephc_pdo_adapter_addr(3);
+            return \elephc_pdo_create_aggregate($this->connectionId(), $name, $numArgs, $_stepDesc, $_stepAdapter, $_finalDesc, $_finalAdapter) === 1;
         }
     }
 

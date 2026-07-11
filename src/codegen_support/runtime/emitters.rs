@@ -536,6 +536,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     if features.pdo_udf {
         pdo::emit_pdo_call_collation(emitter);
         pdo::emit_pdo_call_scalar(emitter);
+        pdo::emit_pdo_call_agg_step(emitter);
+        pdo::emit_pdo_call_agg_final(emitter);
     }
 
     // Fiber runtime functions (cooperative coroutines)
@@ -635,7 +637,12 @@ mod tests {
             let mut emitter = Emitter::new(Target::new(platform, arch));
             emit_runtime(&mut emitter, RuntimeFeatures::all());
             let asm = emitter.output();
-            for sym in ["__rt_pdo_call_collation", "__rt_pdo_call_scalar"] {
+            for sym in [
+                "__rt_pdo_call_collation",
+                "__rt_pdo_call_scalar",
+                "__rt_pdo_call_agg_step",
+                "__rt_pdo_call_agg_final",
+            ] {
                 assert!(
                     asm.contains(&format!(".globl {}\n", sym)),
                     "pdo_udf runtime missing {} for {:?}/{:?}",
@@ -658,6 +665,8 @@ mod tests {
         assert!(!asm.contains(".globl __rt_pdo_call_collation\n"));
         assert!(!asm.contains("__rt_pdo_call_scalar:"));
         assert!(!asm.contains(".globl __rt_pdo_call_scalar\n"));
+        assert!(!asm.contains(".globl __rt_pdo_call_agg_step\n"));
+        assert!(!asm.contains(".globl __rt_pdo_call_agg_final\n"));
     }
 
     /// Verifies the full macOS AArch64 runtime still assembles once per-symbol

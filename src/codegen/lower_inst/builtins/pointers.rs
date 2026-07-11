@@ -136,9 +136,10 @@ pub(crate) fn lower_elephc_callable_ptr(
 
 /// Lowers `__elephc_pdo_adapter_addr($kind)` — materializes the GOT address of the
 /// shared codegen PDO callback adapter selected by the constant `$kind`
-/// (0 = collation, 1 = scalar user function). The bridge stores this address per
-/// registration and calls it back with the database-provided arguments, so no bridge
-/// extern references a `__rt_*` symbol directly.
+/// (0 = collation, 1 = scalar user function, 2 = aggregate step, 3 = aggregate
+/// finalize). The bridge stores this address per registration and calls it back with
+/// the database-provided arguments, so no bridge extern references a `__rt_*` symbol
+/// directly.
 ///
 /// The adapter is an external runtime symbol (emitted in the runtime `.text`
 /// section, gated by `RuntimeFeatures::pdo_udf`), so its address is taken through
@@ -152,6 +153,8 @@ pub(crate) fn lower_elephc_pdo_adapter_addr(
     let symbol = match kind {
         0 => "__rt_pdo_call_collation",
         1 => "__rt_pdo_call_scalar",
+        2 => "__rt_pdo_call_agg_step",
+        3 => "__rt_pdo_call_agg_final",
         _ => {
             return Err(CodegenIrError::unsupported(format!(
                 "__elephc_pdo_adapter_addr has no adapter for kind {}",

@@ -1580,3 +1580,147 @@ echo "done:" . $db->query("SELECT 1 + 1")->fetchColumn();
     );
     assert_eq!(out, "done:2");
 }
+
+/// Tier-D `Pdo\Sqlite::createAggregate`: an integer-accumulating aggregate (sum). The
+/// step callback receives the running accumulator + row number + row value and returns
+/// the new accumulator (row-number-seeded on the first row, so no null arithmetic); the
+/// finalize callback returns it. Proves the whole aggregate path: per-group
+/// accumulator threaded through `sqlite3_aggregate_context`, `__rt_pdo_call_agg_step`
+/// per row, `__rt_pdo_call_agg_final` once, and correct row-number threading (0 on the
+/// first step).
+#[test]
+fn test_pdo_sqlite_create_aggregate_sum() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createAggregate("mysum",
+    function($ctx, $row, $v) { if ($row == 0) { return $v; } return $ctx + $v; },
+    function($ctx, $row) { return $ctx; }
+);
+$db->exec("CREATE TABLE t (v)");
+$db->exec("INSERT INTO t (v) VALUES (1), (2), (3), (4)");
+echo $db->query("SELECT mysum(v) FROM t")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
+/// Tier-D `Pdo\Sqlite::createAggregate`: a STRING-accumulating aggregate (concat). This
+/// is the refcount-critical test — the accumulator is a boxed-Mixed PHP string that
+/// must survive being stored in the group slot and passed back into the next step
+/// across every row (incref-new-before-release-old). A refcount error frees it early
+/// (corrupt output) or leaks it. Correct output proves the ownership protocol.
+#[test]
+fn test_pdo_sqlite_create_aggregate_string_concat() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createAggregate("myconcat",
+    function($ctx, $row, $v) { if ($row == 0) { return $v; } return $ctx . $v; },
+    function($ctx, $row) { return $ctx; }
+);
+$db->exec("CREATE TABLE t (v)");
+$db->exec("INSERT INTO t (v) VALUES ('a'), ('b'), ('c'), ('d')");
+echo $db->query("SELECT myconcat(v) FROM t")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "abcd");
+}
+
+/// Tier-D `Pdo\Sqlite::createAggregate`: `GROUP BY` gives each group its own
+/// accumulator. SQLite allocates a distinct `sqlite3_aggregate_context` per group, so
+/// the two groups accumulate independently — the direct proof that the per-group slot
+/// (not a single shared accumulator) carries the state. Expects `a=3,b=30,`.
+#[test]
+fn test_pdo_sqlite_create_aggregate_group_by() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createAggregate("mysum",
+    function($ctx, $row, $v) { if ($row == 0) { return $v; } return $ctx + $v; },
+    function($ctx, $row) { return $ctx; }
+);
+$db->exec("CREATE TABLE t (g, v)");
+$db->exec("INSERT INTO t (g, v) VALUES ('a', 1), ('a', 2), ('b', 10), ('b', 20)");
+$out = "";
+foreach ($db->query("SELECT g, mysum(v) FROM t GROUP BY g ORDER BY g")->fetchAll(PDO::FETCH_NUM) as $r) {
+    $out .= $r[0] . "=" . $r[1] . ",";
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "a=3,b=30,");
+}
+
+/// Tier-D `Pdo\Sqlite::createAggregate`: an empty group calls finalize exactly once
+/// with NO prior step (`sqlite3_aggregate_context(ctx, 0)` returns NULL → a null
+/// accumulator and row count 0). The finalize here returns the step count, so an
+/// aggregate over an empty table yields `0`, proving the empty-group path and the
+/// row-count threading.
+#[test]
+fn test_pdo_sqlite_create_aggregate_empty_group() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createAggregate("mycount",
+    function($ctx, $row, $v) { return $ctx; },
+    function($ctx, $row) { return $row; }
+);
+$db->exec("CREATE TABLE t (v)");
+echo $db->query("SELECT mycount(v) FROM t")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+/// Tier-D exception firewall (aggregate step): a step callback that `throw`s must not
+/// unwind across SQLite's VDBE + the Rust bridge frame. The step adapter's firewall
+/// catches the longjmp, preserves the accumulator (so finalize still frees it), and
+/// signals the throw; the bridge raises a SQL error. The program must finish and the
+/// connection stay usable.
+#[test]
+fn test_pdo_sqlite_create_aggregate_throwing_step_does_not_hang() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createAggregate("boom",
+    function($ctx, $row, $v) { throw new Exception("step boom"); },
+    function($ctx, $row) { return $ctx; }
+);
+$db->exec("CREATE TABLE t (v)");
+$db->exec("INSERT INTO t (v) VALUES (1), (2)");
+try {
+    $db->exec("SELECT boom(v) FROM t");
+} catch (\Exception $e) {
+}
+echo "done:" . $db->query("SELECT 1 + 1")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "done:2");
+}
+
+/// Tier-D exception firewall (aggregate finalize): a finalize callback that `throw`s is
+/// caught by the finalize adapter's firewall, reported as an error result, and — since
+/// finalize is terminal — the accumulator is still freed (no leak/dangling before
+/// SQLite frees the group block). The program must finish and the connection stay
+/// usable.
+#[test]
+fn test_pdo_sqlite_create_aggregate_throwing_final_does_not_hang() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createAggregate("boomf",
+    function($ctx, $row, $v) { if ($row == 0) { return $v; } return $ctx + $v; },
+    function($ctx, $row) { throw new Exception("final boom"); }
+);
+$db->exec("CREATE TABLE t (v)");
+$db->exec("INSERT INTO t (v) VALUES (1), (2)");
+try {
+    $db->exec("SELECT boomf(v) FROM t");
+} catch (\Exception $e) {
+}
+echo "done:" . $db->query("SELECT 1 + 1")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "done:2");
+}
