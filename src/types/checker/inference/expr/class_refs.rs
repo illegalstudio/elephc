@@ -75,9 +75,26 @@ impl Checker {
         // First: enum case access (`Color::Red`). Enums shadow classes for
         // this syntax in PHP since 8.1. A name that is not a declared case is an enum *constant*
         // (`Scale::FACTOR`), which is resolved through the class-constant table below.
+        //
+        // Keyword-spelled member names lose their source spelling — the lexer folds keywords
+        // case-insensitively, so `case Match` is DECLARED as "match" while a builtin table may
+        // declare "MATCH". After an exact miss, each lookup therefore retries
+        // case-insensitively and accepts a UNIQUE fold-match (PHP itself is case-sensitive
+        // here; this path is only reachable for spellings the lexer has already erased, and an
+        // ambiguous fold keeps the miss).
         if let Some(enum_info) = self.enums.get(&class_name) {
             if enum_info.cases.iter().any(|case| case.name == name) {
                 return self.infer_enum_case_type(&class_name, name, expr);
+            }
+            let folded: Vec<&str> = enum_info
+                .cases
+                .iter()
+                .map(|case| case.name.as_str())
+                .filter(|case| case.eq_ignore_ascii_case(name))
+                .collect();
+            if let [canonical] = folded[..] {
+                let canonical = canonical.to_string();
+                return self.infer_enum_case_type(&class_name, &canonical, expr);
             }
         }
         // Walk parent chain to find a class constant.
@@ -85,6 +102,16 @@ impl Checker {
         while let Some(cn) = current_class.as_deref() {
             if let Some(info) = self.classes.get(cn) {
                 if let Some(value_expr) = info.constants.get(name).cloned() {
+                    return self.infer_type(&value_expr, &TypeEnv::default());
+                }
+                let folded: Vec<String> = info
+                    .constants
+                    .keys()
+                    .filter(|constant| constant.eq_ignore_ascii_case(name))
+                    .cloned()
+                    .collect();
+                if let [canonical] = &folded[..] {
+                    let value_expr = info.constants[canonical.as_str()].clone();
                     return self.infer_type(&value_expr, &TypeEnv::default());
                 }
             }

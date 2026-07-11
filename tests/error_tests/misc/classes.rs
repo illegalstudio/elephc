@@ -970,6 +970,17 @@ fn test_error_const_named_class_is_rejected() {
     );
 }
 
+/// Verifies that `class` is rejected as an enum-case name, even though other semi-reserved
+/// keywords (`case Default;`, `case Print;`) are allowed — the same `Foo::class` reservation
+/// that applies to class-constant names.
+#[test]
+fn test_error_enum_case_named_class_is_rejected() {
+    expect_error(
+        "<?php enum E { case class; }",
+        "Cannot use 'class' as an enum case name",
+    );
+}
+
 /// Verifies that a non-name token (an operator) after `->` is still rejected even though
 /// semi-reserved keywords are now accepted as member names.
 #[test]

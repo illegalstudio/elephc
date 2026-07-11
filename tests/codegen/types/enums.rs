@@ -833,3 +833,17 @@ fn test_backed_int_enum_tryfrom_mixed() {
     );
     assert_eq!(out, "HighnullLow");
 }
+
+/// Keyword-named enum cases are ACCESSIBLE — the lexer folds keyword spellings case-insensitively
+/// (both `case Match` and `E::Match` reach the checker as "match"), so the scoped-constant lookup
+/// retries case-insensitively after an exact miss and accepts a unique fold-match. Values are
+/// byte-identical to PHP 8.5; a genuinely undefined case still errors. Known limit: `->name` of a
+/// KEYWORD-named case reports the folded spelling (the lexer discards the source lexeme) —
+/// identifier-named cases like `Error` are unaffected.
+#[test]
+fn test_keyword_named_enum_case_access() {
+    let out = compile_and_run(
+        "<?php enum CardVariant: string { case Default = 'default'; case Error = 'error'; case Match = 'match'; } function pick(CardVariant $v): string { return $v->value; } echo pick(CardVariant::Error), ':', pick(CardVariant::Match), ':', pick(CardVariant::Default), ':', CardVariant::Error->name;",
+    );
+    assert_eq!(out, "error:match:default:Error");
+}

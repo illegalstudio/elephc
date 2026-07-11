@@ -297,6 +297,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns a class or interface constant expression resolved with PHP lookup order.
+    ///
+    /// After an exact miss at each level, retries case-insensitively and accepts a UNIQUE
+    /// fold-match: the lexer folds keyword spellings, so `X::MATCH` reaches lowering as
+    /// "match" while the table declares "MATCH" (mirrors the checker's scoped lookup).
     pub(crate) fn scoped_constant_value(
         &self,
         class_name: &str,
@@ -305,7 +309,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let mut current = Some(class_name);
         while let Some(name) = current {
             if let Some(info) = self.classes.get(name) {
-                if let Some(value) = info.constants.get(const_name) {
+                if let Some(value) = constant_by_name_or_unique_fold(&info.constants, const_name)
+                {
                     return Some(value.clone());
                 }
                 current = info.parent.as_deref();
@@ -336,7 +341,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 continue;
             }
             if let Some(info) = self.interfaces.get(&name) {
-                if let Some(value) = info.constants.get(const_name) {
+                if let Some(value) = constant_by_name_or_unique_fold(&info.constants, const_name)
+                {
                     return Some(value.clone());
                 }
                 queue.extend(info.parents.iter().cloned());
@@ -1515,4 +1521,26 @@ fn ref_cell_array_element_type(ty: &PhpType) -> Option<PhpType> {
         PhpType::AssocArray { value, .. } => Some(value.codegen_repr()),
         _ => None,
     }
+}
+
+/// Exact constant lookup with a UNIQUE case-insensitive fallback for keyword-spelled names
+/// (the lexer folds keyword spellings, so `X::MATCH` reaches lowering as "match" while the
+/// table declares "MATCH"). An ambiguous fold keeps the miss, mirroring the checker.
+fn constant_by_name_or_unique_fold<'a>(
+    constants: &'a HashMap<String, crate::parser::ast::Expr>,
+    const_name: &str,
+) -> Option<&'a crate::parser::ast::Expr> {
+    if let Some(value) = constants.get(const_name) {
+        return Some(value);
+    }
+    let mut fold_match = None;
+    for (name, value) in constants {
+        if name.eq_ignore_ascii_case(const_name) {
+            if fold_match.is_some() {
+                return None;
+            }
+            fold_match = Some(value);
+        }
+    }
+    fold_match
 }

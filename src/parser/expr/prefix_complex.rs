@@ -731,12 +731,10 @@ pub(super) fn parse_named_expr(
                 *pos += 1;
                 member
             }
-            Some(Token::Match) => {
-                *pos += 1;
-                "MATCH".to_string()
-            }
             // PHP 8 allows semi-reserved keywords as static method / class-constant names
             // (e.g. `Foo::self()`, `Foo::print`); `class` and `$var` are handled above.
+            // The lexer folds keyword spellings, so `Foo::Match`/`Foo::MATCH` both arrive as
+            // the bareword "match" — scoped-constant lookup retries case-insensitively.
             Some(t) if crate::parser::keyword_name::bareword_name_from_token(t).is_some() => {
                 let member = crate::parser::keyword_name::bareword_name_from_token(t).unwrap();
                 *pos += 1;

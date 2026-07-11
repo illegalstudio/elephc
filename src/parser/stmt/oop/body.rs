@@ -176,11 +176,20 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 ));
             }
             *pos += 1; // consume 'case'
+            // PHP 8 allows semi-reserved keywords as enum-case names (e.g. `case Default;`,
+            // `case Print;`), except `class`, which is reserved for the `Foo::class` fetch —
+            // the same rule as class-constant names.
             let case_name = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Identifier(name)) => {
-                    let name = name.clone();
+                Some(Token::Class) => {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Cannot use 'class' as an enum case name",
+                    ))
+                }
+                Some(t) if crate::parser::keyword_name::bareword_name_from_token(t).is_some() => {
+                    let n = crate::parser::keyword_name::bareword_name_from_token(t).unwrap();
                     *pos += 1;
-                    name
+                    n
                 }
                 _ => {
                     return Err(CompileError::new(
