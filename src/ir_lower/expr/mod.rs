@@ -6044,6 +6044,8 @@ fn pointer_builtin_return_type(
             }
         }
         "zval_pack" => Some(PhpType::Pointer(None)),
+        "__elephc_callable_ptr" => Some(PhpType::Pointer(None)),
+        "__elephc_pdo_adapter_addr" => Some(PhpType::Pointer(None)),
         "zval_unpack" => Some(PhpType::Mixed),
         "zval_type" => Some(PhpType::Int),
         "zval_free" => Some(PhpType::Void),

@@ -264,3 +264,23 @@ echo (count($n) === 0) ? "none" : ($n[0] . ":" . $n[2]);
     );
     assert_eq!(out, "elephc_ch:hi");
 }
+
+/// `Pdo\Pgsql::lobOpen()` reads a large object whole into a rewound php://memory
+/// stream (the read-whole resource shape). The fixture creates a large object from a
+/// known byte string via `lo_from_bytea`, opens it, reads it fully back, and confirms
+/// that opening a nonexistent OID returns false. Driven against the live server.
+#[test]
+#[ignore]
+fn test_pgsql_lob_open() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
+$oid = $db->query("SELECT lo_from_bytea(0, 'elephc-lo'::bytea)")->fetchColumn();
+$s = $db->lobOpen((string) $oid);
+$content = stream_get_contents($s);
+$db->lobUnlink((string) $oid);
+echo $content . ":" . (($db->lobOpen("999999999") === false) ? "false" : "leak");
+"#,
+    );
+    assert_eq!(out, "elephc-lo:false");
+}

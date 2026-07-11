@@ -445,6 +445,32 @@ impl PgConn {
         }
     }
 
+    /// Reads a large object whole (`SELECT lo_get(<oid>)`), returning its raw bytes,
+    /// or `None` on a non-numeric OID or a server error (e.g. no such object). Unlike
+    /// the descriptor-based `lo_open`/`lo_read`/`lo_close` API, `lo_get` runs
+    /// standalone (no explicit transaction). Backs `Pdo\Pgsql::lobOpen()` (read-whole).
+    pub fn lob_get(&mut self, oid: &str) -> Option<Vec<u8>> {
+        let oid_num = oid.parse::<u32>().ok()?;
+        // oid_num is a validated integer, so inlining it is injection-safe.
+        match self
+            .client
+            .query_one(&format!("SELECT lo_get({oid_num})"), &[])
+        {
+            Ok(row) => match row.try_get::<_, Vec<u8>>(0) {
+                Ok(bytes) => {
+                    self.errcode = 0;
+                    self.sqlstate = "00000".to_string();
+                    Some(bytes)
+                }
+                Err(_) => None,
+            },
+            Err(e) => {
+                self.fail(e);
+                None
+            }
+        }
+    }
+
     /// Streams `data` into the server for a `COPY … FROM STDIN` statement (built by
     /// the prelude), returning the number of rows copied or -1 on error. Backs
     /// `Pdo\Pgsql::copyFromArray()` / `copyFromFile()`.

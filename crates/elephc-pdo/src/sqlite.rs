@@ -15,7 +15,7 @@
 //!   5=NULL — the same codes the PDO prelude's `columnValue()` reads.
 
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_int};
+use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 
 use libsqlite3_sys as ffi;
@@ -214,6 +214,160 @@ impl SqliteConn {
             }
             (rc == ffi::SQLITE_OK) as i64
         }
+    }
+
+    /// Reads a BLOB cell whole through the incremental-blob API
+    /// (`sqlite3_blob_open` read-only, `sqlite3_blob_bytes`, `sqlite3_blob_read`),
+    /// returning its raw bytes. `dbname` selects the attached database ("main" by
+    /// default), `rowid` is the row's integer key, and `column` names the BLOB
+    /// column. A missing row/column, or a column that cannot be opened as a blob,
+    /// surfaces as `Err(message)`. Backs `Pdo\Sqlite::openBlob()` (read-whole).
+    pub fn blob_read(
+        &self,
+        dbname: &str,
+        table: &str,
+        column: &str,
+        rowid: i64,
+    ) -> Result<Vec<u8>, String> {
+        let c_db = CString::new(dbname).map_err(|_| "invalid database name".to_string())?;
+        let c_table = CString::new(table).map_err(|_| "invalid table name".to_string())?;
+        let c_col = CString::new(column).map_err(|_| "invalid column name".to_string())?;
+        unsafe {
+            let mut blob: *mut ffi::sqlite3_blob = ptr::null_mut();
+            // flags = 0 opens the blob read-only, which is all read-whole needs.
+            let rc = ffi::sqlite3_blob_open(
+                self.db,
+                c_db.as_ptr(),
+                c_table.as_ptr(),
+                c_col.as_ptr(),
+                rowid,
+                0,
+                &mut blob,
+            );
+            if rc != ffi::SQLITE_OK || blob.is_null() {
+                return Err(read_errmsg(self.db));
+            }
+            let n = ffi::sqlite3_blob_bytes(blob);
+            let mut buf = vec![0u8; n.max(0) as usize];
+            let read_rc = if n > 0 {
+                ffi::sqlite3_blob_read(blob, buf.as_mut_ptr() as *mut c_void, n, 0)
+            } else {
+                ffi::SQLITE_OK
+            };
+            // Capture the error text before closing, since close resets the handle.
+            let err = (read_rc != ffi::SQLITE_OK).then(|| read_errmsg(self.db));
+            ffi::sqlite3_blob_close(blob);
+            match err {
+                Some(msg) => Err(msg),
+                None => Ok(buf),
+            }
+        }
+    }
+
+    /// Registers a custom collation `name` backed by a compiled-PHP comparator
+    /// (`Pdo\Sqlite::createCollation`). `descriptor` is the callable's 64-byte
+    /// descriptor pointer and `adapter` the address of the codegen collation
+    /// adapter (`__rt_pdo_call_collation`); both are threaded to the `x_compare`
+    /// dispatcher through SQLite's per-registration `pApp`, so any number of
+    /// collations coexist on one connection. Returns `1` on success, `0` on error.
+    ///
+    /// # Safety
+    /// `descriptor`/`adapter` must be the live callable descriptor and adapter
+    /// entry of the calling compiled program; both are kept alive by the PDO
+    /// object rooting the callable, so the bridge stores them without touching the
+    /// descriptor's (arena-managed) refcount.
+    pub unsafe fn create_collation(
+        &self,
+        name: &str,
+        descriptor: *mut c_void,
+        adapter: *const c_void,
+    ) -> i64 {
+        let Ok(c_name) = CString::new(name) else {
+            return 0;
+        };
+        let reg = Box::into_raw(Box::new(UdfReg { descriptor, adapter })) as *mut c_void;
+        // `_v2` invokes `x_destroy` (freeing the box) even when it returns an
+        // error, so the success path is the only one that must not free here.
+        let rc = ffi::sqlite3_create_collation_v2(
+            self.db,
+            c_name.as_ptr(),
+            ffi::SQLITE_UTF8,
+            reg,
+            Some(x_compare),
+            Some(x_destroy),
+        );
+        if rc == ffi::SQLITE_OK {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+/// The C-ABI adapter that re-enters a compiled-PHP collation comparator. Emitted
+/// by codegen as `__rt_pdo_call_collation`; the bridge only stores and calls its
+/// address. It boxes the two byte buffers as PHP strings, invokes the callable
+/// descriptor's uniform invoker, and returns the comparison sign clamped to
+/// -1/0/1 (or a sentinel the dispatcher maps to "equal" when the comparator threw).
+type CollationAdapter = unsafe extern "C" fn(
+    descriptor: *mut c_void,
+    a: *const u8,
+    a_len: i64,
+    b: *const u8,
+    b_len: i64,
+) -> i64;
+
+/// A registered SQLite user callback. Boxed and handed to SQLite as the
+/// registration's `pApp`, recovered in the dispatcher, and freed by `x_destroy`
+/// at `sqlite3_close` / re-registration. The compiled-PHP callable `descriptor`
+/// is kept alive by the PDO object rooting the callable (`$this->udfCallbacks`),
+/// so the bridge holds it as a bare pointer and never touches its refcount (which
+/// lives in the compiled program's arena, unreachable from this staticlib).
+struct UdfReg {
+    /// The 64-byte compiled-PHP callable descriptor pointer.
+    descriptor: *mut c_void,
+    /// The shared codegen adapter entry that re-enters the descriptor.
+    adapter: *const c_void,
+}
+
+/// SQLite collation dispatcher (`xCompare`). Recovers the `UdfReg` from `pApp`
+/// and re-enters the compiled-PHP comparator through its codegen adapter, passing
+/// the two byte buffers SQLite provides (not NUL-terminated — the adapter consumes
+/// explicit lengths). Returns the comparison sign in -1/0/1.
+///
+/// # Safety
+/// `p_arg` is the `pApp` from registration (a live `Box<UdfReg>` pointer); `a`/`b`
+/// point to `n_a`/`n_b` bytes valid for the call.
+unsafe extern "C" fn x_compare(
+    p_arg: *mut c_void,
+    n_a: c_int,
+    a: *const c_void,
+    n_b: c_int,
+    b: *const c_void,
+) -> c_int {
+    if p_arg.is_null() {
+        return 0;
+    }
+    let reg = &*(p_arg as *const UdfReg);
+    let adapter: CollationAdapter = std::mem::transmute(reg.adapter);
+    let sign = adapter(
+        reg.descriptor,
+        a as *const u8,
+        n_a as i64,
+        b as *const u8,
+        n_b as i64,
+    );
+    sign.clamp(-1, 1) as c_int
+}
+
+/// Frees a `Box<UdfReg>` when SQLite deletes a registration (connection close or
+/// re-registration under the same name). Registered as every callback's `xDestroy`.
+///
+/// # Safety
+/// `p_arg` must be a pointer produced by `Box::into_raw` for a `UdfReg`.
+unsafe extern "C" fn x_destroy(p_arg: *mut c_void) {
+    if !p_arg.is_null() {
+        drop(Box::from_raw(p_arg as *mut UdfReg));
     }
 }
 

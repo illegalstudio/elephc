@@ -102,6 +102,18 @@ extern "elephc_pdo" {
     // v11: PostgreSQL LISTEN/NOTIFY poll — returns `channel\tpid\tpayload`, empty if
     // none within the timeout.
     function elephc_pdo_get_notify(int $conn, int $timeout_ms): string;
+    // v12: whole-BLOB / whole-large-object read (read-whole streams). blob_read
+    // (SQLite) and lob_get (PostgreSQL) load the whole value into a shared buffer and
+    // return its byte length (-1 on error); blob_byte drains that buffer one byte at a
+    // time so embedded NUL bytes survive into the PHP string.
+    function elephc_pdo_blob_read(int $conn, string $table, string $column, int $rowid, string $dbname): int;
+    function elephc_pdo_lob_get(int $conn, string $oid): int;
+    function elephc_pdo_blob_byte(int $offset): int;
+    // v13: custom SQLite collation registration (Pdo\Sqlite::createCollation). The
+    // callable is decomposed at the PHP layer into its descriptor pointer and the
+    // shared codegen collation adapter address, so this extern takes two plain `ptr`
+    // args and never a `callable`. Returns 1 on success, 0 on error.
+    function elephc_pdo_create_collation(int $conn, string $name, ptr $descriptor, ptr $adapter): int;
 }
 
 class PDOException extends RuntimeException {
@@ -430,6 +442,29 @@ class PDO {
         // normal inherited method dispatch, so it reads $conn in the base class's
         // own scope.
         return $this->conn;
+    }
+
+    protected function blobStream(int $length): mixed {
+        // Turns a whole-BLOB / whole-large-object read into the read-whole resource
+        // that Pdo\Sqlite::openBlob() / Pdo\Pgsql::lobOpen() return. The caller has
+        // already populated the shared bridge buffer (elephc_pdo_blob_read /
+        // elephc_pdo_lob_get) and passes its byte length here; a negative length
+        // signals a bridge error and yields false. The buffer is drained one byte at
+        // a time (via chr()) so embedded NUL bytes survive into the PHP string, which
+        // is then wrapped in a rewound in-memory read/write stream. This is a
+        // read-whole snapshot: writing back to the stream does not update the stored
+        // BLOB / large object.
+        if ($length < 0) {
+            return false;
+        }
+        $_data = "";
+        for ($_j = 0; $_j < $length; $_j++) {
+            $_data = $_data . \chr(\elephc_pdo_blob_byte($_j));
+        }
+        $_stream = \fopen("php://memory", "r+");
+        \fwrite($_stream, $_data);
+        \rewind($_stream);
+        return $_stream;
     }
 
     public function errorCode(): ?string {
@@ -1040,6 +1075,19 @@ namespace Pdo {
         const ATTR_READONLY_STATEMENT = 1001;
         const ATTR_EXTENDED_RESULT_CODES = 1002;
 
+        // Roots the collation / user-function callbacks registered on this
+        // connection. SQLite keeps a raw C pointer to each callback's compiled-PHP
+        // descriptor for the connection's lifetime, so the descriptor must stay
+        // reachable from PHP; this array is that GC root.
+        private array $udfCallbacks;
+
+        public function __construct(string $dsn, ?string $username = null, ?string $password = null, ?array $options = null) {
+            // Forward to \PDO to open the connection, then initialise the callback
+            // root (an uninitialised typed array property is not implicitly []).
+            parent::__construct($dsn, $username, $password, $options);
+            $this->udfCallbacks = [];
+        }
+
         public function loadExtension(string $name): void {
             // Loads a SQLite extension library by path (its entry point is
             // auto-derived, as PHP's loadExtension does), throwing on failure.
@@ -1048,6 +1096,37 @@ namespace Pdo {
             if (\elephc_pdo_load_extension($this->connectionId(), $name) !== 1) {
                 throw new \PDOException("Failed to load SQLite extension: " . $name);
             }
+        }
+
+        public function openBlob(string $table, string $column, int $rowid, ?string $dbname = "main", int $flags = 1): mixed {
+            // Opens a BLOB cell as a stream resource. Divergence from PHP: this is a
+            // read-whole snapshot — the whole BLOB is read into an in-memory stream, so
+            // reads (fread/stream_get_contents) work fully but writes are not flushed
+            // back to the row. $flags defaults to 1 (self::OPEN_READONLY) written as a
+            // literal, since a constant of the class being defined does not resolve as
+            // an int default here, and is accepted only for signature compatibility (a
+            // read-write handle is not honored). Returns false if the row/column cannot
+            // be opened (matching PHP's failure return).
+            $_unused = $flags;
+            $_db = ($dbname === null) ? "main" : $dbname;
+            $_len = \elephc_pdo_blob_read($this->connectionId(), $table, $column, $rowid, $_db);
+            return $this->blobStream($_len);
+        }
+
+        public function createCollation(string $name, callable $callback): bool {
+            // Registers a custom collation `$name` backed by a compiled-PHP
+            // comparator `$callback($a, $b): int` (returning <0, 0, >0). The callable
+            // is decomposed here into its descriptor pointer and the shared codegen
+            // collation adapter address, so the bridge extern receives two plain
+            // `ptr` args and never a `callable`. The callback is rooted in
+            // $this->udfCallbacks first because SQLite keeps a C pointer to its
+            // descriptor for the connection's lifetime. Only closures and first-class
+            // callables are supported (their value is a descriptor pointer); a string
+            // or array callable is rejected at compile time by __elephc_callable_ptr.
+            $this->udfCallbacks[$name] = $callback;
+            $_descriptor = \__elephc_callable_ptr($callback);
+            $_adapter = \__elephc_pdo_adapter_addr(0);
+            return \elephc_pdo_create_collation($this->connectionId(), $name, $_descriptor, $_adapter) === 1;
         }
     }
 
@@ -1119,6 +1198,18 @@ namespace Pdo {
         public function lobUnlink(string $oid): bool {
             // Deletes the large object with the given OID.
             return \elephc_pdo_lob_unlink($this->connectionId(), $oid) === 1;
+        }
+
+        public function lobOpen(string $oid, string $mode = "rb"): mixed {
+            // Opens a large object as a stream resource. Divergence from PHP: this is a
+            // read-whole snapshot — the whole large object is read (SQL `lo_get`) into
+            // an in-memory stream, so reads work fully but writes are not flushed back
+            // to the object, and $mode is accepted for signature compatibility but not
+            // otherwise honored (PHP opens "rb"/"wb" descriptors). Returns false if the
+            // OID is non-numeric or no such large object exists.
+            $_unused = $mode;
+            $_len = \elephc_pdo_lob_get($this->connectionId(), $oid);
+            return $this->blobStream($_len);
         }
 
         private function copyOptions(string $separator, string $nullAs): string {

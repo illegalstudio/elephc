@@ -332,9 +332,10 @@ or at program exit. You do not need to close them explicitly.
   (warnings from the last statement), `Pdo\Pgsql::lobCreate()` / `lobUnlink()`
   (large-object create/delete), `Pdo\Pgsql::copyFromArray()` / `copyFromFile()` /
   `copyToArray()` / `copyToFile()` (COPY), `Pdo\Sqlite::loadExtension()` (load a
-  SQLite extension by path), and `Pdo\Pgsql::getNotify()` (poll LISTEN/NOTIFY). The
-  remaining stream-returning methods (`openBlob` / `lobOpen`) and the callback
-  methods are not yet provided (see Limitations).
+  SQLite extension by path), `Pdo\Pgsql::getNotify()` (poll LISTEN/NOTIFY), and the
+  stream-returning `Pdo\Sqlite::openBlob()` / `Pdo\Pgsql::lobOpen()` (read the whole
+  BLOB / large object into a `php://memory` stream). The callback methods are not yet
+  provided (see Limitations).
 
 ## Limitations
 
@@ -361,20 +362,24 @@ or at program exit. You do not need to close them explicitly.
   their driver-specific constants. Implemented driver methods:
   `Pdo\Pgsql::escapeIdentifier()`, `getPid()`, `lobCreate()` / `lobUnlink()`,
   `copyFromArray()` / `copyFromFile()` / `copyToArray()` / `copyToFile()`,
-  `Pdo\Sqlite::loadExtension()`, `Pdo\Pgsql::getNotify()`, and
+  `Pdo\Sqlite::loadExtension()`, `Pdo\Pgsql::getNotify()`,
   `Pdo\Mysql::getWarningCount()` (which reflects a preceding direct `exec()`/DML
-  statement; the pure-Rust client does not surface a SELECT's EOF-packet warnings).
+  statement; the pure-Rust client does not surface a SELECT's EOF-packet warnings),
+  and the stream-returning `Pdo\Sqlite::openBlob()` / `Pdo\Pgsql::lobOpen()`.
   `copyToArray()` returns an empty array both for an empty table and a transport
   error (check `errorInfo()`); `loadExtension()` runs native code from the named
   library, weakening the standalone-binary guarantee; `getNotify()` returns a
   numerically-indexed `[channel, pid, payload]` array (an empty array, not `false`,
   when none is pending — elephc's EIR array backend cannot mix a string-keyed and an
-  empty array across one method's return paths). Still missing: the
-  stream-returning **connection-backed** methods (`Pdo\Sqlite::openBlob`,
-  `Pdo\Pgsql::lobOpen`) and the **callback** methods
-  (`Pdo\Sqlite::createFunction` / `createAggregate` / `createCollation`,
-  `Pdo\Pgsql::setNoticeCallback`), the latter needing a PHP-callable-to-C trampoline
-  elephc's FFI does not yet provide. `PDO::connect()` selects the subclass from the
+  empty array across one method's return paths). `openBlob()` / `lobOpen()` are
+  **read-whole**: they read the entire BLOB / large object (NUL bytes preserved) into
+  a rewound `php://memory` stream and return it (or `false` on a missing row/OID), so
+  reads work fully but writes are not flushed back to storage, and the `$flags` /
+  `$mode` argument is accepted only for signature compatibility. Still missing: the
+  **callback** methods (`Pdo\Sqlite::createFunction` / `createAggregate` /
+  `createCollation`, `Pdo\Pgsql::setNoticeCallback`), which need a PHP-callable-to-C
+  trampoline elephc's FFI does not yet provide. `PDO::connect()` selects the subclass
+  from the
   DSN prefix, so a subclass-qualified call with a mismatched DSN
   (`Pdo\Sqlite::connect("mysql:…")`) is not rejected as PHP would.
 - **`FETCH_GROUP` / `FETCH_UNIQUE`** result shaping and **`createFunction()`** are

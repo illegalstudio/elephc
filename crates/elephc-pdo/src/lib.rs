@@ -30,7 +30,7 @@ mod sqlite;
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_void};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -161,6 +161,17 @@ fn pg_text_result_cell() -> &'static Mutex<CString> {
     C.get_or_init(|| Mutex::new(CString::default()))
 }
 
+/// Static byte buffer for the most recent whole BLOB / large-object read
+/// (`elephc_pdo_blob_read` / `elephc_pdo_lob_get`), drained byte-by-byte through
+/// `elephc_pdo_blob_byte`. A `Vec<u8>` rather than a `CString` because BLOBs are
+/// binary and may contain embedded NUL bytes; shared because the prelude copies each
+/// result into a PHP string (wrapped in a `php://memory` stream) before the next read
+/// overwrites the cell.
+fn blob_cell() -> &'static Mutex<Vec<u8>> {
+    static C: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 /// Stores `s` (NUL bytes stripped) into the per-result static `cell` and returns
 /// a pointer into it. Valid until the next call writing the same cell; elephc
 /// copies it into an owned PHP string on return.
@@ -282,9 +293,14 @@ fn open_persistent_dsn(dsn: &str) -> i64 {
 /// the SQLite column-decltype and load-extension accessors backing
 /// `PDOStatement::getColumnMeta()`'s native type and `Pdo\Sqlite::loadExtension()`.
 /// v11 adds the PostgreSQL LISTEN/NOTIFY poll backing `Pdo\Pgsql::getNotify()`.
+/// v12 adds the whole-BLOB / whole-large-object read accessors backing
+/// `Pdo\Sqlite::openBlob()` / `Pdo\Pgsql::lobOpen()` (read-whole into a
+/// `php://memory` stream). v13 adds the SQLite custom-collation registration
+/// (`elephc_pdo_create_collation`) backing `Pdo\Sqlite::createCollation()`, whose
+/// comparator descriptor and codegen adapter cross as two plain `ptr` arguments.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    11
+    13
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -699,6 +715,85 @@ pub extern "C" fn elephc_pdo_get_notify(conn_id: i64, timeout_ms: i64) -> *const
     store_cstr(pg_text_result_cell(), &text)
 }
 
+/// Reads a SQLite BLOB cell whole into the shared blob buffer (`Pdo\Sqlite::openBlob()`),
+/// returning its length in bytes, or -1 for a non-SQLite connection, an unknown handle,
+/// or a read error (missing row/column). The bytes are then drained with
+/// `elephc_pdo_blob_byte`, which preserves embedded NUL bytes.
+///
+/// # Safety
+/// `table`, `column`, and `dbname` must point to NUL-terminated strings valid for the
+/// call (`dbname` may be null, treated as `"main"`).
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_blob_read(
+    conn_id: i64,
+    table: *const c_char,
+    column: *const c_char,
+    rowid: i64,
+    dbname: *const c_char,
+) -> i64 {
+    let (Some(table), Some(column)) = (cstr_arg(table), cstr_arg(column)) else {
+        return -1;
+    };
+    let dbname = cstr_arg(dbname).unwrap_or("main");
+    let result = {
+        let mut guard = conns().lock().unwrap();
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.blob_read(dbname, table, column, rowid),
+            _ => return -1,
+        }
+    };
+    match result {
+        Ok(bytes) => {
+            let len = bytes.len() as i64;
+            *blob_cell().lock().unwrap() = bytes;
+            len
+        }
+        Err(_) => -1,
+    }
+}
+
+/// Reads a PostgreSQL large object whole into the shared blob buffer
+/// (`Pdo\Pgsql::lobOpen()`), returning its length in bytes, or -1 for a
+/// non-PostgreSQL connection, an unknown handle, a non-numeric OID, or a server error
+/// (no such object). The bytes are then drained with `elephc_pdo_blob_byte`.
+///
+/// # Safety
+/// `oid` must point to a NUL-terminated string valid for the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_lob_get(conn_id: i64, oid: *const c_char) -> i64 {
+    let Some(oid) = cstr_arg(oid) else {
+        return -1;
+    };
+    let result = {
+        let mut guard = conns().lock().unwrap();
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Postgres(c)) => c.lob_get(oid),
+            _ => return -1,
+        }
+    };
+    match result {
+        Some(bytes) => {
+            let len = bytes.len() as i64;
+            *blob_cell().lock().unwrap() = bytes;
+            len
+        }
+        None => -1,
+    }
+}
+
+/// Returns the byte at `offset` in the shared blob buffer populated by the most recent
+/// `elephc_pdo_blob_read` / `elephc_pdo_lob_get`, or 0 when out of range. The prelude
+/// drains the buffer one byte at a time (the same shape as `elephc_pdo_column_data_byte`)
+/// so embedded NUL bytes survive the round-trip into a PHP string.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_blob_byte(offset: i64) -> i64 {
+    if offset < 0 {
+        return 0;
+    }
+    let guard = blob_cell().lock().unwrap();
+    guard.get(offset as usize).map(|&b| b as i64).unwrap_or(0)
+}
+
 /// Prepares a statement (`PDO::prepare` / `PDO::query`) and returns an `i64`
 /// statement handle, or `-1` on a compile error.
 ///
@@ -1010,6 +1105,34 @@ pub unsafe extern "C" fn elephc_pdo_load_extension(conn_id: i64, path: *const c_
     }
 }
 
+/// Registers a custom SQLite collation from a compiled-PHP comparator
+/// (`Pdo\Sqlite::createCollation`). `descriptor` is the callable descriptor
+/// pointer and `adapter` the codegen collation-adapter address, both produced by
+/// the prelude via `__elephc_callable_ptr` / `__elephc_pdo_adapter_addr`. Returns
+/// `1` on success, `0` on error or a non-SQLite handle. Registration itself never
+/// fires the comparator (SQLite invokes it later, during an `ORDER BY … COLLATE`),
+/// so the connection lock is held only for the brief `sqlite3_create_collation_v2`.
+///
+/// # Safety
+/// `name` must be a NUL-terminated string valid for the call; `descriptor`/`adapter`
+/// must be the live callable descriptor and adapter entry of the compiled program.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_create_collation(
+    conn_id: i64,
+    name: *const c_char,
+    descriptor: *mut c_void,
+    adapter: *mut c_void,
+) -> i64 {
+    let Some(name) = cstr_arg(name) else {
+        return 0;
+    };
+    let guard = conns().lock().unwrap();
+    match guard.get(&conn_id) {
+        Some(Conn::Sqlite(c)) => c.create_collation(name, descriptor, adapter as *const c_void),
+        _ => 0,
+    }
+}
+
 /// Returns the current row's column `i` (0-based) as an integer.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_int(stmt_id: i64, i: i64) -> i64 {
@@ -1233,12 +1356,13 @@ mod tests {
         std::slice::from_raw_parts(p as *const u8, len as usize).to_vec()
     }
 
-    /// The ABI version constant is the v7 (sqlite + pgsql + mysql + raw data +
-    /// persistent open + SQLSTATE/statement errors + bool/blob binds +
-    /// busy-timeout + server version + text-valued last-insert-id) surface.
+    /// The ABI version constant tracks the current bridge surface; the per-version
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v13 adds the
+    /// SQLite custom-collation registration (`elephc_pdo_create_collation`) backing
+    /// `Pdo\Sqlite::createCollation()`.
     #[test]
-    fn version_is_v7() {
-        assert_eq!(elephc_pdo_version(), 7);
+    fn version_is_v13() {
+        assert_eq!(elephc_pdo_version(), 13);
     }
 
     /// A DSN for an unsupported driver is rejected with a driver error.

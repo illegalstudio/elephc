@@ -12,6 +12,8 @@
 //!   which `TypeSpec` cannot express statically.
 //! - Add `pub mod <name>;` here for every new pointer builtin home.
 
+pub mod elephc_callable_ptr;
+pub mod elephc_pdo_adapter_addr;
 pub mod ptr;
 pub mod ptr_get;
 pub mod ptr_is_null;

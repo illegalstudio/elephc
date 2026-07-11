@@ -1303,6 +1303,28 @@ try {
     assert_eq!(out, "caught");
 }
 
+/// Pdo\Sqlite::openBlob reads a BLOB cell whole into a rewound php://memory stream
+/// (the read-whole resource shape). The fixture stores a 3-byte BLOB with an embedded
+/// NUL (`x'610062'` = "a\0b") directly through SQL so the read path is exercised
+/// independently of parameter binding, then asserts the streamed bytes match
+/// (NUL-preserving) and that opening a missing row returns false.
+#[test]
+fn test_pdo_sqlite_open_blob() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->exec("CREATE TABLE imgs (id INTEGER PRIMARY KEY, body BLOB)");
+$db->exec("INSERT INTO imgs (id, body) VALUES (1, x'610062')");
+$s = $db->openBlob("imgs", "body", 1);
+$content = stream_get_contents($s);
+$ok = (strlen($content) === 3 && $content === ("a" . chr(0) . "b")) ? "ok" : "bad";
+$missing = $db->openBlob("imgs", "body", 999);
+echo $ok . ":" . (($missing === false) ? "false" : "leak");
+"#,
+    );
+    assert_eq!(out, "ok:false");
+}
+
 /// PDOStatement::debugDumpParams writes the SQL (with its byte length) and the
 /// bound-parameter count to stdout.
 #[test]
@@ -1339,4 +1361,85 @@ echo $pg->escapeIdentifier('my"col') . "|" . $pg->escapeIdentifier('plain');
 "#,
     );
     assert_eq!(out, "\"my\"\"col\"|\"plain\"");
+}
+
+/// Tier-D `Pdo\Sqlite::createCollation`: a compiled-PHP closure comparator drives a
+/// custom `COLLATE` ordering. Here the comparator reverses the natural string order,
+/// so `ORDER BY name COLLATE REV` returns the rows descending — proving the whole
+/// path: the callable is decomposed into (descriptor, adapter) pointers, registered
+/// via SQLite `pApp`, and re-entered by `__rt_pdo_call_collation` for each comparison.
+#[test]
+fn test_pdo_sqlite_create_collation_reverse_order() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createCollation("REV", function($a, $b) {
+    return strcmp($b, $a);
+});
+$db->exec("CREATE TABLE t (name TEXT)");
+$db->exec("INSERT INTO t (name) VALUES ('banana'), ('apple'), ('cherry')");
+$rows = $db->query("SELECT name FROM t ORDER BY name COLLATE REV")->fetchAll(PDO::FETCH_NUM);
+$out = "";
+foreach ($rows as $r) { $out .= $r[0] . ","; }
+echo $out;
+"#,
+    );
+    assert_eq!(out, "cherry,banana,apple,");
+}
+
+/// Tier-D `Pdo\Sqlite::createCollation`: TWO collations registered on one connection
+/// coexist and each keeps its own comparator. This is the direct disproof of "problem
+/// C" (the old single process-global callback slot, last-write-wins): if both
+/// registrations shared one slot, the reverse query would sort ascending (the
+/// last-registered comparator). Each registration threads its own descriptor through
+/// SQLite `pApp`, so `REV` stays descending while `NAT` sorts ascending.
+#[test]
+fn test_pdo_sqlite_create_collation_two_coexist() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createCollation("REV", function($a, $b) {
+    return strcmp($b, $a);
+});
+$db->createCollation("NAT", function($a, $b) {
+    return strcmp($a, $b);
+});
+$db->exec("CREATE TABLE t (name TEXT)");
+$db->exec("INSERT INTO t (name) VALUES ('banana'), ('apple'), ('cherry')");
+$rev = "";
+foreach ($db->query("SELECT name FROM t ORDER BY name COLLATE REV")->fetchAll(PDO::FETCH_NUM) as $r) {
+    $rev .= $r[0] . ",";
+}
+$nat = "";
+foreach ($db->query("SELECT name FROM t ORDER BY name COLLATE NAT")->fetchAll(PDO::FETCH_NUM) as $r) {
+    $nat .= $r[0] . ",";
+}
+echo $rev . "|" . $nat;
+"#,
+    );
+    assert_eq!(out, "cherry,banana,apple,|apple,banana,cherry,");
+}
+
+/// Tier-D exception firewall: a collation comparator that `throw`s must not unwind
+/// past the C boundary (SQLite's VDBE + the Rust bridge frame). The adapter's
+/// `setjmp` firewall catches the `throw`, treats the comparison as equal (SQLite's
+/// `xCompare` has no error channel), and lets the query complete. The program must
+/// finish (no deadlock/hang/crash from a `longjmp` over C frames) and the connection
+/// must remain usable — a following query still returns the correct count.
+#[test]
+fn test_pdo_sqlite_create_collation_throwing_comparator_does_not_hang() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createCollation("BOOM", function($a, $b) {
+    throw new Exception("boom");
+});
+$db->exec("CREATE TABLE t (name TEXT)");
+$db->exec("INSERT INTO t (name) VALUES ('x'), ('y'), ('z')");
+$rows = $db->query("SELECT name FROM t ORDER BY name COLLATE BOOM")->fetchAll(PDO::FETCH_NUM);
+$count = $db->query("SELECT COUNT(*) FROM t")->fetchColumn();
+echo count($rows) . ":" . $count;
+"#,
+    );
+    assert_eq!(out, "3:3");
 }

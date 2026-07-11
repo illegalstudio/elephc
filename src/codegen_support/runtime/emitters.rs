@@ -17,6 +17,7 @@ use super::fibers;
 use super::generators;
 use super::io;
 use super::objects;
+use super::pdo;
 use super::pointers;
 use super::spl;
 use super::strings;
@@ -529,6 +530,13 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     zval::emit_zval_free_array(emitter);
     zval::emit_zval_free(emitter);
 
+    // PDO Tier-D callback adapters. Emitted only when a PDO callback registration
+    // is reachable; placed after arrays/heap/mixed and zval so the adapters can
+    // call __rt_array_new / __rt_mixed_from_value / __rt_mixed_cast_int / __rt_decref_*.
+    if features.pdo_udf {
+        pdo::emit_pdo_call_collation(emitter);
+    }
+
     // Fiber runtime functions (cooperative coroutines)
     fibers::emit_fiber_alloc_stack(emitter);
     fibers::emit_fiber_free_stack(emitter);
@@ -613,6 +621,37 @@ mod tests {
                 sym
             );
         }
+    }
+
+    /// Verifies the PDO Tier-D callback adapter is emitted under `pdo_udf` on both
+    /// targets, so the `__elephc_pdo_adapter_addr` address-of reference resolves.
+    #[test]
+    fn test_runtime_emits_pdo_call_collation_when_pdo_udf() {
+        for (platform, arch) in [
+            (Platform::MacOS, Arch::AArch64),
+            (Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(Target::new(platform, arch));
+            emit_runtime(&mut emitter, RuntimeFeatures::all());
+            let asm = emitter.output();
+            assert!(
+                asm.contains(".globl __rt_pdo_call_collation\n"),
+                "pdo_udf runtime missing __rt_pdo_call_collation for {:?}/{:?}",
+                platform,
+                arch
+            );
+        }
+    }
+
+    /// Verifies the PDO Tier-D adapter is omitted when `pdo_udf` is not requested,
+    /// so non-PDO programs never carry the collation adapter.
+    #[test]
+    fn test_runtime_omits_pdo_call_collation_without_pdo_udf() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_runtime(&mut emitter, RuntimeFeatures::none());
+        let asm = emitter.output();
+        assert!(!asm.contains("__rt_pdo_call_collation:"));
+        assert!(!asm.contains(".globl __rt_pdo_call_collation\n"));
     }
 
     /// Verifies the full macOS AArch64 runtime still assembles once per-symbol

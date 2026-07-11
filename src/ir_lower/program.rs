@@ -97,6 +97,7 @@ fn include_lowered_runtime_features(module: &mut Module) {
     module.required_runtime_features.regex |= features.regex;
     module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
+    module.required_runtime_features.pdo_udf |= features.pdo_udf;
 }
 
 /// Derives optional runtime features from the actual EIR instruction stream.
@@ -114,6 +115,9 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                     }
                     if builtin_call_requires_descriptor_invoker(module, function, inst) {
                         features.descriptor_invoker = true;
+                    }
+                    if builtin_call_requires_pdo_udf(module, inst) {
+                        features.pdo_udf = true;
                     }
                 }
                 Op::ExprCall | Op::CallableDescriptorInvoke => {
@@ -188,6 +192,16 @@ fn builtin_call_requires_descriptor_invoker(
     function
         .value(callback)
         .is_some_and(|value| value.php_type.codegen_repr() == PhpType::Str)
+}
+
+/// Returns true when a lowered builtin call takes the address of a `__rt_pdo_*`
+/// callback adapter, requiring the PDO Tier-D adapter family to be emitted so the
+/// address-of reference resolves at link time.
+fn builtin_call_requires_pdo_udf(module: &Module, inst: &crate::ir::Instruction) -> bool {
+    let Some(name) = builtin_call_name(module, inst) else {
+        return false;
+    };
+    crate::names::php_symbol_key(name.trim_start_matches('\\')) == "__elephc_pdo_adapter_addr"
 }
 
 /// Returns the canonical builtin name attached to a lowered builtin instruction.
