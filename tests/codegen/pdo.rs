@@ -1443,3 +1443,140 @@ echo count($rows) . ":" . $count;
     );
     assert_eq!(out, "3:3");
 }
+
+/// Tier-D `Pdo\Sqlite::createFunction`: a compiled-PHP closure drives a scalar SQL
+/// function. Integer arguments box as Mixed ints, cross into the callable, and the
+/// integer return is decoded back through `__rt_pdo_call_scalar` into
+/// `sqlite3_result_int64` — proving the whole path (decompose → pApp → adapter → box
+/// args → invoke → decode int return).
+#[test]
+fn test_pdo_sqlite_create_function_int_args() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createFunction("myadd", function($a, $b) {
+    return $a + $b;
+}, 2);
+echo $db->query("SELECT myadd(3, 4)")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Tier-D `Pdo\Sqlite::createFunction`: a TEXT argument round-trips byte-exactly (the
+/// adapter deep-copies SQLite's transient buffer while boxing tag-1 strings), and a
+/// string return is staged through `elephc_pdo_udf_stash_bytes` and handed back to
+/// SQLite with `sqlite3_result_text` — proving the string arg + string result path.
+#[test]
+fn test_pdo_sqlite_create_function_string_roundtrip() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createFunction("myecho", function($s) {
+    return $s . "!";
+}, 1);
+echo $db->query("SELECT myecho('hi')")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "hi!");
+}
+
+/// Tier-D `Pdo\Sqlite::createFunction`: a zero-argument function exercises the empty
+/// (header-only) args-array path, and a float return proves the f64 bit-pattern
+/// survives the box/unbox round-trip (carried in the integer lo register, written to
+/// `ElephcResult.f`, dispatched to `sqlite3_result_double`).
+#[test]
+fn test_pdo_sqlite_create_function_float_and_zero_args() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createFunction("myval", function() {
+    return 2.5;
+}, 0);
+echo $db->query("SELECT myval()")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "2.5");
+}
+
+/// Tier-D `Pdo\Sqlite::createFunction`: TWO scalar functions on one connection coexist,
+/// each keeping its own callable. This is the direct disproof of "problem C" (a single
+/// process-global callback slot, last-write-wins) for scalar functions: if both shared
+/// one slot, `f1()` would return 22 (the last-registered body). Each registration
+/// threads its own descriptor through SQLite `pApp`, so `f1` stays 11 and `f2` is 22.
+#[test]
+fn test_pdo_sqlite_create_function_two_coexist() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createFunction("f1", function() { return 11; }, 0);
+$db->createFunction("f2", function() { return 22; }, 0);
+echo $db->query("SELECT f1()")->fetchColumn() . "," . $db->query("SELECT f2()")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "11,22");
+}
+
+/// Tier-D `Pdo\Sqlite::createFunction`: SQLite passes a different storage class per row,
+/// so one registration must re-box each argument by its per-row type. An identity
+/// function over a column holding an INTEGER then a TEXT value must return each with its
+/// original type preserved (int→`result_int64`, text→`result_text`), yielding `5,str,`.
+#[test]
+fn test_pdo_sqlite_create_function_per_row_dynamic_typing() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createFunction("ident", function($x) { return $x; }, 1);
+$db->exec("CREATE TABLE t (v)");
+$db->exec("INSERT INTO t (v) VALUES (5), ('str')");
+$out = "";
+foreach ($db->query("SELECT ident(v) FROM t ORDER BY rowid")->fetchAll(PDO::FETCH_NUM) as $r) {
+    $out .= $r[0] . ",";
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "5,str,");
+}
+
+/// Tier-D `Pdo\Sqlite::createFunction`: a SQL NULL argument boxes as PHP null (Mixed
+/// tag 8), and a PHP null return decodes to `sqlite3_result_null`. Verified in SQL
+/// (`ident(v) IS NULL`) so the round-trip is checked without a PHP-side null compare:
+/// the null survives the box → invoke → decode path, so the count is 1.
+#[test]
+fn test_pdo_sqlite_create_function_null_roundtrip() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createFunction("ident", function($x) { return $x; }, 1);
+$db->exec("CREATE TABLE t (v)");
+$db->exec("INSERT INTO t (v) VALUES (NULL)");
+echo $db->query("SELECT COUNT(*) FROM t WHERE ident(v) IS NULL")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Tier-D exception firewall (scalar path): a user function that `throw`s must not
+/// unwind past the C boundary (SQLite's VDBE + the Rust bridge frame). The adapter's
+/// `setjmp` firewall catches the `throw` and reports `ElephcResult.tag = -1`, which the
+/// bridge turns into a `sqlite3_result_error`; the statement fails but the program must
+/// finish (no deadlock/hang/crash from a `longjmp` over C frames) and the connection
+/// must remain usable — a following query still evaluates correctly.
+#[test]
+fn test_pdo_sqlite_create_function_throwing_does_not_hang() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createFunction("boom", function() {
+    throw new Exception("bang");
+}, 0);
+try {
+    $db->exec("SELECT boom()");
+} catch (\Exception $e) {
+}
+echo "done:" . $db->query("SELECT 1 + 1")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "done:2");
+}

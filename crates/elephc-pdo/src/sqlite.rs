@@ -302,6 +302,51 @@ impl SqliteConn {
             0
         }
     }
+
+    /// Registers a scalar SQL function `name` backed by a compiled-PHP callable
+    /// (`Pdo\Sqlite::createFunction`). `num_args` is the declared arity (-1 =
+    /// variadic), `flags` an optional `SQLITE_DETERMINISTIC` OR-ed into the text
+    /// encoding, and `descriptor`/`adapter` the callable descriptor pointer and the
+    /// codegen scalar adapter (`__rt_pdo_call_scalar`) threaded to `x_scalar` through
+    /// SQLite's per-registration `pApp`. Returns `1` on success, `0` on error.
+    ///
+    /// # Safety
+    /// `descriptor`/`adapter` must be the live callable descriptor and adapter entry
+    /// of the calling compiled program; both are kept alive by the PDO object rooting
+    /// the callable, so the bridge stores them without touching the descriptor's
+    /// (arena-managed) refcount.
+    pub unsafe fn create_function(
+        &self,
+        name: &str,
+        num_args: i64,
+        flags: i64,
+        descriptor: *mut c_void,
+        adapter: *const c_void,
+    ) -> i64 {
+        let Ok(c_name) = CString::new(name) else {
+            return 0;
+        };
+        let reg = Box::into_raw(Box::new(UdfReg { descriptor, adapter })) as *mut c_void;
+        // `_v2` invokes `x_destroy` (freeing the box) even on failure, so only the
+        // success path must not free here. `flags` carries SQLITE_DETERMINISTIC etc.,
+        // OR-ed into the UTF-8 text encoding as SQLite's C API expects.
+        let rc = ffi::sqlite3_create_function_v2(
+            self.db,
+            c_name.as_ptr(),
+            num_args as c_int,
+            ffi::SQLITE_UTF8 | (flags as c_int),
+            reg,
+            Some(x_scalar),
+            None,
+            None,
+            Some(x_destroy),
+        );
+        if rc == ffi::SQLITE_OK {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// The C-ABI adapter that re-enters a compiled-PHP collation comparator. Emitted
@@ -369,6 +414,212 @@ unsafe extern "C" fn x_destroy(p_arg: *mut c_void) {
     if !p_arg.is_null() {
         drop(Box::from_raw(p_arg as *mut UdfReg));
     }
+}
+
+/// One argument value crossing from the bridge's `x_scalar` shim into the codegen
+/// scalar adapter (`__rt_pdo_call_scalar`). A fixed `#[repr(C)]` POD so the adapter
+/// can read fields by offset; `tag` selects which payload field is live. `ptr`/`len`
+/// alias SQLite's `sqlite3_value` buffers, which stay valid for the whole callback,
+/// and the adapter deep-copies them (via `__rt_str_persist`) while boxing, so they
+/// need not outlive the call. Offsets (asserted on the codegen side): tag@0, i@8,
+/// f@16, ptr@24, len@32.
+#[repr(C)]
+struct ElephcVal {
+    /// 0 = NULL, 1 = INT, 2 = FLOAT, 3 = TEXT, 4 = BLOB.
+    tag: i64,
+    /// Integer payload (tag 1).
+    i: i64,
+    /// Float payload (tag 2).
+    f: f64,
+    /// TEXT/BLOB byte pointer (tags 3/4), aliasing the `sqlite3_value` buffer.
+    ptr: *const u8,
+    /// TEXT/BLOB byte length (tags 3/4).
+    len: i64,
+}
+
+/// The scalar user function's return value crossing back from the codegen adapter
+/// into `x_scalar`. `#[repr(C)]` POD; offsets tag@0, i@8, f@16. String/blob results
+/// do NOT cross as raw pointers: the adapter copies the bytes into the bridge's
+/// result stash (`elephc_pdo_udf_stash_bytes`) before releasing its Mixed and sets
+/// `tag` to TEXT/BLOB, and `x_scalar` reads the stash. `tag = -1` signals that the
+/// callback threw (the adapter's firewall caught it) so `x_scalar` raises a SQL error.
+#[repr(C)]
+struct ElephcResult {
+    /// -1 = ERROR (callback threw), 0 = NULL, 1 = INT, 2 = FLOAT, 3 = TEXT,
+    /// 4 = BLOB, 5 = BOOL (0/1 in `i`).
+    tag: i64,
+    /// Integer / bool payload (tags 1/5).
+    i: i64,
+    /// Float payload (tag 2).
+    f: f64,
+}
+
+/// The C-ABI adapter that re-enters a compiled-PHP scalar user function. Emitted by
+/// codegen as `__rt_pdo_call_scalar`; the bridge only stores and calls its address.
+/// It boxes each `ElephcVal` into a Mixed argument, invokes the callable descriptor's
+/// uniform invoker, and writes the return into `*out` (stashing string/blob bytes in
+/// the bridge first). A thrown callback is caught by its firewall and reported as
+/// `out.tag = -1`.
+type ScalarAdapter = unsafe extern "C" fn(
+    descriptor: *mut c_void,
+    argv: *const ElephcVal,
+    argc: i64,
+    out: *mut ElephcResult,
+);
+
+thread_local! {
+    /// Per-thread staging buffer for a scalar/aggregate UDF's string or blob return.
+    /// The codegen adapter copies the compiled-PHP string bytes here (they live in the
+    /// program's arena and vanish when the adapter returns) via `elephc_pdo_udf_stash_bytes`;
+    /// `x_scalar` then hands them to SQLite with `SQLITE_TRANSIENT`. Thread-local because
+    /// the adapter runs synchronously on the query's own thread inside the shim.
+    static UDF_RESULT_STASH: std::cell::RefCell<(Vec<u8>, bool)> =
+        const { std::cell::RefCell::new((Vec::new(), false)) };
+}
+
+/// Stages a compiled-PHP UDF string/blob return into the per-thread result stash so
+/// `x_scalar` can copy it into SQLite after the adapter releases its Mixed. `is_blob`
+/// selects `sqlite3_result_blob` over `_text`. A null pointer or non-positive length
+/// stages an empty value.
+///
+/// # Safety
+/// `ptr` must reference `len` readable bytes for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_udf_stash_bytes(ptr: *const u8, len: i64, is_blob: i64) {
+    let bytes = if ptr.is_null() || len <= 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(ptr, len as usize).to_vec()
+    };
+    UDF_RESULT_STASH.with(|stash| *stash.borrow_mut() = (bytes, is_blob != 0));
+}
+
+/// Takes and clears the staged UDF string/blob return `(bytes, is_blob)`.
+fn udf_result_stash_take() -> (Vec<u8>, bool) {
+    UDF_RESULT_STASH.with(|stash| std::mem::take(&mut *stash.borrow_mut()))
+}
+
+/// Clears any stale staged UDF result before invoking a callback.
+fn udf_result_stash_clear() {
+    UDF_RESULT_STASH.with(|stash| {
+        let mut stash = stash.borrow_mut();
+        stash.0.clear();
+        stash.1 = false;
+    });
+}
+
+/// Decodes one `sqlite3_value` into an `ElephcVal`, mirroring the statement fetch
+/// path's byte-counted read (`sqlite3_value_blob` + `_bytes`) so TEXT/BLOB arguments
+/// with embedded NUL bytes round-trip exactly.
+///
+/// # Safety
+/// `v` must be a live `sqlite3_value` valid for the current callback.
+unsafe fn decode_value(v: *mut ffi::sqlite3_value) -> ElephcVal {
+    match ffi::sqlite3_value_type(v) {
+        1 => ElephcVal {
+            tag: 1,
+            i: ffi::sqlite3_value_int64(v),
+            f: 0.0,
+            ptr: std::ptr::null(),
+            len: 0,
+        },
+        2 => ElephcVal {
+            tag: 2,
+            i: 0,
+            f: ffi::sqlite3_value_double(v),
+            ptr: std::ptr::null(),
+            len: 0,
+        },
+        code @ (3 | 4) => {
+            let ptr = ffi::sqlite3_value_blob(v) as *const u8;
+            let len = ffi::sqlite3_value_bytes(v).max(0) as i64;
+            ElephcVal {
+                tag: code as i64,
+                i: 0,
+                f: 0.0,
+                ptr,
+                len,
+            }
+        }
+        _ => ElephcVal {
+            tag: 0,
+            i: 0,
+            f: 0.0,
+            ptr: std::ptr::null(),
+            len: 0,
+        },
+    }
+}
+
+/// Writes an `ElephcResult` into the SQLite call context via the `sqlite3_result_*`
+/// family. String/blob results are copied out of the per-thread stash with
+/// `SQLITE_TRANSIENT` (SQLite owns its own copy); a `-1` tag raises a SQL error.
+///
+/// # Safety
+/// `ctx` must be the live `sqlite3_context` for the current callback.
+unsafe fn dispatch_scalar_result(ctx: *mut ffi::sqlite3_context, out: &ElephcResult) {
+    match out.tag {
+        -1 => {
+            let msg = c"PDO user function callback raised an exception";
+            ffi::sqlite3_result_error(ctx, msg.as_ptr(), -1);
+        }
+        1 | 5 => ffi::sqlite3_result_int64(ctx, out.i),
+        2 => ffi::sqlite3_result_double(ctx, out.f),
+        3 | 4 => {
+            let (bytes, is_blob) = udf_result_stash_take();
+            if is_blob || out.tag == 4 {
+                ffi::sqlite3_result_blob(
+                    ctx,
+                    bytes.as_ptr() as *const c_void,
+                    bytes.len() as c_int,
+                    ffi::SQLITE_TRANSIENT(),
+                );
+            } else {
+                ffi::sqlite3_result_text(
+                    ctx,
+                    bytes.as_ptr() as *const c_char,
+                    bytes.len() as c_int,
+                    ffi::SQLITE_TRANSIENT(),
+                );
+            }
+        }
+        _ => ffi::sqlite3_result_null(ctx),
+    }
+}
+
+/// SQLite scalar user-function dispatcher (`xFunc`). Unlike `x_compare`, a scalar
+/// callback receives no `pApp` argument, so the `UdfReg` is recovered through
+/// `sqlite3_user_data`. Each argument is decoded into an `ElephcVal`, the codegen
+/// adapter re-enters the compiled-PHP callable, and its `ElephcResult` is written
+/// back through the `sqlite3_result_*` family.
+///
+/// # Safety
+/// `ctx`/`argv` are the live SQLite call context and argument vector; the registered
+/// `pApp` is a live `Box<UdfReg>` pointer.
+unsafe extern "C" fn x_scalar(
+    ctx: *mut ffi::sqlite3_context,
+    argc: c_int,
+    argv: *mut *mut ffi::sqlite3_value,
+) {
+    let p_arg = ffi::sqlite3_user_data(ctx);
+    if p_arg.is_null() {
+        ffi::sqlite3_result_null(ctx);
+        return;
+    }
+    let reg = &*(p_arg as *const UdfReg);
+    let mut vals: Vec<ElephcVal> = Vec::with_capacity(argc.max(0) as usize);
+    for idx in 0..argc {
+        vals.push(decode_value(*argv.offset(idx as isize)));
+    }
+    let adapter: ScalarAdapter = std::mem::transmute(reg.adapter);
+    let mut out = ElephcResult {
+        tag: 0,
+        i: 0,
+        f: 0.0,
+    };
+    udf_result_stash_clear();
+    adapter(reg.descriptor, vals.as_ptr(), vals.len() as i64, &mut out);
+    dispatch_scalar_result(ctx, &out);
 }
 
 impl SqliteStmt {

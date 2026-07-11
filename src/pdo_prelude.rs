@@ -114,6 +114,11 @@ extern "elephc_pdo" {
     // shared codegen collation adapter address, so this extern takes two plain `ptr`
     // args and never a `callable`. Returns 1 on success, 0 on error.
     function elephc_pdo_create_collation(int $conn, string $name, ptr $descriptor, ptr $adapter): int;
+    // v14: custom SQLite scalar function registration (Pdo\Sqlite::createFunction).
+    // Same decompose-at-PHP shape as create_collation; `num_args` is the declared arity
+    // (-1 = variadic) and `flags` carries the SQLITE_DETERMINISTIC bit. Returns 1 on
+    // success, 0 on error.
+    function elephc_pdo_create_function(int $conn, string $name, int $num_args, int $flags, ptr $descriptor, ptr $adapter): int;
 }
 
 class PDOException extends RuntimeException {
@@ -1120,13 +1125,33 @@ namespace Pdo {
             // collation adapter address, so the bridge extern receives two plain
             // `ptr` args and never a `callable`. The callback is rooted in
             // $this->udfCallbacks first because SQLite keeps a C pointer to its
-            // descriptor for the connection's lifetime. Only closures and first-class
-            // callables are supported (their value is a descriptor pointer); a string
-            // or array callable is rejected at compile time by __elephc_callable_ptr.
-            $this->udfCallbacks[$name] = $callback;
+            // descriptor for the connection's lifetime. The key is namespaced so a
+            // same-named collation and scalar function do not evict each other's GC
+            // root. Only closures and first-class callables are supported (their value
+            // is a descriptor pointer); a string or array callable is rejected at
+            // compile time by __elephc_callable_ptr.
+            $this->udfCallbacks["collation:" . $name] = $callback;
             $_descriptor = \__elephc_callable_ptr($callback);
             $_adapter = \__elephc_pdo_adapter_addr(0);
             return \elephc_pdo_create_collation($this->connectionId(), $name, $_descriptor, $_adapter) === 1;
+        }
+
+        public function createFunction(string $name, callable $callback, int $numArgs = -1, int $flags = 0): bool {
+            // Registers a scalar SQL function `$name` backed by a compiled-PHP
+            // `$callback(...$args): mixed` invoked once per row. Like createCollation,
+            // the callable is decomposed here into its descriptor pointer and the shared
+            // codegen scalar adapter address, so the bridge extern receives two plain
+            // `ptr` args and never a `callable`. The callback is rooted in
+            // $this->udfCallbacks (under a function-namespaced key) first because SQLite
+            // keeps a C pointer to its descriptor for the connection's lifetime.
+            // $numArgs is the declared arity (-1 = variadic); $flags carries
+            // self::DETERMINISTIC. Only closures and first-class callables are supported;
+            // a string or array callable is rejected at compile time by
+            // __elephc_callable_ptr.
+            $this->udfCallbacks["function:" . $name] = $callback;
+            $_descriptor = \__elephc_callable_ptr($callback);
+            $_adapter = \__elephc_pdo_adapter_addr(1);
+            return \elephc_pdo_create_function($this->connectionId(), $name, $numArgs, $flags, $_descriptor, $_adapter) === 1;
         }
     }
 

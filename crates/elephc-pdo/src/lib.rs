@@ -298,9 +298,12 @@ fn open_persistent_dsn(dsn: &str) -> i64 {
 /// `php://memory` stream). v13 adds the SQLite custom-collation registration
 /// (`elephc_pdo_create_collation`) backing `Pdo\Sqlite::createCollation()`, whose
 /// comparator descriptor and codegen adapter cross as two plain `ptr` arguments.
+/// v14 adds the SQLite scalar user-function registration
+/// (`elephc_pdo_create_function` + `elephc_pdo_udf_stash_bytes`) backing
+/// `Pdo\Sqlite::createFunction()`, sharing the same descriptor/adapter `ptr` shape.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    13
+    14
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -1133,6 +1136,37 @@ pub unsafe extern "C" fn elephc_pdo_create_collation(
     }
 }
 
+/// Registers a scalar SQL function `name` backed by a compiled-PHP callable
+/// (`Pdo\Sqlite::createFunction`). `num_args` is the declared arity (-1 = variadic),
+/// `flags` an optional `SQLITE_DETERMINISTIC`, and `descriptor`/`adapter` the callable
+/// descriptor pointer and the codegen scalar adapter address, produced by the prelude
+/// via `__elephc_callable_ptr` / `__elephc_pdo_adapter_addr`. Returns `1` on success,
+/// `0` on error or a non-SQLite handle.
+///
+/// # Safety
+/// `name` must be a NUL-terminated string valid for the call; `descriptor`/`adapter`
+/// must be the live callable descriptor and adapter entry of the compiled program.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_create_function(
+    conn_id: i64,
+    name: *const c_char,
+    num_args: i64,
+    flags: i64,
+    descriptor: *mut c_void,
+    adapter: *mut c_void,
+) -> i64 {
+    let Some(name) = cstr_arg(name) else {
+        return 0;
+    };
+    let guard = conns().lock().unwrap();
+    match guard.get(&conn_id) {
+        Some(Conn::Sqlite(c)) => {
+            c.create_function(name, num_args, flags, descriptor, adapter as *const c_void)
+        }
+        _ => 0,
+    }
+}
+
 /// Returns the current row's column `i` (0-based) as an integer.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_int(stmt_id: i64, i: i64) -> i64 {
@@ -1357,12 +1391,12 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v13 adds the
-    /// SQLite custom-collation registration (`elephc_pdo_create_collation`) backing
-    /// `Pdo\Sqlite::createCollation()`.
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v14 adds the
+    /// SQLite scalar user-function registration (`elephc_pdo_create_function`) backing
+    /// `Pdo\Sqlite::createFunction()`.
     #[test]
-    fn version_is_v13() {
-        assert_eq!(elephc_pdo_version(), 13);
+    fn version_is_v14() {
+        assert_eq!(elephc_pdo_version(), 14);
     }
 
     /// A DSN for an unsupported driver is rejected with a driver error.

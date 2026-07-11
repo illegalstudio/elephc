@@ -15,5 +15,7 @@
 //!   stores and calls it but never references a `__rt_*` symbol directly.
 
 mod pdo_call_collation;
+mod pdo_call_scalar;
 
 pub(crate) use pdo_call_collation::emit_pdo_call_collation;
+pub(crate) use pdo_call_scalar::emit_pdo_call_scalar;
