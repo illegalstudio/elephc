@@ -39,5 +39,41 @@ rust_decimal = { version = "1", features = ["db-postgres"] }
 # (miniz_oxide) deflate backend instead of the C `zlib` one, so the staticlib has
 # no `libz` dependency and compiled PHP binaries stay fully standalone (no system
 # DB client, no `-lz`) while keeping the binary wire protocol and prepared
-# statements this driver needs.
+# statements this driver needs. Its rustls TLS backend is enabled only through the
+# opt-in `mysql-tls` feature below (it would otherwise drag in aws-lc-rs).
 mysql = { version = "25", default-features = false, features = ["minimal-rust"] }
+# --- TLS (gated by the `tls` / `mysql-tls` features below) ---
+# PostgreSQL TLS uses rustls with the RING crypto provider ONLY (no aws-lc-rs),
+# mirroring crates/elephc-tls so the musl/Docker images and standalone binaries
+# stay free of the aws-lc C/asm toolchain prerequisites. tokio-postgres-rustls
+# exposes a `ring` feature, so `default-features = false` keeps aws-lc-rs out.
+tokio-postgres-rustls = { version = "0.14", default-features = false, features = [
+    "ring",
+], optional = true }
+# The pg connector's rustls ClientConfig is built explicitly with the ring
+# provider (ClientConfig::builder_with_provider), so the pg path never consults a
+# process-global default provider. `std`/`tls12` mirror elephc-tls.
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+], optional = true }
+# Default trust roots for pg verification when no custom `sslrootcert` is given.
+webpki-roots = { version = "0.26", optional = true }
+# Parses a custom `sslrootcert`/client-cert PEM into the pg rustls config.
+rustls-pemfile = { version = "2", optional = true }
+
+[features]
+# TLS is ON by default, but the default `tls` feature covers PostgreSQL ONLY and
+# is aws-lc-rs-free (ring): a `pgsql:` DSN with `sslmode=require`/`verify-full`
+# works out of the box against managed Postgres (Supabase/Neon/RDS/Timescale).
+# `mysql-tls` is deliberately OPT-IN: the `mysql` crate's rustls backend pulls
+# rustls with its DEFAULT features (aws-lc-rs), which would otherwise drag the
+# aws-lc C/asm toolchain into every PDO binary (mysql is always linked). Building
+# with `--features mysql-tls` accepts that cost and, because both ring (pg/elephc-
+# tls) and aws-lc-rs (mysql) then coexist, the mysql path installs the ring
+# provider as the process default to arbitrate the two at runtime. A minimal
+# `--no-default-features` build keeps the historical NoTls behavior for both.
+default = ["tls"]
+tls = ["dep:tokio-postgres-rustls", "dep:rustls", "dep:webpki-roots", "dep:rustls-pemfile"]
+mysql-tls = ["tls", "mysql/rustls-tls"]

@@ -226,15 +226,22 @@ unsafe fn bytes_arg(p: *const c_char, len: i64) -> Vec<u8> {
 
 /// Opens the driver connection for a validated DSN string. `sqlite_open_flags`
 /// (P1-10/P2-9) is only consulted for a `sqlite:` DSN; `my_init_command` (P1-9)
-/// only for a `mysql:` DSN; PostgreSQL and the other driver's parameter are
-/// ignored.
-fn open_conn_for_dsn(dsn: &str, sqlite_open_flags: i64, my_init_command: &str) -> Result<Conn, String> {
+/// and `my_ssl_config` (the packed `Pdo\Mysql::ATTR_SSL_*` options) only for a
+/// `mysql:` DSN. PostgreSQL reads its own `sslmode`/`sslrootcert` straight from
+/// the DSN, so it takes no extra parameter here; the other driver's parameters
+/// are ignored.
+fn open_conn_for_dsn(
+    dsn: &str,
+    sqlite_open_flags: i64,
+    my_init_command: &str,
+    my_ssl_config: &str,
+) -> Result<Conn, String> {
     if let Some(path) = dsn.strip_prefix("sqlite:") {
         sqlite::SqliteConn::open(path, sqlite_open_flags).map(Conn::Sqlite)
     } else if dsn.starts_with("pgsql:") {
         pg::PgConn::open(dsn).map(Conn::Postgres)
     } else if dsn.starts_with("mysql:") {
-        my::MyConn::open(dsn, my_init_command).map(Conn::Mysql)
+        my::MyConn::open(dsn, my_init_command, my_ssl_config).map(Conn::Mysql)
     } else {
         Err(
             "could not find driver (only sqlite:, pgsql:, and mysql: DSNs are supported)"
@@ -252,8 +259,13 @@ fn register_conn(conn: Conn) -> i64 {
 
 /// Opens a non-persistent connection and stores any failure message for the PDO
 /// constructor's `elephc_pdo_last_open_error()` call.
-fn open_nonpersistent_dsn(dsn: &str, sqlite_open_flags: i64, my_init_command: &str) -> i64 {
-    match open_conn_for_dsn(dsn, sqlite_open_flags, my_init_command) {
+fn open_nonpersistent_dsn(
+    dsn: &str,
+    sqlite_open_flags: i64,
+    my_init_command: &str,
+    my_ssl_config: &str,
+) -> i64 {
+    match open_conn_for_dsn(dsn, sqlite_open_flags, my_init_command, my_ssl_config) {
         Ok(conn) => register_conn(conn),
         Err(msg) => {
             store_cstr(open_error_cell(), &msg);
@@ -263,18 +275,23 @@ fn open_nonpersistent_dsn(dsn: &str, sqlite_open_flags: i64, my_init_command: &s
 }
 
 /// Opens or reuses a process-local persistent connection for the full DSN.
-/// `sqlite_open_flags`/`my_init_command` are only applied on a fresh open — the
+/// `sqlite_open_flags`/`my_init_command`/`my_ssl_config` are only applied on a fresh open — the
 /// persistent pool is keyed by DSN alone, so a later open reusing an
 /// already-pooled connection does not re-apply a different flags/init-command
 /// request (matching how no other constructor option retroactively affects a
 /// reused persistent handle either).
-fn open_persistent_dsn(dsn: &str, sqlite_open_flags: i64, my_init_command: &str) -> i64 {
+fn open_persistent_dsn(
+    dsn: &str,
+    sqlite_open_flags: i64,
+    my_init_command: &str,
+    my_ssl_config: &str,
+) -> i64 {
     if let Some(id) = persistent_conns().lock().unwrap().get(dsn).copied() {
         if conns().lock().unwrap().contains_key(&id) {
             return id;
         }
     }
-    match open_conn_for_dsn(dsn, sqlite_open_flags, my_init_command) {
+    match open_conn_for_dsn(dsn, sqlite_open_flags, my_init_command, my_ssl_config) {
         Ok(conn) => {
             let id = register_conn(conn);
             persistent_conns()
@@ -322,9 +339,15 @@ fn open_persistent_dsn(dsn: &str, sqlite_open_flags: i64, my_init_command: &str)
 /// empty string = none) — one SQL statement run by the MySQL/MariaDB server right
 /// after authentication on every (re)connect, backing the minimal wiring for
 /// `Pdo\Mysql::ATTR_INIT_COMMAND`; ignored for `sqlite:`/`pgsql:` DSNs.
+/// v19 adds a `my_ssl_config` parameter to `elephc_pdo_open_persistent` (empty =
+/// no TLS) — the prelude's packed `Pdo\Mysql::ATTR_SSL_*` options applied to the
+/// MySQL/MariaDB connection's rustls backend (requires the opt-in `mysql-tls`
+/// feature) — and enables PostgreSQL TLS via the DSN's own `sslmode`/`sslrootcert`
+/// keys through the default `tls` feature's rustls (ring) connector. No new extern
+/// is added for pg (its TLS parameters ride the DSN).
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    18
+    19
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -354,7 +377,7 @@ pub unsafe extern "C" fn elephc_pdo_open(dsn: *const c_char) -> i64 {
         store_cstr(open_error_cell(), "invalid DSN");
         return -1;
     };
-    open_nonpersistent_dsn(dsn, 0, "")
+    open_nonpersistent_dsn(dsn, 0, "", "")
 }
 
 /// Opens a database for a PDO DSN, reusing a process-local pooled connection when
@@ -365,27 +388,33 @@ pub unsafe extern "C" fn elephc_pdo_open(dsn: *const c_char) -> i64 {
 /// `Pdo\Sqlite::ATTR_OPEN_FLAGS` (P1-10). `my_init_command` (v18) is a SQL
 /// statement run right after authentication on a `mysql:` connection (empty = do
 /// nothing), ignored for SQLite/PostgreSQL DSNs; it backs the minimal wiring for
-/// `Pdo\Mysql::ATTR_INIT_COMMAND` (P1-9).
+/// `Pdo\Mysql::ATTR_INIT_COMMAND` (P1-9). `my_ssl_config` (v19) is the prelude's
+/// packed `Pdo\Mysql::ATTR_SSL_*` options (`ca=…;cert=…;key=…;verify=0|1`, empty =
+/// no TLS) applied to the `mysql:` connection's rustls backend; it is ignored for
+/// SQLite/PostgreSQL DSNs (PostgreSQL carries its own `sslmode`/`sslrootcert` in
+/// the DSN) and requires the opt-in `mysql-tls` feature to take effect.
 ///
 /// # Safety
-/// `dsn` and, when non-null, `my_init_command` must each point to a
-/// NUL-terminated string valid for the duration of the call.
+/// `dsn` and, when non-null, `my_init_command`/`my_ssl_config` must each point to
+/// a NUL-terminated string valid for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_open_persistent(
     dsn: *const c_char,
     persistent: i64,
     sqlite_open_flags: i64,
     my_init_command: *const c_char,
+    my_ssl_config: *const c_char,
 ) -> i64 {
     let Some(dsn) = cstr_arg(dsn) else {
         store_cstr(open_error_cell(), "invalid DSN");
         return -1;
     };
     let init_command = cstr_arg(my_init_command).unwrap_or("");
+    let ssl_config = cstr_arg(my_ssl_config).unwrap_or("");
     if persistent == 0 {
-        open_nonpersistent_dsn(dsn, sqlite_open_flags, init_command)
+        open_nonpersistent_dsn(dsn, sqlite_open_flags, init_command, ssl_config)
     } else {
-        open_persistent_dsn(dsn, sqlite_open_flags, init_command)
+        open_persistent_dsn(dsn, sqlite_open_flags, init_command, ssl_config)
     }
 }
 
@@ -1490,11 +1519,12 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v18 adds
-    /// `elephc_pdo_open_persistent`'s `my_init_command` parameter (P1-9).
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v19 adds
+    /// `elephc_pdo_open_persistent`'s `my_ssl_config` parameter (MySQL TLS) and the
+    /// DSN-driven PostgreSQL rustls connector.
     #[test]
-    fn version_is_v18() {
-        assert_eq!(elephc_pdo_version(), 18);
+    fn version_is_v19() {
+        assert_eq!(elephc_pdo_version(), 19);
     }
 
     /// A DSN for an unsupported driver is rejected with a driver error.
@@ -1586,7 +1616,7 @@ mod tests {
     #[test]
     fn sqlite_persistent_pool_reuses_connection_after_close() {
         let dsn = cs("sqlite::memory:");
-        let first = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1, 0, std::ptr::null()) };
+        let first = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1, 0, std::ptr::null(), std::ptr::null()) };
         assert!(first > 0, "open failed");
 
         let ddl = cs("CREATE TABLE persistent_pool (n INTEGER)");
@@ -1595,7 +1625,7 @@ mod tests {
         assert_eq!(unsafe { elephc_pdo_exec(first, ins.as_ptr()) }, 1);
         elephc_pdo_close(first);
 
-        let second = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1, 0, std::ptr::null()) };
+        let second = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1, 0, std::ptr::null(), std::ptr::null()) };
         assert_eq!(second, first);
         let sql = cs("SELECT n FROM persistent_pool");
         let stmt = unsafe { elephc_pdo_prepare(second, sql.as_ptr()) };
@@ -1699,7 +1729,7 @@ mod tests {
 
         // A non-persistent (flag 0) open with sqlite_open_flags=0 creates the file
         // read-write, as today's default does.
-        let rw = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 0, 0, std::ptr::null()) };
+        let rw = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 0, 0, std::ptr::null(), std::ptr::null()) };
         assert!(rw > 0, "read-write open failed");
         let ddl = cs("CREATE TABLE t (n INTEGER)");
         assert_eq!(unsafe { elephc_pdo_exec(rw, ddl.as_ptr()) }, 0);
@@ -1707,7 +1737,7 @@ mod tests {
 
         // Reopening with sqlite_open_flags=1 (SQLITE_OPEN_READONLY) must reject a
         // write against the now-existing file.
-        let ro = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 0, 1, std::ptr::null()) };
+        let ro = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 0, 1, std::ptr::null(), std::ptr::null()) };
         assert!(ro > 0, "read-only open failed");
         let ins = cs("INSERT INTO t VALUES (1)");
         assert_eq!(
@@ -1733,7 +1763,7 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         let dsn = cs(&format!("sqlite:file:{}?mode=ro", path.display()));
-        let id = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 0, 0, std::ptr::null()) };
+        let id = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 0, 0, std::ptr::null(), std::ptr::null()) };
         assert_eq!(
             id, -1,
             "mode=ro URI DSN against a nonexistent file should fail to open, not create it"

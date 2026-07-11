@@ -308,6 +308,99 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, Vec<i
     (out, named, order)
 }
 
+/// Applies the prelude's packed `Pdo\Mysql::ATTR_SSL_*` config to `opts`, enabling
+/// rustls TLS for the connection. Only compiled with the opt-in `mysql-tls`
+/// feature (the `mysql` crate's rustls backend pulls aws-lc-rs, which the default
+/// build deliberately excludes). An empty config leaves `opts` untouched
+/// (plaintext).
+#[cfg(feature = "mysql-tls")]
+fn apply_ssl_opts(opts: OptsBuilder, ssl_config: &str) -> Result<OptsBuilder, String> {
+    if ssl_config.is_empty() {
+        return Ok(opts);
+    }
+    install_crypto_provider();
+    Ok(opts.ssl_opts(parse_ssl_config(ssl_config)))
+}
+
+/// The default (no `mysql-tls`) build has no MySQL TLS backend linked. Rather than
+/// silently downgrade a program that asked for TLS to a plaintext connection, a
+/// non-empty SSL config fails loudly; an empty config (no TLS requested) connects
+/// normally.
+#[cfg(not(feature = "mysql-tls"))]
+fn apply_ssl_opts(opts: OptsBuilder, ssl_config: &str) -> Result<OptsBuilder, String> {
+    if ssl_config.is_empty() {
+        return Ok(opts);
+    }
+    Err("mysql TLS (Pdo\\Mysql::ATTR_SSL_*) was requested but requires the opt-in \
+         `mysql-tls` feature, which was not compiled in (rebuild elephc-pdo with \
+         --features mysql-tls)"
+        .to_string())
+}
+
+/// Installs the ring `CryptoProvider` as the process default exactly once. The
+/// `mysql` crate builds its rustls `ClientConfig` with the provider-less
+/// `ClientConfig::builder()`, which panics when more than one provider is present
+/// unless a process default is installed — and enabling `mysql-tls` brings in
+/// aws-lc-rs alongside the ring provider that pg / elephc-tls already use. Pinning
+/// ring keeps the whole process on a single, musl-friendly provider.
+#[cfg(feature = "mysql-tls")]
+fn install_crypto_provider() {
+    use std::sync::Once;
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        // Ignored on the (harmless) race where another path already installed one.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
+/// Parses the prelude's packed SSL config (`ca=…;cert=…;key=…;verify=0|1`) into
+/// mysql `SslOpts`. `ca` is `MYSQL_ATTR_SSL_CA` (a server CA bundle to trust on
+/// top of the bundled webpki roots); `cert`+`key` are `MYSQL_ATTR_SSL_CERT`/
+/// `SSL_KEY` (client-certificate mutual TLS, honored only when both are present);
+/// `verify=0` is `MYSQL_ATTR_SSL_VERIFY_SERVER_CERT` set false, which disables
+/// certificate and hostname validation via the crate's danger flags. Unknown keys
+/// (e.g. the unsupported `MYSQL_ATTR_SSL_CAPATH`/`SSL_CIPHER`) are ignored.
+#[cfg(feature = "mysql-tls")]
+fn parse_ssl_config(ssl_config: &str) -> mysql::SslOpts {
+    use mysql::{ClientIdentity, SslOpts};
+    use std::path::PathBuf;
+
+    let mut ca: Option<String> = None;
+    let mut cert: Option<String> = None;
+    let mut key: Option<String> = None;
+    let mut verify = true;
+    for pair in ssl_config.split(';') {
+        let Some((k, v)) = pair.trim().split_once('=') else {
+            continue;
+        };
+        let v = v.trim().to_string();
+        match k.trim() {
+            "ca" => ca = Some(v),
+            "cert" => cert = Some(v),
+            "key" => key = Some(v),
+            "verify" => verify = v != "0",
+            _ => {}
+        }
+    }
+
+    let mut ssl = SslOpts::default();
+    if let Some(ca) = ca {
+        ssl = ssl.with_root_cert_path(Some(PathBuf::from(ca)));
+    }
+    if let (Some(cert), Some(key)) = (cert, key) {
+        ssl = ssl.with_client_identity(Some(ClientIdentity::new(
+            PathBuf::from(cert),
+            PathBuf::from(key),
+        )));
+    }
+    if !verify {
+        ssl = ssl
+            .with_danger_skip_domain_validation(true)
+            .with_danger_accept_invalid_certs(true);
+    }
+    ssl
+}
+
 impl MyConn {
     /// Connects to MySQL/MariaDB for a `mysql:` DSN. `init_command` (P1-9), when
     /// non-empty, is one SQL statement run by the server immediately after
@@ -318,10 +411,16 @@ impl MyConn {
     /// realistic init command (e.g. two statements) could contain. A DSN
     /// `charset=` key (P2-3) becomes its own `SET NAMES <charset>` statement, run
     /// before `init_command` so an explicit `ATTR_INIT_COMMAND` can still issue
-    /// its own `SET NAMES`/`sql_mode` afterwards in the same session. Returns the
+    /// its own `SET NAMES`/`sql_mode` afterwards in the same session.
+    ///
+    /// `ssl_config` is the prelude's packed serialization of the
+    /// `Pdo\Mysql::ATTR_SSL_*` constructor options (`ca=…;cert=…;key=…;verify=…`);
+    /// an empty string means no TLS. It is only honored when the opt-in
+    /// `mysql-tls` feature is compiled in (see [`apply_ssl_opts`]). Returns the
     /// connection or an error message for `last_open_error`.
-    pub fn open(dsn: &str, init_command: &str) -> Result<MyConn, String> {
+    pub fn open(dsn: &str, init_command: &str, ssl_config: &str) -> Result<MyConn, String> {
         let (mut opts, charset) = build_opts(dsn)?;
+        opts = apply_ssl_opts(opts, ssl_config)?;
         let mut init_statements: Vec<String> = Vec::new();
         if let Some(cs) = charset {
             init_statements.push(format!("SET NAMES {cs}"));
@@ -856,5 +955,31 @@ mod tests {
     fn build_opts_leaves_charset_unset_by_default() {
         let (_opts, charset) = build_opts("mysql:host=localhost;dbname=testdb").unwrap();
         assert_eq!(charset, None);
+    }
+
+    /// An empty SSL config is always a no-op (plaintext), regardless of feature.
+    #[test]
+    fn apply_ssl_opts_empty_is_noop() {
+        assert!(apply_ssl_opts(OptsBuilder::new(), "").is_ok());
+    }
+
+    /// In the default build (no `mysql-tls`), a non-empty SSL config fails loudly
+    /// so a program that asked for TLS is not silently downgraded to plaintext.
+    #[cfg(not(feature = "mysql-tls"))]
+    #[test]
+    fn apply_ssl_opts_requires_feature_when_configured() {
+        // `OptsBuilder` has no `Debug`, so match rather than `unwrap_err`.
+        match apply_ssl_opts(OptsBuilder::new(), "ca=/etc/ca.pem") {
+            Ok(_) => panic!("expected an error when the mysql-tls feature is disabled"),
+            Err(err) => assert!(err.contains("mysql-tls"), "unexpected error: {err}"),
+        }
+    }
+
+    /// With `mysql-tls`, a packed config is parsed into `SslOpts` and attached
+    /// without panicking (the ring provider installs on demand).
+    #[cfg(feature = "mysql-tls")]
+    #[test]
+    fn apply_ssl_opts_builds_sslopts() {
+        assert!(apply_ssl_opts(OptsBuilder::new(), "ca=/etc/ca.pem;verify=0").is_ok());
     }
 }

@@ -304,3 +304,34 @@ fn test_mysql_get_warning_count() {
     );
     assert_eq!(out, "1");
 }
+
+/// Live TLS round-trip. Opens a MySQL/MariaDB connection with `Pdo\Mysql::ATTR_SSL_CA`
+/// set to the server CA bundle (path in `ELEPHC_MY_TLS_CA`) and confirms a query
+/// returns over the encrypted connection. UNLIKE pg, MySQL TLS is opt-in: the linked
+/// staticlib must be rebuilt with the `mysql-tls` feature first (it pulls aws-lc-rs),
+/// otherwise the bridge fails loud with a "requires the opt-in `mysql-tls` feature"
+/// error. `#[ignore]` — needs a TLS-serving MySQL. Example:
+///   docker run -d --name mytls -e MYSQL_ROOT_PASSWORD=test -e MYSQL_DATABASE=testdb \
+///       -e MYSQL_USER=test -e MYSQL_PASSWORD=test -p 33062:3306 mysql:8 \
+///       --require-secure-transport=ON
+///   docker cp mytls:/var/lib/mysql/ca.pem ./ca.pem   # server-generated CA
+///   cargo build -p elephc-pdo --features mysql-tls    # TLS staticlib (aws-lc-rs)
+///   ELEPHC_MY_TLS_DSN='mysql:host=127.0.0.1;port=33062;dbname=testdb;user=test;password=test' \
+///       ELEPHC_MY_TLS_CA="$PWD/ca.pem" \
+///       cargo test --test codegen_tests -- --ignored mysql_tls_round_trip
+#[test]
+#[ignore]
+fn mysql_tls_round_trip() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO(
+    (string) getenv("ELEPHC_MY_TLS_DSN"),
+    null,
+    null,
+    [Pdo\Mysql::ATTR_SSL_CA => (string) getenv("ELEPHC_MY_TLS_CA")]
+);
+echo $db->query("SELECT 'tls-ok'")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "tls-ok");
+}

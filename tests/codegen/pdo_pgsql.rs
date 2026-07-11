@@ -327,3 +327,26 @@ echo $content . ":" . (($db->lobOpen("999999999") === false) ? "false" : "leak")
     );
     assert_eq!(out, "elephc-lo:false");
 }
+
+/// Live TLS round-trip. Opens `ELEPHC_PG_TLS_DSN` — a DSN carrying `sslmode=require`
+/// (or `sslmode=verify-full;sslrootcert=<ca.pem>`) against a TLS-enabled PostgreSQL —
+/// and confirms a query returns over the encrypted rustls (ring) connection. The
+/// default `tls` feature is compiled into the linked staticlib, so no extra build
+/// flag is needed. `#[ignore]` — needs a TLS-serving PostgreSQL. Example:
+///   # server.crt/server.key must be owned by the postgres uid inside the container
+///   docker run -d --name pgtls -e POSTGRES_PASSWORD=test -e POSTGRES_USER=test \
+///       -e POSTGRES_DB=testdb -p 55433:5432 -v "$PWD/certs":/certs postgres:16-alpine \
+///       -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key
+///   ELEPHC_PG_TLS_DSN='pgsql:host=localhost;port=55433;dbname=testdb;user=test;password=test;sslmode=require' \
+///       cargo test --test codegen_tests -- --ignored pgsql_tls_round_trip
+#[test]
+#[ignore]
+fn pgsql_tls_round_trip() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO((string) getenv("ELEPHC_PG_TLS_DSN"));
+echo $db->query("SELECT 'tls-ok'")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "tls-ok");
+}

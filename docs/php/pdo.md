@@ -216,13 +216,68 @@ The MySQL driver behaves like the others, with a few database-specific points:
   TCP connect via a `connect_timeout` DSN key.
 - **`Pdo\Mysql::ATTR_INIT_COMMAND`.** Passed as a constructor option, this SQL
   statement runs on the server immediately after authentication (e.g. `SET NAMES
-  utf8mb4`). Every other `Pdo\Mysql::ATTR_*` constant (`ATTR_COMPRESS`,
-  `ATTR_SSL_*`, …) is accepted and stored but has no effect.
+  utf8mb4`). `ATTR_SSL_CA` / `ATTR_SSL_CERT` / `ATTR_SSL_KEY` /
+  `ATTR_SSL_VERIFY_SERVER_CERT` drive TLS (see the TLS section below); the
+  remaining `Pdo\Mysql::ATTR_*` constants (`ATTR_COMPRESS`, `ATTR_SSL_CAPATH`,
+  `ATTR_SSL_CIPHER`, …) are accepted and stored but have no effect.
 - **`charset` DSN key.** A `mysql:…;charset=utf8mb4` DSN key becomes its own `SET
   NAMES utf8mb4` statement at connect time, run before `ATTR_INIT_COMMAND` (so an
   explicit init command can still issue its own `SET NAMES` afterwards). Only
   plain identifier characters (`[A-Za-z0-9_]`) are honored; anything else is
   silently dropped.
+
+## TLS / encrypted connections
+
+Both network drivers connect over TLS with [rustls](https://github.com/rustls/rustls).
+SQLite is in-process and unaffected.
+
+**PostgreSQL** — ships in the default build (ring provider, no aws-lc-rs). Configure
+it with the usual libpq DSN keys:
+
+```php
+<?php
+// Encrypt and verify the server against the bundled public trust roots:
+$db = new PDO("pgsql:host=db.example.com;dbname=app;sslmode=require;user=u;password=p");
+
+// Verify against a specific CA (e.g. a managed provider's root):
+$db = new PDO(
+    "pgsql:host=db.example.com;dbname=app;sslmode=verify-full;sslrootcert=/path/ca.pem;user=u;password=p"
+);
+```
+
+- `sslmode`: `disable` (plaintext), `prefer` (the default — try TLS, allow
+  plaintext), or `require`/`verify-ca`/`verify-full` (require TLS).
+- `sslrootcert`: a PEM CA bundle to trust instead of the bundled webpki roots.
+- `sslcert` + `sslkey`: a client certificate + private key for mutual TLS (both
+  required together).
+
+Unlike libpq's bare `require` (which encrypts without verifying), elephc always
+validates the server certificate once TLS is negotiated — the safer default — so
+`require`, `verify-ca`, and `verify-full` all verify against the trust roots. For a
+server with a self-signed certificate, pass its CA via `sslrootcert`.
+
+**MySQL / MariaDB** — opt-in at build time (`cargo build -p elephc-pdo --features
+mysql-tls`; see Limitations for why). Configure it with the `Pdo\Mysql::ATTR_SSL_*`
+constructor options:
+
+```php
+<?php
+$db = new PDO("mysql:host=db.example.com;dbname=app", "u", "p", [
+    Pdo\Mysql::ATTR_SSL_CA   => "/path/ca.pem",   // trust this CA
+    // Pdo\Mysql::ATTR_SSL_CERT => "/path/client.pem",  // mutual TLS (with SSL_KEY)
+    // Pdo\Mysql::ATTR_SSL_KEY  => "/path/client.key",
+    // Pdo\Mysql::ATTR_SSL_VERIFY_SERVER_CERT => false, // skip verification (insecure)
+]);
+```
+
+- `ATTR_SSL_CA`: a PEM CA bundle to trust (in addition to the bundled webpki roots).
+- `ATTR_SSL_CERT` + `ATTR_SSL_KEY`: client certificate + key for mutual TLS.
+- `ATTR_SSL_VERIFY_SERVER_CERT`: `false` disables certificate and hostname checking.
+- `ATTR_SSL_CAPATH` and `ATTR_SSL_CIPHER` have no rustls equivalent and are ignored.
+
+Presence of any `ATTR_SSL_*` option enables TLS. In a build without `mysql-tls`,
+requesting TLS raises a `PDOException` at connect time rather than silently falling
+back to plaintext.
 
 ## Transactions
 
@@ -432,13 +487,17 @@ is delivered on the next `exec()`/`query()`.
 - **`fetch()`'s second argument** is a class/target (as with `setFetchMode`),
   not PHP 8.4's cursor-orientation parameter; forward-only cursors make the
   difference moot in practice.
-- **No TLS/SSL for PostgreSQL or MySQL.** To keep a compiled binary free of any
-  system TLS library, the PostgreSQL and MySQL drivers connect over plaintext only:
-  the pure-Rust clients are built without their TLS backends, and the
-  `Pdo\Mysql::ATTR_SSL_*` constants are accepted but inert. A server that *mandates*
-  TLS (many managed offerings — AWS RDS `force_ssl`, Supabase, Neon, PlanetScale,
-  Aiven, …) therefore cannot be reached. SQLite is unaffected (in-process). TLS would
-  be an opt-in build feature (pulling in a TLS crate) if that trade-off is wanted.
+- **MySQL TLS is opt-in at build time.** PostgreSQL TLS ships in the default build
+  (see the TLS section above); MySQL/MariaDB TLS is behind the `mysql-tls` Cargo
+  feature. The reason is dependency hygiene: the `mysql` crate's rustls backend
+  pulls rustls with its default `aws-lc-rs` provider (a C/asm library needing a
+  build toolchain), whereas the rest of elephc's TLS — PostgreSQL, `ssl://`
+  streams — uses the pure-Rust `ring` provider and stays musl-friendly. Building
+  without `mysql-tls` (the default) keeps every PDO binary aws-lc-free; a MySQL
+  connection that requests TLS then fails loudly rather than silently downgrading
+  to plaintext. Rebuild the bridge with `cargo build -p elephc-pdo --features
+  mysql-tls` to reach a MySQL server that *mandates* TLS (AWS RDS/Aurora,
+  PlanetScale, …).
 - **`FETCH_CLASS` / `FETCH_INTO` target classes should declare typed properties.**
   Populating a class whose properties are *untyped* (`public $id;`) can corrupt a
   column whose value type differs from another column's (a compiler limitation in

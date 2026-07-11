@@ -1057,6 +1057,33 @@ echo PDO::FETCH_KEY_PAIR . "," . PDO::FETCH_GROUP . "," . PDO::FETCH_UNIQUE . ",
     assert_eq!(out, "12,65536,196608,19,20,1");
 }
 
+/// The `Pdo\Mysql::ATTR_SSL_*` constants that drive MySQL TLS carry their PHP-8.4
+/// (mysqlnd) values, and referencing them compiles.
+#[test]
+fn test_pdo_mysql_ssl_constants_present() {
+    let out = compile_and_run(
+        r#"<?php
+echo Pdo\Mysql::ATTR_SSL_KEY . "," . Pdo\Mysql::ATTR_SSL_CERT . "," . Pdo\Mysql::ATTR_SSL_CA . "," . Pdo\Mysql::ATTR_SSL_CAPATH . "," . Pdo\Mysql::ATTR_SSL_CIPHER . "," . Pdo\Mysql::ATTR_SSL_VERIFY_SERVER_CERT;
+"#,
+    );
+    assert_eq!(out, "1007,1008,1009,1010,1011,1014");
+}
+
+/// A MySQL SSL option in the constructor `$options` array is collected and packed
+/// by `PDO::__construct`, then ignored by the bridge for a `sqlite:` DSN — the open
+/// must still succeed (proving the packed-config building is inert, not fatal, for
+/// the other drivers).
+#[test]
+fn test_pdo_mysql_ssl_options_inert_for_sqlite() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:", null, null, [Pdo\Mysql::ATTR_SSL_CA => "/nonexistent/ca.pem", Pdo\Mysql::ATTR_SSL_VERIFY_SERVER_CERT => false]);
+echo $db->query("SELECT 42")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
 /// W4: `ATTR_DEFAULT_FETCH_MODE` set via setAttribute() governs a no-mode fetch().
 #[test]
 fn test_pdo_default_fetch_mode_set_attribute() {

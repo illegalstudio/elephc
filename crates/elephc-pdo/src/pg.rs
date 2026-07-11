@@ -190,11 +190,16 @@ fn parse_datetime_utc(
 /// Parses a PDO `pgsql:` DSN (semicolon-separated `key=value` pairs) into a
 /// libpq-style connection string the `postgres` client accepts. Recognises the
 /// PDO key `dbname` as-is and passes other keys (`host`, `port`, `user`,
-/// `password`, `sslmode`, …) straight through — including `connect_timeout`
-/// (P2-1: the prelude folds this in from `PDO::ATTR_TIMEOUT` alongside the
-/// credentials, and libpq's own conninfo parser already understands the key, so
-/// no bridge-side special-casing is needed here). Returns an error for a DSN
-/// without the `pgsql:` prefix.
+/// `password`, …) straight through — including `connect_timeout` (P2-1: the
+/// prelude folds this in from `PDO::ATTR_TIMEOUT` alongside the credentials, and
+/// libpq's own conninfo parser already understands the key, so no bridge-side
+/// special-casing is needed here). The TLS keys (`sslmode`, `sslrootcert`,
+/// `sslcert`, `sslkey`) are deliberately NOT forwarded: tokio-postgres's
+/// connection-string parser only accepts `sslmode=disable|prefer|require` (it
+/// rejects libpq's `verify-ca`/`verify-full`) and rejects the file-path keys
+/// outright, so [`parse_tls`] extracts them and `open` applies them to the
+/// `Config`/rustls connector instead. Returns an error for a DSN without the
+/// `pgsql:` prefix.
 pub fn parse_dsn(dsn: &str) -> Result<String, String> {
     let body = dsn
         .strip_prefix("pgsql:")
@@ -210,6 +215,13 @@ pub fn parse_dsn(dsn: &str) -> Result<String, String> {
         };
         let key = key.trim();
         let value = value.trim();
+        // The TLS keys are consumed by `parse_tls`/`open`, not by the libpq
+        // connection string: tokio-postgres's parser rejects `sslrootcert`/
+        // `sslcert`/`sslkey` and the `verify-ca`/`verify-full` sslmode values, so
+        // forwarding any of them would make `.parse::<Config>()` fail.
+        if matches!(key, "sslmode" | "sslrootcert" | "sslcert" | "sslkey") {
+            continue;
+        }
         // libpq connection strings quote values containing spaces/specials; a
         // simple single-quote wrap with backslash-escaping is sufficient here.
         let escaped = value.replace('\\', "\\\\").replace('\'', "\\'");
@@ -219,6 +231,162 @@ pub fn parse_dsn(dsn: &str) -> Result<String, String> {
         return Err("empty pgsql DSN".to_string());
     }
     Ok(parts.join(" "))
+}
+
+/// The PostgreSQL TLS parameters carried by a `pgsql:` DSN, extracted separately
+/// from the libpq connection string (see [`parse_dsn`]). `mode` mirrors libpq's
+/// `sslmode`; the three optional paths mirror libpq's `sslrootcert` (server CA
+/// bundle), `sslcert`, and `sslkey` (client-certificate mutual TLS). The path
+/// fields are only read when the `tls` feature is compiled in; a
+/// `--no-default-features` build still parses them (so the DSN is accepted) but
+/// leaves them unused.
+#[derive(Default)]
+#[cfg_attr(not(feature = "tls"), allow(dead_code))]
+struct PgTls {
+    /// Lowercased `sslmode` value; empty when the DSN omits it (libpq and
+    /// tokio-postgres both default to `prefer`).
+    mode: String,
+    /// `sslrootcert`: a PEM CA bundle the server certificate is verified against.
+    /// When absent, the bundled webpki-roots trust anchors are used.
+    root_cert: Option<String>,
+    /// `sslcert`: the client certificate chain PEM for mutual TLS.
+    client_cert: Option<String>,
+    /// `sslkey`: the client private-key PEM for mutual TLS.
+    client_key: Option<String>,
+}
+
+/// Extracts the TLS parameters from a `pgsql:` DSN (the keys [`parse_dsn`]
+/// deliberately drops). Unknown keys are ignored; a DSN without the `pgsql:`
+/// prefix yields the default (unset) parameters.
+fn parse_tls(dsn: &str) -> PgTls {
+    let mut tls = PgTls::default();
+    let Some(body) = dsn.strip_prefix("pgsql:") else {
+        return tls;
+    };
+    for pair in body.split(';') {
+        let Some((key, value)) = pair.trim().split_once('=') else {
+            continue;
+        };
+        let value = value.trim().to_string();
+        match key.trim() {
+            "sslmode" => tls.mode = value.to_ascii_lowercase(),
+            "sslrootcert" => tls.root_cert = Some(value),
+            "sslcert" => tls.client_cert = Some(value),
+            "sslkey" => tls.client_key = Some(value),
+            _ => {}
+        }
+    }
+    tls
+}
+
+/// Applies the DSN's `sslmode` to `config` and opens the connection, using rustls
+/// (ring provider) when TLS is requested. `disable` connects in plaintext;
+/// `prefer` (the default) attempts TLS but allows a plaintext session;
+/// `require`/`verify-ca`/`verify-full` demand TLS. The rustls verifier always
+/// validates the server certificate against the trust anchors (a stricter, safer
+/// default than libpq's bare `require`, which encrypts without verifying);
+/// `verify-ca` and `verify-full` therefore behave identically here.
+#[cfg(feature = "tls")]
+fn connect_tls(config: &mut Config, tls: &PgTls) -> Result<Client, String> {
+    use postgres::config::SslMode;
+    if tls.mode == "disable" {
+        config.ssl_mode(SslMode::Disable);
+        return config.connect(NoTls).map_err(|e| e.to_string());
+    }
+    let require = matches!(tls.mode.as_str(), "require" | "verify-ca" | "verify-full");
+    config.ssl_mode(if require {
+        SslMode::Require
+    } else {
+        SslMode::Prefer
+    });
+    let connector = build_tls_connector(tls)?;
+    config.connect(connector).map_err(|e| e.to_string())
+}
+
+/// The `--no-default-features` fallback: no TLS backend is linked, so a DSN that
+/// *demands* TLS fails loudly rather than silently connecting in plaintext, while
+/// `disable`/`prefer`/unset (which tolerate plaintext) still connect.
+#[cfg(not(feature = "tls"))]
+fn connect_tls(config: &mut Config, tls: &PgTls) -> Result<Client, String> {
+    if matches!(tls.mode.as_str(), "require" | "verify-ca" | "verify-full") {
+        return Err(format!(
+            "pgsql sslmode={} requires TLS, which was not compiled in \
+             (rebuild elephc-pdo with its default `tls` feature)",
+            tls.mode
+        ));
+    }
+    config.connect(NoTls).map_err(|e| e.to_string())
+}
+
+/// Builds a rustls `MakeRustlsConnect` for the pg connection. The `ClientConfig`
+/// is built with an explicit ring `CryptoProvider` (`builder_with_provider`), so
+/// it never depends on a process-global default provider. When `sslrootcert` is
+/// given, only that PEM CA bundle is trusted; otherwise the bundled webpki-roots
+/// anchors are used. `sslcert`+`sslkey` (both required together) enable
+/// client-certificate mutual TLS.
+#[cfg(feature = "tls")]
+fn build_tls_connector(tls: &PgTls) -> Result<tokio_postgres_rustls::MakeRustlsConnect, String> {
+    use rustls::RootCertStore;
+    use std::sync::Arc;
+
+    let mut roots = RootCertStore::empty();
+    if let Some(ca) = &tls.root_cert {
+        for cert in load_certs(ca, "sslrootcert")? {
+            roots
+                .add(cert)
+                .map_err(|e| format!("sslrootcert {}: {}", ca, e))?;
+        }
+    } else {
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
+
+    let builder = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| e.to_string())?
+    .with_root_certificates(roots);
+
+    let config = match (&tls.client_cert, &tls.client_key) {
+        (Some(cert), Some(key)) => {
+            let chain = load_certs(cert, "sslcert")?;
+            let der = load_private_key(key)?;
+            builder
+                .with_client_auth_cert(chain, der)
+                .map_err(|e| e.to_string())?
+        }
+        _ => builder.with_no_client_auth(),
+    };
+    Ok(tokio_postgres_rustls::MakeRustlsConnect::new(config))
+}
+
+/// Reads a PEM file into a chain of DER certificates. `label` names the DSN key
+/// for error messages (`sslrootcert` / `sslcert`).
+#[cfg(feature = "tls")]
+fn load_certs(
+    path: &str,
+    label: &str,
+) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, String> {
+    let pem = std::fs::read(path).map_err(|e| format!("{} {}: {}", label, path, e))?;
+    let mut reader = &pem[..];
+    let mut out = Vec::new();
+    for cert in rustls_pemfile::certs(&mut reader) {
+        out.push(cert.map_err(|e| format!("{} {}: {}", label, path, e))?);
+    }
+    if out.is_empty() {
+        return Err(format!("{} {}: no certificates found", label, path));
+    }
+    Ok(out)
+}
+
+/// Reads the first PEM private key (PKCS#8, PKCS#1, or SEC1) from `sslkey`.
+#[cfg(feature = "tls")]
+fn load_private_key(path: &str) -> Result<rustls::pki_types::PrivateKeyDer<'static>, String> {
+    let pem = std::fs::read(path).map_err(|e| format!("sslkey {}: {}", path, e))?;
+    let mut reader = &pem[..];
+    rustls_pemfile::private_key(&mut reader)
+        .map_err(|e| format!("sslkey {}: {}", path, e))?
+        .ok_or_else(|| format!("sslkey {}: no private key found", path))
 }
 
 /// Translates PDO `?` and `:name` placeholders to PostgreSQL `$N`, returning the
@@ -323,6 +491,7 @@ impl PgConn {
     /// `Pdo\Pgsql::setNoticeCallback()`.
     pub fn open(dsn: &str) -> Result<PgConn, String> {
         let conn_str = parse_dsn(dsn)?;
+        let tls = parse_tls(dsn);
         let mut config: Config = conn_str.parse().map_err(|e: postgres::Error| e.to_string())?;
         let notices: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         let sink = Arc::clone(&notices);
@@ -334,7 +503,9 @@ impl PgConn {
                 queue.push_back(notice.message().to_string());
             }
         });
-        let client = config.connect(NoTls).map_err(|e| e.to_string())?;
+        // Applies `sslmode` and opens the connection over rustls (ring) when TLS is
+        // requested, or plaintext otherwise (see `connect_tls`).
+        let client = connect_tls(&mut config, &tls)?;
         Ok(PgConn {
             client,
             changes: 0,
@@ -887,4 +1058,78 @@ fn decode_row(row: &Row) -> Vec<Cell> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The TLS keys are consumed by `parse_tls`, not forwarded into the libpq
+    /// connection string — tokio-postgres's parser rejects `sslrootcert` and the
+    /// `verify-*` sslmode values, so leaking any of them would break `.parse()`.
+    #[test]
+    fn parse_dsn_strips_tls_keys() {
+        let dsn = "pgsql:host=db.example.com;sslmode=require;sslrootcert=/etc/ca.pem;dbname=app";
+        let conn_str = parse_dsn(dsn).expect("dsn parses");
+        assert!(conn_str.contains("host='db.example.com'"));
+        assert!(conn_str.contains("dbname='app'"));
+        assert!(
+            !conn_str.contains("sslmode"),
+            "sslmode must not reach the libpq conn string: {conn_str}"
+        );
+        assert!(
+            !conn_str.contains("sslrootcert"),
+            "sslrootcert must not reach the libpq conn string: {conn_str}"
+        );
+    }
+
+    /// `parse_tls` captures `sslmode` (lowercased) and the three file paths.
+    #[test]
+    fn parse_tls_captures_mode_and_paths() {
+        let tls = parse_tls(
+            "pgsql:host=h;sslmode=VERIFY-FULL;sslrootcert=/ca.pem;sslcert=/c.pem;sslkey=/k.pem",
+        );
+        assert_eq!(tls.mode, "verify-full");
+        assert_eq!(tls.root_cert.as_deref(), Some("/ca.pem"));
+        assert_eq!(tls.client_cert.as_deref(), Some("/c.pem"));
+        assert_eq!(tls.client_key.as_deref(), Some("/k.pem"));
+    }
+
+    /// A DSN without TLS keys yields the unset defaults (libpq/tokio-postgres both
+    /// default to `prefer`, represented here by an empty mode).
+    #[test]
+    fn parse_tls_defaults_when_absent() {
+        let tls = parse_tls("pgsql:host=h;dbname=d");
+        assert!(tls.mode.is_empty());
+        assert!(tls.root_cert.is_none());
+    }
+
+    /// Building the rustls connector with the bundled webpki roots exercises the
+    /// explicit ring `CryptoProvider` and the whole `ClientConfig` builder chain,
+    /// catching a provider/API break without needing a live TLS server.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn build_tls_connector_with_webpki_roots_succeeds() {
+        let tls = PgTls {
+            mode: "require".to_string(),
+            ..PgTls::default()
+        };
+        assert!(build_tls_connector(&tls).is_ok());
+    }
+
+    /// A missing custom `sslrootcert` file is a clear, labelled error — not a panic.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn build_tls_connector_missing_ca_errors() {
+        let tls = PgTls {
+            mode: "verify-full".to_string(),
+            root_cert: Some("/nonexistent/elephc-does-not-exist-ca.pem".to_string()),
+            ..PgTls::default()
+        };
+        // `MakeRustlsConnect` has no `Debug`, so match rather than `unwrap_err`.
+        match build_tls_connector(&tls) {
+            Ok(_) => panic!("expected an error for a missing sslrootcert file"),
+            Err(err) => assert!(err.contains("sslrootcert"), "unexpected error: {err}"),
+        }
+    }
 }

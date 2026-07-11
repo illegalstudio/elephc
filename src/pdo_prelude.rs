@@ -47,8 +47,12 @@ extern "elephc_pdo" {
     // v18 adds $my_init_command: one SQL statement run right after
     // authentication on a `mysql:` connection ("" = none), ignored for
     // sqlite:/pgsql: DSNs. Backs the minimal wiring for
-    // Pdo\Mysql::ATTR_INIT_COMMAND (P1-9).
-    function elephc_pdo_open_persistent(string $dsn, int $persistent, int $sqlite_flags, string $my_init_command): int;
+    // Pdo\Mysql::ATTR_INIT_COMMAND (P1-9). $my_ssl_config (v19) is the packed
+    // Pdo\Mysql::ATTR_SSL_* options ("ca=...;cert=...;key=...;verify=0|1", "" = no
+    // TLS), applied to the mysql: rustls backend (requires the opt-in `mysql-tls`
+    // build feature); ignored for sqlite:/pgsql: DSNs — PostgreSQL carries its own
+    // sslmode/sslrootcert in the DSN and needs no extra parameter.
+    function elephc_pdo_open_persistent(string $dsn, int $persistent, int $sqlite_flags, string $my_init_command, string $my_ssl_config): int;
     function elephc_pdo_last_open_error(): string;
     function elephc_pdo_close(int $conn): void;
     function elephc_pdo_exec(int $conn, string $sql): int;
@@ -276,6 +280,19 @@ class PDO {
         // Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES, harmlessly: the bridge only
         // consults $_myInitCommand for a `mysql:` DSN and ignores it otherwise.
         $_myInitCommand = "";
+        // Pdo\Mysql::ATTR_SSL_* (1007/1008/1009/1014): read here into a packed
+        // "ca=…;cert=…;key=…;verify=0|1" string ($_mySslConfig below) that the
+        // bridge applies to the mysql: rustls TLS backend. These numeric values do
+        // not collide with any sqlite:/pgsql: driver-specific constant, and the
+        // bridge only consults $_mySslConfig for a mysql: DSN, so they stay inert
+        // for the other drivers. ATTR_SSL_CAPATH (1010)/ATTR_SSL_CIPHER (1011) have
+        // no rustls SslOpts equivalent and are intentionally not wired (stored in
+        // $this->attributes only). $_mySslVerify stays -1 ("unset") until an
+        // explicit ATTR_SSL_VERIFY_SERVER_CERT is seen.
+        $_mySslCa = "";
+        $_mySslCert = "";
+        $_mySslKey = "";
+        $_mySslVerify = -1;
         // Constructor options affect the connection that is opened below, so
         // apply them before the bridge sees the DSN. In particular,
         // ATTR_PERSISTENT selects the bridge's process-local DSN pool.
@@ -294,6 +311,14 @@ class PDO {
                     $_openFlags = (int) $_val;
                 } elseif ($_iattr == 1002) {
                     $_myInitCommand = (string) $_val;
+                } elseif ($_iattr == 1009) {
+                    $_mySslCa = (string) $_val;
+                } elseif ($_iattr == 1008) {
+                    $_mySslCert = (string) $_val;
+                } elseif ($_iattr == 1007) {
+                    $_mySslKey = (string) $_val;
+                } elseif ($_iattr == 1014) {
+                    $_mySslVerify = ((bool) $_val) ? 1 : 0;
                 }
                 $this->attributes[$_iattr] = $_val;
             }
@@ -323,7 +348,25 @@ class PDO {
                 $_dsn = $_dsn . ";connect_timeout=" . ((int) $this->attributes[2]);
             }
         }
-        $this->conn = elephc_pdo_open_persistent($_dsn, $this->persistent ? 1 : 0, $_openFlags, $_myInitCommand);
+        // Serialize the collected Pdo\Mysql::ATTR_SSL_* options into the packed
+        // string the bridge parses (only the keys that were actually set are
+        // emitted; an all-unset config stays "" = no TLS). File paths do not
+        // contain ';'/'=' in practice, matching the rest of the bridge's DSN-style
+        // parsing.
+        $_mySslConfig = "";
+        if ($_mySslCa !== "") {
+            $_mySslConfig = $_mySslConfig . "ca=" . $_mySslCa . ";";
+        }
+        if ($_mySslCert !== "") {
+            $_mySslConfig = $_mySslConfig . "cert=" . $_mySslCert . ";";
+        }
+        if ($_mySslKey !== "") {
+            $_mySslConfig = $_mySslConfig . "key=" . $_mySslKey . ";";
+        }
+        if ($_mySslVerify != -1) {
+            $_mySslConfig = $_mySslConfig . "verify=" . $_mySslVerify . ";";
+        }
+        $this->conn = elephc_pdo_open_persistent($_dsn, $this->persistent ? 1 : 0, $_openFlags, $_myInitCommand, $_mySslConfig);
         if ($this->conn < 0) {
             $_openMsg = elephc_pdo_last_open_error();
             // P1-4: when a real driver recognized the DSN but the connection
