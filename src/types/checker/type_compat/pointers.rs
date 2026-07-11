@@ -119,6 +119,12 @@ impl Checker {
                     "callable" => Ok(PhpType::Callable),
                     "void" => Ok(PhpType::Void),
                     "array" => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
+                    // The built-in `Closure` class types any closure/arrow-fn value; closures
+                    // resolve to Callable internally, so `Closure` type-hints resolve to Callable.
+                    "closure" => Ok(PhpType::Callable),
+                    // The generic `object` pseudo-type accepts any object; elephc has no classless
+                    // object variant, so it resolves to Mixed (which boxes any value, objects too).
+                    "object" => Ok(PhpType::Mixed),
                     // Relative class types only survive to this point when used outside a class
                     // body; inside a class they are rewritten to the enclosing class beforehand.
                     relative @ ("self" | "static" | "parent") => Err(CompileError::new(

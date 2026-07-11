@@ -102,6 +102,12 @@ impl Checker {
                 &format!("{} cannot use type never", context),
             ));
         }
+        // PHP permits the `Closure` class as a property type even though it forbids the bare
+        // `callable` pseudo-type. Closures resolve to Callable internally, so let the `Closure`
+        // spelling through the callable restriction (a `callable` property is still rejected).
+        if Self::type_expr_names_closure(type_expr) {
+            return Ok(ty);
+        }
         if Self::type_contains_callable(&ty) {
             return Err(CompileError::new(
                 span,
@@ -109,6 +115,16 @@ impl Checker {
             ));
         }
         Ok(ty)
+    }
+
+    /// Returns true if `type_expr` is the built-in `Closure` class name — permitted as a property
+    /// type, unlike the bare `callable` pseudo-type that closures resolve to internally.
+    fn type_expr_names_closure(type_expr: &TypeExpr) -> bool {
+        matches!(
+            type_expr,
+            TypeExpr::Named(name)
+                if name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("Closure")
+        )
     }
 
     /// Returns true if `ty` is or contains a `PhpType::Callable` anywhere in its structure.
