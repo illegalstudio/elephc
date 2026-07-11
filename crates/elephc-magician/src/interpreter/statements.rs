@@ -9775,7 +9775,7 @@ pub(in crate::interpreter) fn eval_dynamic_class_native_method_metadata(
 }
 
 /// Dispatches a missing or inaccessible eval instance method through `__call()`.
-fn eval_magic_instance_method_call(
+pub(in crate::interpreter) fn eval_magic_instance_method_call(
     object: RuntimeCellHandle,
     called_class_name: &str,
     method_name: &str,
@@ -9803,7 +9803,7 @@ fn eval_magic_instance_method_call(
 }
 
 /// Dispatches a missing or inaccessible eval static method through `__callStatic()`.
-fn eval_magic_static_method_call(
+pub(in crate::interpreter) fn eval_magic_static_method_call(
     class_name: &str,
     called_class_name: &str,
     method_name: &str,

@@ -4814,6 +4814,10 @@ fn emit_eval_literal_aot_scope_load(ctx: &mut FunctionContext<'_>, name: &str, s
     emit_branch_if_scope_entry_missing_at(ctx, out_flags_offset, &missing);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, out_cell_offset);
+    let retain_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if retain_arg != result_reg {
+        abi::emit_reg_move(ctx.emitter, retain_arg, result_reg);
+    }
     let retain = ctx
         .emitter
         .target

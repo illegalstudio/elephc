@@ -56,3 +56,38 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 [[profile.ci.overrides]]
 filter = 'test(lowers_examples_corpus)'
 slow-timeout = { period = "180s", terminate-after = 1 }
+
+# These eval/codegen regression tests intentionally exercise several complete
+# compile-link-run programs in one test. They exceed the 60s global guard on
+# one or more supported runners without being hung.
+[[profile.default.overrides]]
+filter = 'test(ir_backend_handles_scalar_builtins)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(ir_backend_handles_scalar_builtins)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(test_eval_rejects_invalid_property_and_parameter_type_atoms)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_rejects_invalid_property_and_parameter_type_atoms)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(test_eval_declared_inherited_property_redeclaration_contracts)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_declared_inherited_property_redeclaration_contracts)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack)'
+slow-timeout = { period = "180s", terminate-after = 1 }

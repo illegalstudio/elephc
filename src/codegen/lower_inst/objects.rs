@@ -4321,6 +4321,10 @@ fn emit_clone_dynamic_property_hash(
     }
     abi::emit_push_reg(ctx.emitter, source_reg);
     abi::emit_push_reg(ctx.emitter, dest_reg);
+    let hash_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if hash_arg != result_reg {
+        abi::emit_reg_move(ctx.emitter, hash_arg, result_reg);
+    }
     abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");
     abi::emit_pop_reg(ctx.emitter, dest_reg);
     abi::emit_pop_reg(ctx.emitter, source_reg);

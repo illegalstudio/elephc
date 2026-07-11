@@ -803,8 +803,15 @@ fn stage_native_function_invoker_args(
             continue;
         }
         let original = bound_arg.value;
-        let mut slot = Box::new(original);
-        let marker = values.invoker_ref_cell(slot.as_mut() as *mut RuntimeCellHandle)?;
+        let retained = values.retain(original)?;
+        let mut slot = Box::new(retained);
+        let marker = match values.invoker_ref_cell(slot.as_mut() as *mut RuntimeCellHandle) {
+            Ok(marker) => marker,
+            Err(status) => {
+                values.release(retained)?;
+                return Err(status);
+            }
+        };
         invoker_values.push(marker);
         ref_slots.push(BoundNativeFunctionRefSlot::Mixed {
             original,
@@ -2438,8 +2445,10 @@ fn cleanup_native_function_ref_args(
                     values.release_raw_heap_word(*original)?;
                 }
             }
-            BoundNativeFunctionRefSlot::Mixed { .. }
-            | BoundNativeFunctionRefSlot::RawWord { .. } => {}
+            BoundNativeFunctionRefSlot::Mixed { slot, .. } => {
+                values.release(**slot)?;
+            }
+            BoundNativeFunctionRefSlot::RawWord { .. } => {}
         }
     }
     Ok(())
@@ -2460,22 +2469,34 @@ fn write_back_native_function_ref_args(
             } => {
                 let value = **slot;
                 if value == *original {
+                    values.release(value)?;
                     continue;
                 }
                 let Some(target) = target else {
+                    values.release(value)?;
                     continue;
                 };
-                let current = eval_reference_target_value(target, context, values)?;
+                let current = match eval_reference_target_value(target, context, values) {
+                    Ok(current) => current,
+                    Err(status) => {
+                        values.release(value)?;
+                        return Err(status);
+                    }
+                };
                 if current == value {
+                    values.release(value)?;
                     continue;
                 }
-                eval_write_direct_ref_target(
+                if let Err(status) = eval_write_direct_ref_target(
                     target,
                     value,
                     context,
                     values,
                     Some(ScopeCellOwnership::Owned),
-                )?;
+                ) {
+                    values.release(value)?;
+                    return Err(status);
+                }
             }
             BoundNativeFunctionRefSlot::RawWord {
                 tag,

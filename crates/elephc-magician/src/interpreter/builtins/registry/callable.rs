@@ -1070,6 +1070,16 @@ fn eval_object_method_call_user_func_result(
         if method.is_static() || method.is_abstract() {
             return Ok(None);
         }
+        if validate_eval_member_access(&declaring_class, method.visibility(), context).is_err() {
+            return eval_magic_instance_method_call(
+                object,
+                &called_class_name,
+                method_name,
+                evaluated_args,
+                context,
+                values,
+            );
+        }
         let callable_name = format!("{}::{}", declaring_class.trim_start_matches('\\'), method.name());
         return eval_dynamic_method_with_values_and_ref_mode(
             &declaring_class,
@@ -1282,6 +1292,16 @@ fn eval_static_method_call_user_func_result(
     {
         if !method.is_static() || method.is_abstract() {
             return Ok(None);
+        }
+        if validate_eval_member_access(&declaring_class, method.visibility(), context).is_err() {
+            return eval_magic_static_method_call(
+                &dispatch_class,
+                &called_class,
+                method_name,
+                evaluated_args,
+                context,
+                values,
+            );
         }
         let callable_name = format!("{}::{}", declaring_class.trim_start_matches('\\'), method.name());
         return eval_dynamic_static_method_with_values_and_ref_mode(
