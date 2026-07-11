@@ -369,6 +369,14 @@ pub(crate) fn lower_crc32(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     store_if_result(ctx, inst)
 }
 
+/// Lowers `mb_strlen(string)` through the UTF-8 code-point-count runtime helper.
+/// The optional encoding argument is unsupported (UTF-8 is assumed).
+pub(crate) fn lower_mb_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    load_single_string_arg(ctx, inst, "mb_strlen")?;
+    abi::emit_call_label(ctx.emitter, "__rt_mb_strlen");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `md5(data, binary?)` through the shared crypto-backed runtime helper.
 pub(crate) fn lower_md5(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_fixed_hash(ctx, inst, "md5", "__rt_md5")

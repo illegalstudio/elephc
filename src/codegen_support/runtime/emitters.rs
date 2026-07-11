@@ -92,6 +92,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_md5(emitter);
     strings::emit_sha1(emitter);
     strings::emit_crc32(emitter);
+    strings::emit_mb_strlen(emitter);
     strings::emit_hash(emitter);
     strings::emit_hash_hmac(emitter);
     strings::emit_hash_equals(emitter);
