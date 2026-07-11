@@ -334,8 +334,43 @@ or at program exit. You do not need to close them explicitly.
   `copyToArray()` / `copyToFile()` (COPY), `Pdo\Sqlite::loadExtension()` (load a
   SQLite extension by path), `Pdo\Pgsql::getNotify()` (poll LISTEN/NOTIFY), and the
   stream-returning `Pdo\Sqlite::openBlob()` / `Pdo\Pgsql::lobOpen()` (read the whole
-  BLOB / large object into a `php://memory` stream). The callback methods are not yet
-  provided (see Limitations).
+  BLOB / large object into a `php://memory` stream), and the SQLite user-callback
+  methods `Pdo\Sqlite::createCollation()` / `createFunction()` / `createAggregate()`
+  (see below). The only callback method still missing is `Pdo\Pgsql::setNoticeCallback()`.
+
+## SQLite user-defined functions and collations
+
+`Pdo\Sqlite` runs compiled-PHP closures as SQLite callbacks:
+
+- `createCollation(string $name, callable $comparator): bool` — registers a custom
+  `COLLATE` ordering; `$comparator($a, $b)` returns `<0` / `0` / `>0`.
+- `createFunction(string $name, callable $callback, int $numArgs = -1, int $flags = 0): bool`
+  — registers a scalar SQL function invoked once per row; `$flags` may be
+  `Pdo\Sqlite::DETERMINISTIC`.
+- `createAggregate(string $name, callable $step, callable $finalize, int $numArgs = -1): bool`
+  — registers an aggregate: `$step($context, $rownumber, ...$values)` runs per row and
+  returns the running accumulator (`null` before the first row), and
+  `$finalize($context, $rownumber)` returns the group result.
+
+```php
+$db = new \Pdo\Sqlite("sqlite::memory:");
+$db->createFunction("shout", fn($s) => strtoupper($s) . "!");
+$db->createAggregate("joined",
+    fn($acc, $n, $v) => $n === 0 ? $v : $acc . "," . $v,
+    fn($acc, $n) => $acc);
+echo $db->query("SELECT shout('hi')")->fetchColumn();          // HI!
+```
+
+Only closures and first-class callables are accepted — a string or `[$obj, 'method']`
+callable is rejected at compile time. A callback that throws never crashes or unwinds
+across SQLite's engine: the exception is caught at the C boundary and the statement
+fails with a `PDOException` (a throwing *collation* comparator is instead treated as
+"equal", since SQLite's comparison has no error channel). Each callback runs through
+elephc's dynamic-dispatch path, which currently retains a small amount of heap per
+invocation, so a callback applied across a very large result set accumulates memory
+until the program exits. Registering a callback (any driver) inside another SQLite
+callback on the same connection is not supported — a nested query returns no rows
+rather than re-entering.
 
 ## Limitations
 
@@ -375,16 +410,15 @@ or at program exit. You do not need to close them explicitly.
   **read-whole**: they read the entire BLOB / large object (NUL bytes preserved) into
   a rewound `php://memory` stream and return it (or `false` on a missing row/OID), so
   reads work fully but writes are not flushed back to storage, and the `$flags` /
-  `$mode` argument is accepted only for signature compatibility. Still missing: the
-  **callback** methods (`Pdo\Sqlite::createFunction` / `createAggregate` /
-  `createCollation`, `Pdo\Pgsql::setNoticeCallback`), which need a PHP-callable-to-C
-  trampoline elephc's FFI does not yet provide. `PDO::connect()` selects the subclass
+  `$mode` argument is accepted only for signature compatibility. The SQLite
+  user-callback methods (`Pdo\Sqlite::createCollation` / `createFunction` /
+  `createAggregate`) are implemented (see above); the one callback method still
+  missing is `Pdo\Pgsql::setNoticeCallback`. `PDO::connect()` selects the subclass
   from the
   DSN prefix, so a subclass-qualified call with a mismatched DSN
   (`Pdo\Sqlite::connect("mysql:…")`) is not rejected as PHP would.
-- **`FETCH_GROUP` / `FETCH_UNIQUE`** result shaping and **`createFunction()`** are
-  not yet implemented — their constants exist but the behaviors either fail loudly
-  or are absent.
+- **`FETCH_GROUP` / `FETCH_UNIQUE`** result shaping is not yet implemented — the
+  constants exist but the behavior fails loudly rather than reshaping the result.
 - **`bindParam()`** binds the current value, not a deferred by-reference read.
 - **`getAttribute` / `setAttribute`** act on `ATTR_ERRMODE`, `ATTR_DRIVER_NAME`,
   `ATTR_PERSISTENT`, `ATTR_TIMEOUT` (SQLite busy-timeout, in seconds),
