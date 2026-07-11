@@ -334,9 +334,10 @@ or at program exit. You do not need to close them explicitly.
   `copyToArray()` / `copyToFile()` (COPY), `Pdo\Sqlite::loadExtension()` (load a
   SQLite extension by path), `Pdo\Pgsql::getNotify()` (poll LISTEN/NOTIFY), and the
   stream-returning `Pdo\Sqlite::openBlob()` / `Pdo\Pgsql::lobOpen()` (read the whole
-  BLOB / large object into a `php://memory` stream), and the SQLite user-callback
-  methods `Pdo\Sqlite::createCollation()` / `createFunction()` / `createAggregate()`
-  (see below). The only callback method still missing is `Pdo\Pgsql::setNoticeCallback()`.
+  BLOB / large object into a `php://memory` stream), the SQLite user-callback methods
+  `Pdo\Sqlite::createCollation()` / `createFunction()` / `createAggregate()` (see
+  below), and `Pdo\Pgsql::setNoticeCallback()` (dispatch a callback for each server
+  NOTICE, poll-based — see below).
 
 ## SQLite user-defined functions and collations
 
@@ -371,6 +372,21 @@ invocation, so a callback applied across a very large result set accumulates mem
 until the program exits. Registering a callback (any driver) inside another SQLite
 callback on the same connection is not supported — a nested query returns no rows
 rather than re-entering.
+
+`Pdo\Pgsql::setNoticeCallback(callable $callback): void` registers a callback invoked
+with the text of each PostgreSQL server `NOTICE` (e.g. from `RAISE NOTICE`):
+
+```php
+$pg = new \Pdo\Pgsql("pgsql:host=localhost;dbname=app");
+$pg->setNoticeCallback(fn($msg) => error_log("PG NOTICE: $msg"));
+$pg->exec("DO $$ BEGIN RAISE NOTICE 'migrated'; END $$");   // callback fires with "migrated"
+```
+
+Two divergences from PHP: the parameter is a non-nullable `callable` (to stop delivery,
+register a no-op closure rather than passing `null`), and delivery is **poll-based** —
+the driver buffers notices as they arrive and dispatches them right after each `exec()`
+/ `query()` on the connection, so a `NOTICE` raised by a prepared-statement `execute()`
+is delivered on the next `exec()`/`query()`.
 
 ## Limitations
 
@@ -411,9 +427,9 @@ rather than re-entering.
   a rewound `php://memory` stream and return it (or `false` on a missing row/OID), so
   reads work fully but writes are not flushed back to storage, and the `$flags` /
   `$mode` argument is accepted only for signature compatibility. The SQLite
-  user-callback methods (`Pdo\Sqlite::createCollation` / `createFunction` /
-  `createAggregate`) are implemented (see above); the one callback method still
-  missing is `Pdo\Pgsql::setNoticeCallback`. `PDO::connect()` selects the subclass
+  user-callback methods are all implemented (see above): `Pdo\Sqlite::createCollation`
+  / `createFunction` / `createAggregate`, and `Pdo\Pgsql::setNoticeCallback` (poll-based,
+  with a non-nullable `callable` parameter). `PDO::connect()` selects the subclass
   from the
   DSN prefix, so a subclass-qualified call with a mismatched DSN
   (`Pdo\Sqlite::connect("mysql:…")`) is not rejected as PHP would.

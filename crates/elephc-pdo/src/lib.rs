@@ -304,9 +304,11 @@ fn open_persistent_dsn(dsn: &str) -> i64 {
 /// v15 adds the SQLite aggregate registration (`elephc_pdo_create_aggregate`) backing
 /// `Pdo\Sqlite::createAggregate()`, crossing a step + finalize (descriptor, adapter)
 /// pair with the per-group accumulator held in SQLite's aggregate context.
+/// v16 adds the PostgreSQL NOTICE drain (`elephc_pdo_get_notice`) backing
+/// `Pdo\Pgsql::setNoticeCallback()`, buffered via the connection's `notice_callback`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    15
+    16
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -715,6 +717,24 @@ pub extern "C" fn elephc_pdo_get_notify(conn_id: i64, timeout_ms: i64) -> *const
         let mut guard = conns().lock().unwrap();
         match guard.get_mut(&conn_id) {
             Some(Conn::Postgres(c)) => c.get_notify(timeout_ms),
+            _ => String::new(),
+        }
+    };
+    store_cstr(pg_text_result_cell(), &text)
+}
+
+/// Drains one buffered server NOTICE message from a `pgsql:` connection
+/// (`Pdo\Pgsql::setNoticeCallback()`), returning its text, or an empty string when
+/// none is pending (or for a non-PostgreSQL connection / unknown handle). The prelude
+/// calls this in a loop after each `exec()`/`query()` and dispatches each message to
+/// the registered PHP callback. The returned pointer is valid until the next
+/// PostgreSQL text-returning bridge call on this thread.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_get_notice(conn_id: i64) -> *const c_char {
+    let text = {
+        let guard = conns().lock().unwrap();
+        match guard.get(&conn_id) {
+            Some(Conn::Postgres(c)) => c.drain_notice(),
             _ => String::new(),
         }
     };
@@ -1430,12 +1450,12 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v15 adds the
-    /// SQLite aggregate registration (`elephc_pdo_create_aggregate`) backing
-    /// `Pdo\Sqlite::createAggregate()`.
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v16 adds the
+    /// PostgreSQL NOTICE drain (`elephc_pdo_get_notice`) backing
+    /// `Pdo\Pgsql::setNoticeCallback()`.
     #[test]
-    fn version_is_v15() {
-        assert_eq!(elephc_pdo_version(), 15);
+    fn version_is_v16() {
+        assert_eq!(elephc_pdo_version(), 16);
     }
 
     /// A DSN for an unsupported driver is rejected with a driver error.

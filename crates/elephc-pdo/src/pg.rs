@@ -20,10 +20,11 @@
 //!   parameter types, so an int bound where the column is `int4` is sent as a
 //!   4-byte int, a text where the column is `int` is parsed, etc.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 
 use postgres::types::{to_sql_checked, IsNull, ToSql, Type};
-use postgres::{Client, NoTls, Row, Statement};
+use postgres::{Client, Config, NoTls, Row, Statement};
 
 /// One materialized column value, already decoded to a PHP-friendly scalar.
 pub enum Cell {
@@ -61,6 +62,14 @@ pub struct PgConn {
     /// success; "HY000" for an error that carries no SQLSTATE (a transport/
     /// connection failure rather than a server-reported error).
     pub sqlstate: String,
+    /// Buffer of server NOTICE message texts captured during query execution,
+    /// backing `Pdo\Pgsql::setNoticeCallback()`. The `postgres` client's connection
+    /// task invokes the `Config::notice_callback` for every `AsyncMessage::Notice`;
+    /// that closure pushes the message here, and the prelude drains this buffer after
+    /// each `exec()`/`query()` and dispatches each message to the PHP callback. Shared
+    /// (`Arc<Mutex>`) because the callback fires from the client's connection driver,
+    /// which may run on a separate thread from the query call.
+    pub notices: Arc<Mutex<VecDeque<String>>>,
 }
 
 /// A live PostgreSQL prepared statement and its lazily-materialized result.
@@ -305,17 +314,44 @@ fn pg_sqlstate(e: &postgres::Error) -> String {
 
 impl PgConn {
     /// Connects to PostgreSQL for a `pgsql:` DSN. Returns the connection or an
-    /// error message for `last_open_error`.
+    /// error message for `last_open_error`. The connection is built through a
+    /// `Config` (rather than `Client::connect`) so a `notice_callback` can be
+    /// installed that buffers every server NOTICE into `notices` for
+    /// `Pdo\Pgsql::setNoticeCallback()`.
     pub fn open(dsn: &str) -> Result<PgConn, String> {
         let conn_str = parse_dsn(dsn)?;
-        let client = Client::connect(&conn_str, NoTls).map_err(|e| e.to_string())?;
+        let mut config: Config = conn_str.parse().map_err(|e: postgres::Error| e.to_string())?;
+        let notices: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let sink = Arc::clone(&notices);
+        // The closure param is inferred as `tokio_postgres::error::DbError`; a NOTICE
+        // carries its human-readable text in `message()`. Never blocks the driver: a
+        // poisoned lock just drops the message.
+        config.notice_callback(move |notice| {
+            if let Ok(mut queue) = sink.lock() {
+                queue.push_back(notice.message().to_string());
+            }
+        });
+        let client = config.connect(NoTls).map_err(|e| e.to_string())?;
         Ok(PgConn {
             client,
             changes: 0,
             errmsg: String::new(),
             errcode: 0,
             sqlstate: "00000".to_string(),
+            notices,
         })
+    }
+
+    /// Removes and returns the oldest buffered server NOTICE message text, or an empty
+    /// string when none is pending. Backs `Pdo\Pgsql::setNoticeCallback()`: the prelude
+    /// drains this after each `exec()`/`query()` and dispatches each message to the
+    /// registered PHP callback.
+    pub fn drain_notice(&self) -> String {
+        self.notices
+            .lock()
+            .ok()
+            .and_then(|mut queue| queue.pop_front())
+            .unwrap_or_default()
     }
 
     /// Records an error message + a generic non-zero code, returning `-1`.

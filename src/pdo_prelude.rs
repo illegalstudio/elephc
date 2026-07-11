@@ -125,6 +125,10 @@ extern "elephc_pdo" {
     // `callable`. `num_args` is the declared arity (-1 = variadic). Returns 1 on
     // success, 0 on error.
     function elephc_pdo_create_aggregate(int $conn, string $name, int $num_args, ptr $step_descriptor, ptr $step_adapter, ptr $final_descriptor, ptr $final_adapter): int;
+    // v16: drain one buffered PostgreSQL server NOTICE message
+    // (Pdo\Pgsql::setNoticeCallback). Returns the message text, or an empty string
+    // when none is pending. The prelude polls this after each exec()/query().
+    function elephc_pdo_get_notice(int $conn): string;
 }
 
 class PDOException extends RuntimeException {
@@ -1224,6 +1228,67 @@ namespace Pdo {
         const TRANSACTION_INTRANS = 2;
         const TRANSACTION_INERROR = 3;
         const TRANSACTION_UNKNOWN = 4;
+
+        // Holds the compiled-PHP NOTICE callback (a no-op closure until one is
+        // registered). Untyped and seeded with a closure so the checker infers it as a
+        // callable that dynamic dispatch can invoke: a `?callable` property reads back
+        // as a `Callable|Void` union (or a typed-array element as Mixed) that elephc's
+        // checker will not narrow to a callable at the call site. Also the GC root that
+        // keeps the closure reachable for the connection's lifetime.
+        private $noticeCallback;
+
+        public function __construct(string $dsn, ?string $username = null, ?string $password = null, ?array $options = null) {
+            // Forward to \PDO to open the connection, then seed a no-op callback so
+            // drainNotices() always has a callable to hand each notice to (a notice
+            // arriving before setNoticeCallback() is drained and discarded).
+            parent::__construct($dsn, $username, $password, $options);
+            $this->noticeCallback = function($_message) {};
+        }
+
+        public function setNoticeCallback(callable $callback): void {
+            // Registers a callback invoked with the text of each PostgreSQL server
+            // NOTICE. Divergences from PHP: (1) the parameter is a non-nullable
+            // `callable` — elephc cannot yet narrow a nullable-callable property back to
+            // a callable at the invocation site, so to stop delivery register a no-op
+            // closure rather than passing null; (2) delivery is poll-based rather than
+            // fired mid-protocol — the bridge buffers notices as they arrive (via the
+            // connection's notice_callback) and this class drains + dispatches them
+            // right after each exec()/query() on this connection (a NOTICE raised by a
+            // prepared-statement execute() is delivered on the next exec()/query()). The
+            // callback receives one string argument (the message); its return is ignored.
+            $this->noticeCallback = $callback;
+        }
+
+        private function drainNotices(): void {
+            // Hand every buffered NOTICE to the registered callback (a no-op until one
+            // is set). A real server NOTICE always carries non-empty text, so an empty
+            // return is the "no more pending" sentinel (as with the getNotify() drain).
+            $_cb = $this->noticeCallback;
+            while (true) {
+                $_msg = \elephc_pdo_get_notice($this->connectionId());
+                if ($_msg === "") {
+                    break;
+                }
+                $_cb($_msg);
+            }
+        }
+
+        public function exec(string $statement): int|bool {
+            // Runs the statement through the base driver, then drains + dispatches any
+            // server NOTICE it raised (e.g. a DO block / function using RAISE NOTICE).
+            $_result = parent::exec($statement);
+            $this->drainNotices();
+            return $_result;
+        }
+
+        public function query(string $query): \PDOStatement|bool {
+            // As exec(), but for a row-returning statement. `\PDOStatement` is
+            // fully-qualified because this override lives inside `namespace Pdo`, where
+            // a bare `PDOStatement` would resolve to the non-existent `Pdo\PDOStatement`.
+            $_result = parent::query($query);
+            $this->drainNotices();
+            return $_result;
+        }
 
         public function escapeIdentifier(string $input): string {
             // PostgreSQL identifier quoting (PQescapeIdentifier semantics): double any
