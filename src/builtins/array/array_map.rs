@@ -48,19 +48,32 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
     match arr_ty {
         PhpType::Array(elem_ty) => {
-            let arr_ty = PhpType::Array(elem_ty.clone());
-            let dummy_args = vec![
-                crate::types::checker::builtins::dummy_arg_for_array_scalar_elem(
-                    &arr_ty, cx.span,
-                ),
-            ];
+            // The dummy argument mirrors the element type. Object elements (no literal form)
+            // and Mixed/Never elements (unknown — e.g. an `array`-hinted param or property)
+            // use the synthetic binding, so a TYPED callback parameter is checked against the
+            // real (or runtime-enforced) element type instead of a fabricated Int placeholder.
+            let (dummy_arg, elem_binding) =
+                crate::types::checker::builtins::comparator_dummy_arg_for_elem(
+                    elem_ty.as_ref(),
+                    cx.span,
+                );
+            let dummy_args = vec![dummy_arg];
+            let mut env_with_elem;
+            let cb_env: &crate::types::TypeEnv = match &elem_binding {
+                Some((binding_name, binding_ty)) => {
+                    env_with_elem = cx.env.clone();
+                    env_with_elem.insert(binding_name.clone(), binding_ty.clone());
+                    &env_with_elem
+                }
+                None => cx.env,
+            };
             let callback_ret_ty =
                 crate::types::checker::builtins::check_callback_builtin_call(
                     cx.checker,
                     &cx.args[0],
                     &dummy_args,
                     cx.span,
-                    cx.env,
+                    cb_env,
                     "array_map() callback",
                 )?;
             let result_elem_ty = if callback_ret_ty == PhpType::Mixed {

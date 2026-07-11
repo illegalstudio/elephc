@@ -134,12 +134,16 @@ pub(crate) fn dummy_arg_for_array_scalar_elem(arr_ty: &PhpType, span: crate::spa
 
 /// Returns the element type carried by an array/associative-array type.
 ///
-/// Falls back to `Int` for non-array types so callers can build a placeholder
-/// comparator argument without special-casing every caller.
+/// A `Mixed` receiver (e.g. an `array`-hinted property whose element type only phpdoc knows)
+/// yields `Mixed` elements, so a typed callback's declared parameter contract stands instead of
+/// being checked against a fabricated placeholder. Falls back to `Int` for other non-array
+/// types so callers can build a placeholder comparator argument without special-casing every
+/// caller.
 pub(crate) fn array_element_type(arr_ty: &PhpType) -> PhpType {
     match arr_ty {
         PhpType::Array(elem_ty) => (**elem_ty).clone(),
         PhpType::AssocArray { value, .. } => (**value).clone(),
+        PhpType::Mixed => PhpType::Mixed,
         _ => PhpType::Int,
     }
 }
@@ -168,9 +172,18 @@ pub(crate) fn comparator_dummy_arg_for_elem(
         PhpType::Bool | PhpType::False => {
             (Expr::new(ExprKind::BoolLiteral(false), span), None)
         }
-        PhpType::Object(_) => (
+        // Object and Mixed elements have no literal form: a reserved synthetic variable is
+        // bound to the element type so a typed callback parameter is checked against the real
+        // (or unknown-and-runtime-enforced) type instead of a fabricated Int placeholder.
+        PhpType::Object(_) | PhpType::Mixed => (
             Expr::new(ExprKind::Variable(COMPARATOR_ELEM_PLACEHOLDER.to_string()), span),
             Some((COMPARATOR_ELEM_PLACEHOLDER.to_string(), elem_ty.clone())),
+        ),
+        // A Never element (empty/unknown array) binds Mixed: the callback is never invoked at
+        // runtime for an empty array, so its declared parameter contract must stand unchecked.
+        PhpType::Never => (
+            Expr::new(ExprKind::Variable(COMPARATOR_ELEM_PLACEHOLDER.to_string()), span),
+            Some((COMPARATOR_ELEM_PLACEHOLDER.to_string(), PhpType::Mixed)),
         ),
         _ => (Expr::new(ExprKind::IntLiteral(0), span), None),
     }

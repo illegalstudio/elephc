@@ -38,13 +38,15 @@ builtin! {
 ///
 /// Infers the array value element type, and validates the comparator with two dummy
 /// arguments of that element type. Object-element arrays use typed closure hints so
-/// an unannotated comparator body (`$a <=> $b`) is checked against the real type.
+/// an unannotated comparator body (`$a <=> $b`) is checked against the real type; a
+/// Mixed element (unknown-element array) takes the same path so a TYPED comparator's
+/// declared parameter contract stands (runtime-enforced) instead of a fabricated Int.
 /// Arity (exactly 2) is pre-validated by the registry. Returns `Ok(PhpType::Void)`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let cmp_ty = crate::types::checker::builtins::array_element_type(&arr_ty);
     let label = format!("{}() callback", cx.name);
-    if let PhpType::Object(_) = cmp_ty {
+    if matches!(cmp_ty, PhpType::Object(_) | PhpType::Mixed) {
         if let ExprKind::Closure {
             params,
             variadic,

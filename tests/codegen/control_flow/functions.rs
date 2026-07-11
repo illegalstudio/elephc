@@ -167,3 +167,47 @@ fn test_property_throw_guard_narrowing() {
     );
     assert_eq!(out, "x");
 }
+
+/// A `mixed` VALUE flowing into a narrower declared boundary is legal PHP (the engine enforces
+/// at runtime) — a mixed param passed on to a `string` param and a mixed value returned as a
+/// declared `int` both compile and run byte-identically (the boxed-Mixed representation
+/// funnels at the boundary).
+#[test]
+fn test_mixed_value_into_typed_boundary() {
+    let out = compile_and_run(
+        "<?php function takesStr(string $s): string { return strtoupper($s); } function relay(mixed $m): string { return takesStr($m); } function giveInt(mixed $m): int { return $m; } echo relay('hi'), ':', giveInt(42);",
+    );
+    assert_eq!(out, "HI:42");
+}
+
+/// A union VALUE with a member the declaration accepts crosses the boundary — an
+/// `int|false`-typed seek result passed to an `int` param on its success path.
+/// Byte-parity vs PHP 8.5.
+#[test]
+fn test_union_value_into_narrower_param() {
+    let out = compile_and_run(
+        "<?php function requireZero(int $value, string $message): int { if ($value !== 0) { throw new \\RuntimeException($message); } return $value; } function main(): void { $f = fopen('php://temp', 'r+b'); fwrite($f, 'abcdef'); $r = requireZero(fseek($f, 2), 'seek failed'); echo $r, ':', fread($f, 3); } main();",
+    );
+    assert_eq!(out, "0:cde");
+}
+
+/// An assoc-array element (Mixed) into a `string` param plus an untyped-array element into an
+/// object param. Byte-parity vs PHP 8.5.
+#[test]
+fn test_mixed_array_element_into_typed_params() {
+    let out = compile_and_run(
+        "<?php final class Item { public function __construct(public string $name) {} } function label(Item $i): string { return $i->name; } function firstMode(string $mode, array $allowed): bool { return in_array($mode, $allowed); } function main(): void { $meta = ['mode' => 'r+', 'seekable' => true]; $mode = $meta['mode']; $ok = firstMode($mode, ['r+', 'w+']) ? 'ok' : 'no'; $items = [new Item('a'), new Item('b')]; $x = $items[1]; echo $ok, ':', label($x), ':', strtoupper($mode); } main();",
+    );
+    assert_eq!(out, "ok:b:R+");
+}
+
+/// A typed comparator over an `array`-hinted parameter keeps its declared parameter contract —
+/// usort checks the closure against its own declarations (via the element-type binding)
+/// instead of a fabricated Int placeholder. Byte-parity vs PHP 8.5.
+#[test]
+fn test_typed_callback_over_array_hinted_param() {
+    let out = compile_and_run(
+        "<?php final class Box { public function __construct(public int $n) {} } function sorted(array $items): string { usort($items, static fn (Box $a, Box $b): int => $a->n <=> $b->n); $out = ''; foreach ($items as $b) { $out .= $b->n; } return $out; } function main(): void { echo sorted([new Box(3), new Box(1), new Box(2)]); } main();",
+    );
+    assert_eq!(out, "123");
+}
