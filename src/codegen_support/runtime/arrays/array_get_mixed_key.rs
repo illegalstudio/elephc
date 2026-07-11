@@ -45,6 +45,13 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #24]");                                   // save whether missing keys should emit PHP warnings
 
     emitter.instruction("cbz x0, __rt_array_get_mixed_key_null");               // null array → Mixed(null)
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "x9",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp x0, x9");                                          // does the receiver carry the in-band null-container sentinel?
+    emitter.instruction("b.eq __rt_array_get_mixed_key_null");                  // sentinel-null receivers from missed reads → Mixed(null)
 
     // -- dispatch on array storage kind --
     emitter.instruction("ldr x9, [x0, #-8]");                                   // load packed kind metadata from the array header
@@ -197,6 +204,13 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rdi, rdi");                                       // null array check
     emitter.instruction("je __rt_array_get_mixed_key_null");                    // null array → Mixed(null)
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "r9",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp rdi, r9");                                         // does the receiver carry the in-band null-container sentinel?
+    emitter.instruction("je __rt_array_get_mixed_key_null");                    // sentinel-null receivers from missed reads → Mixed(null)
 
     // -- dispatch on array storage kind --
     emitter.instruction("mov r9, QWORD PTR [rdi - 8]");                         // load packed kind metadata from the array header

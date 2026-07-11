@@ -48,6 +48,14 @@ pub fn emit_hash_iter(emitter: &mut Emitter) {
     // >0  = slot index + 1 of the next entry to return
     // -2  = post-last cursor returned with the final yielded entry
     // -1  = no more entries
+    emitter.instruction("cbz x0, __rt_hash_iter_end");                          // null tables from missed reads have nothing to iterate
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "x7",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp x0, x7");                                          // does the table carry the in-band null-container sentinel?
+    emitter.instruction("b.eq __rt_hash_iter_end");                             // sentinel-null tables from missed reads have nothing to iterate
     emitter.instruction("cmp x1, #-1");                                         // has the caller already consumed the end sentinel?
     emitter.instruction("b.eq __rt_hash_iter_end");                             // repeated end probes stay at done
     emitter.instruction("cmp x1, #-2");                                         // was the previous yielded entry the tail?
@@ -109,6 +117,15 @@ fn emit_hash_iter_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: hash_iter_next ---");
     emitter.label_global("__rt_hash_iter_next");
 
+    emitter.instruction("test rdi, rdi");                                       // null tables from missed reads have nothing to iterate
+    emitter.instruction("jz __rt_hash_iter_end");                               // return the done sentinel before reading a null table header
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "r11",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp rdi, r11");                                        // does the table carry the in-band null-container sentinel?
+    emitter.instruction("je __rt_hash_iter_end");                               // sentinel-null tables from missed reads have nothing to iterate
     emitter.instruction("cmp rsi, -1");                                         // has the caller already consumed the terminal done sentinel?
     emitter.instruction("je __rt_hash_iter_end");                               // repeated end probes keep returning the done sentinel
     emitter.instruction("cmp rsi, -2");                                         // did the previous yielded entry already encode the post-last cursor?

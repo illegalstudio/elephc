@@ -42,6 +42,13 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save key_ptr
     emitter.instruction("str x2, [sp, #16]");                                   // save key_len
     emitter.instruction("cbz x0, __rt_hash_get_not_found");                     // null tables cannot contain the requested key
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "x5",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp x0, x5");                                          // does the receiver carry the in-band null-container sentinel?
+    emitter.instruction("b.eq __rt_hash_get_not_found");                        // sentinel-null receivers from missed reads cannot contain the key
     emitter.instruction("ldr x5, [x0, #8]");                                    // load capacity before hashing to avoid division by zero on empty tables
     emitter.instruction("cbz x5, __rt_hash_get_not_found");                     // zero-capacity tables cannot contain the requested key
 
@@ -145,6 +152,13 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the key length across helper calls and probe iterations
     emitter.instruction("test rdi, rdi");                                       // null tables cannot contain the requested key
     emitter.instruction("jz __rt_hash_get_not_found");                          // return a miss before reading a null table header
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "r11",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp rdi, r11");                                        // does the receiver carry the in-band null-container sentinel?
+    emitter.instruction("je __rt_hash_get_not_found");                          // sentinel-null receivers from missed reads cannot contain the key
     emitter.instruction("mov r11, QWORD PTR [rdi + 8]");                        // load capacity before hashing to avoid division by zero on empty tables
     emitter.instruction("test r11, r11");                                       // zero capacity means there are no live entries to probe
     emitter.instruction("jz __rt_hash_get_not_found");                          // return a miss for empty hash tables

@@ -1877,7 +1877,13 @@ fn lower_lazy_isset(
     let merge = ctx.builder.create_named_block("isset.lazy_merge", Vec::new());
     for (idx, arg) in args.iter().enumerate() {
         let checked = lower_lazy_isset_operand(ctx, arg).unwrap_or_else(|| {
-            let value = lower_expr(ctx, arg);
+            // `isset()` never emits undefined-offset warnings, so eager array
+            // operands must be lowered with the silent read variants.
+            let value = if let ExprKind::ArrayAccess { array, index } = &arg.kind {
+                lower_array_access_with_missing_warning(ctx, array, index, arg, false)
+            } else {
+                lower_expr(ctx, arg)
+            };
             emit_builtin_call_value(ctx, name, vec![value.value], PhpType::Int, arg.span)
         });
         let then_target = if idx + 1 == args.len() {
@@ -2108,7 +2114,7 @@ fn lower_native_isset_offset_probe(
     index: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let array_value = lower_expr(ctx, array);
+    let array_value = lower_subscript_receiver_silently(ctx, array);
     if value_is_nullable(ctx, array_value.value) {
         return lower_nullable_native_isset_offset_probe(ctx, array_value, index, expr);
     }
@@ -7215,7 +7221,9 @@ fn lower_array_access(
 }
 
 /// Lowers array, hash, string, or ArrayAccess indexing with configurable
-/// undefined-offset warning behavior for native indexed-array reads.
+/// undefined-offset warning behavior for native indexed-array reads. Suppressed
+/// warnings propagate through the whole subscript chain: PHP's `isset()` and `??`
+/// are silent for every level of `$a[1][2][3]`, not just the outermost read.
 fn lower_array_access_with_missing_warning(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
@@ -7223,11 +7231,27 @@ fn lower_array_access_with_missing_warning(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
-    let array_value = lower_expr(ctx, array);
+    let array_value = if warn_on_missing {
+        lower_expr(ctx, array)
+    } else {
+        lower_subscript_receiver_silently(ctx, array)
+    };
     if value_is_nullable(ctx, array_value.value) {
         return lower_nullable_array_access(ctx, array_value, index, expr, warn_on_missing);
     }
     lower_array_access_from_value(ctx, array_value, index, expr, warn_on_missing)
+}
+
+/// Lowers a subscript-chain receiver with undefined-offset warnings suppressed on
+/// nested array reads, so `isset()`/`??` stay silent across chained subscripts.
+fn lower_subscript_receiver_silently(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+) -> LoweredValue {
+    if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
+        return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
+    }
+    lower_expr(ctx, array)
 }
 
 /// Lowers array access once the receiver is already evaluated.

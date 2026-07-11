@@ -116,6 +116,33 @@ pub(crate) fn emit_tagged_scalar_from_int_result(emitter: &mut Emitter) {
     }
 }
 
+/// Branches to `label` when the container pointer in `value_reg` represents PHP null:
+/// either a zero pointer or the in-band `NULL_SENTINEL` that missed reads of refcounted
+/// slots materialize. Clobbers `scratch_reg` with the sentinel bit pattern. Used to keep
+/// container reads from dereferencing a null/sentinel receiver (issue #526).
+pub(crate) fn emit_branch_if_null_container(
+    emitter: &mut Emitter,
+    value_reg: &str,
+    scratch_reg: &str,
+    label: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbz {}, {}", value_reg, label));      // zero container pointers take the caller's null path
+            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
+            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the container carry the in-band null sentinel?
+            emitter.instruction(&format!("b.eq {}", label));                    // sentinel-null containers take the caller's null path
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {}, {}", value_reg, value_reg)); // is the container pointer zero (PHP null)?
+            emitter.instruction(&format!("jz {}", label));                      // zero container pointers take the caller's null path
+            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
+            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the container carry the in-band null sentinel?
+            emitter.instruction(&format!("je {}", label));                      // sentinel-null containers take the caller's null path
+        }
+    }
+}
+
 /// Branches to `label` when the tagged scalar in the result registers is PHP null
 /// (tag register == null tag).
 pub(crate) fn emit_branch_if_tagged_scalar_null(emitter: &mut Emitter, label: &str) {

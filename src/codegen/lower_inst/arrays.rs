@@ -614,8 +614,16 @@ fn lower_array_get_aarch64(
     ctx.load_value_to_reg(index, result_reg)?;
     ctx.load_value_to_reg(array, array_reg)?;
     let null_label = ctx.next_label("array_get_null");
+    let null_receiver_label = ctx.next_label("array_get_null_recv");
     let done_label = ctx.next_label("array_get_done");
 
+    // -- guard the receiver: a missed outer read carries a null/sentinel container --
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        array_reg,
+        len_reg,
+        &null_receiver_label,
+    );
     ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));                // check whether the indexed-array offset is negative
     ctx.emitter.instruction(&format!("b.lt {}", null_label));                   // negative indexed-array offsets read as null
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
@@ -627,6 +635,7 @@ fn lower_array_get_aarch64(
     if warn_on_missing {
         emit_undefined_array_key_warning(ctx);
     }
+    ctx.emitter.label(&null_receiver_label);
     emit_array_get_null_fallback(ctx, result_ty);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
@@ -693,8 +702,16 @@ fn lower_array_get_x86_64(
     ctx.load_value_to_reg(array, array_reg)?;
     ctx.load_value_to_reg(index, result_reg)?;
     let null_label = ctx.next_label("array_get_null");
+    let null_receiver_label = ctx.next_label("array_get_null_recv");
     let done_label = ctx.next_label("array_get_done");
 
+    // -- guard the receiver: a missed outer read carries a null/sentinel container --
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        array_reg,
+        len_reg,
+        &null_receiver_label,
+    );
     ctx.emitter.instruction(&format!("cmp {}, 0", result_reg));                 // check whether the indexed-array offset is negative
     ctx.emitter.instruction(&format!("jl {}", null_label));                     // negative indexed-array offsets read as null
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
@@ -706,6 +723,7 @@ fn lower_array_get_x86_64(
     if warn_on_missing {
         emit_undefined_array_key_warning(ctx);
     }
+    ctx.emitter.label(&null_receiver_label);
     emit_array_get_null_fallback(ctx, result_ty);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)

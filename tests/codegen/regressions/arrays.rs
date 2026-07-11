@@ -965,3 +965,173 @@ echo $a[0], ":", $b[0];
     );
     assert_eq!(out, "5:6");
 }
+
+// --- Issue #526: chained subscript read with a miss on the FIRST index ---
+
+/// Regression for issue #526: a chained subscript read whose FIRST index misses
+/// must warn and propagate null instead of dereferencing the scalar null
+/// sentinel as an array pointer (historical SIGSEGV in the outer length load).
+#[test]
+fn test_chained_read_first_index_miss_warns_and_yields_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 3; $i++) { $a[] = ['kw', 'word' . $i]; }
+$x = (string) $a[7][1];
+echo 'x=' . $x . "\n";
+echo 'done' . "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "x=\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Guard for issue #526: the already-working second-index-miss path keeps its
+/// behavior — one warning, empty result, exit 0.
+#[test]
+fn test_chained_read_second_index_miss_still_warns_and_yields_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 3; $i++) { $a[] = ['kw', 'word' . $i]; }
+$x = (string) $a[1][7];
+echo 'x=' . $x . "\n";
+echo 'done' . "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "x=\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Regression for issue #526: the crashing chained miss must leave the heap
+/// clean — the sentinel-null container must not enter refcount traffic.
+#[test]
+fn test_chained_read_first_index_miss_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 3; $i++) { $a[] = ['kw', 'word' . $i]; }
+$x = (string) $a[7][1];
+echo 'x=' . $x . "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "x=\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #526: `isset()` over a chained subscript whose first
+/// index misses is false, silent, and must not crash.
+#[test]
+fn test_chained_isset_first_index_miss_is_false_and_silent() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['kw', 'w0']];
+echo isset($a[7][1]) ? 'yes' : 'no';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "no");
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #526: `??` over a chained subscript whose first index
+/// misses stays silent across the whole chain and must not crash.
+#[test]
+fn test_chained_coalesce_first_index_miss_is_silent() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['kw', 'w0']];
+echo 'A' . ($a[7][1] ?? '') . 'B';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "AB");
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #526: a string-keyed chained miss on an assoc-of-assoc
+/// yields null instead of dereferencing the sentinel as a hash table.
+#[test]
+fn test_chained_string_key_first_miss_yields_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$m = ['a' => ['x' => 1, 'y' => 2], 'b' => ['x' => 3]];
+$v = $m['nope']['x'];
+echo is_null($v) ? 'null' : 'notnull';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "null");
+}
+
+/// Regression for issue #526: a three-level chain with a miss at each level
+/// yields null at every level without crashing.
+#[test]
+fn test_three_level_chain_miss_at_each_level_yields_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [[[5]]];
+echo is_null($a[9][0][0]) ? 'n' : 'v';
+echo is_null($a[0][9][0]) ? 'n' : 'v';
+echo is_null($a[0][0][9]) ? 'n' : 'v';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "nnn");
+    assert!(out.stderr.contains("Warning: Undefined array key 9"));
+}
+
+/// Regression for issue #526: foreach over a missed element with a `?? []`
+/// default iterates the default silently instead of crashing.
+#[test]
+fn test_foreach_over_first_index_miss_coalesce_default() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['kw', 'w0']];
+foreach ($a[7] ?? [] as $v) { echo 'v=' . $v; }
+echo 'done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #526: foreach directly over a missed element warns for
+/// the miss and skips the loop body instead of crashing on the sentinel.
+#[test]
+fn test_foreach_over_first_index_miss_skips_loop() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['kw', 'w0']];
+foreach ($a[7] as $v) { echo 'v=' . $v; }
+echo 'done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Guard for issue #526: heterogeneous (Mixed-element) arrays already routed
+/// misses through boxed Mixed nulls; the fixed path keeps that behavior.
+#[test]
+fn test_chained_read_first_index_miss_mixed_elements() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = [[1, 'a'], 'str', 42];
+$x = $h[7][1];
+echo is_null($x) ? 'null' : 'notnull';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "null");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}

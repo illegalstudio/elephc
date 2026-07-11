@@ -107,11 +107,37 @@ pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId)
             emit_int_result_null_sentinel_bool(ctx);
             Ok(())
         }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Object(_) => {
+            ctx.load_value_to_result(value)?;
+            emit_int_result_null_container_bool(ctx);
+            Ok(())
+        }
         _ => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             Ok(())
         }
     }
+}
+
+/// Compares the loaded container pointer against PHP's null representations — a zero
+/// pointer or the in-band null-container sentinel produced by missed reads of refcounted
+/// slots — and materializes the boolean result.
+fn emit_int_result_null_container_bool(ctx: &mut FunctionContext<'_>) {
+    let null_label = ctx.next_label("is_null_container");
+    let done_label = ctx.next_label("is_null_container_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &null_label,
+    );
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 1);
+    ctx.emitter.label(&done_label);
 }
 
 /// Compares the loaded tagged-scalar tag register against PHP's null tag.
