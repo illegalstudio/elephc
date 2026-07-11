@@ -265,6 +265,49 @@ echo (count($n) === 0) ? "none" : ($n[0] . ":" . $n[2]);
     assert_eq!(out, "elephc_ch:hi");
 }
 
+/// `Pdo\Pgsql::getNotify(PDO::FETCH_ASSOC)` shapes the notification as
+/// `["message"=>channel, "pid"=>pid, "payload"=>payload]` instead of the default
+/// numerically-indexed triple (P2-5). Driven against the live server.
+#[test]
+#[ignore]
+fn test_pgsql_get_notify_assoc() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
+$db->exec("LISTEN elephc_ch_assoc");
+$db->exec("NOTIFY elephc_ch_assoc, 'hi'");
+$n = $db->getNotify(\PDO::FETCH_ASSOC, 1000);
+echo (count($n) === 0) ? "none" : ($n["message"] . ":" . $n["payload"] . ":" . ($n["pid"] > 0 ? "pid-ok" : "pid-bad"));
+"#,
+    );
+    assert_eq!(out, "elephc_ch_assoc:hi:pid-ok");
+}
+
+/// P2-1: `PDO::ATTR_TIMEOUT` folds into the DSN as libpq's `connect_timeout`
+/// conninfo key, so a connection attempt against an unreachable host fails
+/// within a bounded time instead of hanging on the OS's own (much longer) TCP
+/// connect timeout. Uses a non-routable TEST-NET-1 address (RFC 5737,
+/// `192.0.2.0/24`) so the connect attempt reliably blackholes rather than
+/// getting an immediate "connection refused". Driven without any live server
+/// (the point is that the connection never completes).
+#[test]
+#[ignore]
+fn test_pgsql_attr_timeout_fails_fast() {
+    let out = compile_and_run(
+        r#"<?php
+$start = microtime(true);
+try {
+    $conn = new \Pdo\Pgsql("pgsql:host=192.0.2.1;port=5432;dbname=testdb", null, null, [PDO::ATTR_TIMEOUT => 2]);
+    echo "connected";
+} catch (PDOException $e) {
+    $elapsed = microtime(true) - $start;
+    echo ($elapsed < 10.0) ? "fast" : "slow";
+}
+"#,
+    );
+    assert_eq!(out, "fast");
+}
+
 /// `Pdo\Pgsql::lobOpen()` reads a large object whole into a rewound php://memory
 /// stream (the read-whole resource shape). The fixture creates a large object from a
 /// known byte string via `lo_from_bytea`, opens it, reads it fully back, and confirms

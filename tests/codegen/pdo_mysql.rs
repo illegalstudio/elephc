@@ -210,6 +210,86 @@ echo ":" . (($db->exec("ALSO BAD") === false) ? "false" : "other");
     assert_eq!(out, "caught:false");
 }
 
+/// P2-2: a `BIGINT UNSIGNED` value above `i64::MAX` round-trips as an exact
+/// decimal numeric string rather than wrapping negative through a lossy `as
+/// i64` cast (`my.rs::decode_value`'s `Value::UInt` branch). Driven against the
+/// live server.
+#[test]
+#[ignore]
+fn test_mysql_bigint_unsigned_above_i64_max_round_trips() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS my_bigint_unsigned");
+$db->exec("CREATE TABLE my_bigint_unsigned (n BIGINT UNSIGNED)");
+$db->exec("INSERT INTO my_bigint_unsigned VALUES (18446744073709551615)");
+echo $db->query("SELECT n FROM my_bigint_unsigned")->fetchColumn();
+$db->exec("DROP TABLE my_bigint_unsigned");
+"#,
+    ));
+    assert_eq!(out, "18446744073709551615");
+}
+
+/// P1-9 (minimal wiring): `Pdo\Mysql::ATTR_INIT_COMMAND` runs its SQL statement
+/// right after authentication, so a session variable it sets is already visible
+/// to the very first query issued on the connection. Driven against the live
+/// server as the driver subclass directly (the constructor option).
+#[test]
+#[ignore]
+fn test_mysql_attr_init_command_runs_on_connect() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Mysql((string) getenv("ELEPHC_MY_DSN"), null, null, [
+    \Pdo\Mysql::ATTR_INIT_COMMAND => "SET @elephc_init_probe = 42",
+]);
+echo $db->query("SELECT @elephc_init_probe")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// P2-3: a `charset=utf8mb4` DSN key becomes a `SET NAMES utf8mb4` statement at
+/// connect time, so `SHOW VARIABLES LIKE 'character_set_connection'` reports it
+/// without the caller issuing any SQL itself. Driven against the live server.
+#[test]
+#[ignore]
+fn test_mysql_charset_dsn_key_sets_connection_charset() {
+    let out = compile_and_run(
+        r#"<?php
+$dsn = ((string) getenv("ELEPHC_MY_DSN")) . ";charset=utf8mb4";
+$db = new \Pdo\Mysql($dsn);
+$row = $db->query("SHOW VARIABLES LIKE 'character_set_connection'")->fetch(PDO::FETCH_NUM);
+echo $row[1];
+"#,
+    );
+    assert_eq!(out, "utf8mb4");
+}
+
+/// P2-1: `PDO::ATTR_TIMEOUT` folds into the DSN as the `connect_timeout` key
+/// (mapped to `OptsBuilder::tcp_connect_timeout` in `my.rs::build_opts`), so a
+/// connection attempt against an unreachable host fails within a bounded time
+/// instead of hanging on the OS's own (much longer) TCP connect timeout. Uses a
+/// non-routable TEST-NET-1 address (RFC 5737, `192.0.2.0/24`) so the connect
+/// attempt reliably blackholes rather than getting an immediate "connection
+/// refused". Driven without any live server (the point is that the connection
+/// never completes).
+#[test]
+#[ignore]
+fn test_mysql_attr_timeout_fails_fast() {
+    let out = compile_and_run(
+        r#"<?php
+$start = microtime(true);
+try {
+    $conn = new \Pdo\Mysql("mysql:host=192.0.2.1;port=3306;dbname=testdb", null, null, [PDO::ATTR_TIMEOUT => 2]);
+    echo "connected";
+} catch (PDOException $e) {
+    $elapsed = microtime(true) - $start;
+    echo ($elapsed < 10.0) ? "fast" : "slow";
+}
+"#,
+    );
+    assert_eq!(out, "fast");
+}
+
 /// `Pdo\Mysql::getWarningCount()` reports the warning count of the last statement,
 /// cached from that statement's terminal OK packet. `CREATE TABLE IF NOT EXISTS`
 /// on an existing table raises one "table already exists" warning (an OK-terminated

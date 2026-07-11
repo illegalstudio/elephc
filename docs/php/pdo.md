@@ -176,6 +176,17 @@ points:
   are re-serialized compactly, so whitespace may differ from the server's text
   output, but the value is equivalent. Other types (arrays, network types) are
   best read with an explicit `::text` cast.
+- **`getNotify()`.** `getNotify(PDO::FETCH_ASSOC, $timeoutMs)` shapes a pending
+  `LISTEN`/`NOTIFY` message as `["message" => $channel, "pid" => $pid, "payload"
+  => $payload]`; any other `$fetchMode` (the default) keeps the numerically-indexed
+  `[$channel, $pid, $payload]` shape. Both return `[]` rather than `false` when no
+  notification arrives within the timeout.
+- **Credentials and `ATTR_TIMEOUT`.** The constructor's `$username`/`$password`
+  are folded into the DSN as `user=`/`password=` only when the DSN does not
+  already carry that key (a DSN-embedded credential wins, matching PHP).
+  `PDO::ATTR_TIMEOUT` (seconds) is folded in the same way as a `connect_timeout`
+  conninfo key, bounding the initial socket connect — not just the SQLite-style
+  busy-wait `setAttribute()` applies after the connection already exists.
 
 ## MySQL / MariaDB notes
 
@@ -195,8 +206,23 @@ The MySQL driver behaves like the others, with a few database-specific points:
   returned as their text representation: `DECIMAL` (scale preserved), `DATE`,
   `DATETIME` / `TIMESTAMP`, and `TIME`. The same values bind as parameters (text
   is coerced to the column type by the server). Binary and BLOB columns are
-  returned as PHP strings with embedded NUL bytes preserved.
+  returned as PHP strings with embedded NUL bytes preserved. A `BIGINT UNSIGNED`
+  value above `PHP_INT_MAX` is returned as its exact decimal numeric string
+  (matching PHP) rather than wrapping negative.
 - **Driver name.** `getAttribute(PDO::ATTR_DRIVER_NAME)` reports `"mysql"`.
+- **Credentials and `ATTR_TIMEOUT`.** Same DSN-precedence and connect-time
+  timeout behavior as PostgreSQL's (see above): a DSN-embedded `user=`/`password=`
+  wins over the constructor arguments, and `PDO::ATTR_TIMEOUT` bounds the initial
+  TCP connect via a `connect_timeout` DSN key.
+- **`Pdo\Mysql::ATTR_INIT_COMMAND`.** Passed as a constructor option, this SQL
+  statement runs on the server immediately after authentication (e.g. `SET NAMES
+  utf8mb4`). Every other `Pdo\Mysql::ATTR_*` constant (`ATTR_COMPRESS`,
+  `ATTR_SSL_*`, …) is accepted and stored but has no effect.
+- **`charset` DSN key.** A `mysql:…;charset=utf8mb4` DSN key becomes its own `SET
+  NAMES utf8mb4` statement at connect time, run before `ATTR_INIT_COMMAND` (so an
+  explicit init command can still issue its own `SET NAMES` afterwards). Only
+  plain identifier characters (`[A-Za-z0-9_]`) are honored; anything else is
+  silently dropped.
 
 ## Transactions
 
@@ -406,6 +432,28 @@ is delivered on the next `exec()`/`query()`.
 - **`fetch()`'s second argument** is a class/target (as with `setFetchMode`),
   not PHP 8.4's cursor-orientation parameter; forward-only cursors make the
   difference moot in practice.
+- **No TLS/SSL for PostgreSQL or MySQL.** To keep a compiled binary free of any
+  system TLS library, the PostgreSQL and MySQL drivers connect over plaintext only:
+  the pure-Rust clients are built without their TLS backends, and the
+  `Pdo\Mysql::ATTR_SSL_*` constants are accepted but inert. A server that *mandates*
+  TLS (many managed offerings — AWS RDS `force_ssl`, Supabase, Neon, PlanetScale,
+  Aiven, …) therefore cannot be reached. SQLite is unaffected (in-process). TLS would
+  be an opt-in build feature (pulling in a TLS crate) if that trade-off is wanted.
+- **`FETCH_CLASS` / `FETCH_INTO` target classes should declare typed properties.**
+  Populating a class whose properties are *untyped* (`public $id;`) can corrupt a
+  column whose value type differs from another column's (a compiler limitation in
+  dynamically-named property writes); declare them `public mixed $id;` (or a concrete
+  type) and every column populates correctly. `FETCH_OBJ` (`stdClass`) is unaffected.
+- **`PDOException`'s second constructor argument** is `?array $errorInfo`
+  (`new PDOException($message, $errorInfo)`), not PHP's `int $code` — the SQLSTATE
+  triple lives in `errorInfo`, and `getCode()` is the base default (see above). A
+  caught exception's `$e->errorInfo` is a real `[SQLSTATE, driver-code, message]`
+  array for a server error (so `$e->errorInfo[0]` works) and `null` when there is no
+  structured info (an unrecognized-driver connect failure), matching PHP.
+- **`clone $pdo` / `clone $stmt` and a bare `fetch(PDO::FETCH_LAZY)`** are not
+  supported: cloning a connection/statement is rejected (PHP forbids it too), and
+  `FETCH_LAZY` — which returns PHP's lazy `PDORow`, a class elephc does not provide —
+  fails loudly rather than returning a wrong-shaped row.
 - **Namespaced driver subclasses** `Pdo\Sqlite`, `Pdo\Mysql`, and `Pdo\Pgsql`
   (PHP 8.4) exist and extend `PDO`: they are auto-detected (a program that names
   only a subclass still injects the prelude), are directly instantiable, inherit
@@ -420,9 +468,10 @@ is delivered on the next `exec()`/`query()`.
   `copyToArray()` returns an empty array both for an empty table and a transport
   error (check `errorInfo()`); `loadExtension()` runs native code from the named
   library, weakening the standalone-binary guarantee; `getNotify()` returns a
-  numerically-indexed `[channel, pid, payload]` array (an empty array, not `false`,
-  when none is pending — elephc's EIR array backend cannot mix a string-keyed and an
-  empty array across one method's return paths). `openBlob()` / `lobOpen()` are
+  numerically-indexed `[channel, pid, payload]` array by default, or the assoc
+  `["message" => channel, "pid" => pid, "payload" => payload]` shape when called
+  with `PDO::FETCH_ASSOC` (an empty array, not `false`, either way when none is
+  pending). `openBlob()` / `lobOpen()` are
   **read-whole**: they read the entire BLOB / large object (NUL bytes preserved) into
   a rewound `php://memory` stream and return it (or `false` on a missing row/OID), so
   reads work fully but writes are not flushed back to storage, and the `$flags` /

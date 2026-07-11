@@ -224,14 +224,17 @@ unsafe fn bytes_arg(p: *const c_char, len: i64) -> Vec<u8> {
     std::slice::from_raw_parts(p as *const u8, len as usize).to_vec()
 }
 
-/// Opens the driver connection for a validated DSN string.
-fn open_conn_for_dsn(dsn: &str) -> Result<Conn, String> {
+/// Opens the driver connection for a validated DSN string. `sqlite_open_flags`
+/// (P1-10/P2-9) is only consulted for a `sqlite:` DSN; `my_init_command` (P1-9)
+/// only for a `mysql:` DSN; PostgreSQL and the other driver's parameter are
+/// ignored.
+fn open_conn_for_dsn(dsn: &str, sqlite_open_flags: i64, my_init_command: &str) -> Result<Conn, String> {
     if let Some(path) = dsn.strip_prefix("sqlite:") {
-        sqlite::SqliteConn::open(path).map(Conn::Sqlite)
+        sqlite::SqliteConn::open(path, sqlite_open_flags).map(Conn::Sqlite)
     } else if dsn.starts_with("pgsql:") {
         pg::PgConn::open(dsn).map(Conn::Postgres)
     } else if dsn.starts_with("mysql:") {
-        my::MyConn::open(dsn).map(Conn::Mysql)
+        my::MyConn::open(dsn, my_init_command).map(Conn::Mysql)
     } else {
         Err(
             "could not find driver (only sqlite:, pgsql:, and mysql: DSNs are supported)"
@@ -249,8 +252,8 @@ fn register_conn(conn: Conn) -> i64 {
 
 /// Opens a non-persistent connection and stores any failure message for the PDO
 /// constructor's `elephc_pdo_last_open_error()` call.
-fn open_nonpersistent_dsn(dsn: &str) -> i64 {
-    match open_conn_for_dsn(dsn) {
+fn open_nonpersistent_dsn(dsn: &str, sqlite_open_flags: i64, my_init_command: &str) -> i64 {
+    match open_conn_for_dsn(dsn, sqlite_open_flags, my_init_command) {
         Ok(conn) => register_conn(conn),
         Err(msg) => {
             store_cstr(open_error_cell(), &msg);
@@ -260,13 +263,18 @@ fn open_nonpersistent_dsn(dsn: &str) -> i64 {
 }
 
 /// Opens or reuses a process-local persistent connection for the full DSN.
-fn open_persistent_dsn(dsn: &str) -> i64 {
+/// `sqlite_open_flags`/`my_init_command` are only applied on a fresh open — the
+/// persistent pool is keyed by DSN alone, so a later open reusing an
+/// already-pooled connection does not re-apply a different flags/init-command
+/// request (matching how no other constructor option retroactively affects a
+/// reused persistent handle either).
+fn open_persistent_dsn(dsn: &str, sqlite_open_flags: i64, my_init_command: &str) -> i64 {
     if let Some(id) = persistent_conns().lock().unwrap().get(dsn).copied() {
         if conns().lock().unwrap().contains_key(&id) {
             return id;
         }
     }
-    match open_conn_for_dsn(dsn) {
+    match open_conn_for_dsn(dsn, sqlite_open_flags, my_init_command) {
         Ok(conn) => {
             let id = register_conn(conn);
             persistent_conns()
@@ -306,9 +314,17 @@ fn open_persistent_dsn(dsn: &str) -> i64 {
 /// pair with the per-group accumulator held in SQLite's aggregate context.
 /// v16 adds the PostgreSQL NOTICE drain (`elephc_pdo_get_notice`) backing
 /// `Pdo\Pgsql::setNoticeCallback()`, buffered via the connection's `notice_callback`.
+/// v17 adds a `sqlite_open_flags` parameter to `elephc_pdo_open_persistent` backing
+/// `Pdo\Sqlite::ATTR_OPEN_FLAGS` (P1-10; `0` = no override) and a
+/// `sqlite3_stmt_readonly` accessor (`elephc_pdo_stmt_readonly`) backing
+/// `PDOStatement::getAttribute(Pdo\Sqlite::ATTR_READONLY_STATEMENT)` (P2-16).
+/// v18 adds a `my_init_command` parameter to `elephc_pdo_open_persistent` (P1-9;
+/// empty string = none) — one SQL statement run by the MySQL/MariaDB server right
+/// after authentication on every (re)connect, backing the minimal wiring for
+/// `Pdo\Mysql::ATTR_INIT_COMMAND`; ignored for `sqlite:`/`pgsql:` DSNs.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    16
+    18
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -338,28 +354,38 @@ pub unsafe extern "C" fn elephc_pdo_open(dsn: *const c_char) -> i64 {
         store_cstr(open_error_cell(), "invalid DSN");
         return -1;
     };
-    open_nonpersistent_dsn(dsn)
+    open_nonpersistent_dsn(dsn, 0, "")
 }
 
 /// Opens a database for a PDO DSN, reusing a process-local pooled connection when
 /// `persistent` is non-zero. Persistent handles stay registered until process
-/// exit; `elephc_pdo_close` is a no-op for them.
+/// exit; `elephc_pdo_close` is a no-op for them. `sqlite_open_flags` (v17) is the
+/// raw `sqlite3_open_v2` flags to open a `sqlite:` DSN with — `0` means "use the
+/// default `READWRITE|CREATE`" — and is ignored for PostgreSQL/MySQL DSNs; it backs
+/// `Pdo\Sqlite::ATTR_OPEN_FLAGS` (P1-10). `my_init_command` (v18) is a SQL
+/// statement run right after authentication on a `mysql:` connection (empty = do
+/// nothing), ignored for SQLite/PostgreSQL DSNs; it backs the minimal wiring for
+/// `Pdo\Mysql::ATTR_INIT_COMMAND` (P1-9).
 ///
 /// # Safety
-/// `dsn` must point to a NUL-terminated string valid for the duration of the call.
+/// `dsn` and, when non-null, `my_init_command` must each point to a
+/// NUL-terminated string valid for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_open_persistent(
     dsn: *const c_char,
     persistent: i64,
+    sqlite_open_flags: i64,
+    my_init_command: *const c_char,
 ) -> i64 {
     let Some(dsn) = cstr_arg(dsn) else {
         store_cstr(open_error_cell(), "invalid DSN");
         return -1;
     };
+    let init_command = cstr_arg(my_init_command).unwrap_or("");
     if persistent == 0 {
-        open_nonpersistent_dsn(dsn)
+        open_nonpersistent_dsn(dsn, sqlite_open_flags, init_command)
     } else {
-        open_persistent_dsn(dsn)
+        open_persistent_dsn(dsn, sqlite_open_flags, init_command)
     }
 }
 
@@ -454,8 +480,9 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id(conn_id: i64, name: *const c_
 /// Like `elephc_pdo_last_insert_id`, but returns a pointer to the id rendered as
 /// text: PostgreSQL sequence values are not always safe to round-trip as `i64`
 /// (a caller-chosen sequence can be any integer type), so text avoids a lossy or
-/// failing numeric bridge. Empty string on an unknown handle or error. Valid
-/// until the next `elephc_pdo_last_insert_id_text`.
+/// failing numeric bridge; likewise (P2-2) a MySQL `BIGINT UNSIGNED`
+/// AUTO_INCREMENT id can exceed `i64::MAX`. Empty string on an unknown handle or
+/// error. Valid until the next `elephc_pdo_last_insert_id_text`.
 ///
 /// # Safety
 /// `name`, when non-null, must point to a NUL-terminated string valid for the call.
@@ -469,7 +496,7 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id_text(
         match guard.get_mut(&conn_id) {
             Some(Conn::Sqlite(c)) => c.last_insert_id().to_string(),
             Some(Conn::Postgres(c)) => c.last_insert_id_text(cstr_arg(name)),
-            Some(Conn::Mysql(c)) => c.last_insert_id(cstr_arg(name)).to_string(),
+            Some(Conn::Mysql(c)) => c.last_insert_id_text(cstr_arg(name)),
             None => String::new(),
         }
     };
@@ -1329,6 +1356,19 @@ pub extern "C" fn elephc_pdo_finalize(stmt_id: i64) -> i64 {
     }
 }
 
+/// Returns `1` if a SQLite statement makes no direct changes to the database file
+/// content (`sqlite3_stmt_readonly`), else `0` — including for a non-SQLite or
+/// unknown handle, where the notion does not apply. Backs
+/// `PDOStatement::getAttribute(Pdo\Sqlite::ATTR_READONLY_STATEMENT)` (P2-16) as a
+/// live read rather than a value stored at prepare time.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_stmt_readonly(stmt_id: i64) -> i64 {
+    match stmts().lock().unwrap().get(&stmt_id) {
+        Some(Stmt::Sqlite(s)) => s.readonly(),
+        _ => 0,
+    }
+}
+
 /// Returns the native driver code for the statement's last operation. SQLite
 /// tracks this per-connection (mirrored here from the statement's own `db`
 /// pointer); PostgreSQL/MySQL statements share their connection's bookkeeping
@@ -1450,12 +1490,11 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v16 adds the
-    /// PostgreSQL NOTICE drain (`elephc_pdo_get_notice`) backing
-    /// `Pdo\Pgsql::setNoticeCallback()`.
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v18 adds
+    /// `elephc_pdo_open_persistent`'s `my_init_command` parameter (P1-9).
     #[test]
-    fn version_is_v16() {
-        assert_eq!(elephc_pdo_version(), 16);
+    fn version_is_v18() {
+        assert_eq!(elephc_pdo_version(), 18);
     }
 
     /// A DSN for an unsupported driver is rejected with a driver error.
@@ -1547,7 +1586,7 @@ mod tests {
     #[test]
     fn sqlite_persistent_pool_reuses_connection_after_close() {
         let dsn = cs("sqlite::memory:");
-        let first = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1) };
+        let first = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1, 0, std::ptr::null()) };
         assert!(first > 0, "open failed");
 
         let ddl = cs("CREATE TABLE persistent_pool (n INTEGER)");
@@ -1556,7 +1595,7 @@ mod tests {
         assert_eq!(unsafe { elephc_pdo_exec(first, ins.as_ptr()) }, 1);
         elephc_pdo_close(first);
 
-        let second = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1) };
+        let second = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1, 0, std::ptr::null()) };
         assert_eq!(second, first);
         let sql = cs("SELECT n FROM persistent_pool");
         let stmt = unsafe { elephc_pdo_prepare(second, sql.as_ptr()) };
@@ -1641,6 +1680,93 @@ mod tests {
         );
         assert_eq!(elephc_pdo_finalize(dup_stmt), 1);
 
+        elephc_pdo_close(conn);
+    }
+
+    /// v17 (P1-10): `Pdo\Sqlite::ATTR_OPEN_FLAGS` threaded through
+    /// `elephc_pdo_open_persistent`'s `sqlite_open_flags` opens a connection that
+    /// rejects writes when the flags select `SQLITE_OPEN_READONLY` (`1`, matching
+    /// `Pdo\Sqlite::OPEN_READONLY`) instead of the default `READWRITE|CREATE`.
+    #[test]
+    fn sqlite_open_flags_readonly_rejects_write() {
+        let path = std::env::temp_dir().join(format!(
+            "elephc_pdo_test_readonly_{}_{}.sqlite",
+            std::process::id(),
+            next_id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let dsn = cs(&format!("sqlite:{}", path.display()));
+
+        // A non-persistent (flag 0) open with sqlite_open_flags=0 creates the file
+        // read-write, as today's default does.
+        let rw = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 0, 0, std::ptr::null()) };
+        assert!(rw > 0, "read-write open failed");
+        let ddl = cs("CREATE TABLE t (n INTEGER)");
+        assert_eq!(unsafe { elephc_pdo_exec(rw, ddl.as_ptr()) }, 0);
+        elephc_pdo_close(rw);
+
+        // Reopening with sqlite_open_flags=1 (SQLITE_OPEN_READONLY) must reject a
+        // write against the now-existing file.
+        let ro = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 0, 1, std::ptr::null()) };
+        assert!(ro > 0, "read-only open failed");
+        let ins = cs("INSERT INTO t VALUES (1)");
+        assert_eq!(
+            unsafe { elephc_pdo_exec(ro, ins.as_ptr()) },
+            -1,
+            "write should be rejected on a read-only handle"
+        );
+        elephc_pdo_close(ro);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// v17 (P2-9): a `file:` URI-DSN body enables `SQLITE_OPEN_URI`, so a
+    /// `mode=ro` query parameter takes effect (SQLite docs: `mode=` overrides the
+    /// flags passed to `sqlite3_open_v2`) and fails to open a nonexistent
+    /// database rather than silently creating a new file at the literal
+    /// (unparsed) `file:...?mode=ro` path, which the pre-fix code did.
+    #[test]
+    fn sqlite_file_uri_dsn_mode_ro_nonexistent_fails() {
+        let path = std::env::temp_dir().join(format!(
+            "elephc_pdo_test_uri_ro_{}_{}.sqlite",
+            std::process::id(),
+            next_id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let dsn = cs(&format!("sqlite:file:{}?mode=ro", path.display()));
+        let id = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 0, 0, std::ptr::null()) };
+        assert_eq!(
+            id, -1,
+            "mode=ro URI DSN against a nonexistent file should fail to open, not create it"
+        );
+        assert!(!path.exists(), "a literal file must not have been created");
+    }
+
+    /// v17 (P2-16): `elephc_pdo_stmt_readonly` reports `1` for a SELECT statement
+    /// and `0` for an INSERT, backing
+    /// `PDOStatement::getAttribute(Pdo\Sqlite::ATTR_READONLY_STATEMENT)` as a live
+    /// `sqlite3_stmt_readonly` read. An unknown handle reports `0`.
+    #[test]
+    fn sqlite_stmt_readonly_reports_select_vs_write() {
+        let dsn = cs("sqlite::memory:");
+        let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+        assert!(conn > 0, "open failed");
+        let ddl = cs("CREATE TABLE t (n INTEGER)");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, ddl.as_ptr()) }, 0);
+
+        let sel = cs("SELECT n FROM t");
+        let sel_stmt = unsafe { elephc_pdo_prepare(conn, sel.as_ptr()) };
+        assert!(sel_stmt > 0, "prepare failed");
+        assert_eq!(elephc_pdo_stmt_readonly(sel_stmt), 1);
+
+        let ins = cs("INSERT INTO t VALUES (1)");
+        let ins_stmt = unsafe { elephc_pdo_prepare(conn, ins.as_ptr()) };
+        assert!(ins_stmt > 0, "prepare failed");
+        assert_eq!(elephc_pdo_stmt_readonly(ins_stmt), 0);
+
+        assert_eq!(elephc_pdo_stmt_readonly(999_999), 0);
+
+        assert_eq!(elephc_pdo_finalize(sel_stmt), 1);
+        assert_eq!(elephc_pdo_finalize(ins_stmt), 1);
         elephc_pdo_close(conn);
     }
 

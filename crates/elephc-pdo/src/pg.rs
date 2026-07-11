@@ -190,7 +190,10 @@ fn parse_datetime_utc(
 /// Parses a PDO `pgsql:` DSN (semicolon-separated `key=value` pairs) into a
 /// libpq-style connection string the `postgres` client accepts. Recognises the
 /// PDO key `dbname` as-is and passes other keys (`host`, `port`, `user`,
-/// `password`, `sslmode`, …) straight through. Returns an error for a DSN
+/// `password`, `sslmode`, …) straight through — including `connect_timeout`
+/// (P2-1: the prelude folds this in from `PDO::ATTR_TIMEOUT` alongside the
+/// credentials, and libpq's own conninfo parser already understands the key, so
+/// no bridge-side special-casing is needed here). Returns an error for a DSN
 /// without the `pgsql:` prefix.
 pub fn parse_dsn(dsn: &str) -> Result<String, String> {
     let body = dsn

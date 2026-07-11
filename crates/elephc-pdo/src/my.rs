@@ -24,6 +24,7 @@
 //!   PostgreSQL driver — no per-parameter type inference is needed.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use mysql::consts::ColumnType;
 use mysql::prelude::Queryable;
@@ -97,8 +98,10 @@ pub struct MyConn {
     pub sqlstate: String,
     /// The most recent non-zero AUTO_INCREMENT id, kept sticky across later
     /// non-INSERT statements (which would otherwise reset the protocol field) to
-    /// match `PDO::lastInsertId()`.
-    pub last_id: i64,
+    /// match `PDO::lastInsertId()`. Stored as `u64` (P2-2's sibling gap): a
+    /// `BIGINT UNSIGNED` AUTO_INCREMENT id can exceed `i64::MAX`, and casting at
+    /// storage time would wrap it negative before either accessor ever runs.
+    pub last_id: u64,
 }
 
 /// A live MySQL prepared statement and its lazily-materialized result.
@@ -146,11 +149,23 @@ fn err_sqlstate(e: &mysql::Error) -> String {
 }
 
 /// Parses a PDO `mysql:` DSN (semicolon-separated `key=value` pairs) into the
-/// `mysql` client's connection options. Recognises `host`, `port`, `dbname`,
-/// `unix_socket`, and the credential keys the prelude folds in (`user`,
-/// `password`); unknown keys (e.g. `charset`) are accepted and ignored. Returns an
-/// error for a DSN without the `mysql:` prefix.
-pub fn build_opts(dsn: &str) -> Result<OptsBuilder, String> {
+/// `mysql` client's connection options, plus a validated `charset` value (P2-3,
+/// second tuple element) for the caller to apply. Recognises `host`, `port`,
+/// `dbname`, `unix_socket`, the credential keys the prelude folds in (`user`,
+/// `password`), `connect_timeout` (P2-1: seconds, mapped to `tcp_connect_timeout`
+/// — backs `PDO::ATTR_TIMEOUT`, which the prelude folds into the DSN alongside
+/// the credentials since the option needs to take effect before the socket
+/// connects), and `charset`; other unknown keys are accepted and ignored.
+/// Returns an error for a DSN without the `mysql:` prefix.
+///
+/// `charset` has no direct `OptsBuilder` knob in the `mysql` crate, so it is
+/// returned as data rather than applied here — `MyConn::open` turns it into a
+/// `SET NAMES <charset>` statement alongside `ATTR_INIT_COMMAND` (P1-9) via
+/// `OptsBuilder::init`. It is validated here to only contain the identifier
+/// characters a real MySQL charset name uses (`[A-Za-z0-9_]`), so a stray value
+/// cannot inject SQL into that generated statement; an invalid value is silently
+/// dropped (documented best-effort, matching the surrounding DSN parsing style).
+pub fn build_opts(dsn: &str) -> Result<(OptsBuilder, Option<String>), String> {
     let body = dsn
         .strip_prefix("mysql:")
         .ok_or_else(|| "could not find driver (expected a mysql: DSN)".to_string())?;
@@ -160,6 +175,8 @@ pub fn build_opts(dsn: &str) -> Result<OptsBuilder, String> {
     let mut socket: Option<String> = None;
     let mut user: Option<String> = None;
     let mut password: Option<String> = None;
+    let mut connect_timeout: Option<u64> = None;
+    let mut charset: Option<String> = None;
     for pair in body.split(';') {
         let pair = pair.trim();
         if pair.is_empty() {
@@ -176,8 +193,16 @@ pub fn build_opts(dsn: &str) -> Result<OptsBuilder, String> {
             "unix_socket" | "socket" => socket = Some(value),
             "user" => user = Some(value),
             "password" => password = Some(value),
-            // charset and any other key are accepted for DSN compatibility but
-            // have no direct option here (modern MariaDB defaults to utf8mb4).
+            "connect_timeout" => connect_timeout = value.parse::<u64>().ok(),
+            "charset" => {
+                if !value.is_empty()
+                    && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    charset = Some(value);
+                }
+            }
+            // any other key is accepted for DSN compatibility but has no direct
+            // option here.
             _ => {}
         }
     }
@@ -192,7 +217,10 @@ pub fn build_opts(dsn: &str) -> Result<OptsBuilder, String> {
             opts = opts.tcp_port(p);
         }
     }
-    Ok(opts)
+    if let Some(secs) = connect_timeout {
+        opts = opts.tcp_connect_timeout(Some(Duration::from_secs(secs)));
+    }
+    Ok((opts, charset))
 }
 
 /// Translates PDO `?` and `:name` placeholders to MySQL's positional `?`,
@@ -281,10 +309,29 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, Vec<i
 }
 
 impl MyConn {
-    /// Connects to MySQL/MariaDB for a `mysql:` DSN. Returns the connection or an
-    /// error message for `last_open_error`.
-    pub fn open(dsn: &str) -> Result<MyConn, String> {
-        let opts = build_opts(dsn)?;
+    /// Connects to MySQL/MariaDB for a `mysql:` DSN. `init_command` (P1-9), when
+    /// non-empty, is one SQL statement run by the server immediately after
+    /// authentication on every (re)connect — the bridge-level minimal wiring for
+    /// `Pdo\Mysql::ATTR_INIT_COMMAND` (Doctrine/Laravel commonly set `SET NAMES
+    /// utf8mb4` or a `sql_mode` here). It travels as its own parameter rather than
+    /// a DSN `key=value` pair because the DSN parser splits on `;`, which a
+    /// realistic init command (e.g. two statements) could contain. A DSN
+    /// `charset=` key (P2-3) becomes its own `SET NAMES <charset>` statement, run
+    /// before `init_command` so an explicit `ATTR_INIT_COMMAND` can still issue
+    /// its own `SET NAMES`/`sql_mode` afterwards in the same session. Returns the
+    /// connection or an error message for `last_open_error`.
+    pub fn open(dsn: &str, init_command: &str) -> Result<MyConn, String> {
+        let (mut opts, charset) = build_opts(dsn)?;
+        let mut init_statements: Vec<String> = Vec::new();
+        if let Some(cs) = charset {
+            init_statements.push(format!("SET NAMES {cs}"));
+        }
+        if !init_command.is_empty() {
+            init_statements.push(init_command.to_string());
+        }
+        if !init_statements.is_empty() {
+            opts = opts.init(init_statements);
+        }
         let conn = Conn::new(opts).map_err(|e| e.to_string())?;
         Ok(MyConn {
             conn,
@@ -298,10 +345,13 @@ impl MyConn {
 
     /// Records the AUTO_INCREMENT id from the just-run statement when it is
     /// non-zero, so `lastInsertId()` survives an intervening non-INSERT query.
+    /// Stored without a lossy cast (P2-2's sibling gap) so a `BIGINT UNSIGNED`
+    /// AUTO_INCREMENT id above `i64::MAX` still round-trips through
+    /// `last_insert_id_text`.
     fn note_last_id(&mut self, id: Option<u64>) {
         if let Some(id) = id {
             if id != 0 {
-                self.last_id = id as i64;
+                self.last_id = id;
             }
         }
     }
@@ -358,9 +408,20 @@ impl MyConn {
     }
 
     /// Returns the last inserted AUTO_INCREMENT id. MySQL ignores the sequence
-    /// name argument (it is a PostgreSQL/Oracle concept).
+    /// name argument (it is a PostgreSQL/Oracle concept). Matches the bridge's
+    /// `i64` ABI (`elephc_pdo_last_insert_id`): a `BIGINT UNSIGNED` id above
+    /// `i64::MAX` still wraps through this accessor — `last_insert_id_text` is
+    /// the precision-preserving one (mirroring PostgreSQL's own text accessor).
     pub fn last_insert_id(&self, _name: Option<&str>) -> i64 {
-        self.last_id
+        self.last_id as i64
+    }
+
+    /// Like `last_insert_id`, but renders the id as decimal text without the
+    /// lossy `i64` cast (P2-2's sibling gap), so a `BIGINT UNSIGNED`
+    /// AUTO_INCREMENT id above `i64::MAX` round-trips exactly. MySQL ignores the
+    /// sequence name argument, matching `last_insert_id`.
+    pub fn last_insert_id_text(&self, _name: Option<&str>) -> String {
+        self.last_id.to_string()
     }
 
     /// Returns the MySQL/MariaDB server's reported version (`MAJOR.MINOR.PATCH`),
@@ -465,7 +526,17 @@ fn decode_value(v: Value, kind: ColKind) -> Cell {
     match v {
         Value::NULL => Cell::Null,
         Value::Int(i) => Cell::Int(i),
-        Value::UInt(u) => Cell::Int(u as i64),
+        // BIGINT UNSIGNED (P2-2): a value above `i64::MAX` would wrap negative
+        // through a plain `as i64` cast, silently corrupting the column. PHP's
+        // pdo_mysql/mysqlnd matches this numeric-string fallback for any integer
+        // too large for a native `zend_long`.
+        Value::UInt(u) => {
+            if u > i64::MAX as u64 {
+                Cell::Text(u.to_string())
+            } else {
+                Cell::Int(u as i64)
+            }
+        }
         Value::Float(f) => Cell::Float(f as f64),
         Value::Double(d) => Cell::Float(d),
         // Text, VARCHAR, DECIMAL, BLOB, etc. all arrive as raw bytes.
@@ -676,5 +747,114 @@ impl MyStmt {
             Some(Cell::Float(v)) => v.to_string().into_bytes(),
             _ => Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Extracts the `Cell::Text` payload, or fails naming the wrong variant (no
+    /// `Debug` derive on `Cell` elsewhere in the bridge, so this keeps the tests
+    /// below from requiring one just for a panic message).
+    fn expect_text(cell: Cell) -> String {
+        match cell {
+            Cell::Text(s) => s,
+            Cell::Int(_) => panic!("expected Cell::Text, got Cell::Int"),
+            Cell::Null => panic!("expected Cell::Text, got Cell::Null"),
+            Cell::Float(_) => panic!("expected Cell::Text, got Cell::Float"),
+            Cell::Bytes(_) => panic!("expected Cell::Text, got Cell::Bytes"),
+        }
+    }
+
+    /// Extracts the `Cell::Int` payload, or fails naming the wrong variant.
+    fn expect_int(cell: Cell) -> i64 {
+        match cell {
+            Cell::Int(v) => v,
+            Cell::Text(_) => panic!("expected Cell::Int, got Cell::Text"),
+            Cell::Null => panic!("expected Cell::Int, got Cell::Null"),
+            Cell::Float(_) => panic!("expected Cell::Int, got Cell::Float"),
+            Cell::Bytes(_) => panic!("expected Cell::Int, got Cell::Bytes"),
+        }
+    }
+
+    /// P2-2: a `BIGINT UNSIGNED` value at or below `i64::MAX` decodes as a plain
+    /// `Cell::Int` — the common case, unaffected by the overflow fix below.
+    #[test]
+    fn bigint_unsigned_within_i64_max_decodes_to_int() {
+        let u = i64::MAX as u64;
+        assert_eq!(expect_int(decode_value(Value::UInt(u), ColKind::Other)), i64::MAX);
+    }
+
+    /// P2-2 (mandatory unit test, no server needed): a `BIGINT UNSIGNED` value
+    /// above `i64::MAX` must decode to the exact decimal numeric string rather
+    /// than silently wrapping negative through an `as i64` cast.
+    #[test]
+    fn bigint_unsigned_above_i64_max_decodes_to_numeric_string() {
+        let u = u64::MAX;
+        assert_eq!(
+            expect_text(decode_value(Value::UInt(u), ColKind::Other)),
+            "18446744073709551615"
+        );
+        // The tightest regression check for the `>` boundary comparison: one
+        // past `i64::MAX` must already take the text path.
+        let boundary = i64::MAX as u64 + 1;
+        assert_eq!(
+            expect_text(decode_value(Value::UInt(boundary), ColKind::Other)),
+            boundary.to_string()
+        );
+    }
+
+    /// P2-1: a `connect_timeout=<secs>` DSN key (as the prelude folds in
+    /// alongside `user=`/`password=` when `PDO::ATTR_TIMEOUT` is set) parses into
+    /// the `mysql` client's `tcp_connect_timeout` option. Pure DSN-parsing logic,
+    /// no server needed — `build_opts` never dials out.
+    #[test]
+    fn build_opts_maps_connect_timeout_dsn_key() {
+        let (opts, _charset) =
+            build_opts("mysql:host=localhost;dbname=testdb;connect_timeout=5").unwrap();
+        let opts: mysql::Opts = opts.into();
+        assert_eq!(opts.get_tcp_connect_timeout(), Some(Duration::from_secs(5)));
+    }
+
+    /// A DSN with no `connect_timeout` key leaves the option unset (the client's
+    /// own default, effectively no timeout).
+    #[test]
+    fn build_opts_leaves_connect_timeout_unset_by_default() {
+        let (opts, _charset) = build_opts("mysql:host=localhost;dbname=testdb").unwrap();
+        let opts: mysql::Opts = opts.into();
+        assert_eq!(opts.get_tcp_connect_timeout(), None);
+    }
+
+    /// P2-3: a `charset=<name>` DSN key is captured (for `MyConn::open` to turn
+    /// into a `SET NAMES <name>` init statement), validated to plain identifier
+    /// characters so it cannot inject SQL into that generated statement.
+    #[test]
+    fn build_opts_captures_valid_charset() {
+        let (_opts, charset) =
+            build_opts("mysql:host=localhost;dbname=testdb;charset=utf8mb4").unwrap();
+        assert_eq!(charset.as_deref(), Some("utf8mb4"));
+    }
+
+    /// A `charset` value containing anything beyond `[A-Za-z0-9_]` (e.g. an
+    /// attempted SQL-injection payload embedded in the DSN's `charset=` value —
+    /// a `;` in the payload would already be defused by the DSN's own
+    /// semicolon-segmented parsing, so this uses a quote/space payload that
+    /// stays within the one `charset=` segment) is dropped rather than reaching
+    /// the generated `SET NAMES` statement.
+    #[test]
+    fn build_opts_rejects_charset_with_unsafe_characters() {
+        let (_opts, charset) = build_opts(
+            "mysql:host=localhost;dbname=testdb;charset=utf8mb4' OR '1'='1",
+        )
+        .unwrap();
+        assert_eq!(charset, None);
+    }
+
+    /// A DSN with no `charset` key leaves it unset.
+    #[test]
+    fn build_opts_leaves_charset_unset_by_default() {
+        let (_opts, charset) = build_opts("mysql:host=localhost;dbname=testdb").unwrap();
+        assert_eq!(charset, None);
     }
 }

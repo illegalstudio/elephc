@@ -66,12 +66,28 @@ pub fn sqlite_sqlstate(rc: c_int) -> &'static str {
 impl SqliteConn {
     /// Opens the SQLite database at `path` (the DSN body after `sqlite:`),
     /// returning the connection or an error message.
-    pub fn open(path: &str) -> Result<SqliteConn, String> {
+    ///
+    /// `open_flags` is the raw `sqlite3_open_v2` flags to use, taken from
+    /// `Pdo\Sqlite::ATTR_OPEN_FLAGS` (P1-10); `0` means "no override", which
+    /// keeps the default `READWRITE|CREATE` PHP uses when the option is not
+    /// set. `Pdo\Sqlite::OPEN_READONLY`/`OPEN_READWRITE`/`OPEN_CREATE` share
+    /// their bit values with `SQLITE_OPEN_READONLY`/`_READWRITE`/`_CREATE`, so
+    /// the PHP-side int crosses unchanged. When `path` starts with `file:`
+    /// (P2-9's URI DSN, e.g. `sqlite:file:test.db?mode=ro`), `SQLITE_OPEN_URI`
+    /// is OR-ed in regardless of `open_flags` so the query-string is honored.
+    pub fn open(path: &str, open_flags: i64) -> Result<SqliteConn, String> {
         let Ok(c_path) = CString::new(path) else {
             return Err("invalid database path".to_string());
         };
         let mut db: *mut ffi::sqlite3 = ptr::null_mut();
-        let flags = ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE;
+        let mut flags: c_int = if open_flags != 0 {
+            open_flags as c_int
+        } else {
+            ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE
+        };
+        if path.starts_with("file:") {
+            flags |= ffi::SQLITE_OPEN_URI;
+        }
         let rc = unsafe { ffi::sqlite3_open_v2(c_path.as_ptr(), &mut db, flags, ptr::null()) };
         if rc != ffi::SQLITE_OK {
             let msg = if db.is_null() {
@@ -84,6 +100,11 @@ impl SqliteConn {
             }
             return Err(msg);
         }
+        // P2-7: PHP's pdo_sqlite seeds a 60s busy-timeout at connect time so a
+        // lock contention (another connection mid-write) retries instead of
+        // failing immediately with SQLITE_BUSY. `ATTR_TIMEOUT`/`setAttribute`
+        // still override this later via `set_busy_timeout`.
+        unsafe { ffi::sqlite3_busy_timeout(db, 60_000) };
         Ok(SqliteConn { db })
     }
 
@@ -770,6 +791,10 @@ unsafe extern "C" fn x_agg_step(
     for idx in 0..argc {
         vals.push(decode_value(*argv.offset(idx as isize)));
     }
+    // PHP (`sqlite_driver.c`: `ZVAL_LONG(&zargs[1], ++agg_context->row)`) pre-increments
+    // the shared row counter before passing it to the callback, so `$rownumber` runs
+    // 1..N across the group's steps (never 0). Increment first, then pass.
+    (*slot).row_count += 1;
     let adapter: StepAdapter = std::mem::transmute(reg.step_adapter);
     let mut threw: i64 = 0;
     let new_acc = adapter(
@@ -788,14 +813,14 @@ unsafe extern "C" fn x_agg_step(
     } else {
         (*slot).accumulator = new_acc;
     }
-    (*slot).row_count += 1;
 }
 
 /// SQLite aggregate finalize dispatcher (`xFinal`). Recovers the `AggReg` and reads
 /// the per-group `AggCtx` with `sqlite3_aggregate_context(ctx, 0)` — passing 0 so an
 /// empty group (no `xStep` ever ran) returns a NULL slot rather than allocating,
 /// which the dispatcher treats as `{row_count: 0, accumulator: null}` (PHP null
-/// context). Calls the codegen finalize adapter to produce the result and release the
+/// context) before pre-incrementing the row number it hands to the adapter (see
+/// below). Calls the codegen finalize adapter to produce the result and release the
 /// accumulator, writes it through `dispatch_scalar_result`, then nulls the slot so no
 /// freed pointer dangles before SQLite frees the block.
 ///
@@ -811,10 +836,14 @@ unsafe extern "C" fn x_agg_final(ctx: *mut ffi::sqlite3_context) {
     let reg = &*(p_arg as *const AggReg);
     // nBytes 0: do NOT allocate for an empty group; a NULL slot means "never stepped".
     let slot = ffi::sqlite3_aggregate_context(ctx, 0) as *mut AggCtx;
+    // PHP pre-increments the SAME shared row counter for the finalize call too
+    // (`++agg_context->row`), so finalize sees one past the last step's rownumber
+    // (N+1 for an N-step group), or 1 for an empty group (the counter starts at 0
+    // and is pre-incremented even though xStep never ran).
     let (accumulator, row_count) = if slot.is_null() {
-        (ptr::null_mut(), 0i64)
+        (ptr::null_mut(), 1i64)
     } else {
-        ((*slot).accumulator, (*slot).row_count)
+        ((*slot).accumulator, (*slot).row_count + 1)
     };
     let adapter: FinalAdapter = std::mem::transmute(reg.final_adapter);
     let mut out = ElephcResult {
@@ -1031,5 +1060,13 @@ impl SqliteStmt {
     /// Returns the 5-char SQLSTATE for the statement's last operation.
     pub fn sqlstate(&self) -> String {
         sqlite_sqlstate(unsafe { ffi::sqlite3_errcode(self.db) }).to_string()
+    }
+
+    /// Returns `1` if the statement makes no direct changes to the content of
+    /// the database file (`sqlite3_stmt_readonly`), else `0`. Backs
+    /// `PDOStatement::getAttribute(Pdo\Sqlite::ATTR_READONLY_STATEMENT)` (P2-16)
+    /// as a live read rather than a stored value.
+    pub fn readonly(&self) -> i64 {
+        (unsafe { ffi::sqlite3_stmt_readonly(self.ptr) } != 0) as i64
     }
 }
