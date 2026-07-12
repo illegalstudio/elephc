@@ -345,9 +345,27 @@ fn open_persistent_dsn(
 /// feature) — and enables PostgreSQL TLS via the DSN's own `sslmode`/`sslrootcert`
 /// keys through the default `tls` feature's rustls (ring) connector. No new extern
 /// is added for pg (its TLS parameters ride the DSN).
+/// v20 adds an explicit `len` parameter to `elephc_pdo_bind_text` (the value's
+/// true byte length, replacing SQLite's strlen-based `-1` sentinel and pg/mysql's
+/// NUL-terminated `cstr_arg` decode) so a bound string with an embedded NUL byte
+/// binds in full instead of silently truncating at the first NUL (P0-A); it also
+/// routes `PDO::PARAM_LOB` binds through the pre-existing `elephc_pdo_bind_blob`
+/// from the prelude, which was implemented but never called.
+/// v21 adds `elephc_pdo_no_backslash_escapes`, a live read of whether a `mysql:`
+/// connection's session has `NO_BACKSLASH_ESCAPES` active in its `sql_mode`,
+/// backing `PDO::quote()`'s MySQL branch (P1-f): under that mode backslash is a
+/// literal character in a string literal, so the usual backslash-escaping is
+/// unsafe (an escaped quote does not actually escape) and must fall back to
+/// `''`-doubling only, matching mysqlnd's own behavior.
+/// v22 adds `elephc_pdo_in_transaction`, a live transaction-state read backing
+/// `PDO::inTransaction()` / `beginTransaction()`'s already-active guard (P1-g):
+/// `1`/`0` for SQLite (`sqlite3_get_autocommit`), `-1` ("unknown, use the
+/// caller's own flag") for PostgreSQL and MySQL/MariaDB, neither of which
+/// exposes a public live transaction-status accessor through this bridge's
+/// client crates.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    19
+    22
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -580,6 +598,29 @@ pub extern "C" fn elephc_pdo_rollback(conn_id: i64) -> i64 {
     }
 }
 
+/// Returns the connection's LIVE transaction state (P1-g), so a transaction
+/// started via a raw `exec("BEGIN")` — bypassing `PDO::beginTransaction()` — is
+/// still visible to `PDO::inTransaction()` and to `beginTransaction()`'s
+/// already-active guard. `1` = definitely in a transaction, `0` = definitely
+/// not; `-1` = unknown (no live read is possible for this driver, or the
+/// handle is unrecognized) — the prelude falls back to its own `$inTxn` flag in
+/// that case. SQLite reads `sqlite3_get_autocommit` live. MySQL/MariaDB has no
+/// live read: the `mysql` crate's `Conn` tracks the server's `SERVER_STATUS_IN_TRANS`
+/// status flag internally but exposes no public accessor for it (only the
+/// unrelated `no_backslash_escape()` reads a status bit), so `-1` is returned.
+/// PostgreSQL similarly has no live read: the sync `postgres` crate exposes no
+/// public transaction-status getter on `Client`, so `-1` is returned there too.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_in_transaction(conn_id: i64) -> i64 {
+    let guard = conns().lock().unwrap();
+    match guard.get(&conn_id) {
+        Some(Conn::Sqlite(c)) => c.in_transaction(),
+        Some(Conn::Postgres(_)) => -1,
+        Some(Conn::Mysql(_)) => -1,
+        None => -1,
+    }
+}
+
 /// Returns the driver's result code for the connection's last operation.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_errcode(conn_id: i64) -> i64 {
@@ -685,6 +726,20 @@ pub extern "C" fn elephc_pdo_warning_count(conn_id: i64) -> i64 {
     }
 }
 
+/// Returns `1` when a `mysql:` connection's session has `NO_BACKSLASH_ESCAPES`
+/// active in its `sql_mode` (backslash is then a literal character in a string
+/// literal, so `PDO::quote()`'s usual backslash-escaping is unsafe there and
+/// must fall back to `''`-doubling only — P1-f); `0` for a SQLite/PostgreSQL
+/// connection or an unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_no_backslash_escapes(conn_id: i64) -> i64 {
+    let guard = conns().lock().unwrap();
+    match guard.get(&conn_id) {
+        Some(Conn::Mysql(c)) => c.no_backslash_escape() as i64,
+        _ => 0,
+    }
+}
+
 /// Creates a large object and returns its OID as text for a `pgsql:` connection
 /// (`Pdo\Pgsql::lobCreate()`); empty string for a non-PostgreSQL connection, an
 /// unknown handle, or an error.
@@ -741,7 +796,11 @@ pub unsafe extern "C" fn elephc_pdo_copy_in(
 
 /// Runs a prelude-built `COPY … TO STDOUT` for a `pgsql:` connection and returns the
 /// raw text output (`Pdo\Pgsql::copyToArray()` / `copyToFile()`); empty string for a
-/// non-PostgreSQL connection, unknown handle, or error.
+/// non-PostgreSQL connection, unknown handle, or error. P2-i: a caller cannot tell
+/// "really empty" apart from "error" by this return value alone — `copy_out` always
+/// resets `elephc_pdo_errcode()` to `0` on success (even an empty one) and sets it
+/// non-zero on error, so the prelude checks that accessor right after this call to
+/// make the distinction, satisfying `copyToArray()`'s `array|false` contract.
 ///
 /// # Safety
 /// `copy_sql` must point to a NUL-terminated string valid for the call.
@@ -962,27 +1021,38 @@ pub extern "C" fn elephc_pdo_bind_double(stmt_id: i64, idx: i64, val: f64) -> i6
     }
 }
 
-/// Binds a text value to the 1-based placeholder `idx`. A null pointer binds SQL
-/// NULL. Returns `1`/`0`.
+/// Binds a text value to the 1-based placeholder `idx`, using the
+/// caller-supplied `len` (the value's true byte length) rather than a
+/// NUL-terminated-string decode, so a value with an embedded NUL byte binds in
+/// full instead of silently truncating at the first NUL (v20/P0-A). A null
+/// pointer binds SQL NULL. Returns `1`/`0`.
 ///
 /// # Safety
-/// `val`, when non-null, must point to a NUL-terminated string valid for the call.
+/// `val`, when non-null, must point to at least `len` readable bytes valid for
+/// the call.
 #[no_mangle]
-pub unsafe extern "C" fn elephc_pdo_bind_text(stmt_id: i64, idx: i64, val: *const c_char) -> i64 {
+pub unsafe extern "C" fn elephc_pdo_bind_text(
+    stmt_id: i64,
+    idx: i64,
+    val: *const c_char,
+    len: i64,
+) -> i64 {
     let mut guard = stmts().lock().unwrap();
     match guard.get_mut(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.bind_text(idx, val),
+        Some(Stmt::Sqlite(s)) => s.bind_text(idx, val, len),
         Some(Stmt::Postgres(s)) => {
-            let bind = match cstr_arg(val) {
-                Some(t) => pg::Bind::Text(t.to_string()),
-                None => pg::Bind::Null,
+            let bind = if val.is_null() {
+                pg::Bind::Null
+            } else {
+                pg::Bind::Text(String::from_utf8_lossy(&bytes_arg(val, len)).into_owned())
             };
             s.bind(idx, bind)
         }
         Some(Stmt::Mysql(s)) => {
-            let bind = match cstr_arg(val) {
-                Some(t) => my::Bind::Text(t.to_string()),
-                None => my::Bind::Null,
+            let bind = if val.is_null() {
+                my::Bind::Null
+            } else {
+                my::Bind::Text(String::from_utf8_lossy(&bytes_arg(val, len)).into_owned())
             };
             s.bind(idx, bind)
         }
@@ -1519,12 +1589,39 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v19 adds
-    /// `elephc_pdo_open_persistent`'s `my_ssl_config` parameter (MySQL TLS) and the
-    /// DSN-driven PostgreSQL rustls connector.
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v22 adds
+    /// `elephc_pdo_in_transaction`, a live transaction-state read (`1`/`0`/`-1`)
+    /// backing `PDO::inTransaction()` / `beginTransaction()`'s already-active guard.
     #[test]
-    fn version_is_v19() {
-        assert_eq!(elephc_pdo_version(), 19);
+    fn version_is_v22() {
+        assert_eq!(elephc_pdo_version(), 22);
+    }
+
+    /// `elephc_pdo_in_transaction` reads SQLite's live autocommit state through
+    /// the full C ABI: `0` before any `BEGIN`, `1` once `elephc_pdo_begin` starts
+    /// one, `0` again after `elephc_pdo_commit` — the same live signal the
+    /// codegen test `test_pdo_in_transaction_reflects_raw_begin` exercises at the
+    /// PHP level via a raw `exec("BEGIN")` instead of `beginTransaction()`.
+    #[test]
+    fn sqlite_in_transaction_reflects_live_autocommit_state() {
+        let dsn = cs("sqlite::memory:");
+        let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+        assert!(conn > 0, "open failed");
+        assert_eq!(elephc_pdo_in_transaction(conn), 0, "no transaction yet");
+        assert_eq!(elephc_pdo_begin(conn), 1);
+        assert_eq!(elephc_pdo_in_transaction(conn), 1, "BEGIN must be visible live");
+        assert_eq!(elephc_pdo_commit(conn), 1);
+        assert_eq!(elephc_pdo_in_transaction(conn), 0, "COMMIT must clear it live");
+        elephc_pdo_close(conn);
+    }
+
+    /// `elephc_pdo_in_transaction` reports `-1` ("unknown, use the caller's own
+    /// flag") for a handle this bridge has never seen — PostgreSQL and MySQL take
+    /// the same `-1` branch for a live handle, since neither client crate exposes a
+    /// public transaction-status accessor (see the extern's own docblock).
+    #[test]
+    fn in_transaction_unknown_handle_is_negative_one() {
+        assert_eq!(elephc_pdo_in_transaction(-12345), -1);
     }
 
     /// A DSN for an unsupported driver is rejected with a driver error.
@@ -1819,7 +1916,7 @@ mod tests {
             (ffi::SQLITE_NOTADB, "HY000"),
             (ffi::SQLITE_NOTFOUND, "42S02"),
             (ffi::SQLITE_INTERRUPT, "01002"),
-            (ffi::SQLITE_NOLFS, "IM001"),
+            (ffi::SQLITE_NOLFS, "HYC00"),
             (ffi::SQLITE_TOOBIG, "22001"),
         ];
         for (code, expected) in cases {
@@ -1835,7 +1932,7 @@ mod tests {
     /// `'…'` literals and the `::` cast operator left untouched.
     #[test]
     fn pg_translate_placeholders() {
-        let (sql, map) = pg::translate_placeholders(
+        let (sql, map, mixed) = pg::translate_placeholders(
             "SELECT * FROM t WHERE a = ? AND b = :b AND c = :b AND d = 'x?:y' AND e = id::text",
         );
         assert_eq!(
@@ -1843,6 +1940,162 @@ mod tests {
             "SELECT * FROM t WHERE a = $1 AND b = $2 AND c = $2 AND d = 'x?:y' AND e = id::text"
         );
         assert_eq!(map.get("b"), Some(&2));
+        assert!(mixed, "a positional ? and a named :b were both used");
+    }
+
+    /// A `--` line comment's `?` is left untouched; only the trailing real
+    /// placeholder is translated.
+    #[test]
+    fn pg_translate_placeholders_line_comment() {
+        let (sql, map, mixed) = pg::translate_placeholders("-- x = ?\nSELECT ?");
+        assert_eq!(sql, "-- x = ?\nSELECT $1");
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// A `/* ... */` block comment's `?` and `:a` are left untouched; only the
+    /// trailing real placeholder is translated.
+    #[test]
+    fn pg_translate_placeholders_block_comment() {
+        let (sql, map, mixed) = pg::translate_placeholders("/* ? :a */ SELECT ?");
+        assert_eq!(sql, "/* ? :a */ SELECT $1");
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// A `'...'` single-quoted literal's `?`/`::` are preserved verbatim.
+    #[test]
+    fn pg_translate_placeholders_single_quote() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT '?::x', ?");
+        assert_eq!(sql, "SELECT '?::x', $1");
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// A `"..."` double-quoted identifier's `?` is preserved verbatim.
+    #[test]
+    fn pg_translate_placeholders_double_quote() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT \"we?rd\" , ?");
+        assert_eq!(sql, "SELECT \"we?rd\" , $1");
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// A `$$...$$` (empty-tag) dollar-quoted string's body is preserved
+    /// verbatim, including the `?` inside it.
+    #[test]
+    fn pg_translate_placeholders_dollar_quote_empty_tag() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT $$a ? b$$, ?");
+        assert_eq!(sql, "SELECT $$a ? b$$, $1");
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// A `$tag$...$tag$` (named-tag) dollar-quoted string's body is preserved
+    /// verbatim, and the trailing `:n` still translates to `$1`.
+    #[test]
+    fn pg_translate_placeholders_dollar_quote_tagged() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT $x$ p?q $x$ , :n");
+        assert_eq!(sql, "SELECT $x$ p?q $x$ , $1");
+        assert_eq!(map.get("n"), Some(&1));
+        assert!(!mixed);
+    }
+
+    /// A `$` immediately followed by a digit (e.g. a literal `$1` in the input)
+    /// can never open a dollar-quote tag and is emitted verbatim, distinct from
+    /// the real placeholder translation.
+    #[test]
+    fn pg_translate_placeholders_dollar_digit_not_a_tag() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT $2foo, ?");
+        assert_eq!(sql, "SELECT $2foo, $1");
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// `??` is PostgreSQL's jsonb operator escape: it collapses to a single
+    /// literal `?` and allocates no placeholder slot.
+    #[test]
+    fn pg_translate_placeholders_jsonb_escape() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT d ?? 'k'");
+        assert_eq!(sql, "SELECT d ? 'k'");
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// An `E'...'` escape-string is not terminated early by its backslash-
+    /// escaped quote; the trailing `?` still translates.
+    #[test]
+    fn pg_translate_placeholders_e_string_backslash_escape() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT E'it\\'s', ?");
+        assert_eq!(sql, "SELECT E'it\\'s', $1");
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// Repeated named placeholders dedupe to the same index.
+    #[test]
+    fn pg_translate_placeholders_named_dedup() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT :a, :a, :b");
+        assert_eq!(sql, "SELECT $1, $1, $2");
+        assert_eq!(map.get("a"), Some(&1));
+        assert_eq!(map.get("b"), Some(&2));
+        assert!(!mixed);
+    }
+
+    /// The `::` cast operator is left untouched (not read as a named
+    /// placeholder), while a real `?` still translates.
+    #[test]
+    fn pg_translate_placeholders_cast_operator() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT x::int, ?");
+        assert_eq!(sql, "SELECT x::int, $1");
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// A SQL text using both a positional `?` and a named `:a` sets the
+    /// `mixed` flag, which `PgConn::prepare()` uses to reject the statement
+    /// with `HY093` before ever asking the server to prepare it.
+    #[test]
+    fn pg_translate_placeholders_mixed_flag() {
+        let (_, _, mixed) = pg::translate_placeholders("SELECT ?, :a");
+        assert!(mixed);
+    }
+
+    /// BUG 1 regression: multi-byte UTF-8 bytes inside a `'...'` string literal
+    /// must round-trip byte-for-byte. A per-byte `u8 as char` cast would
+    /// double-encode any byte >= 0x80 (a UTF-8 continuation byte reinterpreted
+    /// as a Latin-1 codepoint), corrupting `café`/`Zürich` before the SQL ever
+    /// reaches the server.
+    #[test]
+    fn pg_translate_placeholders_utf8_string_literal_preserved() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT 'café', ? , 'Zürich'");
+        assert_eq!(sql, "SELECT 'café', $1 , 'Zürich'");
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// BUG 1 regression: a multi-byte UTF-8 byte outside any recognized quoted
+    /// region (the ordinary/unquoted scanning path) must also round-trip
+    /// unmangled.
+    #[test]
+    fn pg_translate_placeholders_utf8_outside_quotes_preserved() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT résumé, ?");
+        assert_eq!(sql, "SELECT résumé, $1");
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// BUG 2 regression: a `:name`-shaped token immediately preceded by an
+    /// alphanumeric byte is not a bind placeholder (matching php-src's
+    /// `pdo_sql_parser.re`) — most importantly a PostgreSQL array slice like
+    /// `data[1:5]`, which must not be misread as a named parameter `:5`.
+    #[test]
+    fn pg_translate_placeholders_array_slice_not_named_param() {
+        let (sql, map, mixed) =
+            pg::translate_placeholders("SELECT data[1:5] FROM t WHERE id = ?");
+        assert_eq!(sql, "SELECT data[1:5] FROM t WHERE id = $1");
+        assert!(map.is_empty());
+        assert!(!mixed);
     }
 
     /// A `pgsql:` DSN parses into a libpq connection string.
@@ -1894,7 +2147,7 @@ mod tests {
         let d = cs(":d");
         let di = unsafe { elephc_pdo_bind_parameter_index(stmt, d.as_ptr()) };
         let ada = cs("Ada");
-        unsafe { elephc_pdo_bind_text(stmt, ni, ada.as_ptr()) };
+        unsafe { elephc_pdo_bind_text(stmt, ni, ada.as_ptr(), ada.as_bytes().len() as i64) };
         elephc_pdo_bind_double(stmt, si, 9.5);
         elephc_pdo_bind_bool(stmt, fi, 1);
         let blob = b"A\0B";
@@ -1918,7 +2171,7 @@ mod tests {
         let fi2 = unsafe { elephc_pdo_bind_parameter_index(stmt2, f.as_ptr()) };
         let di2 = unsafe { elephc_pdo_bind_parameter_index(stmt2, d.as_ptr()) };
         let grace = cs("Grace");
-        unsafe { elephc_pdo_bind_text(stmt2, ni2, grace.as_ptr()) };
+        unsafe { elephc_pdo_bind_text(stmt2, ni2, grace.as_ptr(), grace.as_bytes().len() as i64) };
         elephc_pdo_bind_double(stmt2, si2, 1.0);
         elephc_pdo_bind_bool(stmt2, fi2, 0);
         unsafe { elephc_pdo_bind_blob(stmt2, di2, std::ptr::null(), 0) };
@@ -1975,7 +2228,7 @@ mod tests {
     /// `::` left untouched.
     #[test]
     fn my_translate_placeholders() {
-        let (sql, map, order) = my::translate_placeholders(
+        let (sql, map, order, mixed) = my::translate_placeholders(
             "SELECT * FROM t WHERE a = ? AND b = :b AND c = :b AND d = 'x?:y' AND e = id::text",
         );
         assert_eq!(
@@ -1985,6 +2238,141 @@ mod tests {
         // `?`→slot 1, `:b`→slot 2 (reused for the second `:b`).
         assert_eq!(order, vec![1, 2, 2]);
         assert_eq!(map.get("b"), Some(&2));
+        assert!(mixed, "a positional ? and a named :b were both used");
+    }
+
+    /// A `--` line comment's `?` is left untouched; only the trailing real
+    /// placeholder is translated.
+    #[test]
+    fn my_translate_placeholders_line_comment() {
+        let (sql, map, order, mixed) = my::translate_placeholders("-- ?\nSELECT ?");
+        assert_eq!(sql, "-- ?\nSELECT ?");
+        assert_eq!(order, vec![1]);
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// `--` NOT followed by whitespace is not a MySQL comment (`a--b` is the
+    /// arithmetic `a - -b`), so a `?` after it is a real placeholder — matching
+    /// php-src's `mysql_sql_parser.re` COMMENTS rule (`"--"[ \t\v\f\r]`).
+    #[test]
+    fn my_translate_placeholders_double_dash_not_comment() {
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT a--b, ? FROM t");
+        assert_eq!(sql, "SELECT a--b, ? FROM t");
+        assert_eq!(order, vec![1]);
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// A bare `--` (no trailing whitespace) does not open a comment, so both the
+    /// positional `?` and the named `:c` after it are real placeholders — which
+    /// makes the statement mixed (HY093 at prepare).
+    #[test]
+    fn my_translate_placeholders_double_dash_keeps_mixed() {
+        let (_sql, map, order, mixed) = my::translate_placeholders("SELECT ?--:c");
+        assert_eq!(order, vec![1, 2]);
+        assert_eq!(map.get("c"), Some(&2));
+        assert!(mixed);
+    }
+
+    /// A `#` line comment's `?` is left untouched; only the trailing real
+    /// placeholder is translated.
+    #[test]
+    fn my_translate_placeholders_hash_comment() {
+        let (sql, map, order, mixed) = my::translate_placeholders("# ?\nSELECT ?");
+        assert_eq!(sql, "# ?\nSELECT ?");
+        assert_eq!(order, vec![1]);
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// A `/* ... */` block comment's `?` is left untouched; only the trailing
+    /// real placeholder is translated.
+    #[test]
+    fn my_translate_placeholders_block_comment() {
+        let (sql, map, order, mixed) = my::translate_placeholders("/* ? */ SELECT ?");
+        assert_eq!(sql, "/* ? */ SELECT ?");
+        assert_eq!(order, vec![1]);
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// A `"..."` double-quoted string literal's `?` is preserved verbatim (both
+    /// quote styles are string literals in MySQL's default `sql_mode`).
+    #[test]
+    fn my_translate_placeholders_double_quote_string() {
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT \"a?b\", ?");
+        assert_eq!(sql, "SELECT \"a?b\", ?");
+        assert_eq!(order, vec![1]);
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// A backslash-escaped quote inside a `'...'` literal does not terminate
+    /// the string early.
+    #[test]
+    fn my_translate_placeholders_backslash_in_single_quote() {
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT 'a\\'b', ?");
+        assert_eq!(sql, "SELECT 'a\\'b', ?");
+        assert_eq!(order, vec![1]);
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// A backtick-quoted identifier's `?` is preserved verbatim.
+    #[test]
+    fn my_translate_placeholders_backtick_identifier() {
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT `we?rd`, ?");
+        assert_eq!(sql, "SELECT `we?rd`, ?");
+        assert_eq!(order, vec![1]);
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// A named placeholder reused twice shares one slot in both `order` and
+    /// the name map.
+    #[test]
+    fn my_translate_placeholders_named_reuse() {
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT :a, :a");
+        assert_eq!(sql, "SELECT ?, ?");
+        assert_eq!(order, vec![1, 1]);
+        assert_eq!(map.get("a"), Some(&1));
+        assert!(!mixed);
+    }
+
+    /// A SQL text using both a positional `?` and a named `:a` sets the
+    /// `mixed` flag, which `MyConn::prepare()` uses to reject the statement
+    /// with `HY093` before ever asking the server to prepare it.
+    #[test]
+    fn my_translate_placeholders_mixed_flag() {
+        let (_, _, _, mixed) = my::translate_placeholders("SELECT ?, :a");
+        assert!(mixed);
+    }
+
+    /// BUG 1 regression: multi-byte UTF-8 bytes inside a `'...'` string
+    /// literal must round-trip byte-for-byte. A per-byte `u8 as char` cast
+    /// would double-encode any byte >= 0x80, corrupting `café` before the SQL
+    /// ever reaches the server.
+    #[test]
+    fn my_translate_placeholders_utf8_string_literal_preserved() {
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT 'café', ?");
+        assert_eq!(sql, "SELECT 'café', ?");
+        assert_eq!(order, vec![1]);
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// BUG 2 regression: a `:name`-shaped token immediately preceded by an
+    /// alphanumeric byte is not a bind placeholder (matching php-src's
+    /// `pdo_sql_parser.re`), so it is left untouched and allocates no slot —
+    /// only the real trailing `?` does.
+    #[test]
+    fn my_translate_placeholders_colon_after_alnum_not_named() {
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT a:b, ?");
+        assert_eq!(sql, "SELECT a:b, ?");
+        assert_eq!(order, vec![1]);
+        assert!(map.is_empty());
+        assert!(!mixed);
     }
 
     /// Full MySQL/MariaDB round-trip against a live server. Ignored by default; run
@@ -2029,7 +2417,7 @@ mod tests {
         let d = cs(":d");
         let di = unsafe { elephc_pdo_bind_parameter_index(stmt, d.as_ptr()) };
         let ada = cs("Ada");
-        unsafe { elephc_pdo_bind_text(stmt, ni, ada.as_ptr()) };
+        unsafe { elephc_pdo_bind_text(stmt, ni, ada.as_ptr(), ada.as_bytes().len() as i64) };
         elephc_pdo_bind_double(stmt, si, 9.5);
         elephc_pdo_bind_bool(stmt, fi, 1);
         let blob = b"A\0B";
@@ -2053,7 +2441,7 @@ mod tests {
         let fi2 = unsafe { elephc_pdo_bind_parameter_index(stmt2, f.as_ptr()) };
         let di2 = unsafe { elephc_pdo_bind_parameter_index(stmt2, d.as_ptr()) };
         let grace = cs("Grace");
-        unsafe { elephc_pdo_bind_text(stmt2, ni2, grace.as_ptr()) };
+        unsafe { elephc_pdo_bind_text(stmt2, ni2, grace.as_ptr(), grace.as_bytes().len() as i64) };
         elephc_pdo_bind_double(stmt2, si2, 1.0);
         elephc_pdo_bind_bool(stmt2, fi2, 0);
         unsafe { elephc_pdo_bind_blob(stmt2, di2, std::ptr::null(), 0) };

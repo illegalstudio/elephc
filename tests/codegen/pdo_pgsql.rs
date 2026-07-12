@@ -52,6 +52,25 @@ $db->exec("DROP TABLE pg_rt");
     assert_eq!(out, "1:Ada:9.5");
 }
 
+/// P2-j: a multi-statement `exec()` string (rejected by the single-command
+/// `execute()` path, so it falls back to the simple-query protocol) returns the
+/// LAST command's affected-row count, mirroring php-src's `PQexec` — not `0`,
+/// which the old `batch_execute`-based fallback always reported.
+#[test]
+#[ignore]
+fn test_pgsql_exec_multi_statement_returns_last_command_count() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS pg_multi");
+$db->exec("CREATE TABLE pg_multi (id INT)");
+$n = $db->exec("INSERT INTO pg_multi VALUES (1); INSERT INTO pg_multi VALUES (2), (3);");
+$db->exec("DROP TABLE pg_multi");
+echo $n;
+"#,
+    ));
+    assert_eq!(out, "2");
+}
+
 /// Positional `?` placeholders translate to `$1, $2` and bind by position.
 #[test]
 #[ignore]
@@ -229,6 +248,12 @@ echo $ok . $unlinked;
 
 /// `Pdo\Pgsql::copyFromArray()` streams rows into a table via COPY FROM STDIN and
 /// `copyToArray()` reads them back via COPY TO STDOUT (default tab/`\N` format).
+///
+/// `copyToArray()` is typed `array|false` (P2-i), so `$rows` must be narrowed before
+/// `count()`/`implode()` accept it as an array. The checker's flow-sensitive guard
+/// narrowing (`src/types/checker/stmt_check/narrowing.rs`) recognizes `is_array($rows)`
+/// (alongside `is_bool`/`is_null`/`instanceof` and the `=== false`/`!== false` /
+/// `=== null` comparisons), narrowing the union down to `array` for `count()`/`implode()`.
 #[test]
 #[ignore]
 fn test_pgsql_copy_from_to_array() {
@@ -240,11 +265,42 @@ $db->exec("CREATE TABLE elephc_copy (id INT, name TEXT)");
 $ok = $db->copyFromArray("elephc_copy", ["1\tAda", "2\tBob"]) ? "1" : "0";
 $rows = $db->copyToArray("elephc_copy");
 $db->exec("DROP TABLE elephc_copy");
-$joined = implode("", $rows);
-echo $ok . ":" . count($rows) . ":" . (strpos($joined, "Ada") !== false ? "y" : "n") . (strpos($joined, "Bob") !== false ? "y" : "n");
+if (is_array($rows)) {
+    $joined = implode("", $rows);
+    echo $ok . ":" . count($rows) . ":" . (strpos($joined, "Ada") !== false ? "y" : "n") . (strpos($joined, "Bob") !== false ? "y" : "n");
+} else {
+    echo $ok . ":err";
+}
 "#,
     );
     assert_eq!(out, "1:2:yy");
+}
+
+/// P2-i: `copyToArray()` distinguishes a genuinely empty table (`[]`) from a
+/// failed COPY (`false`, widened from the old `array`-only return type) —
+/// `COPY` against a nonexistent table fails at the server, and must not read
+/// back as an empty result.
+///
+/// The empty-vs-array check uses `$empty === []` directly: the deep array strict-equality
+/// helper (`__rt_array_strict_eq`) compares a `Union(Array, Bool)`-typed value (what
+/// `array|false` lowers to) against an array literal by structure rather than heap-pointer
+/// identity, so an empty result reads back as strictly equal to `[]` while a `false`
+/// failure does not. `$error === false` compares the `false` alternative directly.
+#[test]
+#[ignore]
+fn test_pgsql_copy_to_array_distinguishes_empty_from_error() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
+$db->exec("DROP TABLE IF EXISTS elephc_copy_empty");
+$db->exec("CREATE TABLE elephc_copy_empty (id INT)");
+$empty = $db->copyToArray("elephc_copy_empty");
+$db->exec("DROP TABLE elephc_copy_empty");
+$error = $db->copyToArray("elephc_copy_does_not_exist");
+echo ($empty === [] ? "empty-ok" : "empty-bad") . ":" . ($error === false ? "error-ok" : "error-bad");
+"#,
+    );
+    assert_eq!(out, "empty-ok:error-ok");
 }
 
 /// `Pdo\Pgsql::getNotify()` receives a LISTEN/NOTIFY notification: the session

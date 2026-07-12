@@ -56,7 +56,7 @@ pub fn sqlite_sqlstate(rc: c_int) -> &'static str {
         ffi::SQLITE_OK => "00000",
         ffi::SQLITE_NOTFOUND => "42S02",
         ffi::SQLITE_INTERRUPT => "01002",
-        ffi::SQLITE_NOLFS => "IM001",
+        ffi::SQLITE_NOLFS => "HYC00",
         ffi::SQLITE_TOOBIG => "22001",
         ffi::SQLITE_CONSTRAINT => "23000",
         _ => "HY000",
@@ -132,6 +132,18 @@ impl SqliteConn {
     /// Returns the number of rows changed by the most recent statement.
     pub fn changes(&self) -> i64 {
         unsafe { ffi::sqlite3_changes(self.db) as i64 }
+    }
+
+    /// Returns whether the connection is currently inside a transaction, read
+    /// live from SQLite's own autocommit flag (`sqlite3_get_autocommit`) rather
+    /// than any PHP-side bookkeeping (P1-g). SQLite reports non-autocommit (`0`)
+    /// from the moment a `BEGIN` — issued via `PDO::beginTransaction()` OR a raw
+    /// `PDO::exec("BEGIN")` — takes effect until the matching `COMMIT`/`ROLLBACK`
+    /// (or an auto-rollback on error), so this mirrors php-src's own
+    /// `pdo_sqlite3_in_transaction` handler exactly. Returns `1` when a
+    /// transaction is active, `0` otherwise.
+    pub fn in_transaction(&self) -> i64 {
+        (unsafe { ffi::sqlite3_get_autocommit(self.db) } == 0) as i64
     }
 
     /// Runs a single bare statement (BEGIN/COMMIT/ROLLBACK), returning `1`/`0`.
@@ -903,16 +915,33 @@ impl SqliteStmt {
         (rc == ffi::SQLITE_OK) as i64
     }
 
-    /// Binds a text value (copied via `SQLITE_TRANSIENT`) to placeholder `idx`.
-    /// A null pointer binds SQL NULL. Returns `1`/`0`.
+    /// Binds a text value (copied via `SQLITE_TRANSIENT`) to placeholder `idx`,
+    /// using the caller-supplied `len` (the value's true byte length) rather than
+    /// SQLite's strlen-based `-1` sentinel, so a value with an embedded NUL byte
+    /// binds in full instead of truncating at the first NUL. A null pointer binds
+    /// SQL NULL. A non-positive or `c_int`-overflowing `len` is treated as a
+    /// zero-length string rather than being cast as-is, matching `bind_blob`'s
+    /// clamp. Returns `1`/`0`.
     ///
     /// # Safety
-    /// `val`, when non-null, must point to a NUL-terminated string valid for the call.
-    pub unsafe fn bind_text(&self, idx: i64, val: *const c_char) -> i64 {
+    /// `val`, when non-null, must point to at least `len` readable bytes valid for
+    /// the call.
+    pub unsafe fn bind_text(&self, idx: i64, val: *const c_char, len: i64) -> i64 {
         if val.is_null() {
             return (ffi::sqlite3_bind_null(self.ptr, idx as c_int) == ffi::SQLITE_OK) as i64;
         }
-        let rc = ffi::sqlite3_bind_text(self.ptr, idx as c_int, val, -1, ffi::SQLITE_TRANSIENT());
+        let safe_len = if len <= 0 || len > c_int::MAX as i64 {
+            0
+        } else {
+            len as c_int
+        };
+        let rc = ffi::sqlite3_bind_text(
+            self.ptr,
+            idx as c_int,
+            val,
+            safe_len,
+            ffi::SQLITE_TRANSIENT(),
+        );
         (rc == ffi::SQLITE_OK) as i64
     }
 

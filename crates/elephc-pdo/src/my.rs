@@ -11,9 +11,12 @@
 //! Key details:
 //! - MySQL placeholders are positional `?`. PDO `:name` placeholders are rewritten
 //!   to `?` at prepare time, with a per-`?` `order` recording which bound slot
-//!   feeds it, so a `:name` used several times binds the same value to each `?`
-//!   (PHP cannot mix `?` and `:name` in one statement, so the two cases never
-//!   interleave).
+//!   feeds it, so a `:name` used several times binds the same value to each `?`.
+//!   A scanner skips `--`/`#`/`/* */` comments and `'…'`/`"…"`/`` `…` `` quoted
+//!   regions (all with their driver-correct escape rules) so a `?`/`:name`
+//!   inside any of those is never mistaken for a real placeholder. PDO forbids
+//!   mixing `?` and `:name` in one statement; `prepare()` rejects the mix with
+//!   `HY093` before ever asking the server to prepare it.
 //! - A statement is prepared server-side for column metadata, then executed
 //!   lazily on the first `step()`. The whole result set is materialized into typed
 //!   `Cell` values, so the column accessors read from owned data and per-value
@@ -28,7 +31,7 @@ use std::time::Duration;
 
 use mysql::consts::ColumnType;
 use mysql::prelude::Queryable;
-use mysql::{Conn, OptsBuilder, Statement, Value};
+use mysql::{Column, Conn, OptsBuilder, Statement, Value};
 
 /// One materialized column value, already decoded to a PHP-friendly scalar.
 pub enum Cell {
@@ -54,7 +57,10 @@ pub enum Bind {
 
 /// How a result column's MySQL type should render as text — the temporal types
 /// need their own formatting; everything else decodes directly from the value.
-#[derive(Clone, Copy)]
+/// `PartialEq`/`Debug` are only needed for the unit test asserting the BIT/
+/// GEOMETRY classification below; deriving them unconditionally is simpler
+/// than gating and costs nothing (both are trivial, non-`pub` derives).
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum ColKind {
     Binary,
     Date,
@@ -63,15 +69,50 @@ enum ColKind {
     Other,
 }
 
+/// The `character_set` value MySQL uses for the special `binary` pseudo-collation
+/// (collation id 63, `binary` charset): a `VARBINARY`/`BINARY` column always
+/// reports this character set regardless of the connection's own charset, and it
+/// is the ONLY signal that distinguishes those columns from `VARCHAR`/`CHAR` —
+/// both pairs share the same wire `ColumnType` (`MYSQL_TYPE_VAR_STRING` /
+/// `MYSQL_TYPE_STRING`).
+const MYSQL_BINARY_CHARSET: u16 = 63;
+
 impl ColKind {
-    /// Classifies a MySQL column type into the text-rendering bucket the decoder
+    /// Classifies a MySQL column into the text-rendering bucket the decoder
     /// needs (date-only, date+time, time-of-day, or value-driven).
-    fn from_column_type(ct: ColumnType) -> ColKind {
-        match ct {
+    ///
+    /// `MYSQL_TYPE_BIT` and `MYSQL_TYPE_GEOMETRY` (P0-D) are routed through
+    /// `Binary` alongside the BLOB types: both carry arbitrary non-UTF-8 bytes
+    /// (a `BIT(8)` column's high-bit values, WKB-encoded geometry), and without
+    /// this, `decode_value` would run them through the lossy
+    /// `String::from_utf8_lossy` path used for `Other`, corrupting the bytes
+    /// into U+FFFD replacement characters. This matches php-src's mysqlnd,
+    /// which returns both types as raw (binary-string) bytes.
+    ///
+    /// `VARBINARY`/`BINARY` (P1) arrive on the wire as the exact same
+    /// `ColumnType` as `VARCHAR`/`CHAR` (`MYSQL_TYPE_VAR_STRING`/
+    /// `MYSQL_TYPE_STRING` respectively) — `ColumnType` alone cannot tell them
+    /// apart. The one distinguishing signal is the column's character set: a
+    /// `VARBINARY`/`BINARY` column is always tagged with charset 63 (the
+    /// `binary` collation), while a real `VARCHAR`/`CHAR` carries the
+    /// connection's text charset (e.g. utf8mb4 = 45/46/224...). Without this,
+    /// those columns fell to `Other` and every non-UTF-8 byte they held was
+    /// silently replaced with U+FFFD by the lossy decode path — matching
+    /// php-src's mysqlnd, which also keys off the charset-63 marker to return
+    /// `VARBINARY`/`BINARY` as raw bytes.
+    fn from_column(col: &Column) -> ColKind {
+        match col.column_type() {
             ColumnType::MYSQL_TYPE_TINY_BLOB
             | ColumnType::MYSQL_TYPE_BLOB
             | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
-            | ColumnType::MYSQL_TYPE_LONG_BLOB => ColKind::Binary,
+            | ColumnType::MYSQL_TYPE_LONG_BLOB
+            | ColumnType::MYSQL_TYPE_BIT
+            | ColumnType::MYSQL_TYPE_GEOMETRY => ColKind::Binary,
+            ColumnType::MYSQL_TYPE_VAR_STRING | ColumnType::MYSQL_TYPE_STRING
+                if col.character_set() == MYSQL_BINARY_CHARSET =>
+            {
+                ColKind::Binary
+            }
             ColumnType::MYSQL_TYPE_DATE | ColumnType::MYSQL_TYPE_NEWDATE => ColKind::Date,
             ColumnType::MYSQL_TYPE_DATETIME
             | ColumnType::MYSQL_TYPE_DATETIME2
@@ -125,6 +166,15 @@ pub struct MyStmt {
     cursor: isize,
     /// Whether the query has been executed (results materialized) yet.
     executed: bool,
+    /// Whether the SQL text is a `CALL <procedure>(...)` invocation (P0-C). A
+    /// stored procedure's real result shape (whether it `SELECT`s any rows at
+    /// all, and how many columns) is only known once it actually runs —
+    /// MySQL's `COM_STMT_PREPARE` always reports zero columns for a `CALL`,
+    /// unlike a plain `SELECT`, whose column list is already known at prepare
+    /// time. `column_count()` uses this flag to report a non-zero placeholder
+    /// before execution instead of that genuine (but misleading) zero — see
+    /// `column_count`'s doc comment for why that matters.
+    is_call: bool,
 }
 
 /// Extracts a MySQL server error code from a driver error, or `1` for transport /
@@ -223,67 +273,232 @@ pub fn build_opts(dsn: &str) -> Result<(OptsBuilder, Option<String>), String> {
     Ok((opts, charset))
 }
 
+/// Returns whether `b` is an identifier byte (`[A-Za-z0-9_]`), used to read a
+/// `:name` placeholder's name.
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Returns the byte length of the UTF-8 sequence led by `b` (1 for ASCII, 2-4
+/// for a multi-byte lead byte). `sql` is always valid UTF-8, so slicing
+/// `&sql[i..i + utf8_len(bytes[i])]` lands on a valid char boundary at both
+/// ends — used to copy a content byte (or run of one multi-byte codepoint)
+/// through `out.push_str` instead of `out.push(b as char)`, which corrupts any
+/// codepoint above U+007F: a `u8` cast to `char` treats each raw continuation
+/// byte as its own Latin-1 codepoint and re-encodes it as 2 UTF-8 bytes,
+/// doubling/mangling every multi-byte character embedded in the SQL text
+/// (BUG 1).
+fn utf8_len(b: u8) -> usize {
+    if b & 0x80 == 0 {
+        1
+    } else if b & 0xE0 == 0xC0 {
+        2
+    } else if b & 0xF0 == 0xE0 {
+        3
+    } else if b & 0xF8 == 0xF0 {
+        4
+    } else {
+        // A stray continuation byte can't start a codepoint in valid UTF-8;
+        // fall back to one byte so the scanner still makes forward progress.
+        1
+    }
+}
+
+/// Returns whether `sql` invokes a stored procedure (`CALL proc(...)`,
+/// case-insensitive, ignoring leading whitespace). Used by `prepare()` to set
+/// `MyStmt::is_call` — see `column_count`'s doc comment for why a `CALL`'s
+/// prepare-time column count needs this special-casing. Requires a non-identifier
+/// byte (or end of string) right after the keyword, so `CALLBACK(...)` — a
+/// (nonsensical but not a stored-procedure-call) function-call expression — is
+/// never mistaken for `CALL BACK(...)`.
+fn sql_is_call_statement(sql: &str) -> bool {
+    let trimmed = sql.trim_start();
+    if trimmed.len() < 4 || !trimmed.as_bytes()[..4].eq_ignore_ascii_case(b"call") {
+        return false;
+    }
+    trimmed.as_bytes().get(4).is_none_or(|&b| !is_ident_byte(b))
+}
+
+/// Scans a MySQL quoted region opened by `quote` (`'` or `"`) starting at
+/// `start` (the index of the opening quote byte), returning the exclusive end
+/// index just past the closing quote (or `len` if unterminated). Both quote
+/// styles are string literals in MySQL's default `sql_mode` and share the same
+/// escaping: a doubled quote (`''`/`""`) is a literal quote, and a backslash
+/// escapes the following byte unconditionally (so `\'`/`\"`/`\\` never
+/// terminate or mis-parse the string).
+fn scan_my_string(bytes: &[u8], start: usize, quote: u8) -> usize {
+    let len = bytes.len();
+    let mut j = start + 1;
+    loop {
+        if j >= len {
+            return len;
+        }
+        let cj = bytes[j];
+        if cj == b'\\' && j + 1 < len {
+            j += 2;
+            continue;
+        }
+        if cj == quote {
+            if j + 1 < len && bytes[j + 1] == quote {
+                j += 2;
+                continue;
+            }
+            return j + 1;
+        }
+        j += 1;
+    }
+}
+
 /// Translates PDO `?` and `:name` placeholders to MySQL's positional `?`,
-/// returning the rewritten SQL, the bare-name → 1-based-slot map, and a per-`?`
-/// `order` (the slot each emitted `?` reads). Single-quoted string literals are
-/// passed through untouched, and a `::` sequence is not mistaken for a named
+/// returning the rewritten SQL, the bare-name → 1-based-slot map, a per-`?`
+/// `order` (the slot each emitted `?` reads), and whether the SQL mixed a
+/// positional `?` with a named `:name` (PDO forbids this combination;
+/// `prepare()` checks the flag and raises `HY093` before ever reaching the
+/// server).
+///
+/// The scanner tracks these mutually exclusive regions, copying each verbatim
+/// (never scanning `?`/`:name` inside them) before resuming normal placeholder
+/// scanning:
+/// - `-- ...` and `# ...` line comments (to end of line or EOF);
+/// - `/* ... */` block comments (non-nested, to the first `*/` or EOF);
+/// - `'...'` and `"..."` string literals — both quote styles honor the doubled-
+///   quote escape (`''`/`""`) and backslash escapes (`\'`, `\"`, `\\`, …), per
+///   MySQL's default (non-`NO_BACKSLASH_ESCAPES`) `sql_mode`;
+/// - `` `...` `` backtick-quoted identifiers, with `` `` `` as the doubled-quote
+///   escape (no backslash escaping here).
+///
+/// A run of two or more `?` (e.g. `??`) is a single verbatim text token (php-src
+/// treats it the same way) and allocates no slot; only a lone `?` is a real
+/// positional placeholder. `::` is left untouched rather than read as a named
 /// placeholder.
-pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, Vec<i64>) {
+///
+/// A `:name` immediately preceded by an alphanumeric byte is NOT a named
+/// placeholder (matching php-src's `pdo_sql_parser.re`, which skips the same
+/// way).
+pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, Vec<i64>, bool) {
     let bytes = sql.as_bytes();
+    let len = bytes.len();
     let mut out = String::with_capacity(sql.len() + 8);
     let mut named: HashMap<String, i64> = HashMap::new();
     let mut order: Vec<i64> = Vec::new();
     let mut next_slot: i64 = 1;
     let mut i = 0;
-    let mut in_string = false;
-    while i < bytes.len() {
-        let c = bytes[i] as char;
-        if in_string {
-            out.push(c);
-            if c == '\'' {
-                // Doubled '' is an escaped quote inside the literal.
-                if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
-                    out.push('\'');
-                    i += 2;
-                    continue;
-                }
-                in_string = false;
-            }
-            i += 1;
-            continue;
-        }
+    let mut saw_positional = false;
+    let mut saw_named = false;
+    while i < len {
+        let c = bytes[i];
         match c {
-            '\'' => {
-                in_string = true;
-                out.push(c);
-                i += 1;
+            b'-'
+                if i + 2 < len
+                    && bytes[i + 1] == b'-'
+                    && matches!(bytes[i + 2], b' ' | b'\t' | b'\x0b' | b'\x0c' | b'\r') =>
+            {
+                // Line comment: verbatim to the end of the line (exclusive of the
+                // newline itself, which the default arm then copies) or EOF. Unlike
+                // PostgreSQL, MySQL only treats `--` as a comment when the second
+                // dash is followed by a whitespace/control char (`[ \t\v\f\r]`, the
+                // php-src `mysql_sql_parser.re` COMMENTS rule): otherwise `a--b` is
+                // the arithmetic `a - -b`, and a `?`/`:name` after a bare `--` is a
+                // real placeholder — so the guard requires that trailing byte.
+                let start = i;
+                let mut j = i + 2;
+                while j < len && bytes[j] != b'\n' {
+                    j += 1;
+                }
+                out.push_str(&sql[start..j]);
+                i = j;
             }
-            '?' => {
-                // Each positional placeholder is its own fresh slot.
-                out.push('?');
-                order.push(next_slot);
-                next_slot += 1;
-                i += 1;
+            b'#' => {
+                // MySQL's `#` line comment: verbatim to end of line or EOF.
+                let start = i;
+                let mut j = i + 1;
+                while j < len && bytes[j] != b'\n' {
+                    j += 1;
+                }
+                out.push_str(&sql[start..j]);
+                i = j;
             }
-            ':' => {
+            b'/' if i + 1 < len && bytes[i + 1] == b'*' => {
+                // Block comment: verbatim to the matching (non-nested) `*/`, or
+                // to EOF if unterminated.
+                let start = i;
+                let mut j = i + 2;
+                while j + 1 < len && !(bytes[j] == b'*' && bytes[j + 1] == b'/') {
+                    j += 1;
+                }
+                let end = if j + 1 < len { j + 2 } else { len };
+                out.push_str(&sql[start..end]);
+                i = end;
+            }
+            b'\'' | b'"' => {
+                let end = scan_my_string(bytes, i, c);
+                out.push_str(&sql[i..end]);
+                i = end;
+            }
+            b'`' => {
+                // Backtick-quoted identifier: verbatim, with doubled `` `` ``
+                // as the escape (no backslash escaping here).
+                let start = i;
+                let mut j = i + 1;
+                loop {
+                    if j >= len {
+                        break;
+                    }
+                    if bytes[j] == b'`' {
+                        if j + 1 < len && bytes[j + 1] == b'`' {
+                            j += 2;
+                            continue;
+                        }
+                        j += 1;
+                        break;
+                    }
+                    j += 1;
+                }
+                out.push_str(&sql[start..j]);
+                i = j;
+            }
+            b'?' => {
+                // A run of 2+ `?` is a single verbatim text token, no slot
+                // allocated; a lone `?` is a fresh positional placeholder.
+                let mut j = i + 1;
+                while j < len && bytes[j] == b'?' {
+                    j += 1;
+                }
+                if j - i >= 2 {
+                    out.push_str(&sql[i..j]);
+                    i = j;
+                } else {
+                    out.push('?');
+                    order.push(next_slot);
+                    next_slot += 1;
+                    saw_positional = true;
+                    i += 1;
+                }
+            }
+            b':' => {
                 // `::` is not a named placeholder; emit verbatim.
-                if i + 1 < bytes.len() && bytes[i + 1] == b':' {
+                if i + 1 < len && bytes[i + 1] == b':' {
                     out.push_str("::");
                     i += 2;
                     continue;
                 }
                 let start = i + 1;
                 let mut j = start;
-                while j < bytes.len() {
-                    let nc = bytes[j] as char;
-                    if nc.is_ascii_alphanumeric() || nc == '_' {
-                        j += 1;
-                    } else {
-                        break;
-                    }
+                while j < len && is_ident_byte(bytes[j]) {
+                    j += 1;
                 }
                 if j == start {
                     // A bare colon (not a named placeholder); emit verbatim.
+                    out.push(':');
+                    i += 1;
+                    continue;
+                }
+                // php-src's `pdo_sql_parser.re` only treats `:name` as a bind
+                // placeholder when the byte immediately before the colon is
+                // NOT alphanumeric (BUG 2). Emit the colon verbatim; the
+                // identifier bytes are then re-scanned as ordinary text by
+                // the default arm on the next iterations.
+                if i > 0 && bytes[i - 1].is_ascii_alphanumeric() {
                     out.push(':');
                     i += 1;
                     continue;
@@ -297,15 +512,22 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, Vec<i
                 });
                 out.push('?');
                 order.push(slot);
+                saw_named = true;
                 i = j;
             }
             _ => {
-                out.push(c);
-                i += 1;
+                // Copy the whole codepoint via a slice (BUG 1): `c as char`
+                // would corrupt any multi-byte UTF-8 character (e.g. an
+                // embedded `'café'` byte outside a recognized quoted region —
+                // the ordinary/unquoted path).
+                let n = utf8_len(c).min(len - i);
+                out.push_str(&sql[i..i + n]);
+                i += n;
             }
         }
     }
-    (out, named, order)
+    let mixed = saw_positional && saw_named;
+    (out, named, order, mixed)
 }
 
 /// Applies the prelude's packed `Pdo\Mysql::ATTR_SSL_*` config to `opts`, enabling
@@ -463,7 +685,18 @@ impl MyConn {
         // fields are written below.
         let outcome: Result<(i64, Option<u64>), mysql::Error> = match self.conn.query_iter(sql) {
             Ok(mut res) => {
+                // P0-B: `last_insert_id`/`affected_rows` read the CURRENT result
+                // set's OK packet, which only exists while the state machine is
+                // still on that set. The first `.next()` call below on an
+                // empty-result (DDL/DML) query advances the state straight to
+                // `Done` (no OK packet), so `affected_rows()` read AFTER the
+                // drain loop always returns 0. Capture both here, immediately
+                // after the query succeeds and before draining, so the real
+                // counts survive the state transition (verified live on
+                // MariaDB 11: reading before the drain gives the correct count,
+                // after gives 0).
                 let last = res.last_insert_id();
+                let affected = res.affected_rows() as i64;
                 // Drain any result set (a SELECT run through exec() has rows; DDL
                 // and DML have none) so the connection is ready for the next call.
                 for row in res.by_ref() {
@@ -471,7 +704,6 @@ impl MyConn {
                         break;
                     }
                 }
-                let affected = res.affected_rows() as i64;
                 Ok((affected, last))
             }
             Err(e) => Err(e),
@@ -547,10 +779,31 @@ impl MyConn {
         }
     }
 
+    /// Returns whether the connection's current session has `NO_BACKSLASH_ESCAPES`
+    /// active in its `sql_mode` (backslash is then a literal character in a string
+    /// literal, so backslash-escaping a quoted value is unsafe there —
+    /// `PDO::quote()`'s MySQL branch falls back to `''`-doubling only in that case,
+    /// P1-f). The `mysql` crate already tracks this from the connection's session
+    /// state (`Conn::no_backslash_escape`), so no extra query is needed here.
+    pub fn no_backslash_escape(&self) -> bool {
+        self.conn.no_backslash_escape()
+    }
+
     /// Prepares a statement: translates placeholders and prepares it server-side
-    /// for column metadata. Returns the statement or an error message.
+    /// for column metadata. Returns the statement or an error message. Rejects a
+    /// SQL text that mixes a positional `?` with a named `:name` placeholder
+    /// with `HY093` before ever asking the server to prepare it — PDO forbids
+    /// combining the two styles in one statement, and MySQL's own placeholder
+    /// syntax (a bare `?`) has no way to catch this itself.
     pub fn prepare(&mut self, sql: &str) -> Result<MyStmt, String> {
-        let (translated, named_map, order) = translate_placeholders(sql);
+        let (translated, named_map, order, mixed) = translate_placeholders(sql);
+        if mixed {
+            self.errcode = 0;
+            self.sqlstate = "HY093".to_string();
+            self.errmsg =
+                "Invalid parameter number: mixed named and positional parameters".to_string();
+            return Err(self.errmsg.clone());
+        }
         match self.conn.prep(&translated) {
             Ok(statement) => {
                 let col_names = statement
@@ -561,7 +814,7 @@ impl MyConn {
                 let col_kinds = statement
                     .columns()
                     .iter()
-                    .map(|c| ColKind::from_column_type(c.column_type()))
+                    .map(ColKind::from_column)
                     .collect();
                 // Distinct slots run 1..=N contiguously, so the highest slot in
                 // `order` is the bound-value count.
@@ -579,6 +832,7 @@ impl MyConn {
                     rows: Vec::new(),
                     cursor: -1,
                     executed: false,
+                    is_call: sql_is_call_statement(sql),
                 })
             }
             Err(e) => {
@@ -713,16 +967,53 @@ impl MyStmt {
 
     /// Executes the query (once) and materializes the result set into decoded
     /// cells. Records the affected row count and last insert id on the connection.
+    ///
+    /// P0-C: row materialization is decided from the EXECUTED result's live
+    /// column metadata (`res.columns()`), not from `self.col_kinds` captured at
+    /// PREPARE time. MySQL's `COM_STMT_PREPARE` reports zero columns for a
+    /// `CALL proc()` statement — the result shape is only known once the
+    /// procedure actually runs — so gating on the prepare-time count made
+    /// `is_select` false for every `CALL`, silently dropping the procedure's
+    /// rows off the wire. `res.columns()` must be read here, before the drain
+    /// loop below: the crate's `QueryResult` is a state machine, and once the
+    /// current result set's rows are fully consumed its `columns()` reports
+    /// none, so metadata has to be captured while still on the just-executed
+    /// set. When the live result has columns, `self.col_names`/`self.col_kinds`
+    /// are refreshed from it too, so `columnCount()`/`getColumnMeta()` reflect
+    /// the procedure's real output columns rather than the empty prepare-time
+    /// set. A genuine non-SELECT (e.g. an `INSERT` via a prepared statement)
+    /// still reports zero live columns, so it keeps taking the
+    /// `affected_rows()` path below unchanged.
+    ///
+    /// This alone is not sufficient, though: the generated `PDOStatement::
+    /// execute()` prelude reads `column_count()` BEFORE ever calling `step()`
+    /// (and thus before this method has run even once) to decide whether the
+    /// upcoming first `step()` is a throwaway "run the DML" call or a real
+    /// "pre-fetch the first row" call whose result must be cached. A `CALL`'s
+    /// prepare-time column count is genuinely `0` at that point (this method
+    /// has not run yet to refresh it), so without `column_count()`'s own
+    /// `is_call` placeholder (see its doc comment), the prelude picks the
+    /// throwaway branch and discards this method's very first materialized row.
     fn execute(&mut self, conn: &mut MyConn) -> Result<(), i64> {
         let values = self.build_values();
         let statement = self.statement.clone();
-        // A statement with result columns is a SELECT-style query; otherwise it is
-        // DML/DDL whose affected-row count and insert id we record.
-        let is_select = !self.col_kinds.is_empty();
-        let col_kinds = self.col_kinds.clone();
-        let outcome: Result<(i64, Option<u64>, Vec<Vec<Cell>>), mysql::Error> = (|| {
+        type ExecOutcome = (i64, Option<u64>, Vec<Vec<Cell>>, bool, Vec<String>, Vec<ColKind>);
+        let outcome: Result<ExecOutcome, mysql::Error> = (|| {
             let mut res = conn.conn.exec_iter(&statement, values)?;
             let last = res.last_insert_id();
+            let (is_select, col_names, col_kinds) = {
+                let live = res.columns();
+                let cols: &[Column] = live.as_ref();
+                if cols.is_empty() {
+                    (false, self.col_names.clone(), self.col_kinds.clone())
+                } else {
+                    (
+                        true,
+                        cols.iter().map(|c| c.name_str().into_owned()).collect(),
+                        cols.iter().map(ColKind::from_column).collect(),
+                    )
+                }
+            };
             let mut rows = Vec::new();
             if is_select {
                 for row in res.by_ref() {
@@ -731,10 +1022,10 @@ impl MyStmt {
             }
             let affected = res.affected_rows() as i64;
             drop(res);
-            Ok((affected, last, rows))
+            Ok((affected, last, rows, is_select, col_names, col_kinds))
         })();
         match outcome {
-            Ok((affected, last, rows)) => {
+            Ok((affected, last, rows, is_select, col_names, col_kinds)) => {
                 conn.changes = if is_select {
                     rows.len() as i64
                 } else {
@@ -743,6 +1034,8 @@ impl MyStmt {
                 conn.note_last_id(last);
                 conn.errcode = 0;
                 conn.sqlstate = "00000".to_string();
+                self.col_names = col_names;
+                self.col_kinds = col_kinds;
                 self.rows = rows;
                 self.executed = true;
                 Ok(())
@@ -783,8 +1076,28 @@ impl MyStmt {
     }
 
     /// Number of result columns (available before execution).
+    ///
+    /// P0-C: for an unexecuted `CALL` (`self.is_call`, `self.col_names` still
+    /// empty), this reports a placeholder `1` instead of the genuine prepare-time
+    /// `0`. The generated `PDOStatement::execute()` prelude reads this count
+    /// right before its first `step()` to decide which of two branches to take:
+    /// a `0` means "no-result statement" (INSERT/UPDATE/DELETE/DDL) — it runs one
+    /// throwaway `step()` and does not cache the result for the caller's first
+    /// `fetch()`; a non-zero count means "SELECT-style" — it caches that same
+    /// first `step()`'s row so no fetch ever skips it. A `CALL`'s real column
+    /// count is not known until it actually runs (`execute()` below refreshes
+    /// `col_names`/`col_kinds` from the live result), so reporting the genuine `0`
+    /// here would misroute a row-producing `CALL` into the no-result branch,
+    /// silently discarding the very first row it returns — the observed bug this
+    /// hack fixes. Once executed, `col_names` reflects the real (possibly still
+    /// zero, for a `CALL` with no internal `SELECT`) count and this reports it
+    /// unconditionally — the placeholder only ever applies pre-execution.
     pub fn column_count(&self) -> i64 {
-        self.col_names.len() as i64
+        if self.is_call && !self.executed && self.col_names.is_empty() {
+            1
+        } else {
+            self.col_names.len() as i64
+        }
     }
 
     /// Name of result column `i` (0-based).
@@ -902,6 +1215,62 @@ mod tests {
             expect_text(decode_value(Value::UInt(boundary), ColKind::Other)),
             boundary.to_string()
         );
+    }
+
+    /// P0-D (mandatory unit test, no server needed): `BIT` and `GEOMETRY`
+    /// columns must classify as `ColKind::Binary` so `decode_value` routes them
+    /// through the byte-preserving `Cell::Bytes` path instead of the lossy
+    /// `String::from_utf8_lossy` path used for `ColKind::Other` — otherwise a
+    /// `BIT(8)` value like `0xFF` decodes as a 3-byte U+FFFD replacement
+    /// character instead of the original byte. Neither type depends on the
+    /// character set, so the default (0) is left as-is.
+    #[test]
+    fn bit_and_geometry_columns_classify_as_binary() {
+        assert_eq!(
+            ColKind::from_column(&Column::new(ColumnType::MYSQL_TYPE_BIT)),
+            ColKind::Binary
+        );
+        assert_eq!(
+            ColKind::from_column(&Column::new(ColumnType::MYSQL_TYPE_GEOMETRY)),
+            ColKind::Binary
+        );
+    }
+
+    /// P1 (mandatory unit test, no server needed): `VARBINARY`/`BINARY` columns
+    /// arrive as `MYSQL_TYPE_VAR_STRING`/`MYSQL_TYPE_STRING` — the exact same
+    /// `ColumnType` a `VARCHAR`/`CHAR` column uses — so only the charset-63
+    /// (`binary` collation) marker tells them apart. A charset-63 `VAR_STRING`/
+    /// `STRING` column must classify as `ColKind::Binary`; the same `ColumnType`
+    /// under a real text charset (e.g. utf8mb4 = 45) must classify as `Other`, so
+    /// a genuine `VARCHAR`/`CHAR` keeps decoding through the text path.
+    #[test]
+    fn varbinary_and_binary_columns_classify_by_charset_not_type() {
+        let varbinary = Column::new(ColumnType::MYSQL_TYPE_VAR_STRING)
+            .with_character_set(MYSQL_BINARY_CHARSET);
+        assert_eq!(ColKind::from_column(&varbinary), ColKind::Binary);
+
+        let binary =
+            Column::new(ColumnType::MYSQL_TYPE_STRING).with_character_set(MYSQL_BINARY_CHARSET);
+        assert_eq!(ColKind::from_column(&binary), ColKind::Binary);
+
+        let varchar_utf8mb4 =
+            Column::new(ColumnType::MYSQL_TYPE_VAR_STRING).with_character_set(45);
+        assert_eq!(ColKind::from_column(&varchar_utf8mb4), ColKind::Other);
+    }
+
+    /// P0-C (mandatory unit test, no server needed): `sql_is_call_statement`
+    /// recognizes `CALL` case-insensitively and with leading whitespace, but
+    /// rejects a bare `CALLBACK(...)`-style identifier that merely starts with
+    /// the same four letters, and any non-`CALL` statement.
+    #[test]
+    fn sql_is_call_statement_detects_call_only() {
+        assert!(sql_is_call_statement("CALL my_call_sp()"));
+        assert!(sql_is_call_statement("  call my_call_sp(?, ?)"));
+        assert!(sql_is_call_statement("Call\tmy_call_sp()"));
+        assert!(!sql_is_call_statement("CALLBACK()"));
+        assert!(!sql_is_call_statement("SELECT 1"));
+        assert!(!sql_is_call_statement("INSERT INTO t VALUES (1)"));
+        assert!(!sql_is_call_statement(""));
     }
 
     /// P2-1: a `connect_timeout=<secs>` DSN key (as the prelude folds in

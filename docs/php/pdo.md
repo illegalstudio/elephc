@@ -546,7 +546,64 @@ is delivered on the next `exec()`/`query()`.
 - **`bindParam()`** binds the current value, not a deferred by-reference read.
 - **`getAttribute` / `setAttribute`** act on `ATTR_ERRMODE`, `ATTR_DRIVER_NAME`,
   `ATTR_PERSISTENT`, `ATTR_TIMEOUT` (SQLite busy-timeout, in seconds),
-  `ATTR_DEFAULT_FETCH_MODE`, and `ATTR_SERVER_VERSION`; other attributes are
-  stored and read back but have no effect.
-- Avoid `new PDOStatement(...)` directly — statements are created by `query()` /
-  `prepare()`.
+  `ATTR_DEFAULT_FETCH_MODE`, `ATTR_SERVER_VERSION`, `ATTR_CASE` (folds fetched
+  column-name keys upper/lowercase), `ATTR_ORACLE_NULLS` (folds NULL<->`""` in
+  fetched scalar values), and `ATTR_STRINGIFY_FETCHES` (stringifies fetched
+  INTEGER/FLOAT values); other attributes are stored and read back but have no
+  effect.
+- **`PDO::ATTR_SERVER_INFO`** is inert (always `null`, unless a caller has
+  explicitly `setAttribute()`'d a value for it) for every driver. php-src itself
+  only answers this for MySQL, from mysqlnd's live `mysql_stat()` admin string;
+  neither the `mysql` crate nor `mysql_common` this bridge links exposes a
+  `mysql_stat()`/`COM_STATISTICS` accessor to reproduce that.
+- **PostgreSQL `boolean` and `bytea` do not map to PHP's native representations.**
+  A `boolean` column returns the integer `0`/`1` rather than PHP's real `bool`, so
+  `$row['flag'] === true` is always `false` — compare with `== true` or cast with
+  `(bool) $row['flag']` instead. A `bytea` column returns a plain PHP string (with
+  embedded NUL bytes preserved) rather than a stream resource, so `fread()` /
+  `fseek()` do not apply to a fetched value — read it as a string directly. Both
+  are deliberate, ubiquitous divergences from php-src's `pdo_pgsql`, not bugs.
+- **`PDO::ATTR_EMULATE_PREPARES` is accepted but inert for MySQL — elephc always
+  uses native server-side prepares**, whereas real PHP's `pdo_mysql` *emulates*
+  prepares by default. Consequences: a multi-statement `prepare()`/`query()` is
+  not supported, some admin statements (`USE`, `LOCK TABLES`, certain `SHOW`
+  forms) fail with MySQL errno 1295 ("this command is not supported in the
+  prepared statement protocol yet"), and `CALL` behaves like a genuine prepared
+  `CALL` rather than an emulated one. There is no attribute to switch to
+  emulation.
+- **MySQL multiple rowsets are not exposed.** A `CALL` returning several result
+  sets, or a multi-statement query, only makes its first rowset available
+  through this bridge; `nextRowset()` always returns `false` for a `mysql:`
+  statement without raising an error (MySQL genuinely supports more rowsets —
+  see `nextRowset()`'s SQLite/PostgreSQL `IM001` behavior below).
+- **The `?` / `:name` placeholder scanner diverges from php-src only on already-
+  malformed SQL.** An unterminated string literal or unterminated `/* … */`
+  comment consumes to end-of-input (php-src's scanner instead backtracks and
+  treats the opening quote/`/*` as a lone character), so a `?` that appears
+  after an unbalanced quote or comment is not recognized as a placeholder. `::`
+  runs of three or more colons (chained PostgreSQL type casts) and non-ASCII
+  dollar-quote tags (`$tag$…$tag$`) are also not special-cased. Well-formed SQL
+  matches php-src exactly; these differences are only observable on SQL that is
+  already broken.
+- **`Pdo\Pgsql::ATTR_DISABLE_PREPARES`** is accepted but inert — there is no
+  execute-only, non-prepared code path to switch to. **A SQLite user-defined
+  function or aggregate that returns a non-scalar value** (an array or object)
+  yields SQL `NULL` silently rather than raising an error. **`Pdo\Sqlite::setAuthorizer()`,
+  the legacy `sqliteCreateFunction()` / `sqliteCreateAggregate()` /
+  `sqliteCreateCollation()` aliases, the `uri:` DSN prefix, `php.ini`-based DSN
+  aliasing (`pdo.dsn.*`), and the `#[\SensitiveParameter]` attribute** are not
+  supported.
+- **`PDO::quote()` on SQLite is binary-safe for an embedded NUL byte** — a
+  deliberate improvement over php-src, whose own SQLite quoter
+  (`ext/pdo_sqlite`) truncates the quoted literal at the first NUL.
+- **`nextRowset()`** raises `IM001` ("driver does not support multiple
+  rowsets") for SQLite and PostgreSQL statements — errMode-aware, like every
+  other statement failure — instead of silently returning `false`; a `mysql:`
+  statement returns `false` without raising (see above).
+- `new PDOStatement(...)` constructed directly (not via `query()` / `prepare()`)
+  throws a `PDOException` ("You should not create a PDOStatement manually") as
+  long as the `$connection` argument is not a real, currently-open connection
+  handle — the only way to call this constructor at all, since elephc never
+  exposes a valid handle to PHP code. It cannot detect a caller who happens to
+  guess a live handle (elephc's handles are small sequential integers), unlike
+  php-src's real ownership check.

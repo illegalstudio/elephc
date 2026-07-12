@@ -335,3 +335,173 @@ echo $db->query("SELECT 'tls-ok'")->fetchColumn();
     );
     assert_eq!(out, "tls-ok");
 }
+
+/// P0-B: `PDO::exec()` must return the real affected-row count for INSERT,
+/// UPDATE, and DELETE, not always `0`. Regression for `my.rs::MyConn::exec()`
+/// reading `affected_rows()` after draining the query result, at which point
+/// the crate's `QueryResult` state machine has already advanced past the OK
+/// packet that carries the count. Asserts the return values directly (not via
+/// a follow-up `SELECT COUNT(*)`, which would pass even with the bug). Docker:
+///   docker run -d --name my -e MARIADB_ROOT_PASSWORD=rootpw \
+///       -e MARIADB_DATABASE=testdb -e MARIADB_USER=test \
+///       -e MARIADB_PASSWORD=test -p 33060:3306 mariadb:11
+///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
+///       cargo test --test codegen_tests -- --ignored mysql_exec_returns_affected_row_count
+#[test]
+#[ignore]
+fn mysql_exec_returns_affected_row_count() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS my_exec_counts");
+$db->exec("CREATE TABLE my_exec_counts (id INTEGER PRIMARY KEY, n INTEGER)");
+$inserted = $db->exec("INSERT INTO my_exec_counts (id, n) VALUES (1, 1), (2, 1), (3, 2)");
+$updated = $db->exec("UPDATE my_exec_counts SET n = 9 WHERE n = 1");
+$deleted = $db->exec("DELETE FROM my_exec_counts WHERE n = 9");
+echo $inserted . ":" . $updated . ":" . $deleted;
+$db->exec("DROP TABLE my_exec_counts");
+"#,
+    ));
+    assert_eq!(out, "3:2:2");
+}
+
+/// P0-D: a `BIT(8)` column holding a high-bit value must round-trip its raw
+/// byte unchanged. Regression for `my.rs::ColKind::from_column_type()` routing
+/// `MYSQL_TYPE_BIT` through the lossy `String::from_utf8_lossy` path (the
+/// `Other` bucket) instead of the byte-preserving `Cell::Bytes` path (the
+/// `Binary` bucket): `0xFF` is not valid UTF-8, so the lossy path replaces it
+/// with a 3-byte U+FFFD ("\u{FFFD}") in the decoded string. Asserted via
+/// `bin2hex()`, not a printable-ASCII value, since a printable value would
+/// happen to survive the lossy path and mask the bug. Docker: same as
+/// `mysql_exec_returns_affected_row_count` above.
+#[test]
+#[ignore]
+fn mysql_bit_column_round_trip() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS my_bit_col");
+$db->exec("CREATE TABLE my_bit_col (b BIT(8))");
+$db->exec("INSERT INTO my_bit_col VALUES (b'11111111')");
+$val = $db->query("SELECT b FROM my_bit_col")->fetchColumn();
+echo bin2hex($val);
+$db->exec("DROP TABLE my_bit_col");
+"#,
+    ));
+    assert_eq!(out, "ff");
+}
+
+/// P1: a `VARBINARY` column holding a high-bit, non-UTF-8 byte sequence must
+/// round-trip its raw bytes unchanged. Regression for `my.rs::ColKind::
+/// from_column` classifying `VARBINARY`/`BINARY` correctly: both arrive on the
+/// wire as the exact same `ColumnType` as `VARCHAR`/`CHAR`
+/// (`MYSQL_TYPE_VAR_STRING`), and only the column's character set (63, the
+/// `binary` collation) tells them apart. Before the fix, a `VARBINARY` column
+/// fell to `ColKind::Other` and was decoded through the lossy
+/// `String::from_utf8_lossy` path, turning `0xC3FF00` (not valid UTF-8) into a
+/// U+FFFD-corrupted value. Asserted via `bin2hex()`, not a printable value,
+/// since a printable value would happen to survive the lossy path and mask the
+/// bug. Docker: same as `mysql_exec_returns_affected_row_count` above.
+#[test]
+#[ignore]
+fn mysql_varbinary_round_trip() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS my_varbinary_col");
+$db->exec("CREATE TABLE my_varbinary_col (b VARBINARY(16))");
+$db->exec("INSERT INTO my_varbinary_col VALUES (x'C3FF00')");
+$val = $db->query("SELECT b FROM my_varbinary_col")->fetchColumn();
+echo bin2hex($val);
+$db->exec("DROP TABLE my_varbinary_col");
+"#,
+    ));
+    assert_eq!(out, "c3ff00");
+}
+
+/// P0-C: `CALL`ing a stored procedure through a prepared statement must return
+/// its rows. Regression for `my.rs::MyStmt::execute()` gating row
+/// materialization on the PREPARE-time column count (`self.col_kinds`):
+/// `COM_STMT_PREPARE` reports zero columns for `CALL proc()` (the result shape
+/// is only known once the procedure actually runs), so the old code silently
+/// dropped the procedure's rows off the wire. Docker: same server as above,
+/// e.g.:
+///   docker run -d --name my -e MARIADB_ROOT_PASSWORD=rootpw \
+///       -e MARIADB_DATABASE=testdb -e MARIADB_USER=test \
+///       -e MARIADB_PASSWORD=test -p 33060:3306 mariadb:11
+///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
+///       cargo test --test codegen_tests -- --ignored mysql_call_stored_procedure_returns_rows
+#[test]
+#[ignore]
+fn mysql_call_stored_procedure_returns_rows() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS my_call_src");
+$db->exec("CREATE TABLE my_call_src (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO my_call_src VALUES (1, 'a'), (2, 'b')");
+$db->exec("DROP PROCEDURE IF EXISTS my_call_sp");
+$db->exec("CREATE PROCEDURE my_call_sp() BEGIN SELECT id, name FROM my_call_src ORDER BY id; END");
+$stmt = $db->prepare("CALL my_call_sp()");
+$stmt->execute();
+$rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+echo count($rows) . ":" . $rows[0]["id"] . "=" . $rows[0]["name"] . ";" . $rows[1]["id"] . "=" . $rows[1]["name"];
+$db->exec("DROP PROCEDURE my_call_sp");
+$db->exec("DROP TABLE my_call_src");
+"#,
+    ));
+    assert_eq!(out, "2:1=a;2=b");
+}
+
+/// P1-f (SECURITY): under the `NO_BACKSLASH_ESCAPES` `sql_mode`, backslash is a
+/// literal character inside a MySQL string literal, so `PDO::quote()`'s usual
+/// backslash-escaping is unsafe there — an escaped quote (`\'`) does not
+/// actually escape and lets a crafted string break out of the literal. mysqlnd
+/// itself switches to quote-doubling-only in that mode; `elephc_pdo_no_backslash_escapes`
+/// (bridge v21) mirrors that via a live `sql_mode` read, so `quote()` must
+/// return the doubled-quote form (`'O''Brien'`), not the backslash form. Docker:
+/// same server as the other MySQL fixtures in this file, e.g.:
+///   docker run -d --name my -e MARIADB_ROOT_PASSWORD=rootpw \
+///       -e MARIADB_DATABASE=testdb -e MARIADB_USER=test \
+///       -e MARIADB_PASSWORD=test -p 33060:3306 mariadb:11
+///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
+///       cargo test --test codegen_tests -- --ignored mysql_quote_no_backslash_escapes_mode
+#[test]
+#[ignore]
+fn mysql_quote_no_backslash_escapes_mode() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->exec("SET SESSION sql_mode='NO_BACKSLASH_ESCAPES'");
+echo $db->quote("O'Brien");
+"#,
+    ));
+    assert_eq!(out, "'O''Brien'");
+}
+
+/// Sibling of `mysql_quote_no_backslash_escapes_mode`: the connection's default
+/// session mode (no `NO_BACKSLASH_ESCAPES`) keeps `PDO::quote()`'s
+/// backslash-escaped form, proving the branch genuinely depends on the live
+/// `elephc_pdo_no_backslash_escapes` read rather than one path always winning.
+/// Docker: same server as above (see `mysql_quote_no_backslash_escapes_mode`).
+#[test]
+#[ignore]
+fn mysql_quote_normal_mode_backslash_escapes() {
+    let out = compile_and_run(&my_program(
+        r#"
+echo $db->quote("O'Brien");
+"#,
+    ));
+    assert_eq!(out, "'O\\'Brien'");
+}
+
+/// P1-e: `PDO::quote($string, PDO::PARAM_LOB)` on the mysql driver prefixes the
+/// escaped literal with the `_binary` charset introducer, mirroring php-src's
+/// `mysql_handle_quoter`, so a binary/LOB value is not reinterpreted under the
+/// connection's charset. Docker: same server as above (see
+/// `mysql_quote_no_backslash_escapes_mode`).
+#[test]
+#[ignore]
+fn mysql_quote_param_lob_binary_prefix() {
+    let out = compile_and_run(&my_program(
+        r#"
+echo $db->quote("ab", PDO::PARAM_LOB);
+"#,
+    ));
+    assert_eq!(out, "_binary'ab'");
+}

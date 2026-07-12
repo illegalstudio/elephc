@@ -67,6 +67,24 @@ echo $sel->fetchColumn();
     assert_eq!(out, "seven");
 }
 
+/// P2-f: `PDO::prepare("")` throws a `ValueError` before any driver call at all,
+/// matching php-src's `zend_argument_must_not_be_empty_error`.
+#[test]
+fn test_pdo_prepare_empty_query_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+try {
+    $db->prepare("");
+    echo "no-throw";
+} catch (\ValueError $e) {
+    echo "threw";
+}
+"#,
+    );
+    assert_eq!(out, "threw");
+}
+
 /// `FETCH_NUM` returns a 0-indexed numeric array.
 #[test]
 fn test_pdo_fetch_num() {
@@ -333,6 +351,54 @@ echo $db->query("SELECT n FROM t")->fetchColumn();
     assert_eq!(out, "42");
 }
 
+/// P1-c: `execute($params)` REPLACES prior `bindValue()`/`bindParam()` bindings
+/// rather than layering `$params` on top of them (matching php-src, which
+/// destroys and rebuilds `bound_params` from `$input_params`). Slot 2 is
+/// pre-bound to a stale 99 via `bindValue()`; `execute([0 => 7])` only supplies
+/// slot 1 (array key 0 -> the first `?`), so slot 2 must come back NULL
+/// (unbound for this call) instead of the stale 99 a buggy merge would keep.
+#[test]
+fn test_pdo_execute_params_replaces_prior_binds() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (a INTEGER, b INTEGER)");
+$ins = $db->prepare("INSERT INTO t (a, b) VALUES (?, ?)");
+$ins->bindValue(2, 99, PDO::PARAM_INT);
+$ins->execute([0 => 7]);
+$row = $db->query("SELECT a, b FROM t")->fetch(PDO::FETCH_ASSOC);
+echo $row["a"] . ":" . ($row["b"] === null ? "null" : $row["b"]);
+"#,
+    );
+    assert_eq!(out, "7:null");
+}
+
+/// P2 (this slice): php-src's `pdo_stmt_bind_input_params` DESTROYS
+/// `stmt->bound_params` and REBUILDS it from `$input_params`, so a LATER
+/// no-arg `execute()` replays THAT array, not whatever `bindValue()`/
+/// `bindParam()` call preceded it. Slot 1 is pre-bound to a stale `"a"` via
+/// `bindValue()`; `execute(["b"])` rebinds it to `"b"` for its own call AND
+/// records `"b"` as the new replay bindings, so the immediately-following
+/// no-arg `execute()` must insert `"b"` again — not replay the stale `"a"`
+/// a buggy implementation (recording only the ORIGINAL bindValue() call)
+/// would keep.
+#[test]
+fn test_pdo_execute_params_persists_as_new_bindings_for_next_execute() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (val TEXT)");
+$ins = $db->prepare("INSERT INTO t (val) VALUES (?)");
+$ins->bindValue(1, "a");
+$ins->execute(["b"]);
+$ins->execute();
+$rows = $db->query("SELECT val FROM t ORDER BY rowid")->fetchAll(PDO::FETCH_NUM);
+echo count($rows) . ":" . $rows[0][0] . ":" . $rows[1][0];
+"#,
+    );
+    assert_eq!(out, "2:b:b");
+}
+
 /// `setFetchMode()` sets the default mode used by an argument-less `fetch()` /
 /// `fetchAll()`.
 #[test]
@@ -515,6 +581,174 @@ foreach ($stmt as $v) {
     assert_eq!(out, "x;y;z;");
 }
 
+/// P2-d: `setFetchMode(PDO::FETCH_COLUMN, $n)` with a negative column index
+/// throws a `ValueError` and leaves the statement's previous fetch mode
+/// untouched, mirroring php-src's `pdo_stmt_setup_fetch_mode`.
+#[test]
+fn test_pdo_set_fetch_mode_negative_column_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$db->exec("INSERT INTO t (id) VALUES (1)");
+$stmt = $db->query("SELECT id FROM t");
+try {
+    $stmt->setFetchMode(PDO::FETCH_COLUMN, -1);
+    echo "no-throw";
+} catch (\ValueError $e) {
+    echo "threw";
+}
+// The prior default fetch mode (FETCH_BOTH, from the connection default) must
+// still be in effect — the rejected call did not partially apply.
+$row = $stmt->fetch();
+echo ":" . (isset($row["id"]) && isset($row[0]) ? "both" : "other");
+"#,
+    );
+    assert_eq!(out, "threw:both");
+}
+
+/// P2-d: an out-of-range base fetch mode passed to `setFetchMode()` throws a
+/// `ValueError` instead of silently behaving like `FETCH_BOTH`.
+#[test]
+fn test_pdo_set_fetch_mode_unknown_mode_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$stmt = $db->prepare("SELECT id FROM t");
+try {
+    $stmt->setFetchMode(999);
+    echo "no-throw";
+} catch (\ValueError $e) {
+    echo "threw";
+}
+"#,
+    );
+    assert_eq!(out, "threw");
+}
+
+/// P3: `setFetchMode(PDO::FETCH_COLUMN)` with no column argument throws —
+/// mirroring php-src's `pdo_stmt_setup_fetch_mode`, which raises an
+/// `ArgumentCountError` here (elephc has no `ArgumentCountError` class, so
+/// this raises the closest `ValueError`, using php-src's exact message text).
+#[test]
+fn test_pdo_set_fetch_mode_column_missing_arg_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$stmt = $db->prepare("SELECT id FROM t");
+try {
+    $stmt->setFetchMode(PDO::FETCH_COLUMN);
+    echo "no-throw";
+} catch (\ValueError $e) {
+    echo "threw:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "threw:PDOStatement::setFetchMode() expects exactly 2 arguments for the fetch mode provided, 1 given"
+    );
+}
+
+/// P3: `setFetchMode(PDO::FETCH_CLASS)` with no class-name argument throws the
+/// same way (php-src's ArgumentCountError says "at least 2" here, since a
+/// third constructor-args argument is also optional).
+#[test]
+fn test_pdo_set_fetch_mode_class_missing_arg_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$stmt = $db->prepare("SELECT id FROM t");
+try {
+    $stmt->setFetchMode(PDO::FETCH_CLASS);
+    echo "no-throw";
+} catch (\ValueError $e) {
+    echo "threw:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "threw:PDOStatement::setFetchMode() expects at least 2 arguments for the fetch mode provided, 1 given"
+    );
+}
+
+/// P3: `setFetchMode(PDO::FETCH_INTO)` with no target-object argument throws.
+#[test]
+fn test_pdo_set_fetch_mode_into_missing_arg_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$stmt = $db->prepare("SELECT id FROM t");
+try {
+    $stmt->setFetchMode(PDO::FETCH_INTO);
+    echo "no-throw";
+} catch (\ValueError $e) {
+    echo "threw:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "threw:PDOStatement::setFetchMode() expects exactly 2 arguments for the fetch mode provided, 1 given"
+    );
+}
+
+/// P3: `setFetchMode(PDO::FETCH_FUNC)` is rejected — php-src's
+/// `pdo_stmt_verify_mode` only allows `FETCH_FUNC` as `fetchAll()`'s first
+/// argument, not `setFetchMode()`'s (same message both call sites use).
+#[test]
+fn test_pdo_set_fetch_mode_func_rejected() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$stmt = $db->prepare("SELECT id FROM t");
+try {
+    $stmt->setFetchMode(PDO::FETCH_FUNC);
+    echo "no-throw";
+} catch (\ValueError $e) {
+    echo "threw:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "threw:Can only use PDO::FETCH_FUNC in PDOStatement::fetchAll()"
+    );
+}
+
+/// P3: the negative-`FETCH_COLUMN`-index `ValueError` names the real
+/// underlying parameter php-src's arginfo carries for this position — the
+/// variadic `$args`, not elephc's own `$colno` parameter name (verified
+/// against php-src's `pdo_stmt_setup_fetch_mode`, whose
+/// `zend_argument_value_error(arg1_arg_num, ...)` resolves the name from
+/// `setFetchMode(int $mode, mixed ...$args)`'s arginfo).
+#[test]
+fn test_pdo_set_fetch_mode_negative_column_message_names_args_param() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$stmt = $db->prepare("SELECT id FROM t");
+try {
+    $stmt->setFetchMode(PDO::FETCH_COLUMN, -1);
+    echo "no-throw";
+} catch (\ValueError $e) {
+    echo "threw:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "threw:PDOStatement::setFetchMode(): Argument #2 ($args) must be greater than or equal to 0"
+    );
+}
+
 /// `getAttribute`/`setAttribute` round-trip `ATTR_ERRMODE`; the default mode is
 /// `ERRMODE_EXCEPTION` (2) and `ATTR_DRIVER_NAME` reports the SQLite driver.
 #[test]
@@ -529,6 +763,26 @@ echo ":" . $db->getAttribute(PDO::ATTR_DRIVER_NAME);
 "#,
     );
     assert_eq!(out, "2:0:sqlite");
+}
+
+/// P1-h: `setAttribute(ATTR_ERRMODE, ...)` rejects a value that is not one of the
+/// PDO::ERRMODE_* constants with a `ValueError`, and leaves the error mode
+/// unchanged (still reads back as EXCEPTION == 2 afterward).
+#[test]
+fn test_pdo_set_attribute_errmode_rejects_invalid() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+try {
+    $db->setAttribute(PDO::ATTR_ERRMODE, 42);
+    echo "no-throw";
+} catch (\ValueError $e) {
+    echo "threw";
+}
+echo ":" . $db->getAttribute(PDO::ATTR_ERRMODE);
+"#,
+    );
+    assert_eq!(out, "threw:2");
 }
 
 /// `ATTR_PERSISTENT` is accepted through constructor options and setAttribute(),
@@ -862,6 +1116,46 @@ try {
     assert_eq!(out, "There is no active transaction");
 }
 
+/// P1-g: `inTransaction()` reads the driver's LIVE state, not just a PHP-side
+/// flag — SQLite's `sqlite3_get_autocommit` reports a transaction started by a
+/// raw `exec("BEGIN")` (bypassing `beginTransaction()`) as active, and reports
+/// it cleared again once a raw `exec("COMMIT")` runs.
+#[test]
+fn test_pdo_in_transaction_reflects_raw_begin() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("BEGIN");
+echo $db->inTransaction() ? "1" : "0";
+$db->exec("COMMIT");
+echo $db->inTransaction() ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
+/// P1-g: `beginTransaction()`'s already-active guard also consults the live
+/// state, so it raises PHP's clean "already an active transaction" error even
+/// when the transaction was started by a raw `exec("BEGIN")` rather than by
+/// `beginTransaction()` itself (which never ran, so `$inTxn` alone would have
+/// missed it).
+#[test]
+fn test_pdo_begin_after_raw_begin_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("BEGIN");
+try {
+    $db->beginTransaction();
+    echo "no-throw";
+} catch (PDOException $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "There is already an active transaction");
+}
+
 /// W2: `PDO::getAvailableDrivers()` is a static returning the dispatchable drivers.
 #[test]
 fn test_pdo_get_available_drivers() {
@@ -1128,6 +1422,64 @@ echo $db->getAttribute(PDO::ATTR_DEFAULT_FETCH_MODE);
     assert_eq!(out, "5");
 }
 
+/// P3: `setAttribute(ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_CLASS)` (and
+/// `FETCH_INTO`) is ACCEPTED — mirroring php-src's `pdo_dbh.c` exactly
+/// (verified against php-src): the "PDO::FETCH_INTO and PDO::FETCH_CLASS
+/// cannot be set as the default fetch mode" rejection only fires when the
+/// given value is an ARRAY whose element `[0]` is one of those modes (the
+/// `setAttribute(ATTR_DEFAULT_FETCH_MODE, [PDO::FETCH_CLASS, 'Foo'])` idiom);
+/// a BARE int is accepted and stored like any other mode. elephc's
+/// `setAttribute()` only ever narrows its `mixed $value` with `(int) $value`,
+/// so the array form never reaches this check and has no elephc analogue —
+/// only `PDO::FETCH_USE_DEFAULT` (i.e. `PDO::FETCH_DEFAULT`, 0) is still
+/// rejected. Supersedes the old `test_pdo_default_fetch_mode_rejects_class`,
+/// which asserted the opposite (a real php-src divergence this slice fixes).
+#[test]
+fn test_pdo_default_fetch_mode_accepts_bare_class_and_into() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_CLASS);
+echo $db->getAttribute(PDO::ATTR_DEFAULT_FETCH_MODE);
+$db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_INTO);
+echo ":" . $db->getAttribute(PDO::ATTR_DEFAULT_FETCH_MODE);
+try {
+    $db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_DEFAULT);
+    echo ":no-throw";
+} catch (\ValueError $e) {
+    echo ":threw-default";
+}
+"#,
+    );
+    assert_eq!(out, "8:9:threw-default");
+}
+
+/// P3 regression: after accepting a bare `FETCH_CLASS` default (see above),
+/// `PDO::prepare()` must still succeed — the connection-wide default is
+/// propagated to the new statement via a raw, unvalidated field copy
+/// (mirroring php-src's `stmt->default_fetch_type = dbh->default_fetch_type`)
+/// rather than through `setFetchMode()`'s own argument-count validation,
+/// which would otherwise wrongly reject this now-legal stored default the
+/// moment ANY statement is prepared on the connection. With no class ever
+/// registered, `fetch()` falls back to `stdClass` (its own pre-existing,
+/// documented behavior for a target-less `FETCH_CLASS`).
+#[test]
+fn test_pdo_default_fetch_mode_bare_class_survives_prepare() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_CLASS);
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t VALUES (1, 'Ada')");
+$stmt = $db->prepare("SELECT id, name FROM t");
+$stmt->execute();
+$row = $stmt->fetch();
+echo (($row instanceof stdClass) ? "stdClass" : "other") . ":" . $row->id . ":" . $row->name;
+"#,
+    );
+    assert_eq!(out, "stdClass:1:Ada");
+}
+
 /// W4: `fetchAll(FETCH_KEY_PAIR)` maps a 2-column result to `[col0 => col1]`.
 #[test]
 fn test_pdo_fetch_all_key_pair() {
@@ -1163,6 +1515,50 @@ try {
 "#,
     );
     assert_eq!(out, "threw");
+}
+
+/// P3: the `FETCH_KEY_PAIR` wrong-column-count message matches php-src's exact
+/// wording (verified against php-src's `pdo_stmt.c`: emitted via
+/// `pdo_raise_impl_error(stmt->dbh, stmt, "HY000", ...)`), including the
+/// trailing period — not elephc's previous, shorter invented text.
+#[test]
+fn test_pdo_fetch_key_pair_wrong_column_count_message_matches_php_src() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (a INTEGER, b INTEGER, c INTEGER)");
+$db->exec("INSERT INTO t VALUES (1, 2, 3)");
+try {
+    $db->query("SELECT a, b, c FROM t")->fetchAll(PDO::FETCH_KEY_PAIR);
+    echo "no-throw";
+} catch (PDOException $e) {
+    echo "threw:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "threw:SQLSTATE[HY000]: PDO::FETCH_KEY_PAIR fetch mode requires the result set to contain exactly 2 columns."
+    );
+}
+
+/// P2-b: the `FETCH_KEY_PAIR` wrong-column-count error is errMode-aware, mirroring
+/// php-src's `pdo_raise_impl_error` (SQLSTATE "HY000") rather than an
+/// unconditional throw — under `ERRMODE_SILENT` a 3-column `fetch(FETCH_KEY_PAIR)`
+/// returns `false` instead of throwing.
+#[test]
+fn test_pdo_fetch_key_pair_wrong_column_count_respects_silent() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:", null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_SILENT]);
+$db->exec("CREATE TABLE t (a INTEGER, b INTEGER, c INTEGER)");
+$db->exec("INSERT INTO t VALUES (1, 2, 3)");
+$stmt = $db->query("SELECT a, b, c FROM t");
+$row = $stmt->fetch(PDO::FETCH_KEY_PAIR);
+echo ($row === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
 }
 
 /// W4/W6: an unsupported base fetch mode fails loudly instead of returning wrong
@@ -1359,26 +1755,167 @@ echo \Pdo\Sqlite::DETERMINISTIC . ":" . \Pdo\Sqlite::ATTR_OPEN_FLAGS . ":"
 }
 
 /// PDOStatement PHP 8.4 surface additions: the public `$queryString` property is
-/// threaded from prepare(), statement-level get/setAttribute round-trips (unknown
-/// attribute -> null), and nextRowset() is false (single rowset).
+/// threaded from prepare(), and nextRowset() is false (P2-c: SQLite has no
+/// further rowset, so this now raises IM001 under an exception-raising errMode
+/// — see test_pdo_statement_nextrowset_raises_im001 for that case — and falls
+/// quietly back to `false` here since the connection uses ERRMODE_SILENT).
+/// P1-i/P3: no driver here registers a statement attribute hook, so both
+/// setAttribute() and getAttribute() on an unsupported attribute now raise
+/// IM001 instead of the old unconditional per-statement store — exercised here
+/// under ERRMODE_SILENT so they fail quietly and getAttribute() falls back to
+/// `false` (mirroring php-src's `RETURN_FALSE`, not `null`; see
+/// test_pdo_statement_set_attribute_unsupported_throws for the
+/// ERRMODE_EXCEPTION case).
 #[test]
 fn test_pdo_statement_querystring_attributes_nextrowset() {
     let out = compile_and_run(
         r#"<?php
-$db = new \PDO("sqlite::memory:");
+$db = new \PDO("sqlite::memory:", null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_SILENT]);
 $db->exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
 $db->exec("INSERT INTO t (name) VALUES ('Ada')");
 $stmt = $db->prepare("SELECT name FROM t WHERE id = 1");
 $qs = $stmt->queryString;
-$stmt->setAttribute(19, 5);
-$attr = $stmt->getAttribute(19);
-$missing = $stmt->getAttribute(999) === null ? "null" : "?";
+$set = $stmt->setAttribute(19, 5) ? "T" : "F";
+$missing = $stmt->getAttribute(999) === false ? "false" : "?";
 $stmt->execute();
 $more = $stmt->nextRowset() ? "1" : "0";
-echo $qs . "|" . $attr . "|" . $missing . "|" . $more;
+echo $qs . "|" . $set . "|" . $missing . "|" . $more;
 "#,
     );
-    assert_eq!(out, "SELECT name FROM t WHERE id = 1|5|null|0");
+    assert_eq!(out, "SELECT name FROM t WHERE id = 1|F|false|0");
+}
+
+/// P2-c/P3: `nextRowset()` raises IM001 ("driver does not support multiple
+/// rowsets", php-src's exact wording) for a SQLite statement instead of
+/// silently returning `false`, mirroring php-src's `pdo_raise_impl_error` for
+/// a driver with no further-rowset primitive — errMode-aware like every other
+/// statement failure: SILENT swallows it and still returns `false` (checked on
+/// a separate connection above in
+/// test_pdo_statement_querystring_attributes_nextrowset), EXCEPTION throws a
+/// `PDOException` carrying the SQLSTATE.
+#[test]
+fn test_pdo_statement_nextrowset_raises_im001() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$db->exec("INSERT INTO t VALUES (1)");
+$stmt = $db->query("SELECT id FROM t");
+$threw = "no";
+try {
+    $stmt->nextRowset();
+} catch (PDOException $e) {
+    $threw = $e->errorInfo[0];
+}
+echo $threw;
+"#,
+    );
+    assert_eq!(out, "IM001");
+}
+
+/// P3: the `nextRowset()` IM001 message matches php-src's exact wording
+/// (verified against php-src's `pdo_stmt.c`) — "driver does not support
+/// multiple rowsets", not elephc's previous invented "This driver doesn't
+/// support multiple rowsets" prefix.
+#[test]
+fn test_pdo_statement_nextrowset_message_matches_php_src() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$db->exec("INSERT INTO t VALUES (1)");
+$stmt = $db->query("SELECT id FROM t");
+try {
+    $stmt->nextRowset();
+    echo "no-throw";
+} catch (PDOException $e) {
+    echo "threw:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "threw:SQLSTATE[IM001]: driver does not support multiple rowsets"
+    );
+}
+
+/// P1-j: a `PDOStatement` keeps its owning `PDO` (and therefore its bridge
+/// connection) alive for as long as the statement itself is reachable, even
+/// after the local variable holding the `PDO` goes out of scope. `PDO::query()`
+/// (via `prepare()`) passes `$this` into the new statement's `setOwner()`,
+/// stored in a private `?PDO $owner` property — a plain object-typed property
+/// reference is enough for elephc's refcounting GC to keep the referenced
+/// object (and, transitively, its bridge connection) alive. No reference cycle
+/// is created: `PDO` does not hold a reference back to any of its statements.
+///
+/// `q()` is deliberately left without a declared return type: `PDO::query()`'s
+/// real signature is `PDOStatement|bool`, and elephc's checker does not
+/// flow-narrow that union down to `PDOStatement` even behind an `=== false`
+/// guard, so a `: PDOStatement` return type on `q()` fails to type-check here
+/// — an unrelated checker limitation, not part of what this test verifies.
+#[test]
+fn test_pdo_statement_keeps_connection_alive() {
+    let out = compile_and_run(
+        r#"<?php
+function q() {
+    $db = new PDO("sqlite::memory:");
+    $db->exec("CREATE TABLE t(n)");
+    $db->exec("INSERT INTO t VALUES(42)");
+    return $db->query("SELECT n FROM t");
+}
+echo q()->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// P2-o: constructing a `PDOStatement` directly (not via `PDO::prepare()` /
+/// `query()`) throws a `PDOException` — mirroring php-src's "You should not
+/// create a PDOStatement manually" — because the given `$connection` is not a
+/// real, currently-open connection handle (`elephc_pdo_driver_name()` returns
+/// `""` for an unknown id). This is the only way to reach the constructor
+/// directly, since elephc never exposes a valid handle to PHP code.
+#[test]
+fn test_pdo_statement_direct_construction_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    $_stmt = new PDOStatement(0, 0);
+    echo "no-throw";
+} catch (PDOException $e) {
+    echo "threw:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "threw:You should not create a PDOStatement manually");
+}
+
+/// P1-i: `PDOStatement::setAttribute()`/`getAttribute()` on an unsupported
+/// attribute raise IM001 under `ERRMODE_EXCEPTION` (the connection default) —
+/// mirroring php-src's `pdo_raise_impl_error(stmt->dbh, stmt, "IM001", ...)`,
+/// since no driver here registers a statement attribute hook.
+#[test]
+fn test_pdo_statement_set_attribute_unsupported_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$stmt = $db->prepare("SELECT id FROM t");
+try {
+    $stmt->setAttribute(12345, "x");
+    echo "no-throw-set";
+} catch (PDOException $e) {
+    echo "threw-set:" . $e->errorInfo[0];
+}
+try {
+    $stmt->getAttribute(12345);
+    echo ":no-throw-get";
+} catch (PDOException $e) {
+    echo ":threw-get:" . $e->errorInfo[0];
+}
+"#,
+    );
+    assert_eq!(out, "threw-set:IM001:threw-get:IM001");
 }
 
 /// PDOStatement::getColumnMeta (P1-8): native_type is always the runtime
@@ -1403,6 +1940,56 @@ echo $meta0["name"] . ":" . $meta0["native_type"] . ":" . $meta0["sqlite:decl_ty
 "#,
     );
     assert_eq!(out, "id:integer:INTEGER,name:string:TEXT,F");
+}
+
+/// P2-h: `getColumnMeta()` on a prepared (not yet executed) statement returns
+/// `false` — there is no result set at all to describe yet, distinct from the
+/// existing out-of-range-column `false` case.
+#[test]
+fn test_pdo_get_column_meta_before_execute_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$stmt = $db->prepare("SELECT id, name FROM t");
+$before = $stmt->getColumnMeta(0) === false ? "F" : "?";
+$stmt->execute();
+$after = $stmt->getColumnMeta(0) === false ? "F" : "array";
+echo $before . ":" . $after;
+"#,
+    );
+    assert_eq!(out, "F:array");
+}
+
+/// P3: `getColumnMeta($column)` with a negative `$column` throws a `ValueError`
+/// — mirroring php-src's exact message and ordering (verified against
+/// php-src's `PHP_METHOD(PDOStatement, getColumnMeta)`: the negative check is
+/// pure argument validation that runs BEFORE any executed-state or
+/// driver-dispatch check) — distinct from the `false` returned for a merely
+/// out-of-range-HIGH column index (`test_pdo_statement_get_column_meta`
+/// above) or a not-yet-executed statement
+/// (`test_pdo_get_column_meta_before_execute_returns_false` above). Exercised
+/// on a statement that hasn't been executed yet, so a wrong check order (the
+/// `!executed` guard running first) would return `false` instead of throwing.
+#[test]
+fn test_pdo_get_column_meta_negative_column_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$stmt = $db->prepare("SELECT id FROM t");
+try {
+    $stmt->getColumnMeta(-1);
+    echo "no-throw";
+} catch (\ValueError $e) {
+    echo "threw:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "threw:PDOStatement::getColumnMeta(): Argument #1 ($column) must be greater than or equal to 0"
+    );
 }
 
 /// P1-4: `getColumnMeta()` called BEFORE the first explicit `fetch()` still
@@ -2632,4 +3219,265 @@ echo $msg;
 "#,
     );
     assert_eq!(out, "unrec-null,HY000");
+}
+
+/// P0-A regression: `PDO::PARAM_STR` (the default `bindValue()` type) preserves an
+/// embedded NUL byte end to end. Before the v20 ABI fix, `elephc_pdo_bind_text`
+/// bound via SQLite's strlen-based `-1` sentinel, so `"AB\x00CD"` (5 bytes)
+/// silently truncated to `"AB"` at the first NUL; the v20 bridge threads the
+/// value's true byte length through instead. Also pins that a NUL-safe text bind
+/// keeps SQLite's TEXT affinity/typeof (routed through `bind_text`, not
+/// `bind_blob`).
+#[test]
+fn test_pdo_bind_param_str_preserves_embedded_nul() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (data TEXT)");
+$ins = $db->prepare("INSERT INTO t (data) VALUES (?)");
+$ins->bindValue(1, "AB\x00CD");
+$ins->execute();
+$row = $db->query("SELECT typeof(data) AS ty, data FROM t")->fetch(PDO::FETCH_ASSOC);
+$back = $row["data"];
+echo $row["ty"] . ":" . strlen($back) . ":" . bin2hex($back);
+"#,
+    );
+    assert_eq!(out, "text:5:4142004344");
+}
+
+/// P0-A regression: `PDO::PARAM_LOB` now reaches `elephc_pdo_bind_blob` — declared
+/// in the prelude and wired into `execute()`'s bind loop for the first time in
+/// this slice, even though the bridge-side function has existed since v7. Raw
+/// bytes `"\x00\xff\x01"` (an embedded NUL plus a non-UTF-8 0xFF byte) round-trip
+/// unchanged through a BLOB column, proven via `bin2hex()`.
+#[test]
+fn test_pdo_bind_param_lob_preserves_binary() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (data BLOB)");
+$ins = $db->prepare("INSERT INTO t (data) VALUES (?)");
+$ins->bindValue(1, "\x00\xff\x01", PDO::PARAM_LOB);
+$ins->execute();
+$row = $db->query("SELECT typeof(data) AS ty, data FROM t")->fetch(PDO::FETCH_ASSOC);
+$back = $row["data"];
+echo $row["ty"] . ":" . strlen($back) . ":" . bin2hex($back);
+"#,
+    );
+    assert_eq!(out, "blob:3:00ff01");
+}
+
+/// P1-e: the SQLite (default) `quote()` branch still ignores `$type` entirely —
+/// unlike the mysql/pgsql branches, which now special-case `PDO::PARAM_LOB` — a
+/// regression guard mirroring php-src's own sqlite quoter, which never consults
+/// the type argument either. The pgsql `'\xDEADBEEF...'` bytea-hex-literal branch
+/// and the mysql `_binary'...'` branch (both added in this slice) need a live
+/// server to exercise through a real connection's `elephc_pdo_driver_name()`
+/// dispatch, so they are covered by `tests/codegen/pdo_mysql.rs`'s `#[ignore]`
+/// live fixtures instead (`mysql_quote_param_lob_binary_prefix`); no live pgsql
+/// fixture file exists in this slice's scope to add an equivalent there.
+#[test]
+fn test_pdo_quote_sqlite_ignores_param_lob_type() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+echo $db->quote("O'Brien", PDO::PARAM_LOB);
+"#,
+    );
+    assert_eq!(out, "'O''Brien'");
+}
+
+/// P2-e: `setAttribute(PDO::ATTR_CASE, PDO::CASE_UPPER)` folds every FETCH_ASSOC
+/// column-name key to uppercase (the original-case key is gone); the values are
+/// untouched. `fetch()` returns `mixed`, so `array_keys()` (which needs a
+/// statically-typed `array`) cannot be used here — `isset()` on both spellings
+/// proves the fold happened instead.
+#[test]
+fn test_pdo_attr_case_upper_folds_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_CASE, PDO::CASE_UPPER);
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t VALUES (1, 'Ada')");
+$row = $db->query("SELECT id, name FROM t")->fetch(PDO::FETCH_ASSOC);
+$hasLower = isset($row["id"]) ? "yes" : "no";
+echo $hasLower . ":" . $row["ID"] . ":" . $row["NAME"];
+"#,
+    );
+    assert_eq!(out, "no:1:Ada");
+}
+
+/// P3: `ATTR_CASE` folding is not FETCH_ASSOC-only — `setAttribute(PDO::ATTR_CASE,
+/// PDO::CASE_UPPER)` also uppercases the dynamic PROPERTY name `FETCH_OBJ`
+/// assigns on the fetched `stdClass` (via the same `columnName()` helper
+/// `assignColumns()` uses), not just an array key.
+#[test]
+fn test_pdo_attr_case_upper_folds_fetch_obj_property() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_CASE, PDO::CASE_UPPER);
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t VALUES (1, 'Ada')");
+$row = $db->query("SELECT id, name FROM t")->fetch(PDO::FETCH_OBJ);
+$hasLower = isset($row->id) ? "yes" : "no";
+echo $hasLower . ":" . $row->ID . ":" . $row->NAME;
+"#,
+    );
+    assert_eq!(out, "no:1:Ada");
+}
+
+/// P3: `ATTR_CASE` folding also applies to `FETCH_BOTH`'s STRING-keyed half —
+/// the numerically-indexed half (`$row[0]`, `$row[1]`) is untouched, only the
+/// column-name string key is folded, confirming the fold is keyed off
+/// `columnName()` (shared by every fetch style) rather than something
+/// FETCH_ASSOC-specific.
+#[test]
+fn test_pdo_attr_case_upper_folds_fetch_both_string_key() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_CASE, PDO::CASE_UPPER);
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t VALUES (1, 'Ada')");
+$row = $db->query("SELECT id, name FROM t")->fetch(PDO::FETCH_BOTH);
+$hasLower = isset($row["id"]) ? "yes" : "no";
+$hasNumeric = isset($row[0]) && isset($row[1]) ? "yes" : "no";
+echo $hasLower . ":" . $hasNumeric . ":" . $row["ID"] . ":" . $row[0] . ":" . $row["NAME"] . ":" . $row[1];
+"#,
+    );
+    assert_eq!(out, "no:yes:1:1:Ada:Ada");
+}
+
+/// P2-e: `setAttribute(PDO::ATTR_CASE, PDO::CASE_LOWER)` folds every FETCH_ASSOC
+/// column-name key to lowercase, even when the SQL's own column aliases are
+/// uppercase (sqlite3_column_name reports the alias exactly as written).
+#[test]
+fn test_pdo_attr_case_lower_folds_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_CASE, PDO::CASE_LOWER);
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t VALUES (1, 'Ada')");
+$row = $db->query("SELECT id AS ID, name AS NAME FROM t")->fetch(PDO::FETCH_ASSOC);
+$hasUpper = isset($row["ID"]) ? "yes" : "no";
+echo $hasUpper . ":" . $row["id"] . ":" . $row["name"];
+"#,
+    );
+    assert_eq!(out, "no:1:Ada");
+}
+
+/// P2-e regression guard: with no `ATTR_CASE` ever set (the default
+/// `PDO::CASE_NATURAL`), FETCH_ASSOC column-name keys are left exactly as the
+/// driver reports them (no uppercase spelling appears).
+#[test]
+fn test_pdo_attr_case_natural_default() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t VALUES (1, 'Ada')");
+$row = $db->query("SELECT id, name FROM t")->fetch(PDO::FETCH_ASSOC);
+$hasUpper = isset($row["ID"]) ? "yes" : "no";
+echo $hasUpper . ":" . $row["id"] . ":" . $row["name"];
+"#,
+    );
+    assert_eq!(out, "no:1:Ada");
+}
+
+/// P2-e: `setAttribute(PDO::ATTR_CASE, ...)` rejects a value outside
+/// `{CASE_NATURAL, CASE_UPPER, CASE_LOWER}` with a `ValueError`, using the exact
+/// message php-src's `pdo_dbh.c` uses ("Case folding mode must be one of the
+/// PDO::CASE_* constants", confirmed against php-src).
+#[test]
+fn test_pdo_attr_case_rejects_invalid() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+try {
+    $db->setAttribute(PDO::ATTR_CASE, 99);
+    echo "no-throw";
+} catch (\ValueError $e) {
+    echo "threw:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "threw:Case folding mode must be one of the PDO::CASE_* constants"
+    );
+}
+
+/// `Pdo\Sqlite::ATTR_OPEN_FLAGS`-style constructor option: `PDO::ATTR_CASE` set
+/// through the constructor's `$options` array (rather than `setAttribute()`)
+/// takes effect too, threaded the same way `ATTR_TIMEOUT`'s constructor-option
+/// test already proves for a different attribute.
+#[test]
+fn test_pdo_attr_case_constructor_option() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:", null, null, [PDO::ATTR_CASE => PDO::CASE_UPPER]);
+$db->exec("CREATE TABLE t (id INTEGER)");
+$db->exec("INSERT INTO t VALUES (1)");
+$row = $db->query("SELECT id FROM t")->fetch(PDO::FETCH_ASSOC);
+$hasLower = isset($row["id"]) ? "yes" : "no";
+echo $row["ID"] . ":" . $hasLower;
+"#,
+    );
+    assert_eq!(out, "1:no");
+}
+
+/// `getAttribute`/`setAttribute` round-trip both `ATTR_CASE` and
+/// `ATTR_ORACLE_NULLS`; the default for each is the `*_NATURAL` value (0).
+#[test]
+fn test_pdo_get_set_attr_case_and_oracle_nulls() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+echo $db->getAttribute(PDO::ATTR_CASE) . ":" . $db->getAttribute(PDO::ATTR_ORACLE_NULLS);
+$db->setAttribute(PDO::ATTR_CASE, PDO::CASE_UPPER);
+$db->setAttribute(PDO::ATTR_ORACLE_NULLS, PDO::NULL_EMPTY_STRING);
+echo ":" . $db->getAttribute(PDO::ATTR_CASE) . ":" . $db->getAttribute(PDO::ATTR_ORACLE_NULLS);
+"#,
+    );
+    assert_eq!(out, "0:0:1:1");
+}
+
+/// P2-e: `setAttribute(PDO::ATTR_ORACLE_NULLS, PDO::NULL_EMPTY_STRING)` converts
+/// an empty-string TEXT column value to `null` on fetch, mirroring php-src's
+/// `fetch_value()` (`IS_STRING && Z_STRLEN_P(dest) == 0 && oracle_nulls ==
+/// PDO_NULL_EMPTY_STRING`).
+#[test]
+fn test_pdo_oracle_nulls_empty_string_to_null() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_ORACLE_NULLS, PDO::NULL_EMPTY_STRING);
+$db->exec("CREATE TABLE t (name TEXT)");
+$db->exec("INSERT INTO t VALUES ('')");
+$row = $db->query("SELECT name FROM t")->fetch(PDO::FETCH_ASSOC);
+echo $row["name"] === null ? "null" : "not-null";
+"#,
+    );
+    assert_eq!(out, "null");
+}
+
+/// P2-e sibling: `setAttribute(PDO::ATTR_ORACLE_NULLS, PDO::NULL_TO_STRING)`
+/// converts a `NULL` column value to `""` on fetch, mirroring php-src's
+/// `fetch_value()` (`IS_NULL && oracle_nulls == PDO_NULL_TO_STRING`).
+#[test]
+fn test_pdo_oracle_nulls_null_to_empty_string() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_ORACLE_NULLS, PDO::NULL_TO_STRING);
+$db->exec("CREATE TABLE t (name TEXT)");
+$db->exec("INSERT INTO t (name) VALUES (NULL)");
+$row = $db->query("SELECT name FROM t")->fetch(PDO::FETCH_ASSOC);
+echo $row["name"] === "" ? "empty" : ($row["name"] === null ? "still-null" : "other");
+"#,
+    );
+    assert_eq!(out, "empty");
 }

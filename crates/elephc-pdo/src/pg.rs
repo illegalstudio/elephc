@@ -9,8 +9,13 @@
 //!
 //! Key details:
 //! - PDO `?` / `:name` placeholders are translated to PostgreSQL's `$1, $2, …`
-//!   at prepare time (respecting `'…'` string literals and the `::type` cast
-//!   operator); the named map lets `bind_parameter_index(":name")` resolve.
+//!   at prepare time by a scanner that skips `--`/`/* */` comments, `'…'`
+//!   (incl. `E'…'` backslash-escape strings) and `"…"` literals, `$tag$…$tag$`
+//!   dollar-quoted strings, the `::type` cast operator, and the `??` jsonb
+//!   operator escape, so a `?`/`:name` inside any of those is never mistaken
+//!   for a real placeholder; the named map lets `bind_parameter_index(":name")`
+//!   resolve. A SQL text mixing `?` and `:name` is rejected at `prepare()` with
+//!   `HY093` (PDO forbids the combination).
 //! - A statement is prepared server-side for column metadata, then executed
 //!   lazily on the first `step()`. The whole result set is materialized into
 //!   typed `Cell` values, so the column accessors read from owned data and
@@ -24,7 +29,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use postgres::types::{to_sql_checked, IsNull, ToSql, Type};
-use postgres::{Client, Config, NoTls, Row, Statement};
+use postgres::{Client, Config, NoTls, Row, SimpleQueryMessage, Statement};
 
 /// One materialized column value, already decoded to a PHP-friendly scalar.
 pub enum Cell {
@@ -200,7 +205,45 @@ fn parse_datetime_utc(
 /// outright, so [`parse_tls`] extracts them and `open` applies them to the
 /// `Config`/rustls connector instead. Returns an error for a DSN without the
 /// `pgsql:` prefix.
+///
+/// P1-d: every OTHER key is only forwarded when it is one tokio-postgres's own
+/// `Config::from_str` parser recognizes — its accepted set is exactly: `user`,
+/// `password`, `dbname`, `options`, `application_name`, `sslmode`,
+/// `sslnegotiation`, `host`, `hostaddr`, `port`, `connect_timeout`,
+/// `tcp_user_timeout`, `keepalives`, `keepalives_idle`, `keepalives_interval`,
+/// `keepalives_retries`, `target_session_attrs`, `channel_binding`,
+/// `load_balance_hosts` (`sslmode` is still stripped here, not forwarded — see
+/// above). Any libpq key outside that set (e.g. `sslcrl`, `sslpassword`,
+/// `sslsni`, `service`, `gssencmode`, `passfile`, `requiressl`,
+/// `sslcompression`, `client_encoding`, or a typo) would otherwise make
+/// `.parse::<Config>()` fail with a hard `UnknownOption` connect error even
+/// though real libpq/PHP connects fine with it. Dropping it instead is a
+/// deliberate graceful degradation: the DSN still connects, just without
+/// whatever behavior that key would have configured (e.g. `client_encoding`'s
+/// value would need a post-connect `SET client_encoding = ...` to have any
+/// effect at all — not attempted here) — a silent no-op is preferable to a
+/// connection that never happens.
 pub fn parse_dsn(dsn: &str) -> Result<String, String> {
+    const ACCEPTED_KEYS: &[&str] = &[
+        "user",
+        "password",
+        "dbname",
+        "options",
+        "application_name",
+        "sslnegotiation",
+        "host",
+        "hostaddr",
+        "port",
+        "connect_timeout",
+        "tcp_user_timeout",
+        "keepalives",
+        "keepalives_idle",
+        "keepalives_interval",
+        "keepalives_retries",
+        "target_session_attrs",
+        "channel_binding",
+        "load_balance_hosts",
+    ];
     let body = dsn
         .strip_prefix("pgsql:")
         .ok_or_else(|| "could not find driver (expected a pgsql: DSN)".to_string())?;
@@ -220,6 +263,11 @@ pub fn parse_dsn(dsn: &str) -> Result<String, String> {
         // `sslcert`/`sslkey` and the `verify-ca`/`verify-full` sslmode values, so
         // forwarding any of them would make `.parse::<Config>()` fail.
         if matches!(key, "sslmode" | "sslrootcert" | "sslcert" | "sslkey") {
+            continue;
+        }
+        // P1-d: silently drop any key tokio-postgres's parser does not accept,
+        // rather than forwarding it and hard-failing the whole connection.
+        if !ACCEPTED_KEYS.contains(&key) {
             continue;
         }
         // libpq connection strings quote values containing spaces/specials; a
@@ -389,48 +437,227 @@ fn load_private_key(path: &str) -> Result<rustls::pki_types::PrivateKeyDer<'stat
         .ok_or_else(|| format!("sslkey {}: no private key found", path))
 }
 
+/// Returns whether `b` is an identifier byte (`[A-Za-z0-9_]`), used both to
+/// read a placeholder name and to test the "word boundary" before a possible
+/// `E'...'`/`e'...'` escape-string prefix.
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Returns the byte length of the UTF-8 sequence led by `b` (1 for ASCII, 2-4
+/// for a multi-byte lead byte). `sql` is always valid UTF-8, so slicing
+/// `&sql[i..i + utf8_len(bytes[i])]` lands on a valid char boundary at both
+/// ends — used to copy a content byte (or run of one multi-byte codepoint)
+/// through `out.push_str` instead of `out.push(b as char)`, which corrupts any
+/// codepoint above U+007F: a `u8` cast to `char` treats each raw continuation
+/// byte as its own Latin-1 codepoint and re-encodes it as 2 UTF-8 bytes,
+/// doubling/mangling every multi-byte character embedded in the SQL text
+/// (BUG 1).
+fn utf8_len(b: u8) -> usize {
+    if b & 0x80 == 0 {
+        1
+    } else if b & 0xE0 == 0xC0 {
+        2
+    } else if b & 0xF0 == 0xE0 {
+        3
+    } else if b & 0xF8 == 0xF0 {
+        4
+    } else {
+        // A stray continuation byte can't start a codepoint in valid UTF-8;
+        // fall back to one byte so the scanner still makes forward progress.
+        1
+    }
+}
+
 /// Translates PDO `?` and `:name` placeholders to PostgreSQL `$N`, returning the
-/// rewritten SQL and the bare-name → 1-based-index map. Single-quoted string
-/// literals are passed through untouched, and the `::type` cast operator is not
-/// mistaken for a named placeholder.
-pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>) {
+/// rewritten SQL, the bare-name → 1-based-index map, and whether the SQL mixed a
+/// positional `?` with a named `:name` (PDO forbids this combination; `prepare()`
+/// checks the flag and raises `HY093` before ever reaching the server).
+///
+/// The scanner tracks these mutually exclusive regions, copying each verbatim
+/// (never scanning `?`/`:name` inside them) before resuming normal placeholder
+/// scanning:
+/// - `-- ...` line comments (to end of line or EOF);
+/// - `/* ... */` block comments (non-nested, to the first `*/` or EOF);
+/// - `'...'` single-quoted strings, with `''` as the doubled-quote escape and,
+///   when the string is `E'...'`/`e'...'`-prefixed (a standalone `E`/`e` token,
+///   not part of a preceding identifier), `\'`/`\\` backslash escapes active too
+///   (a plain `'...'` string only recognizes the `''` doubling, per
+///   `standard_conforming_strings`);
+/// - `"..."` double-quoted identifiers, with `""` as the doubled-quote escape;
+/// - `$tag$...$tag$` dollar-quoted strings (`tag` is `[A-Za-z_][A-Za-z0-9_]*` or
+///   empty, and must be followed by `$` to open; a `$` immediately followed by a
+///   digit, e.g. a literal `$1` in the input, can never start a tag and is
+///   emitted as a plain `$`).
+///
+/// A `??` (exactly two `?`) is PostgreSQL's jsonb `?`/`?|`/`?&` operator escape:
+/// it collapses to a single literal `?` in the output and allocates no
+/// placeholder slot. A lone `?` is a real positional placeholder. `::` (the
+/// cast operator) is left untouched rather than read as a named placeholder;
+/// `#` is not a comment introducer in PostgreSQL.
+///
+/// A `:name` immediately preceded by an alphanumeric byte is NOT a named
+/// placeholder (matching php-src's `pdo_sql_parser.re`, which skips the same
+/// way), most importantly so an array slice like `data[1:5]` is left
+/// untouched instead of misreading `:5` as a bind parameter.
+pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, bool) {
     let bytes = sql.as_bytes();
+    let len = bytes.len();
     let mut out = String::with_capacity(sql.len() + 8);
     let mut named: HashMap<String, i64> = HashMap::new();
     let mut next_index: i64 = 1;
     let mut i = 0;
     let mut in_string = false;
-    while i < bytes.len() {
-        let c = bytes[i] as char;
+    // Whether the currently-open string honors backslash escapes (an
+    // `E'...'`/`e'...'` string); irrelevant while `in_string` is false.
+    let mut string_escapes = false;
+    let mut saw_positional = false;
+    let mut saw_named = false;
+    while i < len {
+        let c = bytes[i];
         if in_string {
-            out.push(c);
-            if c == '\'' {
+            if string_escapes && c == b'\\' && i + 1 < len {
+                // A backslash escapes the next character in an E-string
+                // (which may itself be a multi-byte UTF-8 sequence): neither
+                // participates in terminating the string. Copy the whole
+                // escaped character via a slice rather than a per-byte `as
+                // char` push (BUG 1) — pushing only the escaped byte's lead
+                // byte would also leave its continuation bytes to be
+                // re-visited at a non-char-boundary index on the next
+                // iteration.
+                let esc_len = utf8_len(bytes[i + 1]).min(len - i - 1);
+                out.push('\\');
+                out.push_str(&sql[i + 1..i + 1 + esc_len]);
+                i += 1 + esc_len;
+                continue;
+            }
+            let n = utf8_len(c).min(len - i);
+            out.push_str(&sql[i..i + n]);
+            if c == b'\'' {
                 // Doubled '' is an escaped quote inside the literal.
-                if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+                if i + 1 < len && bytes[i + 1] == b'\'' {
                     out.push('\'');
                     i += 2;
                     continue;
                 }
                 in_string = false;
             }
-            i += 1;
+            i += n;
             continue;
         }
         match c {
-            '\'' => {
+            b'-' if i + 1 < len && bytes[i + 1] == b'-' => {
+                // Line comment: verbatim to the end of the line (exclusive of
+                // the newline itself, which the default arm then copies) or EOF.
+                let start = i;
+                let mut j = i + 2;
+                while j < len && bytes[j] != b'\n' {
+                    j += 1;
+                }
+                out.push_str(&sql[start..j]);
+                i = j;
+            }
+            b'/' if i + 1 < len && bytes[i + 1] == b'*' => {
+                // Block comment: verbatim to the matching (non-nested) `*/`, or
+                // to EOF if unterminated.
+                let start = i;
+                let mut j = i + 2;
+                while j + 1 < len && !(bytes[j] == b'*' && bytes[j + 1] == b'/') {
+                    j += 1;
+                }
+                let end = if j + 1 < len { j + 2 } else { len };
+                out.push_str(&sql[start..end]);
+                i = end;
+            }
+            b'"' => {
+                // Double-quoted identifier: verbatim, with `""` as the doubled-
+                // quote escape (no backslash escaping here).
+                let start = i;
+                let mut j = i + 1;
+                loop {
+                    if j >= len {
+                        break;
+                    }
+                    if bytes[j] == b'"' {
+                        if j + 1 < len && bytes[j + 1] == b'"' {
+                            j += 2;
+                            continue;
+                        }
+                        j += 1;
+                        break;
+                    }
+                    j += 1;
+                }
+                out.push_str(&sql[start..j]);
+                i = j;
+            }
+            b'\'' => {
+                // A standalone `E`/`e` immediately before this quote (not part
+                // of a longer identifier) makes this an escape-string.
+                let is_e_prefixed = i > 0
+                    && (bytes[i - 1] == b'E' || bytes[i - 1] == b'e')
+                    && (i < 2 || !is_ident_byte(bytes[i - 2]));
                 in_string = true;
-                out.push(c);
+                string_escapes = is_e_prefixed;
+                out.push('\'');
                 i += 1;
             }
-            '?' => {
+            b'$' => {
+                // A `$` immediately followed by a digit can never open a
+                // dollar-quote tag; emit it verbatim (e.g. a literal `$1`).
+                if i + 1 < len && bytes[i + 1].is_ascii_digit() {
+                    out.push('$');
+                    i += 1;
+                    continue;
+                }
+                let mut j = i + 1;
+                if j < len && (bytes[j].is_ascii_alphabetic() || bytes[j] == b'_') {
+                    j += 1;
+                    while j < len && is_ident_byte(bytes[j]) {
+                        j += 1;
+                    }
+                }
+                if j < len && bytes[j] == b'$' {
+                    // `bytes[i+1..j]` is the (possibly empty) tag; the opening
+                    // delimiter closes at `j` (its own `$`).
+                    let tag = &sql[i + 1..j];
+                    let delim = format!("${}$", tag);
+                    let open_end = j + 1;
+                    match sql[open_end..].find(&delim) {
+                        Some(rel) => {
+                            let close_end = open_end + rel + delim.len();
+                            out.push_str(&sql[i..close_end]);
+                            i = close_end;
+                        }
+                        None => {
+                            // Unterminated dollar-quote: consume verbatim to EOF.
+                            out.push_str(&sql[i..len]);
+                            i = len;
+                        }
+                    }
+                } else {
+                    // Not a valid tag-open (e.g. a bare `$`); emit verbatim.
+                    out.push('$');
+                    i += 1;
+                }
+            }
+            b'?' => {
+                // `??` is the jsonb operator escape: a single literal `?`, no
+                // placeholder slot allocated.
+                if i + 1 < len && bytes[i + 1] == b'?' {
+                    out.push('?');
+                    i += 2;
+                    continue;
+                }
                 out.push('$');
                 out.push_str(&next_index.to_string());
                 next_index += 1;
+                saw_positional = true;
                 i += 1;
             }
-            ':' => {
+            b':' => {
                 // `::` is the cast operator, not a named placeholder.
-                if i + 1 < bytes.len() && bytes[i + 1] == b':' {
+                if i + 1 < len && bytes[i + 1] == b':' {
                     out.push_str("::");
                     i += 2;
                     continue;
@@ -438,16 +665,22 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>) {
                 // Read the placeholder name (identifier chars after the colon).
                 let start = i + 1;
                 let mut j = start;
-                while j < bytes.len() {
-                    let nc = bytes[j] as char;
-                    if nc.is_ascii_alphanumeric() || nc == '_' {
-                        j += 1;
-                    } else {
-                        break;
-                    }
+                while j < len && is_ident_byte(bytes[j]) {
+                    j += 1;
                 }
                 if j == start {
                     // A bare colon (not a named placeholder); emit verbatim.
+                    out.push(':');
+                    i += 1;
+                    continue;
+                }
+                // php-src's `pdo_sql_parser.re` only treats `:name` as a bind
+                // placeholder when the byte immediately before the colon is
+                // NOT alphanumeric (BUG 2). Without this, an array slice like
+                // `data[1:5]` misreads `:5` as a named placeholder. Emit the
+                // colon verbatim; the identifier bytes are then re-scanned as
+                // ordinary text by the default arm on the next iterations.
+                if i > 0 && bytes[i - 1].is_ascii_alphanumeric() {
                     out.push(':');
                     i += 1;
                     continue;
@@ -460,15 +693,22 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>) {
                 });
                 out.push('$');
                 out.push_str(&index.to_string());
+                saw_named = true;
                 i = j;
             }
             _ => {
-                out.push(c);
-                i += 1;
+                // Copy the whole codepoint via a slice (BUG 1): `c as char`
+                // would corrupt any multi-byte UTF-8 character (e.g. an
+                // embedded `'café'`/`'Zürich'` byte outside a recognized
+                // quoted region — the ordinary/unquoted path).
+                let n = utf8_len(c).min(len - i);
+                out.push_str(&sql[i..i + n]);
+                i += n;
             }
         }
     }
-    (out, named)
+    let mixed = saw_positional && saw_named;
+    (out, named, mixed)
 }
 
 /// Extracts the 5-char SQLSTATE from a postgres driver error. `tokio_postgres`
@@ -539,8 +779,8 @@ impl PgConn {
     /// Runs a statement with no result rows (`PDO::exec`), returning the affected
     /// row count or `-1`.
     pub fn exec(&mut self, sql: &str) -> i64 {
-        // execute() runs a single command; fall back to batch_execute for
-        // multi-statement scripts (returning 0 affected, as PHP does for those).
+        // execute() runs a single command; fall back to a multi-statement path for
+        // scripts execute() rejects (it only accepts exactly one command).
         match self.client.execute(sql, &[]) {
             Ok(n) => {
                 self.changes = n as i64;
@@ -548,12 +788,26 @@ impl PgConn {
                 self.sqlstate = "00000".to_string();
                 n as i64
             }
-            Err(_) => match self.client.batch_execute(sql) {
-                Ok(()) => {
-                    self.changes = 0;
+            // P2-j: `simple_query` (not `batch_execute`) runs the whole script over
+            // the simple query protocol and yields one `SimpleQueryMessage` per
+            // statement, including a `CommandComplete(rows)` tag for each — mirroring
+            // php-src's `PQexec`, which reports the LAST command's row count for a
+            // multi-statement string. `batch_execute` discards those tags entirely
+            // (always 0 affected), which is what this replaces.
+            Err(_) => match self.client.simple_query(sql) {
+                Ok(messages) => {
+                    let rows = messages
+                        .iter()
+                        .rev()
+                        .find_map(|m| match m {
+                            SimpleQueryMessage::CommandComplete(n) => Some(*n),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+                    self.changes = rows as i64;
                     self.errcode = 0;
                     self.sqlstate = "00000".to_string();
-                    0
+                    rows as i64
                 }
                 Err(e) => self.fail(e),
             },
@@ -706,8 +960,15 @@ impl PgConn {
     }
 
     /// Runs a `COPY … TO STDOUT` statement (built by the prelude) and returns its raw
-    /// text output (rows separated by newlines), or an empty string on error. Backs
-    /// `Pdo\Pgsql::copyToArray()` / `copyToFile()`.
+    /// text output (rows separated by newlines); also an empty string on error, same
+    /// as for a genuinely empty COPY. Backs `Pdo\Pgsql::copyToArray()` / `copyToFile()`.
+    ///
+    /// P2-i: those two empty-string cases are told apart not by this return value
+    /// but by `errcode`, which this method always resets to `0` on success (even an
+    /// empty one) and sets non-zero via [`Self::fail`] on error — the prelude checks
+    /// `elephc_pdo_errcode()` immediately after the call to distinguish "really
+    /// empty" (returns `[]`) from "the COPY failed" (returns `false`), matching the
+    /// stub's `array|false` contract for `copyToArray()`.
     pub fn copy_out(&mut self, copy_sql: &str) -> String {
         use std::io::Read;
         // Run the COPY in a closure so the reader's borrow of `self.client` ends
@@ -755,9 +1016,20 @@ impl PgConn {
     }
 
     /// Prepares a statement: translates placeholders and prepares it server-side
-    /// for column metadata. Returns the statement or an error message.
+    /// for column metadata. Returns the statement or an error message. Rejects a
+    /// SQL text that mixes a positional `?` with a named `:name` placeholder
+    /// with `HY093` before ever asking the server to prepare it — PDO forbids
+    /// combining the two styles in one statement, and the server has no notion
+    /// of "named" placeholders to catch this itself.
     pub fn prepare(&mut self, sql: &str) -> Result<PgStmt, String> {
-        let (translated, named_map) = translate_placeholders(sql);
+        let (translated, named_map, mixed) = translate_placeholders(sql);
+        if mixed {
+            self.errcode = 1;
+            self.sqlstate = "HY093".to_string();
+            self.errmsg =
+                "Invalid parameter number: mixed named and positional parameters".to_string();
+            return Err(self.errmsg.clone());
+        }
         match self.client.prepare(&translated) {
             Ok(statement) => {
                 let col_names = statement
@@ -1081,6 +1353,30 @@ mod tests {
             !conn_str.contains("sslrootcert"),
             "sslrootcert must not reach the libpq conn string: {conn_str}"
         );
+    }
+
+    /// P1-d: an unrecognized-but-real libpq key (`sslcrl`) and a key
+    /// tokio-postgres simply doesn't model (`client_encoding`) are dropped
+    /// rather than forwarded, so the DSN still parses into a connection string
+    /// instead of hard-failing with `UnknownOption`.
+    #[test]
+    fn parse_dsn_drops_unrecognized_libpq_keys() {
+        let dsn = "pgsql:host=db.example.com;dbname=app;sslcrl=/x;client_encoding=UTF8";
+        let conn_str = parse_dsn(dsn).expect("dsn parses despite the unrecognized keys");
+        assert!(conn_str.contains("host='db.example.com'"));
+        assert!(conn_str.contains("dbname='app'"));
+        assert!(
+            !conn_str.contains("sslcrl"),
+            "sslcrl must not reach the libpq conn string: {conn_str}"
+        );
+        assert!(
+            !conn_str.contains("client_encoding"),
+            "client_encoding must not reach the libpq conn string: {conn_str}"
+        );
+        // The whole point: tokio-postgres's own parser must accept the result.
+        conn_str
+            .parse::<Config>()
+            .expect("conn string with dropped keys must still parse");
     }
 
     /// `parse_tls` captures `sslmode` (lowercased) and the three file paths.
