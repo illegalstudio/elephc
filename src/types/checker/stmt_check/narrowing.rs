@@ -6,16 +6,20 @@
 //! - `crate::types::checker::stmt_check::control_flow` when checking `StmtKind::If`.
 //!
 //! Key details:
-//! - Recognizes `is_int`/`is_float`/`is_string`/`is_bool($var)` (and aliases) and `$var instanceof
-//!   Class` guards, optionally negated with a leading `!`. Narrowing is applied to each clause in an
-//!   if/elseif*/else chain (each subsequent clause, and the else, see the accumulated complement
-//!   from previous guards). For a chain with no else where *every* clause body always diverges
-//!   (return/throw/exit/die/never-function), the accumulated complement is applied to the statements
-//!   after the entire if construct.
+//! - Recognizes `is_int`/`is_float`/`is_string`/`is_bool`/`is_null`/`is_array($var)` (and aliases),
+//!   `$var instanceof Class`, and the strict comparisons `$var === null`/`$var === false` (and their
+//!   `!==` / operand-swapped forms), optionally negated with a leading `!`. Narrowing is applied to
+//!   each clause in an if/elseif*/else chain (each subsequent clause, and the else, see the
+//!   accumulated complement from previous guards). For a chain with no else where *every* clause
+//!   body always diverges (return/throw/exit/die/never-function), the accumulated complement is
+//!   applied to the statements after the entire if construct.
+//! - `=== false` narrows against `bool` and `=== null` against `void` (elephc represents `null` as
+//!   `void` and does not track literal-`false` precision), so the false/null branch drops the whole
+//!   `bool`/`void` union member — the intended and common `T|false` / `?T` return-value shapes.
 //! - Conservative: a concrete (non-union, non-mixed) type is left unchanged, and an empty narrowing
 //!   result falls back to the original type, so valid code is never narrowed away to `Never`.
 
-use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -31,22 +35,50 @@ pub(crate) struct GuardNarrowing {
     pub else_ty: PhpType,
 }
 
+/// The type a guard narrows toward. Most guards map to an exact `PhpType` variant, but `is_array`
+/// needs to match any array member of a union regardless of its element type, and the `PhpType`
+/// model has no bare, element-agnostic array variant — so it is kept as a distinct case.
+enum GuardTarget {
+    /// An exact scalar, `void` (null), or object target, matched by variant equality (an object by
+    /// class name). Covers `is_int`/`is_float`/`is_string`/`is_bool`/`is_null`, `instanceof`, and
+    /// the `=== null` / `=== false` comparisons.
+    Exact(PhpType),
+    /// `is_array($x)`: matches any indexed (`Array`) or associative (`AssocArray`) member.
+    AnyArray,
+}
+
+impl GuardTarget {
+    /// The concrete type to use when the guard is known to hold but the current type carries no
+    /// matching member to keep (e.g. narrowing `mixed`): the exact target itself, or an
+    /// element-agnostic `array<mixed>` for the array guard.
+    fn fallback_type(&self) -> PhpType {
+        match self {
+            GuardTarget::Exact(ty) => ty.clone(),
+            GuardTarget::AnyArray => PhpType::Array(Box::new(PhpType::Mixed)),
+        }
+    }
+}
+
 impl Checker {
     /// Detects a type-predicate guard in an `if` condition and computes the then/else narrowing
     /// for the guarded variable against the current environment. Handles the scalar `is_*`
-    /// predicates and `$var instanceof Class`, with an optional leading `!` that swaps the
-    /// branches. Returns `None` when the condition is not a recognized single-variable guard or the
-    /// variable has no known type in `env`.
+    /// predicates, `is_null`/`is_array`, `$var instanceof Class`, and the strict comparisons
+    /// `$var === null`/`$var === false` (and `!==`), with an optional leading `!`. A `!==`
+    /// comparison and a leading `!` each swap the branches, and they compose. Returns `None` when
+    /// the condition is not a recognized single-variable guard or the variable has no known type in
+    /// `env`.
     pub(crate) fn type_guard_narrowing(
         &self,
         condition: &Expr,
         env: &TypeEnv,
     ) -> Option<GuardNarrowing> {
-        let (cond, negated) = match &condition.kind {
+        let (cond, not_negated) = match &condition.kind {
             ExprKind::Not(inner) => (inner.as_ref(), true),
             _ => (condition, false),
         };
-        let (var, target) = guard_var_and_type(cond)?;
+        let (var, target, cmp_negated) = guard_var_and_target(cond)?;
+        // A `!` prefix and a `!==` comparison each flip the guard sense; both together cancel out.
+        let negated = not_negated ^ cmp_negated;
         let current = env.get(&var)?.clone();
         let matched = self.narrow_to(&current, &target);
         let complement = self.narrow_complement(&current, &target);
@@ -59,29 +91,30 @@ impl Checker {
     }
 
     /// Narrows `current` to the guard-true type. Inside the branch the guard guarantees the target,
-    /// so `Mixed` and any incompatible concrete type become `target`; a `Union` keeps only its
-    /// matching members (falling back to `target` if none match); a concrete type already matching
-    /// the guard is kept as-is (preserving a more specific class for `instanceof`).
-    fn narrow_to(&self, current: &PhpType, target: &PhpType) -> PhpType {
+    /// so `Mixed` and any incompatible concrete type become the target's fallback type; a `Union`
+    /// keeps only its matching members (falling back if none match); a concrete type already
+    /// matching the guard is kept as-is (preserving a more specific class for `instanceof` or the
+    /// element type for `is_array`).
+    fn narrow_to(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> =
                     members.iter().filter(|m| guard_matches(m, target)).cloned().collect();
                 if kept.is_empty() {
-                    target.clone()
+                    target.fallback_type()
                 } else {
                     self.normalize_union_type(kept)
                 }
             }
             _ if guard_matches(current, target) => current.clone(),
-            _ => target.clone(),
+            _ => target.fallback_type(),
         }
     }
 
     /// Narrows `current` to the subset incompatible with `target` (the guard-false type): a `Union`
     /// drops its matching members, while `Mixed` and concrete types are returned unchanged (the
     /// complement of `Mixed` is not representable). An empty result falls back to `current`.
-    fn narrow_complement(&self, current: &PhpType, target: &PhpType) -> PhpType {
+    fn narrow_complement(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> =
@@ -136,23 +169,27 @@ impl Checker {
     }
 }
 
-/// Extracts the guarded variable name and the target type from a (non-negated) guard expression.
-/// Recognizes the scalar `is_*` predicates and `instanceof <Name>`; returns `None` for anything
-/// else (including guards on non-variable operands).
-fn guard_var_and_type(cond: &Expr) -> Option<(String, PhpType)> {
+/// Extracts the guarded variable name, the narrowing target, and whether the guard sense is
+/// inverted (a `!==` comparison) from a guard expression that carries no leading `!`. Recognizes
+/// the scalar `is_*` predicates, `is_null`/`is_array`, `instanceof <Name>`, and the strict
+/// comparisons `$var === null|false` / `$var !== null|false` (in either operand order). Returns
+/// `None` for anything else (including guards on non-variable operands).
+fn guard_var_and_target(cond: &Expr) -> Option<(String, GuardTarget, bool)> {
     match &cond.kind {
         ExprKind::FunctionCall { name, args } if args.len() == 1 => {
             let ExprKind::Variable(var) = &args[0].kind else {
                 return None;
             };
             let target = match name.as_str().to_ascii_lowercase().as_str() {
-                "is_int" | "is_integer" | "is_long" => PhpType::Int,
-                "is_float" | "is_double" => PhpType::Float,
-                "is_string" => PhpType::Str,
-                "is_bool" => PhpType::Bool,
+                "is_int" | "is_integer" | "is_long" => GuardTarget::Exact(PhpType::Int),
+                "is_float" | "is_double" => GuardTarget::Exact(PhpType::Float),
+                "is_string" => GuardTarget::Exact(PhpType::Str),
+                "is_bool" => GuardTarget::Exact(PhpType::Bool),
+                "is_null" => GuardTarget::Exact(PhpType::Void),
+                "is_array" => GuardTarget::AnyArray,
                 _ => return None,
             };
-            Some((var.clone(), target))
+            Some((var.clone(), target, false))
         }
         ExprKind::InstanceOf { value, target } => {
             let ExprKind::Variable(var) = &value.kind else {
@@ -161,18 +198,41 @@ fn guard_var_and_type(cond: &Expr) -> Option<(String, PhpType)> {
             let InstanceOfTarget::Name(class) = target else {
                 return None;
             };
-            Some((var.clone(), PhpType::Object(class.as_str().to_string())))
+            Some((var.clone(), GuardTarget::Exact(PhpType::Object(class.as_str().to_string())), false))
+        }
+        ExprKind::BinaryOp { left, op, right } => {
+            let cmp_negated = match op {
+                BinOp::StrictEq => false,
+                BinOp::StrictNotEq => true,
+                _ => return None,
+            };
+            // One operand must be a bare variable, the other a `null` or `false` literal.
+            let (var, literal) = match (&left.kind, &right.kind) {
+                (ExprKind::Variable(var), _) => (var, right.as_ref()),
+                (_, ExprKind::Variable(var)) => (var, left.as_ref()),
+                _ => return None,
+            };
+            let target = match &literal.kind {
+                ExprKind::Null => GuardTarget::Exact(PhpType::Void),
+                ExprKind::BoolLiteral(false) => GuardTarget::Exact(PhpType::Bool),
+                _ => return None,
+            };
+            Some((var.clone(), target, cmp_negated))
         }
         _ => None,
     }
 }
 
 /// Returns true when a union member is compatible with a guard target, used to keep (then) or drop
-/// (else) members. Scalar targets require an exact variant match; an `Object` target matches an
-/// object member with the same class name (inheritance-aware narrowing is left for the future).
-fn guard_matches(member: &PhpType, target: &PhpType) -> bool {
-    match (member, target) {
-        (PhpType::Object(member_class), PhpType::Object(target_class)) => member_class == target_class,
-        _ => member == target,
+/// (else) members. `AnyArray` matches any indexed or associative array member; an `Exact` object
+/// target matches an object member with the same class name (inheritance-aware narrowing is left
+/// for the future); every other `Exact` target requires an exact variant match.
+fn guard_matches(member: &PhpType, target: &GuardTarget) -> bool {
+    match target {
+        GuardTarget::AnyArray => matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. }),
+        GuardTarget::Exact(PhpType::Object(target_class)) => {
+            matches!(member, PhpType::Object(member_class) if member_class == target_class)
+        }
+        GuardTarget::Exact(target) => member == target,
     }
 }

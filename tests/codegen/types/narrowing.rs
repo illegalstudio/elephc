@@ -10,6 +10,10 @@
 //!   chains, and `: never`-function divergence that keeps the complement after an exhaustive chain.
 //!   The guarded variables are untyped parameters that are unions at runtime (heterogeneous calls),
 //!   so these tests depend on both the union parameter inference and the narrowing. Outputs match PHP.
+//! - Later fixtures exercise `is_array`/`is_null` predicates and the `=== null` / `=== false` (and
+//!   `!==`) comparison guards over `array|false` / `?array` return values: without narrowing the
+//!   checker rejects `count($x)` on the union, so these prove the array/false/null members are
+//!   correctly dropped in the complement branch. Outputs match PHP.
 
 use super::*;
 
@@ -235,4 +239,132 @@ fn test_narrowing_restores_all_narrowed_variables() {
         "#,
     );
     assert_eq!(out, "8");
+}
+
+/// Verifies `is_array` narrowing: the then-branch of `if (is_array($x))` uses the `array|false`
+/// value as an array (via `count`), which the checker rejects without narrowing (`count` requires
+/// an array, not the union). The else-branch keeps the `false` alternative.
+#[test]
+fn test_is_array_narrowing_allows_count() {
+    let out = compile_and_run(
+        r#"<?php
+        function make(bool $b): array|false { return $b ? [1, 2, 3] : false; }
+        function g(bool $b): int {
+            $x = make($b);
+            if (is_array($x)) { return count($x); }
+            return -1;
+        }
+        echo g(true), "|", g(false);
+        "#,
+    );
+    assert_eq!(out, "3|-1");
+}
+
+/// Verifies the negated-`is_array` early-return idiom: after `if (!is_array($x)) { return; }` the
+/// trailing statement must see `$x` narrowed to `array` (the diverging body drops the `false`
+/// alternative), so `count($x)` is accepted.
+#[test]
+fn test_negated_is_array_early_return_narrows_remainder() {
+    let out = compile_and_run(
+        r#"<?php
+        function make(bool $b): array|false { return $b ? ["a", "b", "c", "d"] : false; }
+        function g(bool $b): int {
+            $x = make($b);
+            if (!is_array($x)) { return -1; }
+            return count($x);
+        }
+        echo g(true), "|", g(false);
+        "#,
+    );
+    assert_eq!(out, "4|-1");
+}
+
+/// Verifies `=== false` narrowing: the else-branch of `if ($x === false)` drops the `false` member
+/// of `array|false`, so `count($x)` on the remaining `array` is accepted.
+#[test]
+fn test_strict_eq_false_else_narrows_to_array() {
+    let out = compile_and_run(
+        r#"<?php
+        function make(bool $b): array|false { return $b ? [10, 20] : false; }
+        function g(bool $b): int {
+            $x = make($b);
+            if ($x === false) { return -1; }
+            return count($x);
+        }
+        echo g(true), "|", g(false);
+        "#,
+    );
+    assert_eq!(out, "2|-1");
+}
+
+/// Verifies `!== false` narrowing: the then-branch of `if ($x !== false)` keeps only the non-false
+/// `array` member, mirroring `=== false` with the branches swapped.
+#[test]
+fn test_strict_not_eq_false_then_narrows_to_array() {
+    let out = compile_and_run(
+        r#"<?php
+        function make(bool $b): array|false { return $b ? [7, 8, 9] : false; }
+        function g(bool $b): int {
+            $x = make($b);
+            if ($x !== false) { return count($x); }
+            return -1;
+        }
+        echo g(true), "|", g(false);
+        "#,
+    );
+    assert_eq!(out, "3|-1");
+}
+
+/// Verifies `=== null` narrowing over a `?array` return: the else-branch drops the `null` (`void`)
+/// member so `count($x)` on the remaining `array` is accepted. Also covers the operand-swapped
+/// form `null === $x` in the sibling test below.
+#[test]
+fn test_strict_eq_null_else_narrows_to_array() {
+    let out = compile_and_run(
+        r#"<?php
+        function make(bool $b): ?array { return $b ? [1, 2, 3, 4, 5] : null; }
+        function g(bool $b): int {
+            $x = make($b);
+            if ($x === null) { return 0; }
+            return count($x);
+        }
+        echo g(true), "|", g(false);
+        "#,
+    );
+    assert_eq!(out, "5|0");
+}
+
+/// Verifies the operand-swapped comparison `null === $x` narrows identically to `$x === null`.
+#[test]
+fn test_strict_eq_null_swapped_operands_narrows() {
+    let out = compile_and_run(
+        r#"<?php
+        function make(bool $b): ?array { return $b ? [1, 2] : null; }
+        function g(bool $b): int {
+            $x = make($b);
+            if (null === $x) { return 0; }
+            return count($x);
+        }
+        echo g(true), "|", g(false);
+        "#,
+    );
+    assert_eq!(out, "2|0");
+}
+
+/// Verifies `is_null` narrowing: the else-branch drops the `null` member of `?array`, and the
+/// then-branch takes the null path.
+#[test]
+fn test_is_null_narrowing_over_nullable_array() {
+    let out = compile_and_run(
+        r#"<?php
+        function make(bool $b): ?array { return $b ? [9] : null; }
+        function g(bool $b): int {
+            $x = make($b);
+            if (is_null($x)) { return 0; }
+            return count($x);
+        }
+        echo g(true), "|", g(false);
+        "#,
+    );
+    assert_eq!(out, "1|0");
 }
