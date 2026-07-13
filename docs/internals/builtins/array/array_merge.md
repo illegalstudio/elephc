@@ -35,6 +35,12 @@ function array_merge(...$arrays): array
 - **Arity**: takes no arguments.
 - **Variadic**: collects excess arguments into `$arrays`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_merge.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_merge.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+- **Variadic**: collects excess arguments into `$arrays`.
+
 ## Cross-references
 
 - [User reference for `array_merge()`](../../../php/builtins/array/array_merge.md)

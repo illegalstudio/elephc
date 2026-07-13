@@ -31,7 +31,7 @@ builtin! {
 ///
 /// The registry pre-infers arguments before calling this hook.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(PhpType::Union(vec![PhpType::Int, PhpType::Bool]))
+    Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]))
 }
 
 /// Lowers a `strtotime` call by dispatching to the shared system emitter.

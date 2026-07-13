@@ -33,7 +33,7 @@ builtin! {
 /// Returns `Union(Str, Bool)` reflecting the link target on success or `false` on failure.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
-    Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool]))
+    Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::False]))
 }
 
 /// Lowers a `readlink` call by dispatching to the shared io emitter.

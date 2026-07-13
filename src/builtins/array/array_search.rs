@@ -51,9 +51,9 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     }
     match arr_ty {
         PhpType::AssocArray { key, .. } => {
-            Ok(cx.checker.normalize_union_type(vec![*key, PhpType::Bool]))
+            Ok(cx.checker.normalize_union_type(vec![*key, PhpType::False]))
         }
-        _ => Ok(PhpType::Union(vec![PhpType::Int, PhpType::Bool])),
+        _ => Ok(PhpType::Union(vec![PhpType::Int, PhpType::False])),
     }
 }
 

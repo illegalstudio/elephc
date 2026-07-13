@@ -132,6 +132,9 @@ pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
     if *b == PhpType::Never {
         return a.clone();
     }
+    if matches!((a, b), (PhpType::Bool, PhpType::False) | (PhpType::False, PhpType::Bool)) {
+        return PhpType::Bool;
+    }
     if *a == PhpType::Str || *b == PhpType::Str {
         return PhpType::Str;
     }
@@ -232,7 +235,8 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::IntLiteral(_) => PhpType::Int,
         ExprKind::FloatLiteral(_) => PhpType::Float,
-        ExprKind::BoolLiteral(_) => PhpType::Bool,
+        ExprKind::BoolLiteral(false) => PhpType::False,
+        ExprKind::BoolLiteral(true) => PhpType::Bool,
         ExprKind::Null => PhpType::Void,
         ExprKind::Cast {
             target: CastType::String,
@@ -251,11 +255,12 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             ..
         } => PhpType::Bool,
         ExprKind::FunctionCall { name, args } => match name.as_str() {
+            "eval" => PhpType::Mixed,
             "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim" | "str_repeat"
             | "strrev" | "chr" | "str_replace" | "str_ireplace" | "ucfirst" | "lcfirst"
             | "ucwords" | "str_pad" | "implode" | "sprintf" | "vsprintf" | "nl2br" | "wordwrap" | "md5"
             | "sha1" | "hash" | "substr_replace" | "addslashes" | "stripslashes"
-            | "htmlspecialchars" | "html_entity_decode" | "urlencode" | "urldecode"
+            | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode" | "urldecode"
             | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin" | "number_format"
             | "date" | "json_encode" | "json_decode" | "json_last_error_msg" | "gettype"
             | "str_word_count" | "chunk_split" => PhpType::Str,
@@ -265,7 +270,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "readlink" | "stream_get_contents" | "stream_copy_to_stream" | "clamp" => {
                 PhpType::Mixed
             }
-            "fopen" | "tmpfile" => PhpType::Union(vec![PhpType::stream_resource(), PhpType::Bool]),
+            "fopen" | "tmpfile" => PhpType::Union(vec![PhpType::stream_resource(), PhpType::False]),
             "strlen" | "ord" | "count" | "intval" | "abs" | "intdiv" | "printf"
             | "rand" | "time" | "fpassthru" | "linkinfo" => PhpType::Int,
             "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"
@@ -504,6 +509,25 @@ fn merge_array_literal_element_type_syntactic(existing: PhpType, next: PhpType) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::names::Name;
+    use crate::span::Span;
+
+    /// Verifies syntactic type inference treats eval as a runtime Mixed value.
+    #[test]
+    fn test_syntactic_eval_return_type_is_mixed() {
+        let expr = Expr {
+            kind: ExprKind::FunctionCall {
+                name: Name::unqualified("eval"),
+                args: vec![Expr {
+                    kind: ExprKind::StringLiteral("return 1;".to_string()),
+                    span: Span::dummy(),
+                }],
+            },
+            span: Span::dummy(),
+        };
+
+        assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
+    }
 
     /// Verifies syntactic indexed plus assoc array union type.
     #[test]

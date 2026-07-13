@@ -102,6 +102,22 @@ fn test_string_literal_brace_not_interpolation() {
     assert_eq!(out, "a{b}c");
 }
 
+/// Verifies the deprecated `${var}` interpolation form still evaluates the variable
+/// (PHP 8.x deprecates it but supports it).
+#[test]
+fn test_string_interpolation_deprecated_dollar_brace_var() {
+    let out = compile_and_run(r#"<?php $b = "B"; echo "a${b}c";"#);
+    assert_eq!(out, "aBc");
+}
+
+/// Verifies the deprecated `${arr[key]}` interpolation form evaluates the full array
+/// access expression inside braces.
+#[test]
+fn test_string_interpolation_deprecated_dollar_brace_array() {
+    let out = compile_and_run(r#"<?php $a = ["x" => "ok"]; echo "${a['x']}";"#);
+    assert_eq!(out, "ok");
+}
+
 /// Verifies `md5()` produces the correct hash for an empty string input.
 #[test]
 fn test_md5_empty() {

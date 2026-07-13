@@ -290,10 +290,8 @@ fn test_error_override_attribute_import_alias_is_recognized() {
 /// parent-method matching.
 #[test]
 fn test_override_attribute_qualified_lookalike_is_not_builtin() {
-    check_source(
-        "<?php class Solo { #[Foo\\Override] public function alone(): void {} }",
-    )
-    .expect("qualified user attribute should not enforce #[\\Override]");
+    check_source("<?php class Solo { #[Foo\\Override] public function alone(): void {} }")
+        .expect("qualified user attribute should not enforce #[\\Override]");
 }
 
 /// Verifies that a namespaced `#[Override]` attribute is NOT treated as the PHP 8.3
@@ -301,10 +299,8 @@ fn test_override_attribute_qualified_lookalike_is_not_builtin() {
 /// parent-method enforcement occurs.
 #[test]
 fn test_override_attribute_namespaced_unqualified_lookalike_is_not_builtin() {
-    check_source(
-        "<?php namespace N; class Solo { #[Override] public function alone(): void {} }",
-    )
-    .expect("namespaced user attribute should not enforce #[\\Override]");
+    check_source("<?php namespace N; class Solo { #[Override] public function alone(): void {} }")
+        .expect("namespaced user attribute should not enforce #[\\Override]");
 }
 
 /// Verifies that `#[Override]` on a static method with no matching parent static method
@@ -354,10 +350,7 @@ fn test_error_class_attribute_names_dynamic_argument() {
 /// argument".
 #[test]
 fn test_error_class_attribute_names_no_argument() {
-    expect_error(
-        "<?php class_attribute_names();",
-        "exactly 1 argument",
-    );
+    expect_error("<?php class_attribute_names();", "exactly 1 argument");
 }
 
 /// Verifies that `class_attribute_names()` with a non-string argument (e.g., integer)
@@ -406,10 +399,7 @@ fn test_error_class_attribute_args_dynamic_attr_argument() {
 /// two) reports "exactly 2 arguments".
 #[test]
 fn test_error_class_attribute_args_wrong_arity() {
-    expect_error(
-        "<?php class_attribute_args('Foo');",
-        "exactly 2 arguments",
-    );
+    expect_error("<?php class_attribute_args('Foo');", "exactly 2 arguments");
 }
 
 /// Verifies that `class_attribute_args()` with a non-string first argument reports
@@ -432,12 +422,13 @@ fn test_error_class_attribute_args_non_string_attr() {
     );
 }
 
-/// Verifies that `class_attribute_args()` on an attribute with named arguments reports
-/// "requested attribute uses argument metadata that is not supported yet".
+/// Verifies that `class_attribute_args()` on an attribute with an unmaterialized
+/// symbolic constant argument reports "requested attribute uses argument metadata
+/// that is not supported yet".
 #[test]
-fn test_error_class_attribute_named_args_are_not_silently_dropped() {
+fn test_error_class_attribute_const_args_are_not_silently_dropped() {
     expect_error(
-        "<?php #[Foo(name: \"Ada\")] class C {} class_attribute_args('C', 'Foo');",
+        "<?php #[Attribute(Attribute::TARGET_CLASS)] class MyAttr {} class_attribute_args('MyAttr', 'Attribute');",
         "requested attribute uses argument metadata that is not supported yet",
     );
 }
@@ -491,10 +482,7 @@ fn test_error_class_get_attributes_dynamic_argument() {
 /// argument".
 #[test]
 fn test_error_class_get_attributes_no_argument() {
-    expect_error(
-        "<?php class_get_attributes();",
-        "exactly 1 argument",
-    );
+    expect_error("<?php class_get_attributes();", "exactly 1 argument");
 }
 
 /// Verifies that `class_get_attributes()` with a non-string argument reports
@@ -544,6 +532,73 @@ fn test_error_reflection_attribute_constructor_is_private() {
     expect_error(
         "<?php $r = new ReflectionAttribute();",
         "Cannot access private constructor: ReflectionAttribute::__construct",
+    );
+}
+
+/// Verifies that `new ReflectionParameter()` rejects unknown parameter names.
+#[test]
+fn test_error_reflection_parameter_constructor_unknown_name() {
+    expect_error(
+        "<?php class C { public function f($a) {} } $r = new ReflectionParameter([C::class, 'f'], 'b');",
+        "parameter specified by name could not be found",
+    );
+}
+
+/// Verifies that `new ReflectionParameter()` rejects unknown function targets.
+#[test]
+fn test_error_reflection_parameter_constructor_unknown_function() {
+    expect_error(
+        "<?php $r = new ReflectionParameter('missing_reflect_function', 'a');",
+        "Function missing_reflect_function() does not exist",
+    );
+}
+
+/// Verifies that `new ReflectionParameter()` rejects dynamic function names
+/// because runtime function reflection lookup metadata is not available.
+#[test]
+fn test_error_reflection_parameter_constructor_dynamic_function_name() {
+    expect_error(
+        "<?php function reflected_function($a) {} $f = 'reflected_function'; $r = new ReflectionParameter($f, 'a');",
+        "requires a string literal function name",
+    );
+}
+
+/// Verifies that `new ReflectionParameter()` still rejects dynamic method names
+/// because runtime reflection lookup metadata is not available.
+#[test]
+fn test_error_reflection_parameter_constructor_dynamic_method_name() {
+    expect_error(
+        "<?php class C { public function f($a) {} } $m = 'f'; $r = new ReflectionParameter([C::class, $m], 'a');",
+        "requires a string literal method name",
+    );
+}
+
+/// Verifies that `new ReflectionFunction()` rejects unknown function targets.
+#[test]
+fn test_error_reflection_function_constructor_unknown_function() {
+    expect_error(
+        "<?php $r = new ReflectionFunction('missing_reflection_function');",
+        "Function missing_reflection_function() does not exist",
+    );
+}
+
+/// Verifies that `new ReflectionFunction()` rejects dynamic function names
+/// because runtime function reflection lookup metadata is not available.
+#[test]
+fn test_error_reflection_function_constructor_dynamic_function_name() {
+    expect_error(
+        "<?php function reflected_function($a) {} $f = 'reflected_function'; $r = new ReflectionFunction($f);",
+        "requires a string literal function name",
+    );
+}
+
+/// Verifies `ReflectionFunction` rejects attributes whose arguments cannot yet
+/// be materialized into `ReflectionAttribute` metadata.
+#[test]
+fn test_error_reflection_function_get_attributes_unsupported_arg_metadata() {
+    expect_error(
+        "<?php $name = 'x'; #[FuncAttr($name)] function reflected_function_attr() {} $r = new ReflectionFunction('reflected_function_attr');",
+        "function has attribute argument metadata that is not supported yet",
     );
 }
 
@@ -626,11 +681,11 @@ fn test_error_anonymous_class_missing_body() {
     );
 }
 
-/// Verifies that a nullsafe dynamic method call (`$obj?->$m()`) is rejected (not yet supported).
+/// Verifies that nullsafe dynamic method calls still reject named arguments.
 #[test]
-fn test_error_nullsafe_dynamic_method_call() {
+fn test_error_nullsafe_dynamic_method_call_named_arguments() {
     expect_error(
-        "<?php $obj?->$m();",
-        "Nullsafe dynamic method calls are not supported yet",
+        "<?php $obj?->$m(value: 1);",
+        "Named arguments are not supported in dynamic calls",
     );
 }

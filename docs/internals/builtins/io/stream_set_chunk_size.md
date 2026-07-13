@@ -2,7 +2,7 @@
 title: "stream_set_chunk_size() — internals"
 description: "Compiler internals for stream_set_chunk_size(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 212
+  order: 216
 ---
 
 ## `stream_set_chunk_size()` — internals
@@ -31,6 +31,11 @@ function stream_set_chunk_size(resource $stream, int $size): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_chunk_size.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_chunk_size.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

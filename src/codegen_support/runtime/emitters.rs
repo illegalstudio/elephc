@@ -12,6 +12,8 @@ use super::arrays;
 use super::buffers;
 use super::callables;
 use super::diagnostics;
+use super::eval_bridge;
+use super::eval_scope;
 use super::exceptions;
 use super::fibers;
 use super::generators;
@@ -154,6 +156,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     if features.regex {
         system::emit_preg_strip(emitter);
         system::emit_pcre_to_posix(emitter);
+        system::emit_mb_ereg_match(emitter);
         system::emit_preg_match(emitter);
         system::emit_preg_match_all(emitter);
         system::emit_preg_replace(emitter);
@@ -319,6 +322,16 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_write_stdout(emitter);
     arrays::emit_object_free_deep(emitter);
     arrays::emit_refcount(emitter);
+    if features.eval_bridge {
+        eval_bridge::emit_eval_bridge_runtime(emitter);
+    } else if features.eval_scope {
+        // Scope-only programs run compiled eval fragments natively: they need
+        // the self-contained value wrappers plus the native scope helpers
+        // (the magician staticlib supplies the scope symbols only in the full
+        // bridge configuration).
+        eval_bridge::emit_eval_bridge_runtime(emitter);
+        eval_scope::emit_eval_scope_runtime(emitter);
+    }
 
     // SPL runtime-managed containers
     spl::emit_doubly_linked_list_runtime(emitter);
@@ -476,6 +489,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_print_r_value(emitter);
     io::emit_print_r_indexed(emitter);
     io::emit_print_r_hash(emitter);
+    io::emit_pr_append(emitter);
+    io::emit_pr_write(emitter);
+    io::emit_pr_finish(emitter);
     io::emit_file_get_contents(emitter);
     io::emit_file_put_contents(emitter);
     io::emit_file(emitter);

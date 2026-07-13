@@ -578,12 +578,13 @@ checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
 name = "elephc"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "bitflags 2.13.0",
  "bzip2-rs",
  "elephc-crypto",
  "elephc-image",
+ "elephc-magician",
  "elephc-pdo",
  "elephc-phar",
  "elephc-tls",
@@ -623,6 +624,18 @@ dependencies = [
  "image",
  "kamadak-exif",
  "tiny-skia",
+]
+
+[[package]]
+name = "elephc-magician"
+version = "0.1.0"
+dependencies = [
+ "elephc-crypto",
+ "elephc-phar",
+ "flate2",
+ "inventory",
+ "libc",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -2587,6 +2600,12 @@ name = "unicode-properties"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
+
+[[package]]
+name = "unicode-segmentation"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "unicode-xid"

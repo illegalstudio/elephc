@@ -342,6 +342,21 @@ It now recognizes a useful subset of call expressions precisely, but it still do
 
 That conservatism is why the pass is safe to run by default: if an expression could have runtime behavior and elephc cannot prove otherwise with its local summaries, the optimizer prefers to keep it.
 
+### Eval as a dynamic barrier
+
+`eval()` is the strongest AST-level invalidation case. Its argument is evaluated
+normally, but the call itself is observable, may warn/throw/fatal, and can read,
+write, create, or unset caller-visible variables and dynamic symbols. Constant
+propagation therefore returns `Invalidation::All`; effect analysis must never
+classify eval as pure, even when its return value is unused.
+
+This remains true for a literal source string during AST optimization. A later
+target-independent planner can lower an eligible literal to EIR and omit the
+physical interpreter/scope barrier, but the AST optimizer does not speculate
+across that boundary. The separation keeps type and propagation facts safe
+while still allowing the backend to produce bridge-free native code. See
+[Eval Runtime Architecture](eval-runtime.md).
+
 ## Pipe operator optimizations
 
 PHP 8.5's pipe operator `|>` is implemented as a dedicated `ExprKind::Pipe`

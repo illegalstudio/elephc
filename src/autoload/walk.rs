@@ -558,6 +558,17 @@ fn collect_refs_expr(expr: &Expr, out: &mut HashSet<String>) {
                 collect_refs_expr(a, out);
             }
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            collect_refs_expr(object, out);
+            collect_refs_expr(method, out);
+            for a in args {
+                collect_refs_expr(a, out);
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => {
             collect_static_receiver(receiver, out);
             for a in args {

@@ -406,6 +406,17 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// Stores the current result register(s) directly into an addressable local slot.
+    pub(super) fn store_current_result_to_local(&mut self, slot: LocalSlotId) -> Result<()> {
+        let target_ty = self.local_php_type(slot)?;
+        if self.local_stores_ref_cell_pointer(slot) {
+            return self.store_current_result_to_ref_cell_local(slot, &target_ty);
+        }
+        let offset = self.local_offset(slot)?;
+        self.store_current_result_at_offset(&target_ty, offset);
+        Ok(())
+    }
+
     /// After an in-place hash/array mutation whose runtime helper returns the
     /// possibly-reallocated container pointer in `value`'s register (already
     /// persisted via `store_result_value`), writes that pointer back to global
@@ -481,6 +492,56 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// Stores the current result register(s) through a local ref-cell pointer slot.
+    fn store_current_result_to_ref_cell_local(
+        &mut self,
+        slot: LocalSlotId,
+        target_ty: &PhpType,
+    ) -> Result<()> {
+        reject_multiword_ref_cell_local(target_ty, "store")?;
+        let offset = self.local_offset(slot)?;
+        let pointer_reg = abi::symbol_scratch_reg(self.emitter);
+        abi::load_at_offset(self.emitter, pointer_reg, offset);
+        match target_ty.codegen_repr() {
+            PhpType::Str => {
+                let (ptr_reg, len_reg) = abi::string_result_regs(self.emitter);
+                abi::emit_store_to_address(self.emitter, ptr_reg, pointer_reg, 0);
+                abi::emit_store_to_address(self.emitter, len_reg, pointer_reg, 8);
+            }
+            PhpType::Float => {
+                abi::emit_store_to_address(
+                    self.emitter,
+                    abi::float_result_reg(self.emitter),
+                    pointer_reg,
+                    0,
+                );
+            }
+            PhpType::TaggedScalar => {
+                abi::emit_store_to_address(
+                    self.emitter,
+                    abi::int_result_reg(self.emitter),
+                    pointer_reg,
+                    0,
+                );
+                abi::emit_store_to_address(
+                    self.emitter,
+                    crate::codegen::sentinels::tagged_scalar_tag_reg(self.emitter),
+                    pointer_reg,
+                    8,
+                );
+            }
+            _ => {
+                abi::emit_store_to_address(
+                    self.emitter,
+                    abi::int_result_reg(self.emitter),
+                    pointer_reg,
+                    0,
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Stores the current result register(s) into a frame offset.
     fn store_current_result_at_offset(&mut self, ty: &PhpType, offset: usize) {
         match &ty.codegen_repr() {
@@ -549,6 +610,9 @@ impl<'a> FunctionContext<'a> {
                 | Op::Call
                 | Op::FunctionVariantCall
                 | Op::BuiltinCall
+                | Op::EvalFunctionCall
+                | Op::EvalFunctionCallArray
+                | Op::EvalConstantFetch
                 | Op::RuntimeCall
                 | Op::ExternCall
                 | Op::MethodCall

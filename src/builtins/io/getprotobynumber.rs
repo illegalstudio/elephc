@@ -30,7 +30,7 @@ builtin! {
 
 /// Returns `Union(Str, Bool)` reflecting PHP's false-on-failure return.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool]))
+    Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::False]))
 }
 
 /// Lowers a `getprotobynumber` call by dispatching to the shared io emitter.

@@ -80,6 +80,7 @@ fn type_refs_pdo(type_expr: &TypeExpr) -> bool {
         TypeExpr::Int
         | TypeExpr::Float
         | TypeExpr::Bool
+        | TypeExpr::False
         | TypeExpr::Str
         | TypeExpr::Void
         | TypeExpr::Never
@@ -184,6 +185,7 @@ fn expr_refs_pdo(expr: &Expr) -> bool {
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
@@ -271,6 +273,11 @@ fn expr_refs_pdo(expr: &Expr) -> bool {
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_refs_pdo(object) || args.iter().any(expr_refs_pdo)
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => expr_refs_pdo(object) || expr_refs_pdo(method) || args.iter().any(expr_refs_pdo),
         ExprKind::StaticMethodCall { receiver, args, .. } => {
             receiver_refs_pdo(receiver) || args.iter().any(expr_refs_pdo)
         }

@@ -123,6 +123,7 @@ fn is_destructor_free(php_type: &PhpType) -> bool {
         | PhpType::Float
         | PhpType::Str
         | PhpType::Bool
+        | PhpType::False
         | PhpType::Void
         | PhpType::Never
         | PhpType::Pointer(_)

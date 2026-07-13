@@ -2,7 +2,7 @@
 title: "realpath_cache_get() — internals"
 description: "Compiler internals for realpath_cache_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 140
+  order: 144
 ---
 
 ## `realpath_cache_get()` — internals
@@ -31,6 +31,11 @@ function realpath_cache_get(): array
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_get.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_get.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

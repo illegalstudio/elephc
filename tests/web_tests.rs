@@ -850,6 +850,47 @@ fn web_max_requests_recycles_and_keeps_serving() {
     let _ = child.wait();
 }
 
+/// Regression for issue #516 (caveat 2): planned --max-requests recycles used to
+/// count toward the master's fast-death crash-loop guard, so sustained traffic
+/// recycled a worker >10 times in under a second each and the master printed
+/// "giving up" and shut the whole server down. Drive enough requests through a
+/// tiny quota to force well past MAX_FAST_DEATHS (10) recycles and assert the
+/// master is still alive and serving at the end.
+#[test]
+fn web_max_requests_survives_sustained_recycle_churn() {
+    let dir = make_test_dir("web_maxreq_churn");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1", "--max-requests", "2"])
+        .spawn()
+        .expect("spawn");
+    wait_until_ready(&addr);
+    // 30 requests with a quota of 2 forces ~15 recycles (> MAX_FAST_DEATHS).
+    // Recycling is not graceful, so tolerate transient failures at recycle
+    // boundaries — but every logical request must eventually succeed.
+    for i in 0..30 {
+        let mut ok = false;
+        for _ in 0..40 {
+            if try_http_get(&addr, "/").ends_with("ok") {
+                ok = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(ok, "server gave up during recycle churn at request {}", i + 1);
+    }
+    // The master must still be running (it must NOT have printed "giving up"
+    // and exited after 10 fast recycles).
+    assert!(
+        child.try_wait().expect("try_wait").is_none(),
+        "master exited during sustained --max-requests recycle churn"
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Verifies an uncaught exception in the handler returns HTTP 500 instead of
 /// crashing the worker / dropping the connection (B1), and the server keeps
 /// serving other requests afterward.

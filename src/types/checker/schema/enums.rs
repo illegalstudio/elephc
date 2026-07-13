@@ -16,22 +16,8 @@ use crate::parser::ast::{ClassMethod, ExprKind, Visibility};
 use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, FunctionSig, PhpType};
 
 use super::super::Checker;
+use super::classes::{collect_attribute_args, collect_attribute_names};
 use super::validation::build_method_sig;
-
-/// Clones an enum method with `self`/`static` type hints rewritten to the enum itself. Enums
-/// have no parent, so `parent` is left unresolved (and rejected later if it surfaces).
-fn substitute_enum_relative_types(method: &ClassMethod, enum_name: &str) -> ClassMethod {
-    let mut method = method.clone();
-    for (_, type_ann, _, _) in method.params.iter_mut() {
-        if let Some(ty) = type_ann.as_mut() {
-            *ty = ty.substitute_relative_class_types(enum_name, None);
-        }
-    }
-    if let Some(return_type) = method.return_type.as_mut() {
-        *return_type = return_type.substitute_relative_class_types(enum_name, None);
-    }
-    method
-}
 
 /// Propagates concrete return types from overrides to their abstract parent declarations.
 ///
@@ -116,6 +102,7 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
 /// - `backing_type`: optional `TypeExpr` for backed enums
 /// - `cases`: parsed enum case declarations
 /// - `span`: source location for error reporting
+/// - `used_traits` / `trait_aliases`: flattened direct enum trait-use metadata
 /// - `checker`: type checker state (classes, interfaces, enums, resolve_type_expr)
 /// - `next_class_id`: incrementing class ID counter
 ///
@@ -133,6 +120,8 @@ pub(crate) fn build_enum_info(
     implements: &[crate::names::Name],
     user_methods: &[crate::parser::ast::ClassMethod],
     user_constants: &[crate::parser::ast::ClassConst],
+    used_traits: &[String],
+    trait_aliases: &[(String, String)],
     span: crate::span::Span,
     checker: &mut Checker,
     next_class_id: &mut u64,
@@ -239,6 +228,8 @@ pub(crate) fn build_enum_info(
         enum_cases.push(EnumCaseInfo {
             name: case.name.clone(),
             value,
+            attribute_names: collect_attribute_names(&case.attributes),
+            attribute_args: collect_attribute_args(&case.attributes),
         });
     }
 
@@ -249,6 +240,9 @@ pub(crate) fn build_enum_info(
         implements,
         user_methods,
         user_constants,
+        used_traits,
+        trait_aliases,
+        span,
         checker,
         next_class_id,
     )
@@ -258,8 +252,9 @@ pub(crate) fn build_enum_info(
 ///
 /// Used by parsed enum declarations and builtin enum injection after case/backing
 /// validation has already happened. Synthesizes the static enum methods exposed
-/// by PHP: all enums get `cases()`, while backed enums also get `from()` and
-/// `tryFrom()`.
+/// by PHP, and preserves flattened trait-use metadata for reflection/runtime
+/// class-like queries. All enums get `cases()`, while backed enums also get
+/// `from()` and `tryFrom()`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_enum_metadata(
     name: &str,
@@ -268,6 +263,9 @@ pub(crate) fn insert_enum_metadata(
     implements: &[crate::names::Name],
     user_methods: &[ClassMethod],
     user_constants: &[crate::parser::ast::ClassConst],
+    used_traits: &[String],
+    trait_aliases: &[(String, String)],
+    declaration_span: crate::span::Span,
     checker: &mut Checker,
     next_class_id: &mut u64,
 ) -> Result<(), CompileError> {
@@ -277,30 +275,43 @@ pub(crate) fn insert_enum_metadata(
     let mut defaults = Vec::new();
     let mut property_visibilities = HashMap::new();
     let mut declared_properties = HashSet::new();
+    let mut property_declared_slots = Vec::new();
     let final_properties = HashSet::new();
     let mut readonly_properties = HashSet::new();
     let reference_properties = HashSet::new();
+    let mut property_reference_slots = Vec::new();
     if let Some(backing_ty) = &backing_type {
-        properties.push(("value".to_string(), backing_ty.clone()));
-        property_offsets.insert("value".to_string(), 8);
-        property_declaring_classes.insert("value".to_string(), name.to_string());
-        defaults.push(None);
-        property_visibilities.insert("value".to_string(), Visibility::Public);
-        declared_properties.insert("value".to_string());
-        readonly_properties.insert("value".to_string());
+        push_enum_readonly_property(
+            "value",
+            backing_ty.clone(),
+            name,
+            &mut properties,
+            &mut property_offsets,
+            &mut property_declaring_classes,
+            &mut defaults,
+            &mut property_visibilities,
+            &mut declared_properties,
+            &mut property_declared_slots,
+            &mut readonly_properties,
+            &mut property_reference_slots,
+        );
     }
-    // Every enum case (pure or backed) exposes a readonly public `name` string holding the case
-    // identifier, mirroring PHP's `UnitEnum::$name`. Append it after any backing `value` so backed
-    // enums keep `value` at offset 8; the offset matches the singleton property slot layout used by
-    // EIR codegen (`8 + index * 16`).
-    let name_offset = 8 + properties.len() * 16;
-    properties.push(("name".to_string(), PhpType::Str));
-    property_offsets.insert("name".to_string(), name_offset);
-    property_declaring_classes.insert("name".to_string(), name.to_string());
-    defaults.push(None);
-    property_visibilities.insert("name".to_string(), Visibility::Public);
-    declared_properties.insert("name".to_string());
-    readonly_properties.insert("name".to_string());
+    // Append `name` after any backing `value` so backed enums keep `value` at
+    // offset 8, matching singleton initialization in codegen.
+    push_enum_readonly_property(
+        "name",
+        PhpType::Str,
+        name,
+        &mut properties,
+        &mut property_offsets,
+        &mut property_declaring_classes,
+        &mut defaults,
+        &mut property_visibilities,
+        &mut declared_properties,
+        &mut property_declared_slots,
+        &mut readonly_properties,
+        &mut property_reference_slots,
+    );
 
     let mut static_methods = HashMap::new();
     let mut static_method_visibilities = HashMap::new();
@@ -310,6 +321,8 @@ pub(crate) fn insert_enum_metadata(
         "cases".to_string(),
         FunctionSig {
             params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
             defaults: Vec::new(),
             return_type: PhpType::Array(Box::new(PhpType::Object(name.to_string()))),
             declared_return: true,
@@ -329,6 +342,8 @@ pub(crate) fn insert_enum_metadata(
                 method_name.to_string(),
                 FunctionSig {
                     params: vec![("value".to_string(), backing_ty.clone())],
+                    param_type_exprs: vec![None],
+                    param_attributes: Vec::new(),
                     defaults: vec![None],
                     return_type: if method_name == "from" {
                         PhpType::Object(name.to_string())
@@ -364,7 +379,11 @@ pub(crate) fn insert_enum_metadata(
     let mut method_declaring_classes = HashMap::new();
     let mut method_impl_classes = HashMap::new();
     for method in user_methods {
-        let method = substitute_enum_relative_types(method, name);
+        // Clone + rewrite self/static on this enum method (enums have no parent).
+        // Must happen before build_method_sig because bare "self" is rejected later.
+        let mut method = method.clone();
+        method.substitute_relative_class_types(name, None);
+
         let sig = build_method_sig(checker, &method)?;
         let key = php_symbol_key(&method.name);
         if method.is_static {
@@ -385,8 +404,28 @@ pub(crate) fn insert_enum_metadata(
     // User-declared enum constants. Values are kept as their parsed expressions, matching the
     // class-constant representation.
     let mut constants = HashMap::new();
+    let mut constant_visibilities = HashMap::new();
+    let mut final_constants = HashSet::new();
+    let mut constant_attribute_names = HashMap::new();
+    let mut constant_attribute_args = HashMap::new();
     for constant in user_constants {
         constants.insert(constant.name.clone(), constant.value.clone());
+        constant_visibilities.insert(constant.name.clone(), constant.visibility.clone());
+        if constant.is_final {
+            final_constants.insert(constant.name.clone());
+        }
+        constant_attribute_names.insert(
+            constant.name.clone(),
+            collect_attribute_names(&constant.attributes),
+        );
+        constant_attribute_args.insert(
+            constant.name.clone(),
+            collect_attribute_args(&constant.attributes),
+        );
+    }
+    for case in &enum_cases {
+        constant_attribute_names.insert(case.name.clone(), case.attribute_names.clone());
+        constant_attribute_args.insert(case.name.clone(), case.attribute_args.clone());
     }
 
     let interfaces: Vec<String> = implements
@@ -398,19 +437,25 @@ pub(crate) fn insert_enum_metadata(
         name.to_string(),
         ClassInfo {
             class_id: *next_class_id,
+            declaration_span,
             parent: None,
             is_abstract: false,
             is_final: true,
             is_readonly_class: true,
             allow_dynamic_properties: false,
             constants,
+            constant_visibilities,
+            final_constants,
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
             method_attribute_names: HashMap::new(),
             method_attribute_args: HashMap::new(),
             property_attribute_names: HashMap::new(),
             property_attribute_args: HashMap::new(),
-            used_traits: Vec::new(),
+            constant_attribute_names,
+            constant_attribute_args,
+            used_traits: used_traits.to_vec(),
+            trait_aliases: trait_aliases.to_vec(),
             properties,
             property_offsets,
             property_declaring_classes,
@@ -418,10 +463,13 @@ pub(crate) fn insert_enum_metadata(
             property_visibilities,
             property_set_visibilities: HashMap::new(),
             declared_properties,
+            property_declared_slots,
             final_properties,
             readonly_properties,
             reference_properties,
             owned_reference_properties: HashSet::new(),
+            promoted_properties: HashSet::new(),
+            property_reference_slots,
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
             static_properties: Vec::new(),
@@ -460,4 +508,32 @@ pub(crate) fn insert_enum_metadata(
     );
     *next_class_id += 1;
     Ok(())
+}
+
+/// Appends one synthetic public readonly enum case property to class metadata.
+fn push_enum_readonly_property(
+    property: &str,
+    php_type: PhpType,
+    enum_name: &str,
+    properties: &mut Vec<(String, PhpType)>,
+    property_offsets: &mut HashMap<String, usize>,
+    property_declaring_classes: &mut HashMap<String, String>,
+    defaults: &mut Vec<Option<crate::parser::ast::Expr>>,
+    property_visibilities: &mut HashMap<String, Visibility>,
+    declared_properties: &mut HashSet<String>,
+    property_declared_slots: &mut Vec<bool>,
+    readonly_properties: &mut HashSet<String>,
+    property_reference_slots: &mut Vec<bool>,
+) {
+    let offset = 8 + properties.len() * 16;
+    let property = property.to_string();
+    properties.push((property.clone(), php_type));
+    property_offsets.insert(property.clone(), offset);
+    property_declaring_classes.insert(property.clone(), enum_name.to_string());
+    defaults.push(None);
+    property_visibilities.insert(property.clone(), Visibility::Public);
+    declared_properties.insert(property.clone());
+    property_declared_slots.push(true);
+    readonly_properties.insert(property);
+    property_reference_slots.push(false);
 }

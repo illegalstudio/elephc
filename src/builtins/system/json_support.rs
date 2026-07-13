@@ -27,6 +27,7 @@ pub(crate) fn is_json_string_arg_type(ty: &PhpType) -> bool {
         | PhpType::Int
         | PhpType::Float
         | PhpType::Bool
+        | PhpType::False
         | PhpType::Void
         | PhpType::Mixed => true,
         PhpType::Union(types) => types.iter().all(is_json_string_arg_type),
@@ -39,6 +40,7 @@ pub(crate) fn is_json_string_arg_type(ty: &PhpType) -> bool {
 pub(crate) fn is_json_associative_arg_type(ty: &PhpType) -> bool {
     match ty {
         PhpType::Bool
+        | PhpType::False
         | PhpType::Int
         | PhpType::Float
         | PhpType::Str

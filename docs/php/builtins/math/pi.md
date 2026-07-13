@@ -2,7 +2,7 @@
 title: "pi()"
 description: "Gets value of pi."
 sidebar:
-  order: 260
+  order: 264
 ---
 
 ## pi()
@@ -16,6 +16,11 @@ Gets value of pi.
 **Parameters**: none.
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/pi.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/pi.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

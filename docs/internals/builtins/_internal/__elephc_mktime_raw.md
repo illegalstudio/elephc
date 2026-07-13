@@ -2,7 +2,7 @@
 title: "__elephc_mktime_raw() — internals"
 description: "Compiler internals for __elephc_mktime_raw(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 433
+  order: 438
 ---
 
 ## `__elephc_mktime_raw()` — internals
@@ -35,6 +35,10 @@ function __elephc_mktime_raw(int $hour, int $minute, int $second, int $month, in
 ## What the type checker enforces
 
 - **Arity**: takes exactly 6 arguments.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

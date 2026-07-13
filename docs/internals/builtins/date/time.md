@@ -2,7 +2,7 @@
 title: "time() — internals"
 description: "Compiler internals for time(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 97
+  order: 101
 ---
 
 ## `time()` — internals
@@ -32,6 +32,11 @@ function time(): int
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/time.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/time.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

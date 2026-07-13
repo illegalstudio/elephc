@@ -11,13 +11,16 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, Instruction, IrType};
+use crate::ir::{Immediate, Instruction, IrType, ValueId};
+use crate::names::method_symbol;
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
 use super::{
-    expect_operand, load_value_to_first_int_arg, lower_runtime_object_method_call, predicates,
-    store_if_result, strings,
+    direct_call_stack_pad_bytes, emit_dynamic_instance_method_call,
+    emit_mixed_method_class_dispatch, expect_operand, load_value_to_first_int_arg,
+    lower_runtime_object_method_call, materialize_method_call_args_with_receiver_reg_and_refs,
+    mixed_method_candidates, predicates, store_if_result, strings,
 };
 use crate::codegen::{CodegenIrError, Result};
 
@@ -160,7 +163,10 @@ fn lower_cast_to_float(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
 }
 
 /// Lowers an explicit cast to PHP string for concrete scalar operands.
-fn lower_cast_to_string(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(super) fn lower_cast_to_string(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let raw_ty = ctx.raw_value_php_type(value)?;
     if matches!(raw_ty, PhpType::Resource(_)) {
@@ -178,8 +184,7 @@ fn lower_cast_to_string(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             strings::lower_int_like_to_string(ctx, inst)
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            load_value_to_first_int_arg(ctx, value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            emit_mixed_string_context_result(ctx, value)?;
             store_if_result(ctx, inst)
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
@@ -190,6 +195,211 @@ fn lower_cast_to_string(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             "string cast for PHP type {:?}",
             other
         ))),
+    }
+}
+
+/// Leaves a string result for a boxed Mixed value, dispatching objects through `__toString()`.
+pub(super) fn emit_mixed_string_context_result(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    emit_mixed_string_context(ctx, value, MixedStringContextMode::Result)
+}
+
+/// Writes a boxed Mixed value to stdout, dispatching objects through `__toString()`.
+pub(super) fn emit_mixed_string_context_stdout(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    emit_mixed_string_context(ctx, value, MixedStringContextMode::Stdout)
+}
+
+/// Describes whether a Mixed string context should leave a string result or write it.
+enum MixedStringContextMode {
+    Result,
+    Stdout,
+}
+
+/// Handles PHP string contexts for boxed Mixed values with an object-aware branch.
+fn emit_mixed_string_context(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    mode: MixedStringContextMode,
+) -> Result<()> {
+    let candidates = mixed_method_candidates(ctx, "__toString", 1)?;
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let object_label = ctx.next_label("mixed_string_object");
+    let no_match_label = ctx.next_label("mixed_string_no_match");
+    let done_label = ctx.next_label("mixed_string_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_string_{}",
+                super::label_fragment(&candidate.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_result(value)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_if_unboxed_mixed_object(ctx, &object_label);
+    emit_mixed_string_scalar_fallback(ctx, &mode)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&object_label);
+    discard_preserved_mixed_pointer(ctx);
+    move_unboxed_mixed_object_payload(ctx, receiver_reg);
+    emit_mixed_method_class_dispatch(
+        ctx,
+        receiver_reg,
+        &candidates,
+        &match_labels,
+        &no_match_label,
+    );
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let return_ty = emit_mixed_tostring_candidate_call(ctx, value, receiver_reg, candidate)?;
+        coerce_tostring_return_to_string_result(ctx, &return_ty)?;
+        if matches!(mode, MixedStringContextMode::Stdout) {
+            abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
+        }
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&no_match_label);
+    emit_mixed_missing_tostring_fatal(ctx);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Branches to the object path when `__rt_mixed_unbox` returned an object tag.
+fn emit_branch_if_unboxed_mixed_object(ctx: &mut FunctionContext<'_>, object_label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // check whether the boxed Mixed value contains an object
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // dispatch object string contexts through __toString
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // check whether the boxed Mixed value contains an object
+            ctx.emitter.instruction(&format!("je {}", object_label));           // dispatch object string contexts through __toString
+        }
+    }
+}
+
+/// Runs the existing scalar Mixed string behavior after restoring the original box.
+fn emit_mixed_string_scalar_fallback(
+    ctx: &mut FunctionContext<'_>,
+    mode: &MixedStringContextMode,
+) -> Result<()> {
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match mode {
+        MixedStringContextMode::Result => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+        }
+        MixedStringContextMode::Stdout => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_write_stdout");
+        }
+    }
+    Ok(())
+}
+
+/// Discards the saved boxed Mixed pointer once the object branch no longer needs it.
+fn discard_preserved_mixed_pointer(ctx: &mut FunctionContext<'_>) {
+    abi::emit_pop_reg(ctx.emitter, abi::temp_int_reg(ctx.emitter.target));
+}
+
+/// Moves the unboxed object payload into the callee-saved receiver dispatch register.
+fn move_unboxed_mixed_object_payload(ctx: &mut FunctionContext<'_>, receiver_reg: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov {}, x1", receiver_reg));      // preserve the unboxed object pointer for __toString dispatch
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, rdi", receiver_reg));     // preserve the unboxed object pointer for __toString dispatch
+        }
+    }
+}
+
+/// Emits one concrete `__toString()` candidate call for a boxed Mixed object.
+fn emit_mixed_tostring_candidate_call(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    receiver_reg: &str,
+    candidate: &super::MixedMethodCandidate,
+) -> Result<PhpType> {
+    let receiver_ty = PhpType::Object(candidate.class_name.clone());
+    let mut param_types = Vec::with_capacity(candidate.target.params.len() + 1);
+    param_types.push(receiver_ty.clone());
+    param_types.extend(candidate.target.params.iter().map(|param| param.codegen_repr()));
+    let mut ref_params = Vec::with_capacity(candidate.target.ref_params.len() + 1);
+    ref_params.push(false);
+    ref_params.extend(candidate.target.ref_params.iter().copied());
+    let operands = [value];
+    let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
+        ctx,
+        receiver_reg,
+        &receiver_ty,
+        &operands,
+        &param_types,
+        &ref_params,
+    )?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    if let Some(slot) = candidate.target.dynamic_slot {
+        emit_dynamic_instance_method_call(ctx, slot);
+    } else {
+        abi::emit_call_label(
+            ctx.emitter,
+            &method_symbol(&candidate.target.impl_class, &candidate.target.method_key),
+        );
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    Ok(candidate.target.return_ty.clone())
+}
+
+/// Normalizes a `__toString()` return into a string result pair.
+fn coerce_tostring_return_to_string_result(
+    ctx: &mut FunctionContext<'_>,
+    return_ty: &PhpType,
+) -> Result<()> {
+    match return_ty.codegen_repr() {
+        PhpType::Str => Ok(()),
+        PhpType::Mixed | PhpType::Union(_) => {
+            super::cast_loaded_mixed_pointer_to_result(ctx, &PhpType::Str)
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "__toString return value for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Emits a fatal when a boxed Mixed object has no matching public `__toString()`.
+fn emit_mixed_missing_tostring_fatal(ctx: &mut FunctionContext<'_>) {
+    let (label, len) = ctx
+        .data
+        .add_string(b"Fatal error: Object could not be converted to string\n");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #2");                              // write the object string-cast fatal to stderr
+            ctx.emitter.adrp("x1", &label);
+            ctx.emitter.add_lo12("x1", "x1", &label);
+            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the object string-cast fatal byte length
+            ctx.emitter.syscall(4);
+            abi::emit_exit(ctx.emitter, 1);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov edi, 2");                              // write the object string-cast fatal to Linux stderr
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            ctx.emitter.instruction(&format!("mov edx, {}", len));              // pass the object string-cast fatal byte length
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the object string-cast fatal before exiting
+            abi::emit_exit(ctx.emitter, 1);
+        }
     }
 }
 

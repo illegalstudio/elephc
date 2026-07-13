@@ -33,7 +33,7 @@ builtin! {
 ///
 /// The registry pre-infers arguments before calling this hook.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(PhpType::Union(vec![PhpType::Str, PhpType::Bool]))
+    Ok(PhpType::Union(vec![PhpType::Str, PhpType::False]))
 }
 
 /// Lowers a `realpath` call by dispatching to the shared io emitter.

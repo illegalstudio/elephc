@@ -2,7 +2,7 @@
 title: "addslashes()"
 description: "Adds backslashes before characters that need to be escaped."
 sidebar:
-  order: 338
+  order: 343
 ---
 
 ## addslashes()
@@ -17,6 +17,11 @@ Adds backslashes before characters that need to be escaped.
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/addslashes.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/addslashes.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

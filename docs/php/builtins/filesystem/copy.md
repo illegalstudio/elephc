@@ -2,7 +2,7 @@
 title: "copy()"
 description: "Copies a file."
 sidebar:
-  order: 104
+  order: 108
 ---
 
 ## copy()
@@ -18,6 +18,11 @@ Copies a file.
 - `$to` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/copy.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/copy.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

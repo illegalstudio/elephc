@@ -33,7 +33,7 @@ builtin! {
 /// Returns `Union(Int, Bool)` reflecting the byte count on success or `false` on failure.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
-    Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::Bool]))
+    Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::False]))
 }
 
 /// Lowers a `readfile` call by dispatching to the shared io emitter.

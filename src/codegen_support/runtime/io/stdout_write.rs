@@ -45,6 +45,17 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool) {
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address (the capture branch clobbers x30)
     emitter.instruction("mov x29, sp");                                         // establish a frame pointer for the call
 
+    // -- print_r return-mode capture: when _print_r_mode is set, append the
+    //    bytes to the capture buffer instead of writing to stdout. The flag is
+    //    only ever non-zero during an active print_r($value, true) rendering,
+    //    so non-print_r output is unaffected. --
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_print_r_mode");   // materialize the address of the print_r capture-mode flag
+    emitter.instruction("ldr x9, [x9]");                                        // load the print_r capture-mode flag
+    emitter.instruction("cbz x9, __rt_stdout_write_pr_inactive");               // capture disabled — fall through to the web/syscall path
+    emitter.instruction("bl __rt_pr_append");                                   // capture enabled — append the bytes (ptr=x0, len=x1) to the capture buffer
+    emitter.instruction("b __rt_stdout_write_done");                            // capture handled the bytes — skip the syscall path
+    emitter.label("__rt_stdout_write_pr_inactive");
+
     if web {
         // -- web build: route through elephc_web_write when capture is enabled --
         let capture_symbol = emitter.target.extern_symbol("elephc_web_capture");
@@ -81,6 +92,16 @@ fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool) {
     // -- set up a minimal frame; after `push rbp` rsp is 16-byte aligned for the call --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer and align rsp for the capture-branch call
     emitter.instruction("mov rbp, rsp");                                        // establish a frame base
+
+    // -- print_r return-mode capture: when _print_r_mode is set, append the
+    //    bytes to the capture buffer instead of writing to stdout. --
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_print_r_mode");  // materialize the address of the print_r capture-mode flag
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the print_r capture-mode flag
+    emitter.instruction("test r11, r11");                                       // is print_r return-mode capture enabled?
+    emitter.instruction("jz __rt_stdout_write_pr_inactive");                    // capture disabled — fall through to the web/syscall path
+    emitter.instruction("call __rt_pr_append");                                 // capture enabled — append the bytes (ptr=rdi, len=rsi) to the capture buffer
+    emitter.instruction("jmp __rt_stdout_write_done");                          // capture handled the bytes — skip the syscall path
+    emitter.label("__rt_stdout_write_pr_inactive");
 
     if web {
         // -- web build: route through elephc_web_write when capture is enabled --

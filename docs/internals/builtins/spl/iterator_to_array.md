@@ -2,7 +2,7 @@
 title: "iterator_to_array() — internals"
 description: "Compiler internals for iterator_to_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 322
+  order: 327
 ---
 
 ## `iterator_to_array()` — internals
@@ -31,6 +31,11 @@ function iterator_to_array(traversable $iterator, bool $preserve_keys = true): a
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/iterator_to_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/iterator_to_array.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

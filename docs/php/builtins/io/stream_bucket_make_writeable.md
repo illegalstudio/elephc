@@ -2,7 +2,7 @@
 title: "stream_bucket_make_writeable()"
 description: "Returns a bucket object from the brigade for use in a stream filter."
 sidebar:
-  order: 189
+  order: 193
 ---
 
 ## stream_bucket_make_writeable()
@@ -17,6 +17,11 @@ Returns a bucket object from the brigade for use in a stream filter.
 - `$brigade` (`mixed`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_make_writeable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_make_writeable.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

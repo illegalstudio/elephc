@@ -12,8 +12,8 @@ use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::names::{property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{
-    ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, PropertyHooks, Stmt, StmtKind, TraitUse,
-    TypeExpr, Visibility,
+    ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind, PropertyHooks, Stmt,
+    StmtKind, TraitUse, TypeExpr, Visibility,
 };
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
@@ -228,8 +228,8 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 ));
             }
             *pos += 1; // consume `const`
-            // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
-            // which is reserved for the `Foo::class` name fetch.
+                       // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
+                       // which is reserved for the `Foo::class` name fetch.
             let const_name = match tokens.get(*pos).map(|(t, _)| t) {
                 Some(Token::Class) => {
                     return Err(CompileError::new(
@@ -324,7 +324,10 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             if modifiers.is_abstract && default.is_some() {
                 return Err(CompileError::new(
                     member_span,
-                    &format!("Abstract property ${} cannot have a default value", prop_name),
+                    &format!(
+                        "Abstract property ${} cannot have a default value",
+                        prop_name
+                    ),
                 ));
             }
             if modifiers.is_abstract && !hooks.any() {
@@ -394,6 +397,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 is_static: modifiers.is_static,
                 is_abstract: modifiers.is_abstract,
                 by_ref: false,
+                is_promoted: false,
                 default,
                 span: member_span,
                 attributes: member_attributes,
@@ -421,7 +425,10 @@ fn append_promoted_properties(
     promoted_properties: Vec<ClassProperty>,
 ) -> Result<(), CompileError> {
     for promoted in promoted_properties {
-        if properties.iter().any(|property| property.name == promoted.name) {
+        if properties
+            .iter()
+            .any(|property| property.name == promoted.name)
+        {
             return Err(CompileError::new(
                 promoted.span,
                 &format!("Cannot redeclare promoted property ${}", promoted.name),
@@ -583,8 +590,15 @@ fn parse_class_like_method(
         &Token::LParen,
         "Expected '(' after method name",
     )?;
-    let (params, variadic, variadic_type, promoted_properties, promoted_assignments) =
-        parse_method_params(tokens, pos, span, &method_name)?;
+    let (
+        params,
+        param_attributes,
+        variadic,
+        variadic_by_ref,
+        variadic_type,
+        promoted_properties,
+        promoted_assignments,
+    ) = parse_method_params(tokens, pos, span, &method_name)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')'")?;
     // Parse optional return type: `: TypeExpr`
     let return_type = if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
@@ -618,22 +632,27 @@ fn parse_class_like_method(
     } else {
         promoted_assignments.into_iter().chain(body).collect()
     };
-    Ok((ClassMethod {
-        name: method_name,
-        visibility,
-        is_static,
-        is_abstract,
-        is_final,
-        has_body,
-        params,
-        variadic,
-        variadic_type,
-        return_type,
-        by_ref_return,
-        body,
-        span,
-        attributes: Vec::new(),
-    }, promoted_properties))
+    Ok((
+        ClassMethod {
+            name: method_name,
+            visibility,
+            is_static,
+            is_abstract,
+            is_final,
+            has_body,
+            params,
+            param_attributes,
+            variadic,
+            variadic_by_ref,
+            variadic_type,
+            return_type,
+            by_ref_return,
+            body,
+            span,
+            attributes: Vec::new(),
+        },
+        promoted_properties,
+    ))
 }
 
 /// Parses the body of an `interface` declaration.
@@ -663,8 +682,8 @@ fn parse_interface_body(
         }
         if tokens[*pos].0 == Token::Const {
             *pos += 1; // consume `const`
-            // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
-            // which is reserved for the `Foo::class` name fetch.
+                       // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
+                       // which is reserved for the `Foo::class` name fetch.
             let const_name = match tokens.get(*pos).map(|(t, _)| t) {
                 Some(Token::Class) => {
                     return Err(CompileError::new(
@@ -730,7 +749,10 @@ fn parse_interface_body(
             }
             let prop_name = prop_name.clone();
             *pos += 1;
-            if properties.iter().any(|property: &ClassProperty| property.name == prop_name) {
+            if properties
+                .iter()
+                .any(|property: &ClassProperty| property.name == prop_name)
+            {
                 return Err(CompileError::new(
                     member_span,
                     &format!("Cannot redeclare interface property ${}", prop_name),
@@ -779,6 +801,7 @@ fn parse_interface_body(
                 is_static: false,
                 is_abstract: true,
                 by_ref: false,
+                is_promoted: false,
                 default: None,
                 span: member_span,
                 attributes: member_attributes,
@@ -855,12 +878,7 @@ fn parse_property_hooks(
         };
         let hook_name = match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Identifier(name)) => name.clone(),
-            _ => {
-                return Err(CompileError::new(
-                    hook_span,
-                    "Expected property hook name",
-                ))
-            }
+            _ => return Err(CompileError::new(hook_span, "Expected property hook name")),
         };
         *pos += 1;
         let is_get = hook_name.eq_ignore_ascii_case("get");
@@ -913,10 +931,14 @@ fn parse_property_hooks(
                 if is_get {
                     Some(vec![Stmt::new(StmtKind::Return(Some(expr)), hook_span)])
                 } else {
-                    return Err(CompileError::new(
+                    Some(vec![Stmt::new(
+                        StmtKind::PropertyAssign {
+                            object: Box::new(Expr::new(ExprKind::This, hook_span)),
+                            property: prop_name.to_string(),
+                            value: expr,
+                        },
                         hook_span,
-                        "Short `set => expr` hooks require a backed property; use a block `set { ... }`",
-                    ));
+                    )])
                 }
             }
             Some(Token::LBrace) => Some(parse_block(tokens, pos)?),
@@ -943,7 +965,9 @@ fn parse_property_hooks(
                     is_final: false,
                     has_body: true,
                     params: Vec::new(),
+                    param_attributes: Vec::new(),
                     variadic: None,
+                    variadic_by_ref: false,
                     variadic_type: None,
                     return_type: prop_type.cloned(),
                     by_ref_return: get_by_ref,
@@ -972,7 +996,9 @@ fn parse_property_hooks(
                     is_final: false,
                     has_body: true,
                     params: vec![(set_param, prop_type.cloned(), None, false)],
+                    param_attributes: vec![Vec::new()],
                     variadic: None,
+                    variadic_by_ref: false,
                     variadic_type: None,
                     return_type: Some(TypeExpr::Void),
                     by_ref_return: false,
@@ -991,7 +1017,10 @@ fn parse_property_hooks(
         "Expected '}' at end of property hook block",
     )?;
     if !hooks.any() {
-        return Err(CompileError::new(span, "Expected property hook declaration"));
+        return Err(CompileError::new(
+            span,
+            "Expected property hook declaration",
+        ));
     }
     Ok((hooks, accessors))
 }

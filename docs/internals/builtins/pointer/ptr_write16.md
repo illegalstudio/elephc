@@ -2,7 +2,7 @@
 title: "ptr_write16() — internals"
 description: "Compiler internals for ptr_write16(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 296
+  order: 300
 ---
 
 ## `ptr_write16()` — internals
@@ -32,6 +32,11 @@ function ptr_write16(pointer $pointer, int $value): void
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_write16.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_write16.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

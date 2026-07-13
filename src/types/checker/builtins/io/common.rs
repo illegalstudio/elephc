@@ -56,7 +56,10 @@ fn stream_arg_accepts(checker: &Checker, expected: &PhpType, actual: &PhpType) -
                 .any(|member| checker.type_accepts(expected, member));
             let only_resource_or_false = members
                 .iter()
-                .all(|member| checker.type_accepts(expected, member) || *member == PhpType::Bool);
+                .all(|member| {
+                    checker.type_accepts(expected, member)
+                        || matches!(member, PhpType::Bool | PhpType::False)
+                });
             has_resource && only_resource_or_false
         }
         _ => false,

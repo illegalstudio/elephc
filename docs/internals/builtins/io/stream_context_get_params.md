@@ -2,7 +2,7 @@
 title: "stream_context_get_params() — internals"
 description: "Compiler internals for stream_context_get_params(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 194
+  order: 198
 ---
 
 ## `stream_context_get_params()` — internals
@@ -31,6 +31,11 @@ function stream_context_get_params(resource $context): array
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_params.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_params.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

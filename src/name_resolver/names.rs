@@ -27,6 +27,7 @@ pub(super) fn resolve_type_expr(
         TypeExpr::Int => TypeExpr::Int,
         TypeExpr::Float => TypeExpr::Float,
         TypeExpr::Bool => TypeExpr::Bool,
+        TypeExpr::False => TypeExpr::False,
         TypeExpr::Str => TypeExpr::Str,
         TypeExpr::Void => TypeExpr::Void,
         TypeExpr::Never => TypeExpr::Never,

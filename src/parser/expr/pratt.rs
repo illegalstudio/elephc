@@ -151,19 +151,24 @@ fn parse_expr_bp_inner(
                     ObjectMember::Named(member_name) => member_name,
                     ObjectMember::Dynamic(property) => {
                         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
-                            if nullsafe {
-                                return Err(CompileError::new(
-                                    arrow_span,
-                                    "Nullsafe dynamic method calls are not supported yet",
-                                ));
-                            }
-                            // `$obj->$method(args)` reuses the runtime dynamic-dispatch path by
-                            // desugaring to `call_user_func([$obj, $method], ...args)`.
                             *pos += 1; // consume '('
                             let dynamic_args =
                                 crate::parser::expr::parse_args(tokens, pos, arrow_span)?;
                             let arrow_span = crate::parser::expr::span_through_prev_token(tokens, *pos, arrow_span);
                             reject_named_args_in_dynamic_call(&dynamic_args, arrow_span)?;
+                            if nullsafe {
+                                lhs = Expr::new(
+                                    ExprKind::NullsafeDynamicMethodCall {
+                                        object: Box::new(lhs),
+                                        method: Box::new(property),
+                                        args: dynamic_args,
+                                    },
+                                    arrow_span,
+                                );
+                                continue;
+                            }
+                            // `$obj->$method(args)` reuses the runtime dynamic-dispatch path by
+                            // desugaring to `call_user_func([$obj, $method], ...args)`.
                             let mut call_args = vec![Expr::new(
                                 ExprKind::ArrayLiteral(vec![lhs, property]),
                                 arrow_span,

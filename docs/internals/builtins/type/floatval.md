@@ -2,7 +2,7 @@
 title: "floatval() — internals"
 description: "Compiler internals for floatval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 414
+  order: 419
 ---
 
 ## `floatval()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/floatval.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/floatval.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:556](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L556) (`lower_floatval`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1142](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1142) (`lower_floatval`)
 - **Function symbol**: `lower_floatval()`
 
 
@@ -21,6 +21,7 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
+- `__rt_mixed_cast_float`
 - `__rt_str_to_number`
 
 ## Signature summary
@@ -32,6 +33,11 @@ function floatval(mixed $value): float
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/floatval.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/floatval.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

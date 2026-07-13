@@ -2,7 +2,7 @@
 title: "zval_type()"
 description: "Returns the PHP zval type byte for a zval pointer."
 sidebar:
-  order: 302
+  order: 306
 ---
 
 ## zval_type()
@@ -17,6 +17,11 @@ Returns the PHP zval type byte for a zval pointer.
 - `$zval` (`pointer`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -20,6 +20,8 @@ pub enum PhpType {
     Float,
     Str,
     Bool,
+    /// The PHP literal `false` subtype. Runtime representation is identical to `Bool`.
+    False,
     Void,
     Never,
     Iterable,
@@ -67,7 +69,7 @@ impl PhpType {
     /// Size in bytes on the stack.
     pub fn stack_size(&self) -> usize {
         match self {
-            PhpType::Bool => 8,
+            PhpType::Bool | PhpType::False => 8,
             PhpType::Int => 8,
             PhpType::Float => 8,
             PhpType::Str => 16,
@@ -91,7 +93,7 @@ impl PhpType {
     /// Number of registers used to pass this type as an argument.
     pub fn register_count(&self) -> usize {
         match self {
-            PhpType::Bool => 1,
+            PhpType::Bool | PhpType::False => 1,
             PhpType::Int => 1,
             PhpType::Float => 1,
             PhpType::Str => 2,
@@ -142,6 +144,7 @@ impl PhpType {
                 PhpType::TaggedScalar
             }
             PhpType::Union(_) => PhpType::Mixed,
+            PhpType::False => PhpType::Bool,
             PhpType::Resource(_) => PhpType::Int,
             PhpType::Never => PhpType::Void, // never should not be materialized; fallback to void sentinel
             _ => self.clone(),
@@ -158,7 +161,7 @@ impl PhpType {
         matches!(
             self,
             PhpType::Array(elem)
-                if matches!(**elem, PhpType::Int | PhpType::Float | PhpType::Bool)
+                if matches!(**elem, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False)
         )
     }
 
@@ -226,6 +229,7 @@ impl fmt::Display for PhpType {
             PhpType::Float => write!(f, "float"),
             PhpType::Str => write!(f, "string"),
             PhpType::Bool => write!(f, "bool"),
+            PhpType::False => write!(f, "false"),
             PhpType::Void => write!(f, "null"),
             PhpType::Never => write!(f, "never"),
             PhpType::Iterable => write!(f, "iterable"),

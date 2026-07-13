@@ -89,6 +89,123 @@ fn test_propagate_constants_invalidates_non_scalar_reassignment() {
     );
 }
 
+/// Tests that `eval` invalidates all prior scalar facts because it can read,
+/// write, create, or unset visible variables in the caller scope.
+#[test]
+fn test_propagate_constants_stops_at_eval_barrier() {
+    let program = vec![
+        Stmt::assign("x", Expr::int_lit(2)),
+        Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::from("eval"),
+                    args: vec![Expr::string_lit("$x = 5;")],
+                },
+                Span::dummy(),
+            )),
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1)))
+    );
+}
+
+/// Tests that `eval` invalidates by-value closure capture facts inside the
+/// closure body because the evaluated fragment can update the closure's local copy.
+#[test]
+fn test_propagate_constants_stops_at_eval_barrier_in_closure_capture() {
+    let closure = Expr::new(
+        ExprKind::Closure {
+            params: Vec::new(),
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::FunctionCall {
+                            name: Name::from("eval"),
+                            args: vec![Expr::string_lit("$x = $x + 4;")],
+                        },
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                ),
+                Stmt::new(StmtKind::Return(Some(Expr::var("x"))), Span::dummy()),
+            ],
+            is_arrow: false,
+            is_static: false,
+            by_ref_return: false,
+            captures: vec!["x".to_string()],
+            capture_refs: Vec::new(),
+        },
+        Span::dummy(),
+    );
+    let program = vec![Stmt::assign("x", Expr::int_lit(1)), Stmt::assign("fn", closure)];
+
+    let propagated = propagate_constants(program);
+
+    let StmtKind::Assign { value, .. } = &propagated[1].kind else {
+        panic!("expected propagated closure assignment");
+    };
+    let ExprKind::Closure { body, .. } = &value.kind else {
+        panic!("expected propagated closure expression");
+    };
+    assert_eq!(
+        body[1],
+        Stmt::new(StmtKind::Return(Some(Expr::var("x"))), Span::dummy())
+    );
+}
+
+/// Tests that a call to a user function with `&...$items` invalidates every
+/// positional local passed into the variadic tail.
+#[test]
+fn test_propagate_constants_invalidates_by_ref_variadic_function_args() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "f".to_string(),
+                params: Vec::new(),
+                param_attributes: Vec::new(),
+                variadic: Some("items".to_string()),
+                variadic_by_ref: true,
+                variadic_type: None,
+                return_type: None,
+                by_ref_return: false,
+                body: Vec::new(),
+            },
+            Span::dummy(),
+        ),
+        Stmt::assign("a", Expr::int_lit(1)),
+        Stmt::assign("b", Expr::int_lit(2)),
+        Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::from("f"),
+                    args: vec![Expr::var("a"), Expr::var("b")],
+                },
+                Span::dummy(),
+            )),
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("a"), BinOp::Add, Expr::var("b"))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[4],
+        Stmt::echo(Expr::binop(Expr::var("a"), BinOp::Add, Expr::var("b")))
+    );
+}
+
 /// Tests that when both branches of a ternary expression are the same constant,
 /// the resulting assignment is treated as a uniform constant. `base = flag ? 2 : 2`
 /// always yields `2`, so `base ** 3` folds to `8.0`.
@@ -186,7 +303,9 @@ fn test_pure_user_call_keeps_constants() {
             StmtKind::FunctionDecl {
                 name: "pf".to_string(),
                 params: vec![("a".to_string(), None, None, false)],
+                param_attributes: Vec::new(),
                 variadic: None,
+                variadic_by_ref: false,
                 variadic_type: None,
                 return_type: None,
                 by_ref_return: false,
@@ -234,7 +353,9 @@ fn test_global_writing_user_call_clears_constants_at_top_level() {
             StmtKind::FunctionDecl {
                 name: "gw".to_string(),
                 params: Vec::new(),
+                param_attributes: Vec::new(),
                 variadic: None,
+                variadic_by_ref: false,
                 variadic_type: None,
                 return_type: None,
                 by_ref_return: false,

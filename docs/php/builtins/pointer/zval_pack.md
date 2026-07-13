@@ -2,7 +2,7 @@
 title: "zval_pack()"
 description: "Packs an elephc runtime value into a heap-allocated PHP zval pointer."
 sidebar:
-  order: 301
+  order: 305
 ---
 
 ## zval_pack()
@@ -17,6 +17,11 @@ Packs an elephc runtime value into a heap-allocated PHP zval pointer.
 - `$value` (`mixed`)
 
 **Returns**: `pointer`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

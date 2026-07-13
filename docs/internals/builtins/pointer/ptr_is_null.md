@@ -2,7 +2,7 @@
 title: "ptr_is_null() — internals"
 description: "Compiler internals for ptr_is_null(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 287
+  order: 291
 ---
 
 ## `ptr_is_null()` — internals
@@ -31,6 +31,11 @@ function ptr_is_null(pointer $pointer): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_is_null.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_is_null.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -2,7 +2,7 @@
 title: "hash_hmac()"
 description: "Generates a keyed hash value using the HMAC method."
 sidebar:
-  order: 356
+  order: 361
 ---
 
 ## hash_hmac()
@@ -20,6 +20,11 @@ Generates a keyed hash value using the HMAC method.
 - `$binary` (`bool`), default `false`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_hmac.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_hmac.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

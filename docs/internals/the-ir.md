@@ -2,15 +2,13 @@
 title: "The EIR Design"
 description: "Specification for elephc's default intermediate representation between AST optimization and assembly emission."
 sidebar:
-  order: 13
+  order: 14
 ---
 
 **Status:** EIR is the canonical compiler IR and backend contract for v1.0.
 The diagnostic `--emit-ir` path lowers the checked and optimized AST into
 validated textual EIR, and normal executable/cdylib builds lower that same EIR
 into assembly.
-
-**Implementation phases:** `.plans/eir-*.md`
 
 **Authoritative source audit for this spec:**
 
@@ -251,17 +249,24 @@ pub enum LocalKind {
     StaticLocal,
     RefCell,
     HiddenTemp,
+    OwnedTemp,
     TryHandler,
     ClosureCapture,
     NamedArgTemp,
     IteratorState,
     GeneratorState,
+    EvalContext,
+    EvalScope,
+    EvalGlobalScope,
 }
 ```
 
 `LocalSlot` exists even in SSA form because PHP locals, globals, statics,
 references, try handlers, and hidden temporaries have addressable storage or
-observable lifetime behavior.
+observable lifetime behavior. `OwnedTemp` carries cleanup-owning temporaries;
+the three eval slot kinds hold the optional interpreter context, activation
+scope, and program-global scope. Fully native literal eval paths do not declare
+those slots.
 
 ## Value Ownership
 
@@ -564,6 +569,26 @@ observable order:
 3. Store required hidden temporaries before ABI materialization.
 4. Materialize ABI parameters in callee signature order in the backend.
 5. Avoid temp preevaluation for ref-like and mutating parameters.
+
+### Eval and Dynamic Symbols
+
+| Op | Operands | Result | Effects |
+|---|---|---|---|
+| `EvalLiteralCall` | literal data id plus lowered call operands | `Heap(Mixed)` | conservative call effects until literal planning refines the path |
+| `EvalScopeGet` | scope handle plus global-name immediate | boxed value | `reads_heap`, `may_fatal` |
+| `EvalScopeSet` | scope handle and value plus global-name immediate | `Void` | `reads_heap`, `writes_heap`, `refcount_op`, `may_fatal` |
+| `EvalFunctionCall` | normalized positional values plus dynamic-function metadata | `Heap(Mixed)` | conservative dynamic-call effects |
+| `EvalFunctionCallArray` | argument-array value plus function-name data id | `Heap(Mixed)` | conservative dynamic-call effects |
+| `EvalFunctionExists`, `EvalClassExists`, `EvalConstantExists` | symbol-name data id | `I64` bool | `reads_global` |
+| `EvalConstantFetch` | constant-name data id | `Heap(Mixed)` | global/heap reads, heap/refcount writes, `may_fatal` |
+| `EvalObjectNew` | constructor arguments plus dynamic-class metadata | object or `Mixed` | conservative construction/call effects |
+| `EvalStaticMethodCall` | normalized arguments plus target data id | typed or `Mixed` | conservative dynamic-call effects |
+
+`EvalLiteralCall` does not by itself require the interpreter. The target-
+independent planner in `src/eval_aot.rs` can lower the fragment to an internal
+EIR function, synchronize supported locals directly, use only the core
+eval-scope helpers, or retain interpreter fallback. See
+[Eval Runtime Architecture](eval-runtime.md).
 
 ### Externs, Pointers, Buffers, and Packed Data
 
@@ -1232,7 +1257,7 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `PostIncrement` | Load local, save old value, increment, store, return old value. |
 | `PreDecrement` | Load local, decrement, store, return new value. |
 | `PostDecrement` | Load local, save old value, decrement, store, return old value. |
-| `FunctionCall` | If extern: `ExternCall`; if builtin: `BuiltinCall`; otherwise `Call`/variant dispatch after shared argument planning. |
+| `FunctionCall` | If extern: `ExternCall`; if builtin: `BuiltinCall`; otherwise `Call`/variant dispatch after shared argument planning. Literal `eval()` becomes `EvalLiteralCall` so later lowering can choose native, scope-only, or interpreter execution. |
 | `ArrayLiteral` | Allocate indexed array and insert elements in source order, including spread handling. |
 | `ArrayLiteralAssoc` | Allocate hash table and insert key/value pairs in source order; empty hash keeps mixed key/value metadata. |
 | `Match` | Lower subject once; build strict-comparison arm CFG; default absence may `Fatal` via match-unhandled runtime. |
@@ -1358,10 +1383,13 @@ Runtime effect categories:
 | I/O | streams, filesystem, stat/path helpers |
 | pointers | C string conversion and pointer string helpers |
 | fibers | stack allocation, switch, start/resume/suspend/throw/getters |
+| eval scope | materialized boxed scope access without requiring the interpreter |
+| eval bridge | Magician context, dynamic parsing/execution, symbol registration, and native callback hooks |
 
 `RuntimeFeatures` remains the mechanism for optional runtime categories such as
-regex. EIR lowering must set required runtime features when it emits operations
-that need optional helpers.
+regex, `eval_scope`, and `eval_bridge`. EIR lowering must set required runtime
+features when it emits operations that need optional helpers. A literal eval
+that is fully lowered to native EIR leaves both eval runtime features disabled.
 
 ## Target-Aware Backend Boundary
 

@@ -2,7 +2,7 @@
 title: "hash_init() — internals"
 description: "Compiler internals for hash_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 357
+  order: 362
 ---
 
 ## `hash_init()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/hash_init.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_init.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:266](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L266) (`lower_hash_init`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:284](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L284) (`lower_hash_init`)
 - **Function symbol**: `lower_hash_init()`
 
 
@@ -32,6 +32,11 @@ function hash_init(string $algo, int $flags = 0, string $key = ''): mixed
 ## What the type checker enforces
 
 - **Arity**: takes 1–3 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -21,6 +21,7 @@ fn closure_with_captures(captures: Vec<String>, capture_refs: Vec<String>) -> Ex
         ExprKind::Closure {
             params: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: Vec::new(),

@@ -210,7 +210,7 @@ fn check_object_property_write(
         return Ok(());
     }
     if let Some(class_info) = checker.classes.get(class_name) {
-        if !class_info.properties.iter().any(|(n, _)| n == property) {
+        if class_info.visible_property(property).is_none() {
             if class_info.methods.contains_key("__set") {
                 return Ok(());
             }
@@ -227,10 +227,8 @@ fn check_object_property_write(
         }
         validate_object_property_access(checker, class_name, property, true, span)?;
         let expected_ty = class_info
-            .properties
-            .iter()
-            .find(|(n, _)| n == property)
-            .map(|(_, ty)| ty.clone())
+            .visible_property(property)
+            .map(|(_, (_, ty))| ty.clone())
             .unwrap_or(PhpType::Int);
         let readonly_non_null_coalesce_keep =
             null_coalesce_property_keeps_non_null(object, property, value, &expected_ty);
@@ -284,7 +282,7 @@ fn check_object_property_write(
                 ),
             ));
         }
-        if class_info.declared_properties.contains(property) {
+        if class_info.visible_property_is_declared(property) {
             checker.require_compatible_arg_type(
                 &expected_ty,
                 val_ty,
@@ -361,12 +359,9 @@ fn refine_object_property_type(
     val_ty: &PhpType,
 ) {
     if let Some(class_info) = checker.classes.get_mut(class_name) {
-        let property_has_declared_type = class_info.declared_properties.contains(property);
-        if let Some(prop) = class_info
-            .properties
-            .iter_mut()
-            .find(|(n, _)| n == property)
-        {
+        let property_has_declared_type = class_info.visible_property_is_declared(property);
+        if let Some(slot) = class_info.visible_property_index(property) {
+            let prop = &mut class_info.properties[slot];
             if !property_has_declared_type {
                 if matches!(prop.1, PhpType::Int | PhpType::Void) && prop.1 != *val_ty {
                     prop.1 = val_ty.clone();
@@ -411,7 +406,9 @@ fn check_pointer_property_write(
             ));
         }
     } else if let Some(field_ty) = checker.packed_field_type(class_name, property) {
-        if &field_ty != val_ty {
+        if &field_ty != val_ty
+            && !matches!((&field_ty, val_ty), (PhpType::Bool, PhpType::False))
+        {
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -449,7 +446,7 @@ fn resolve_object_array_property(
         .classes
         .get(class_name)
         .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", class_name)))?;
-    if !class_info.properties.iter().any(|(n, _)| n == property) {
+    if class_info.visible_property(property).is_none() {
         return Err(CompileError::new(
             span,
             &format!("Undefined property: {}::{}", class_name, property),
@@ -458,12 +455,10 @@ fn resolve_object_array_property(
     // Indirect array modification (`$obj->prop[] = x` / `$obj->prop[$k] = x`) is a write, so it
     // must honor PHP 8.4 asymmetric `set` visibility — not the read visibility.
     validate_object_property_access(checker, class_name, property, true, span)?;
-    let property_has_declared_type = class_info.declared_properties.contains(property);
+    let property_has_declared_type = class_info.visible_property_is_declared(property);
     let prop_ty = class_info
-        .properties
-        .iter()
-        .find(|(name, _)| name == property)
-        .map(|(_, ty)| ty.clone())
+        .visible_property(property)
+        .map(|(_, (_, ty))| ty.clone())
         .unwrap_or(PhpType::Int);
     Ok((prop_ty, property_has_declared_type))
 }

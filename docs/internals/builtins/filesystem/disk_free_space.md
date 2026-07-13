@@ -2,7 +2,7 @@
 title: "disk_free_space() — internals"
 description: "Compiler internals for disk_free_space(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 106
+  order: 110
 ---
 
 ## `disk_free_space()` — internals
@@ -32,6 +32,11 @@ function disk_free_space(string $directory): float
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/disk_free_space.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/disk_free_space.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

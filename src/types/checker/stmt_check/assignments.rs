@@ -15,7 +15,7 @@ mod properties_null_coalesce;
 mod static_properties;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::TypeEnv;
 
 use super::super::Checker;
@@ -52,7 +52,7 @@ impl Checker {
         stmt: &Stmt,
         env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
-        match &stmt.kind {
+        let result = match &stmt.kind {
             StmtKind::Assign { name, value } => {
                 locals::check_assign(self, name, value, stmt.span, env)
             }
@@ -162,6 +162,50 @@ impl Checker {
                 env,
             ),
             _ => unreachable!("non-assignment statement routed to assignment checker"),
+        };
+        if result.is_ok() {
+            self.invalidate_property_narrowings_after_assignment(stmt, env);
         }
+        result
+    }
+
+    /// Invalidates synthetic property facts affected by a completed statement assignment.
+    /// Property writes can mutate an aliased object and therefore clear every fact; local
+    /// rebindings clear only facts rooted at the rebound local.
+    fn invalidate_property_narrowings_after_assignment(&self, stmt: &Stmt, env: &mut TypeEnv) {
+        match &stmt.kind {
+            StmtKind::PropertyAssign { .. }
+            | StmtKind::PropertyArrayPush { .. }
+            | StmtKind::PropertyArrayAssign { .. } => Self::purge_property_narrowings(env),
+            StmtKind::NestedArrayAssign { target, .. }
+                if assignment_target_may_write_property(target) =>
+            {
+                Self::purge_property_narrowings(env)
+            }
+            StmtKind::Assign { name, .. }
+            | StmtKind::TypedAssign { name, .. }
+            | StmtKind::StaticVar { name, .. } => {
+                Self::purge_property_narrowings_for_root(env, name)
+            }
+            StmtKind::RefAssign { target, .. } => {
+                Self::purge_property_narrowings_for_root(env, target)
+            }
+            StmtKind::ListUnpack { vars, .. } | StmtKind::Global { vars } => {
+                for name in vars {
+                    Self::purge_property_narrowings_for_root(env, name);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Returns whether a nested assignment target reaches an object property rather than only a local
+/// array, in which case every aliased property fact must be invalidated.
+fn assignment_target_may_write_property(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::Variable(_) => false,
+        ExprKind::ArrayAccess { array, .. } => assignment_target_may_write_property(array),
+        _ => true,
     }
 }

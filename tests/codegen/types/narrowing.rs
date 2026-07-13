@@ -13,6 +13,62 @@
 
 use super::*;
 
+/// Verifies the literal `false` subtype remains callable and uses the normal boolean runtime
+/// representation while `int|false` narrows to int after a divergent strict-false guard.
+#[test]
+fn test_literal_false_type_and_strict_guard_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+        function onlyFalse(false $value): string { return $value === false ? "false" : "bad"; }
+        function returnFalse(): false { return false; }
+        function requireInt(int|false $value): int {
+            if ($value === false) { throw new Exception("false"); }
+            return $value;
+        }
+        echo onlyFalse(returnFalse()), ":", requireInt(9);
+        "#,
+    );
+    assert_eq!(out, "false:9");
+}
+
+/// Verifies a builtin `int|false` result keeps the literal-false member precise, allowing the
+/// standard divergent guard to leave a plain integer on the fallthrough path.
+#[test]
+fn test_builtin_false_sentinel_narrows_to_success_type() {
+    let out = compile_and_run(
+        r#"<?php
+        function requirePosition(string $haystack, string $needle): int {
+            $position = strpos($haystack, $needle);
+            if ($position === false) { throw new Exception("not found"); }
+            return $position;
+        }
+        echo requirePosition("abcdef", "cd");
+        "#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Verifies an unrelated local assignment preserves a stable property narrowing in the same
+/// branch; invalidation is scoped to the receiver that was actually rebound.
+#[test]
+fn test_property_narrowing_survives_unrelated_local_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+        final class NarrowedValue { public function __construct(public string $text) {} }
+        final class NarrowedBox {
+            public function __construct(public ?NarrowedValue $value) {}
+        }
+        function readBox(NarrowedBox $box): NarrowedValue {
+            if (!$box->value instanceof NarrowedValue) { throw new Exception("missing"); }
+            $unrelated = 1;
+            return $box->value;
+        }
+        echo readBox(new NarrowedBox(new NarrowedValue("ok")))->text;
+        "#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies `is_int` narrowing in a function: the then-branch uses the value as an int and the
 /// else-branch as a string, with the parameter being `int|string` across the two call sites.
 #[test]

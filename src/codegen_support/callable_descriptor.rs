@@ -24,11 +24,17 @@ use crate::types::{FunctionSig, PhpType};
 pub(crate) const CALLABLE_DESC_KIND_CLOSURE: u64 = CallableDescriptorShape::Closure as u64;
 pub(crate) const CALLABLE_DESC_KIND_FIRST_CLASS: u64 =
     CallableDescriptorShape::FirstClass as u64;
+pub(crate) const CALLABLE_DESC_KIND_CALLBACK_ADAPTER: u64 =
+    CallableDescriptorShape::CallbackAdapter as u64;
+pub(crate) const CALLABLE_DESC_KIND_OBJECT_INVOKE: u64 =
+    CallableDescriptorShape::ObjectInvoke as u64;
 pub(crate) const CALLABLE_DESC_KIND_FUNCTION: u64 = CallableDescriptorShape::Function as u64;
 pub(crate) const CALLABLE_DESC_KIND_BUILTIN: u64 = CallableDescriptorShape::Builtin as u64;
 pub(crate) const CALLABLE_DESC_KIND_EXTERN: u64 = CallableDescriptorShape::Extern as u64;
 pub(crate) const CALLABLE_DESC_KIND_STATIC_METHOD: u64 =
     CallableDescriptorShape::StaticMethod as u64;
+pub(crate) const CALLABLE_DESC_KIND_INSTANCE_METHOD: u64 =
+    CallableDescriptorShape::InstanceMethod as u64;
 
 pub(crate) const CALLABLE_DESC_ENTRY_OFFSET: usize = 8;
 #[allow(dead_code)]
@@ -554,7 +560,7 @@ fn type_tag(ty: &PhpType) -> u64 {
         PhpType::Int => 0,
         PhpType::Str => 1,
         PhpType::Float => 2,
-        PhpType::Bool => 3,
+        PhpType::Bool | PhpType::False => 3,
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
@@ -586,6 +592,8 @@ mod tests {
                 ("label".to_string(), PhpType::Str),
                 ("rest".to_string(), PhpType::Array(Box::new(PhpType::Mixed))),
             ],
+            param_type_exprs: vec![None, None, None],
+            param_attributes: Vec::new(),
             defaults: vec![
                 None,
                 Some(Expr::new(ExprKind::StringLiteral("fallback".to_string()), Span::dummy())),
@@ -634,6 +642,8 @@ mod tests {
         let mut data = DataSection::new();
         let sig = FunctionSig {
             params: vec![("value".to_string(), PhpType::Int)],
+            param_type_exprs: vec![None],
+            param_attributes: Vec::new(),
             defaults: vec![None],
             return_type: PhpType::Int,
             declared_return: false,

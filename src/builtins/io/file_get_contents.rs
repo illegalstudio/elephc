@@ -52,7 +52,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.checker.require_builtin_library("bz2");
     }
     cx.checker.infer_type(&cx.args[0], cx.env)?;
-    Ok(PhpType::Union(vec![PhpType::Str, PhpType::Bool]))
+    Ok(PhpType::Union(vec![PhpType::Str, PhpType::False]))
 }
 
 /// Lowers a `file_get_contents` call by dispatching to the shared io emitter.

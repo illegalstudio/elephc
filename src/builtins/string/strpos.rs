@@ -41,7 +41,7 @@ builtin! {
 /// type inline. Argument types are inferred by the common registry dispatch path before
 /// this hook fires; arity (capped to 2 via `max_args`) is validated by the registry.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(PhpType::Union(vec![PhpType::Int, PhpType::Bool]))
+    Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]))
 }
 
 /// Lowers a `strpos` call by dispatching to the shared string-position emitter.

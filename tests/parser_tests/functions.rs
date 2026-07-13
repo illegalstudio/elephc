@@ -554,7 +554,7 @@ fn test_parse_union_and_nullable_function_types() {
 }
 
 /// Verifies that union return types containing the literal types `false`/`true`/`null` parse:
-/// `false`/`true` map to `Bool`, and a `null` member makes the whole type nullable
+/// `false` remains precise, `true` maps to `Bool`, and a `null` member makes the whole type nullable
 /// (`T|null` is equivalent to `?T`). Covers `int|false`, `A|null`, and `string|false|null`.
 #[test]
 fn test_parse_union_return_types_with_literal_types() {
@@ -564,7 +564,7 @@ fn test_parse_union_return_types_with_literal_types() {
     };
     assert_eq!(
         ret("<?php function f(): int|false { return 1; }"),
-        Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Bool]))
+        Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::False]))
     );
     assert_eq!(
         ret("<?php function f(): A|null { return null; }"),
@@ -579,7 +579,7 @@ fn test_parse_union_return_types_with_literal_types() {
         // nullable downstream. A single non-null member instead folds to `Nullable` (see `A|null`).
         Some(TypeExpr::Union(vec![
             TypeExpr::Str,
-            TypeExpr::Bool,
+            TypeExpr::False,
             TypeExpr::Void
         ]))
     );
@@ -615,16 +615,16 @@ fn test_parse_null_first_union_folds_to_nullable() {
     }
 }
 
+/// Verifies that the `false` literal type remains precise in a union, so `int|false`
+/// can later narrow independently from a full `bool` member.
 #[test]
-/// Verifies that the `false` literal type widens to `bool` in a union, so `int|false`
-/// (PHP's classic `strpos`-style return) parses as `Union([Int, Bool])`.
-fn test_parse_t_or_false_widens_to_bool_union() {
+fn test_parse_t_or_false_preserves_literal_union_member() {
     let stmts = parse_source("<?php function f(): int|false { return 1; }");
     match &stmts[0].kind {
         StmtKind::FunctionDecl { return_type, .. } => {
             assert_eq!(
                 return_type.as_ref(),
-                Some(&TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Bool]))
+                Some(&TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::False]))
             );
         }
         other => panic!("Expected FunctionDecl, got {:?}", other),
@@ -742,6 +742,27 @@ fn test_parse_variadic_function() {
     }
 }
 
+/// Verifies that `&...$args` is preserved separately from ordinary variadic syntax.
+#[test]
+fn test_parse_by_ref_variadic_function() {
+    let stmts = parse_source("<?php function foo(&$first, &...$args) { }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl {
+            params,
+            variadic,
+            variadic_by_ref,
+            ..
+        } => {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].0, "first");
+            assert!(params[0].3);
+            assert_eq!(variadic.as_deref(), Some("args"));
+            assert!(*variadic_by_ref);
+        }
+        _ => panic!("Expected FunctionDecl"),
+    }
+}
+
 #[test]
 // Verifies that `<?php function foo($a, $b, ...$rest) { }` parses a variadic function with
 // two regular parameters "a" and "b", and `variadic` set to `Some("rest")`.
@@ -798,6 +819,26 @@ fn test_parse_typed_variadic_closure_param() {
     let stmts = parse_source("<?php $f = function (int ...$xs) { return 0; };");
     // The closure is the RHS of the assignment expression statement; assert it parsed cleanly.
     assert_eq!(stmts.len(), 1);
+}
+
+/// Verifies that by-reference variadic syntax is retained for closure signatures.
+#[test]
+fn test_parse_by_ref_variadic_closure_param() {
+    let stmts = parse_source("<?php $f = function (&...$xs) { return 0; };");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::Closure {
+                variadic,
+                variadic_by_ref,
+                ..
+            } => {
+                assert_eq!(variadic.as_deref(), Some("xs"));
+                assert!(*variadic_by_ref);
+            }
+            other => panic!("Expected Closure, got {:?}", other),
+        },
+        other => panic!("Expected Assign, got {:?}", other),
+    }
 }
 
 #[test]

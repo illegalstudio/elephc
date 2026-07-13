@@ -435,6 +435,46 @@ fn test_error_missing_interface_method() {
     );
 }
 
+/// Verifies the error diagnostic for a missing static interface method.
+#[test]
+fn test_error_missing_static_interface_method() {
+    // a concrete class must implement static methods required by interfaces.
+    expect_error(
+        "<?php interface Maker { public static function make(): string; } class Box implements Maker {}",
+        "Class Box must implement interface static method Maker::make",
+    );
+}
+
+/// Verifies an instance method cannot satisfy a static interface method contract.
+#[test]
+fn test_error_instance_method_cannot_satisfy_static_interface_contract() {
+    // PHP keeps static and instance interface contracts distinct.
+    expect_error(
+        "<?php interface Maker { public static function make(): string; } class Box implements Maker { public function make(): string { return \"x\"; } }",
+        "Cannot use instance method to satisfy static interface contract: Box::make",
+    );
+}
+
+/// Verifies a static method cannot satisfy an instance interface method contract.
+#[test]
+fn test_error_static_method_cannot_satisfy_instance_interface_contract() {
+    // PHP keeps static and instance interface contracts distinct in both directions.
+    expect_error(
+        "<?php interface Named { public function name(): string; } class User implements Named { public static function name(): string { return \"x\"; } }",
+        "Cannot use static method to satisfy interface contract: User::name",
+    );
+}
+
+/// Verifies interface inheritance rejects static/non-static method kind conflicts.
+#[test]
+fn test_error_interface_parent_static_method_kind_conflict() {
+    // A child interface cannot redeclare a static parent method as non-static.
+    expect_error(
+        "<?php interface ParentMaker { public static function make(): string; } interface ChildMaker extends ParentMaker { public function make(): string; }",
+        "Cannot combine static and non-static interface method: ChildMaker::make",
+    );
+}
+
 /// Verifies the error diagnostic for wrong signature vs interface.
 #[test]
 fn test_error_wrong_signature_vs_interface() {
@@ -682,16 +722,6 @@ fn test_error_property_redeclaration_adds_type_to_untyped_parent() {
     );
 }
 
-/// Verifies the error diagnostic for property redeclaration shadows private parent property.
-#[test]
-fn test_error_property_redeclaration_shadows_private_parent_property() {
-    // private parent properties cannot be shadowed by a child; the feature is not yet supported.
-    expect_error(
-        "<?php class Base { private int $secret = 1; } class Child extends Base { public int $secret = 2; }",
-        "shadowing private parent properties is not yet supported",
-    );
-}
-
 /// Verifies the error diagnostic for property redeclaration changes by ref qualifier.
 #[test]
 fn test_error_property_redeclaration_changes_by_ref_qualifier() {
@@ -762,13 +792,13 @@ fn test_error_write_to_get_only_hooked_property() {
     );
 }
 
-/// Verifies that the short `set => expr` hook form (which needs a backed property) is rejected.
+/// Verifies that a set hook cannot be declared by reference.
 #[test]
-fn test_error_short_set_hook_rejected() {
-    // short `set => expr` requires a backed property; only the block form is supported.
+fn test_error_set_hook_by_ref_rejected() {
+    // only get hooks may be declared by reference; set hooks receive the assigned value.
     expect_error(
-        "<?php class C { private int $n = 0; public int $v { get => $this->n; set => $this->n; } }",
-        "Short `set => expr` hooks require a backed property",
+        "<?php class C { public int $x { get => $this->x; &set { $this->x = $value; } } }",
+        "Set property hook cannot return by reference",
     );
 }
 

@@ -316,6 +316,7 @@ fn value_ir_type(ctx: &FunctionContext<'_>, value: ValueId) -> Result<IrType> {
 fn pop_result_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Bool
+        | PhpType::False
         | PhpType::Int
         | PhpType::Resource(_)
         | PhpType::Iterable

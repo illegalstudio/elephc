@@ -182,25 +182,32 @@ impl Checker {
         if expected == actual {
             return true;
         }
-
         match (expected, actual) {
             (PhpType::Mixed, _) => true,
             (_, PhpType::Never) => true, // never is the bottom type — compatible with any expected type
+            (PhpType::Bool, PhpType::False) => true,
             // PHP coercive mode: scalar parameters accept Mixed values with a
             // runtime narrowing cast.
             // This is needed because non-constant `int + int` overflows to float,
             // making the result Mixed even when both operands are statically Int.
             (PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str, PhpType::Mixed) => true,
             (PhpType::Iterable, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) => true,
-            (PhpType::Union(members), _) => {
-                members.iter().any(|m| Self::types_compatible(m, actual))
-            }
+            (PhpType::Union(expected_members), PhpType::Union(actual_members)) => actual_members
+                .iter()
+                .all(|actual_member| {
+                    expected_members.iter().any(|expected_member| {
+                        Self::types_compatible(expected_member, actual_member)
+                    })
+                }),
+            (PhpType::Union(members), _) => members
+                .iter()
+                .any(|member| Self::types_compatible(member, actual)),
             (
                 PhpType::AssocArray { key, value },
                 PhpType::Array(_) | PhpType::AssocArray { .. },
             ) if **key == PhpType::Mixed && **value == PhpType::Mixed => true,
-            (PhpType::Float, PhpType::Int | PhpType::Bool | PhpType::Void) => true,
-            (PhpType::Int, PhpType::Bool | PhpType::Void) => true,
+            (PhpType::Float, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) => true,
+            (PhpType::Int, PhpType::Bool | PhpType::False | PhpType::Void) => true,
             (PhpType::Bool, PhpType::Int | PhpType::Void) => true,
             (PhpType::Pointer(_), PhpType::Pointer(_) | PhpType::Void) => true,
             (PhpType::Resource(_), PhpType::Resource(_)) => {

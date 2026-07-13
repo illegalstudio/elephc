@@ -1,0 +1,54 @@
+name: PR labels
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pull_requests:
+        description: "Comma-separated PR numbers, or all-open"
+        required: true
+        type: string
+      dry_run:
+        description: "Report label changes without applying them"
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: pr-labels-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    name: Classify pull requests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      # pull_request_target has a write-capable token. Check out only the trusted
+      # base commit and never execute code from the pull request head.
+      - name: Check out trusted label configuration
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Classify and synchronize labels
+        uses: actions/github-script@v9
+        env:
+          PR_SELECTION: ${{ inputs.pull_requests || github.event.pull_request.number }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+        with:
+          script: |
+            const { run } = require('./.github/scripts/pr-labels.cjs');
+            await run({
+              github,
+              context,
+              core,
+              selection: process.env.PR_SELECTION,
+              dryRun: process.env.DRY_RUN === 'true',
+            });

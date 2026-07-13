@@ -2,7 +2,7 @@
 title: "gzinflate() — internals"
 description: "Compiler internals for gzinflate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 349
+  order: 354
 ---
 
 ## `gzinflate()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/gzinflate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/gzinflate.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:436](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L436) (`lower_gzinflate`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:454](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L454) (`lower_gzinflate`)
 - **Function symbol**: `lower_gzinflate()`
 
 
@@ -31,6 +31,11 @@ function gzinflate(string $data, int $max_length = 0): mixed
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/gzinflate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/gzinflate.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

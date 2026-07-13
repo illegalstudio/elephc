@@ -2,7 +2,7 @@
 title: "rawurlencode() — internals"
 description: "Compiler internals for rawurlencode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 376
+  order: 381
 ---
 
 ## `rawurlencode()` — internals
@@ -21,8 +21,7 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_grapheme_strrev`
-- `__rt_strcopy`
+- `__rt_htmlspecialchars`
 
 ## Signature summary
 
@@ -33,6 +32,11 @@ function rawurlencode(string $string): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/rawurlencode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/rawurlencode.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

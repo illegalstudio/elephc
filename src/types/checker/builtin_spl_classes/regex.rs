@@ -37,6 +37,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "RegexIterator".to_string(),
         FlattenedClass {
             name: "RegexIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("FilterIterator".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -47,6 +48,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: regex_iterator_constants(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -54,6 +56,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "RecursiveRegexIterator".to_string(),
         FlattenedClass {
             name: "RecursiveRegexIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("RegexIterator".to_string()),
             implements: vec!["RecursiveIterator".to_string()],
             is_abstract: false,
@@ -64,6 +67,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: regex_iterator_constants(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 }
@@ -309,6 +313,7 @@ fn regex_capture_closure_expr(
     expr(ExprKind::Closure {
         params: vec![("matches".to_string(), None, None, false)],
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Str),
         body,

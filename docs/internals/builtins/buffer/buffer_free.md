@@ -32,6 +32,11 @@ function buffer_free(buffer $buffer): mixed
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_free.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_free.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `buffer_free()`](../../../php/builtins/buffer/buffer_free.md)

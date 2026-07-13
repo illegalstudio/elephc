@@ -2,7 +2,7 @@
 title: "ptr_read32() — internals"
 description: "Compiler internals for ptr_read32(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 291
+  order: 295
 ---
 
 ## `ptr_read32()` — internals
@@ -32,6 +32,11 @@ function ptr_read32(pointer $pointer): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_read32.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_read32.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

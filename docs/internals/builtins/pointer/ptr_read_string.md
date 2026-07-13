@@ -2,7 +2,7 @@
 title: "ptr_read_string() — internals"
 description: "Compiler internals for ptr_read_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 293
+  order: 297
 ---
 
 ## `ptr_read_string()` — internals
@@ -32,6 +32,11 @@ function ptr_read_string(pointer $pointer, int $length): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_read_string.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_read_string.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

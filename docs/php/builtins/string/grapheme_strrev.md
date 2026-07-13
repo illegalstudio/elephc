@@ -2,7 +2,7 @@
 title: "grapheme_strrev()"
 description: "Reverses a string by grapheme cluster, returning false on failure."
 sidebar:
-  order: 346
+  order: 351
 ---
 
 ## grapheme_strrev()
@@ -17,6 +17,11 @@ Reverses a string by grapheme cluster, returning false on failure.
 - `$string` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/grapheme_strrev.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/grapheme_strrev.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

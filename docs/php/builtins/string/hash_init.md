@@ -2,7 +2,7 @@
 title: "hash_init()"
 description: "Initialize an incremental hashing context."
 sidebar:
-  order: 357
+  order: 362
 ---
 
 ## hash_init()
@@ -19,6 +19,11 @@ Initialize an incremental hashing context.
 - `$key` (`string`), default `''`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -69,7 +69,7 @@ status and headers with `http_response_code()` and `header()`. See
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings) | host platform | Select the compilation target. |
+| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings; recognized future targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. |
 
 See [Targets and cross-compilation](targets.md) for the full list of accepted
 spellings.
@@ -92,7 +92,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-CRATE` | `pdo`, `tls`, `crypto`, `phar`, `tz`, `image`, `web` | — | Force-enable a bridge crate regardless of feature auto-detection (repeatable). Force-links the staticlib (whole-archived, so it is not dead-stripped) and, for crates with a PHP-surface prelude (`pdo`, `tz`, `image`), force-injects that prelude so the API is available. `--with-web` is an alias for `--web`. An unknown crate name is an error. |
+| `--with-CRATE` | `pdo`, `tls`, `crypto`, `phar`, `tz`, `image`, `eval`, `web` | — | Force-enable a bridge crate regardless of feature auto-detection (repeatable). Force-links the staticlib (whole-archived, so it is not dead-stripped) and, for crates with a PHP-surface prelude (`pdo`, `tz`, `image`), force-injects that prelude so the API is available. `--with-eval` force-links Magician but is not required for normal `eval()` use; eligible literal eval can remain bridge-free. `--with-web` is an alias for `--web`. An unknown crate name is an error. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 

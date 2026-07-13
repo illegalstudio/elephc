@@ -2,7 +2,7 @@
 title: "intdiv()"
 description: "Integer division."
 sidebar:
-  order: 250
+  order: 254
 ---
 
 ## intdiv()
@@ -18,6 +18,11 @@ Integer division.
 - `$num2` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/intdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/intdiv.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

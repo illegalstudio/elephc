@@ -21,7 +21,7 @@ use crate::codegen::{CodegenIrError, Result};
 pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     match ctx.raw_value_php_type(value)? {
-        PhpType::Bool | PhpType::Int | PhpType::Pointer(_) => {
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) => {
             ctx.load_value_to_result(value)?;
             emit_int_result_nonzero_bool(ctx);
         }

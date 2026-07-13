@@ -51,7 +51,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "grapheme_strrev() argument must be string",
         ));
     }
-    Ok(PhpType::Union(vec![PhpType::Str, PhpType::Bool]))
+    Ok(PhpType::Union(vec![PhpType::Str, PhpType::False]))
 }
 
 /// Lowers a `grapheme_strrev` call by dispatching to the dedicated emitter.

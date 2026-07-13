@@ -22,6 +22,8 @@ pub(crate) mod call_args;
 pub(crate) mod fibers;
 /// `ext/date` integer constants (e.g. `SUNFUNCS_RET_*`).
 pub(crate) mod date_constants;
+/// `ENT_*` HTML-escaping flag constants shared by checker and codegen.
+pub(crate) mod ent_constants;
 /// C FFI type mapping utilities.
 mod ffi;
 /// JSON literal constant type inference.
@@ -53,6 +55,7 @@ pub use schema::{
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,
     PackedFieldInfo, PropertyHookContract,
 };
+pub(crate) use schema::{collect_attribute_args, collect_attribute_names};
 pub(crate) use signatures::{
     builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
 };

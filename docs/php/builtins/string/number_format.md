@@ -2,7 +2,7 @@
 title: "number_format()"
 description: "Formats a number with grouped thousands."
 sidebar:
-  order: 372
+  order: 377
 ---
 
 ## number_format()
@@ -20,6 +20,11 @@ Formats a number with grouped thousands.
 - `$thousands_separator` (`string`), default `','`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/formatting/number_format.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/formatting/number_format.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

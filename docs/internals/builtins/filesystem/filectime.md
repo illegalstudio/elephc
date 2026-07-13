@@ -2,7 +2,7 @@
 title: "filectime() — internals"
 description: "Compiler internals for filectime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 110
+  order: 114
 ---
 
 ## `filectime()` — internals
@@ -35,6 +35,11 @@ function filectime(string $filename): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/filectime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/filectime.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

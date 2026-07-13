@@ -40,6 +40,12 @@ scripts written for other toolchains keep working:
 | `linux-aarch64` | `linux-arm64`, `aarch64-unknown-linux-gnu` |
 | `linux-x86_64` | `x86_64-unknown-linux-gnu` |
 
+The parser also recognizes `macos-x86_64` / `x86_64-apple-darwin` and
+`windows-x86_64` / `x86_64-pc-windows-msvc` /
+`x86_64-pc-windows-gnu`. These spellings are groundwork for future backends,
+not supported targets: compilation stops with an explicit unsupported-backend
+diagnostic.
+
 ## Cross-compilation notes
 
 Selecting a target different from the host produces assembly and an object file

@@ -2,7 +2,7 @@
 title: "interface_exists()"
 description: "Checks if the interface has been defined."
 sidebar:
-  order: 81
+  order: 85
 ---
 
 ## interface_exists()
@@ -18,6 +18,11 @@ Checks if the interface has been defined.
 - `$autoload` (`bool`), default `true`, optional
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/interface_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/interface_exists.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

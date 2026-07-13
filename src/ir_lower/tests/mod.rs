@@ -105,6 +105,38 @@ echo $counter->value();
     assert!(text.contains("flags(method)"), "missing method flag: {text}");
 }
 
+/// Verifies a native program without Reflection references does not lower the synthetic surface.
+#[test]
+fn plain_program_omits_unreferenced_builtin_reflection_methods() {
+    let module = lower_source("<?php echo 1;");
+    assert!(
+        module
+            .class_methods
+            .iter()
+            .all(|function| !function.name.starts_with("Reflection")),
+        "plain EIR unexpectedly contains builtin Reflection methods"
+    );
+}
+
+/// Verifies a native ReflectionClass use retains its constructor and called method body.
+#[test]
+fn native_reflection_program_lowers_reachable_builtin_methods() {
+    let module = lower_source(
+        r#"<?php
+class Plain {}
+$reflection = new ReflectionClass('Plain');
+echo $reflection->getName();
+"#,
+    );
+    let method_names = module
+        .class_methods
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(method_names.contains("ReflectionClass::__construct"));
+    assert!(method_names.contains("ReflectionClass::getName"));
+}
+
 /// Verifies mixed float/integer comparisons coerce both operands before `fcmp`.
 #[test]
 fn float_comparison_coerces_integer_operand() {

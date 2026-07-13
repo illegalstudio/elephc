@@ -122,11 +122,11 @@ pub(crate) fn emit_branch_if_tagged_scalar_null(emitter: &mut Emitter, label: &s
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp x1, #{}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
-            emitter.instruction(&format!("b.eq {}", label)); // branch when the tagged scalar is PHP null
+            emitter.instruction(&format!("b.eq {}", label));                    // branch when the tagged scalar is PHP null
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp rdx, {}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
-            emitter.instruction(&format!("je {}", label)); // branch when the tagged scalar is PHP null
+            emitter.instruction(&format!("je {}", label));                      // branch when the tagged scalar is PHP null
         }
     }
 }
@@ -137,12 +137,12 @@ pub(crate) fn emit_tagged_scalar_to_int_null_as_zero(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp x1, #{}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
-            emitter.instruction("csel x0, xzr, x0, eq"); // replace the payload with zero when the tagged scalar is null
+            emitter.instruction("csel x0, xzr, x0, eq");                        // replace the payload with zero when the tagged scalar is null
         }
         Arch::X86_64 => {
-            emitter.instruction("xor r11, r11"); // materialize the zero replacement for a null tagged scalar payload
+            emitter.instruction("xor r11, r11");                                // materialize the zero replacement for a null tagged scalar payload
             emitter.instruction(&format!("cmp rdx, {}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
-            emitter.instruction("cmove rax, r11"); // replace the payload with zero when the tagged scalar is null
+            emitter.instruction("cmove rax, r11");                              // replace the payload with zero when the tagged scalar is null
         }
     }
 }

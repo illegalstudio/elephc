@@ -2,7 +2,7 @@
 title: "wordwrap() — internals"
 description: "Compiler internals for wordwrap(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 408
+  order: 413
 ---
 
 ## `wordwrap()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/wordwrap.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/wordwrap.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:802](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L802) (`lower_wordwrap`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:820](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L820) (`lower_wordwrap`)
 - **Function symbol**: `lower_wordwrap()`
 
 
@@ -33,6 +33,11 @@ function wordwrap(string $string, int $width = 75, string $break = '\n', bool $c
 ## What the type checker enforces
 
 - **Arity**: takes 1–4 arguments (3 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/wordwrap.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/wordwrap.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

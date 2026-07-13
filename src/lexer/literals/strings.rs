@@ -148,6 +148,23 @@ fn interpolate(
                 push_interp_part(&mut tokens, &mut current, part, span);
             }
             Some('$') => {
+                // Deprecated ${expr} form: dollar followed by brace. PHP 8.2+ deprecates
+                // this in favor of {$expr} but still supports it. We capture the braced
+                // expression (without the leading $) and interpolate it.
+                if input.peek_nth(1) == Some('{') {
+                    input.advance_escape(); // consume '$'
+                    input.advance_escape(); // consume '{'
+                    let inner_raw = capture_braced_expr(input, span)?;
+                    // Re-prepend the $ so the expression is valid PHP ($a['x'] not a['x'])
+                    let inner = format!("${}", inner_raw);
+                    let fragment = tokenize_fragment(&inner, span)?;
+                    has_interpolation = true;
+                    let mut part = vec![Token::LParen];
+                    part.extend(fragment.into_iter().map(|(token, _)| token));
+                    part.push(Token::RParen);
+                    push_interp_part(&mut tokens, &mut current, part, span);
+                    continue;
+                }
                 input.advance_escape(); // consume '$'
                 let mut name = String::new();
                 while let Some(ch) = input.peek_escape() {

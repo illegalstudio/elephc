@@ -2,7 +2,7 @@
 title: "spl_autoload_extensions()"
 description: "Register and return default file extensions for spl_autoload."
 sidebar:
-  order: 325
+  order: 330
 ---
 
 ## spl_autoload_extensions()
@@ -17,6 +17,11 @@ Register and return default file extensions for spl_autoload.
 - `$file_extensions` (`string`), default `null`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_extensions.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_extensions.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

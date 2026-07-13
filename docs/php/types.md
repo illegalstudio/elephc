@@ -20,7 +20,7 @@ sidebar:
 | `iterable`       | Yes              | PHP pseudo-type for `array \| Traversable`. Supports indexed arrays, associative arrays, `Iterator`, and `IteratorAggregate`; runtime operations (`foreach`, `echo`, `gettype()`, `var_dump()`, `===`, casts, `is_iterable()`) dispatch on heap-kind, value-type, or interface metadata as needed. |
 | `resource`       | Inferred only    | File handles and standard streams are modeled separately from integers. `fopen()` returns `resource\|false`, and `STDIN`, `STDOUT`, and `STDERR` are stream resources. PHP does not allow `resource` as a type declaration, so elephc does not accept `resource` annotations. |
 | `callable`       | Yes              | Closures, arrow functions, first-class callables, and FFI callback parameters.                                         |
-| `object`         | Yes              | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)`                                                    |
+| `object`         | Yes              | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)`; the generic `object` type hint accepts any class, interface, or enum object. |
 | `enum`           | Yes              | Pure and backed enums. Cases are singletons. Backed enums support `->value`, `::from()`, `::tryFrom()`, `::cases()`.   |
 | `int|string`     | Yes              | Union type — variable accepts any of the listed types. Lowered to Mixed at runtime.                                    |
 | `?int`           | Yes              | Nullable shorthand — sugar for `int|null`. The explicit `T|null` form (e.g. `A|null`) is also accepted.                |
@@ -240,7 +240,13 @@ Narrowing applies to function and method parameters. A parameter whose call site
 - Plain array numeric casts (`(int)$array`, `(float)$array`) follow elephc's existing array cast semantics (return the element count rather than PHP's `0`/`1`). Direct `iterable` numeric casts use PHP's empty/non-empty `0`/`1` semantics.
 - `__destruct` runs when an object's refcount reaches zero (scope exit, reassignment, `unset`, program end), matching PHP's timing, but **object resurrection is not supported**: re-storing `$this` so the object would outlive the destructor does not keep it alive — the object is still freed once `__destruct` returns.
 - Under the compatibility `--null-repr=sentinel` opt-out, the integer `9223372036854775806` (`PHP_INT_MAX - 1`) collides with elephc's internal null marker in unboxed scalar slots and is misread as `null` by `echo`, `var_dump()`, `is_null()`, `??`, and related null checks. The default tagged null representation does not have this collision: the full 64-bit integer range round-trips.
-- Variable variables (`$$name`, `${$expr}`) are not supported. elephc allocates each local to a fixed compile-time stack slot and keeps no per-frame variable-name table, so a variable whose name is computed at runtime cannot be resolved. Use an array keyed by the dynamic name instead.
+- Variable variables (`$$name`, `${$expr}`) are not supported yet. Native AOT
+  locals use fixed compile-time stack slots; supporting a runtime-computed name
+  will require routing the access through Magician's materialized named scope
+  and synchronizing the affected native locals. Use an array keyed by the
+  dynamic name in portable elephc code for now.
+- Reference aliases to array elements (`$b =& $a[0]`) are limited to **indexed arrays with integer indices**; associative arrays (`$b =& $a['key']`) are rejected at compile time. Referencing an out-of-range index binds the alias to a null cell instead of creating the element (PHP autovivifies it as `null`), and the alias points into the array's storage, so it is only valid while the array is alive and not reallocated by growth.
+- `print_r($value, true)` captures into a fixed 64 KiB buffer: rendered output longer than 65536 bytes is truncated at the cap (PHP returns the full string). Echo mode (`print_r($value)`) is unaffected.
 - `serialize()`/`unserialize()` cover scalars, arrays, and objects (including the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods and `r:`/`R:` object back-references) byte-for-byte compatibly with PHP. Remaining gaps: a cyclic reference inside an object's own properties resolves to `null` on `unserialize()` (serialization handles cycles), the deprecated `Serializable` interface (`C:` wire form) is unsupported, writing a property of an unserialized object held in a `Mixed` does not persist (a separate `Mixed` property-write limitation), and `unserialize()` does not emit PHP's `E_WARNING` / `E_NOTICE` on malformed input — it just returns `false`.
 
 ### Filesystem functions not implemented

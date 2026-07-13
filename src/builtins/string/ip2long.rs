@@ -36,7 +36,7 @@ builtin! {
 /// Argument types are inferred by the common registry dispatch path before this hook fires;
 /// arity (exactly 1 arg) is pre-validated by the registry.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(PhpType::Union(vec![PhpType::Int, PhpType::Bool]))
+    Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]))
 }
 
 /// Lowers an `ip2long` call by dispatching to the shared `lower_ip2long` emitter.

@@ -157,3 +157,66 @@ echo $box->value;
     );
     assert_eq!(out, "7:9");
 }
+
+/// Verifies that an interface-typed promoted property accepts a concrete implementing-class
+/// default after schema construction, and that the default instance dispatches normally.
+#[test]
+fn test_interface_promoted_property_accepts_object_default() {
+    let out = compile_and_run(
+        r#"<?php
+interface I {
+    public function v(): string;
+}
+final class N implements I {
+    public function v(): string { return "n"; }
+}
+final class C {
+    public function __construct(public I $x = new N()) {}
+    public function read(I $x = new N()): string { return $x->v(); }
+}
+function read_value(I $x = new N()): string { return $x->v(); }
+$c = new C();
+echo $c->x->v();
+echo ":";
+echo $c->read();
+echo ":";
+echo read_value();
+"#,
+    );
+    assert_eq!(out, "n:n:n");
+}
+
+/// Verifies ReflectionParameter reports constructor-promoted parameters.
+#[test]
+fn test_reflection_parameter_is_promoted() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectPromotedParamUser {
+    public function __construct(public int $id, string $name = "Ada") {
+        echo "C";
+    }
+    public function run(int $id) {}
+}
+class ReflectPromotedParamFactory {
+    public function make(): ReflectPromotedParamUser {
+        echo "F";
+        return new ReflectPromotedParamUser(2);
+    }
+}
+$ctor = new ReflectionMethod(ReflectPromotedParamUser::class, "__construct");
+$params = $ctor->getParameters();
+echo $params[0]->isPromoted() ? "I" : "i";
+echo $params[1]->isPromoted() ? "N" : "n";
+$direct = new ReflectionParameter([ReflectPromotedParamUser::class, "__construct"], "id");
+echo $direct->isPromoted() ? "D" : "d";
+$run = new ReflectionParameter([ReflectPromotedParamUser::class, "run"], "id");
+echo $run->isPromoted() ? "R" : "r";
+$inline = new ReflectionParameter([new ReflectPromotedParamUser(1), "run"], 0);
+echo ":" . $inline->getName();
+$factory = new ReflectPromotedParamFactory();
+$fromReturn = new ReflectionParameter([$factory->make(), "run"], 0);
+echo ":" . $fromReturn->getName();
+"#,
+    );
+    assert_eq!(out, "InDrC:idFC:id");
+}

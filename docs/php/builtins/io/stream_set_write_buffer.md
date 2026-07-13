@@ -2,7 +2,7 @@
 title: "stream_set_write_buffer()"
 description: "Sets the write file buffering on a stream."
 sidebar:
-  order: 215
+  order: 219
 ---
 
 ## stream_set_write_buffer()
@@ -18,6 +18,11 @@ Sets the write file buffering on a stream.
 - `$size` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_write_buffer.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_write_buffer.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

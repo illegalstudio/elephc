@@ -36,7 +36,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.checker.infer_type(arg, cx.env)?;
     }
     cx.checker.require_builtin_library("elephc_crypto");
-    Ok(PhpType::Union(vec![PhpType::Str, PhpType::Bool]))
+    Ok(PhpType::Union(vec![PhpType::Str, PhpType::False]))
 }
 
 /// Lowers a `hash_file` call by dispatching to the shared io emitter.

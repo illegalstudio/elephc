@@ -217,6 +217,7 @@ fn consumes_operands_by_value(op: Op) -> bool {
             | StoreGlobal
             | StoreStaticLocal
             | StoreStaticProperty
+            | StoreReflectionStaticProperty
             | InitStaticLocal
             | ThrowException
             | GeneratorYield

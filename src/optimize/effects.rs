@@ -227,6 +227,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Spread(inner) => expr_effect(inner),
         ExprKind::Print(inner) => expr_effect(inner).with_side_effects(),
+        ExprKind::Clone(inner) => expr_effect(inner)
+            .with_side_effects()
+            .with_may_throw(),
         ExprKind::BinaryOp { left, right, .. } => expr_effect(left).combine(expr_effect(right)),
         ExprKind::InstanceOf { value, target } => {
             expr_effect(value).combine(instanceof_target_effect(target))
@@ -263,6 +266,15 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::ExprCall { callee, args } => expr_effect(callee)
             .combine(combine_effects(args.iter().map(expr_effect)))
             .combine(expr_call_effect(callee)),
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => expr_effect(object)
+            .combine(expr_effect(method))
+            .combine(combine_effects(args.iter().map(expr_effect)))
+            .with_side_effects()
+            .with_may_throw(),
         ExprKind::NewObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()
             .with_may_throw(),

@@ -258,7 +258,12 @@ pub(crate) fn compile(config: CliConfig) {
 
     if emit_ir {
         let phase_started = Instant::now();
-        let mut module = match ir_lower::lower_program(&ast, &check_result, target) {
+        let mut module = match ir_lower::lower_program_with_source_path(
+            &ast,
+            &check_result,
+            target,
+            Path::new(filename),
+        ) {
             Ok(module) => module,
             Err(err) => {
                 eprintln!("EIR lowering error: {}", err);
@@ -282,7 +287,12 @@ pub(crate) fn compile(config: CliConfig) {
     }
 
     let phase_started = Instant::now();
-    let mut ir_module = match ir_lower::lower_program(&ast, &check_result, target) {
+    let mut ir_module = match ir_lower::lower_program_with_source_path(
+        &ast,
+        &check_result,
+        target,
+        Path::new(filename),
+    ) {
         Ok(module) => module,
         Err(err) => {
             eprintln!("EIR lowering error: {}", err);
@@ -455,6 +465,7 @@ fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
         Emit::Cdylib => match target.platform {
             Platform::MacOS => format!("lib{}.dylib", stem),
             Platform::Linux => format!("lib{}.so", stem),
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         },
     };
     OutputPaths {

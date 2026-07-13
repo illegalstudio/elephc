@@ -2,7 +2,7 @@
 title: "getcwd() — internals"
 description: "Compiler internals for getcwd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 119
+  order: 123
 ---
 
 ## `getcwd()` — internals
@@ -33,6 +33,11 @@ function getcwd(): string
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/getcwd.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/getcwd.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

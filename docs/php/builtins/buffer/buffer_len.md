@@ -18,6 +18,11 @@ Lowers `buffer_len()` through the direct buffer opcode helper.
 
 **Returns**: `int`
 
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_len.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_len.rs)).
+
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 

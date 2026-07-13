@@ -2,7 +2,7 @@
 title: "is_readable()"
 description: "Tells whether the filename is readable."
 sidebar:
-  order: 126
+  order: 130
 ---
 
 ## is_readable()
@@ -17,6 +17,11 @@ Tells whether the filename is readable.
 - `$filename` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/is_readable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_readable.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -124,6 +124,7 @@ pub fn emit_pop_reg_pair(emitter: &mut Emitter, lo_reg: &str, hi_reg: &str) {
 pub fn emit_push_result_value(emitter: &mut Emitter, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Bool
+        | PhpType::False
         | PhpType::Int
         | PhpType::Resource(_)
         | PhpType::Iterable

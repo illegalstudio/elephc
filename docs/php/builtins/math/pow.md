@@ -2,7 +2,7 @@
 title: "pow()"
 description: "Exponential expression."
 sidebar:
-  order: 261
+  order: 265
 ---
 
 ## pow()
@@ -18,6 +18,11 @@ Exponential expression.
 - `$exponent` (`float`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/pow.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/pow.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

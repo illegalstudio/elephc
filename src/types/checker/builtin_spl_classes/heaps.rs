@@ -22,6 +22,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "SplHeap".to_string(),
         FlattenedClass {
             name: "SplHeap".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec!["Iterator".to_string(), "Countable".to_string()],
             is_abstract: true,
@@ -32,6 +33,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -39,6 +41,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "SplMaxHeap".to_string(),
         FlattenedClass {
             name: "SplMaxHeap".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("SplHeap".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -49,6 +52,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -56,6 +60,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "SplMinHeap".to_string(),
         FlattenedClass {
             name: "SplMinHeap".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("SplHeap".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -66,6 +71,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -73,6 +79,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "SplPriorityQueue".to_string(),
         FlattenedClass {
             name: "SplPriorityQueue".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec!["Iterator".to_string(), "Countable".to_string()],
             is_abstract: false,
@@ -83,6 +90,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: spl_priority_queue_constants(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 }

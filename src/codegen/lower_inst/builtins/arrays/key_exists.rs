@@ -26,11 +26,109 @@ pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instr
     match ctx.value_php_type(array)?.codegen_repr() {
         PhpType::Array(_) => lower_indexed_array_key_exists(ctx, inst, key, array),
         PhpType::AssocArray { .. } => lower_assoc_array_key_exists(ctx, inst, key, array),
+        PhpType::Mixed | PhpType::Union(_) => {
+            lower_mixed_container_key_exists(ctx, inst, key, array)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "array_key_exists for PHP array type {:?}",
             other
         ))),
     }
+}
+
+/// Lowers `array_key_exists()` for a boxed Mixed container by dispatching on
+/// its runtime tag: hashes probe `__rt_hash_get`, indexed arrays reuse the
+/// int-key bounds helper (the key normalizer already folds numeric strings to
+/// integer keys), and non-container payloads answer false.
+fn lower_mixed_container_key_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    key: ValueId,
+    array: ValueId,
+) -> Result<()> {
+    let hash_label = ctx.next_label("mixed_key_exists_hash");
+    let indexed_label = ctx.next_label("mixed_key_exists_indexed");
+    let missing_label = ctx.next_label("mixed_key_exists_missing");
+    let done_label = ctx.next_label("mixed_key_exists_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // Normalize the key first: the helpers leave (key_lo, key_hi) in
+            // x1/x2 with key_hi == -1 marking integer keys.
+            materialize_hash_key_aarch64(ctx, key)?;
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter
+                .instruction(&format!("cbz x9, {}", missing_label)); // null Mixed containers hold no keys
+            ctx.emitter.instruction("ldr x10, [x9]"); // load the container runtime tag
+            ctx.emitter.instruction("ldr x0, [x9, #8]"); // load the boxed payload pointer
+            ctx.emitter
+                .instruction(&format!("cbz x0, {}", missing_label)); // defensive payload null guard
+            ctx.emitter.instruction("cmp x10, #5"); // tag 5 = associative hash
+            ctx.emitter
+                .instruction(&format!("b.eq {}", hash_label)); // hashes probe the hash table
+            ctx.emitter.instruction("cmp x10, #4"); // tag 4 = indexed array
+            ctx.emitter
+                .instruction(&format!("b.eq {}", indexed_label)); // indexed arrays use the int-key helper
+            ctx.emitter
+                .instruction(&format!("b {}", missing_label)); // non-container payloads have no keys
+
+            ctx.emitter.label(&indexed_label);
+            ctx.emitter.instruction("cmn x2, #1"); // key_hi == -1 marks an integer key
+            ctx.emitter
+                .instruction(&format!("b.ne {}", missing_label)); // string keys never exist in indexed arrays
+            abi::emit_call_label(ctx.emitter, "__rt_array_key_exists");
+            ctx.emitter
+                .instruction(&format!("b {}", done_label)); // result already in x0
+
+            ctx.emitter.label(&hash_label);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+            ctx.emitter
+                .instruction(&format!("b {}", done_label)); // found flag already in x0
+
+            ctx.emitter.label(&missing_label);
+            ctx.emitter.instruction("mov x0, #0"); // missing/unsupported containers answer false
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            // Normalize the key first: the helpers leave (key_lo, key_hi) in
+            // rsi/rdx with key_hi == -1 marking integer keys.
+            materialize_hash_key_x86_64(ctx, key)?;
+            ctx.load_value_to_reg(array, "r10")?;
+            ctx.emitter.instruction("test r10, r10"); // null Mixed containers hold no keys
+            ctx.emitter
+                .instruction(&format!("jz {}", missing_label));
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10]"); // load the container runtime tag
+            ctx.emitter.instruction("mov rdi, QWORD PTR [r10 + 8]"); // load the boxed payload pointer
+            ctx.emitter.instruction("test rdi, rdi"); // defensive payload null guard
+            ctx.emitter
+                .instruction(&format!("jz {}", missing_label));
+            ctx.emitter.instruction("cmp r11, 5"); // tag 5 = associative hash
+            ctx.emitter
+                .instruction(&format!("je {}", hash_label)); // hashes probe the hash table
+            ctx.emitter.instruction("cmp r11, 4"); // tag 4 = indexed array
+            ctx.emitter
+                .instruction(&format!("je {}", indexed_label)); // indexed arrays use the int-key helper
+            ctx.emitter
+                .instruction(&format!("jmp {}", missing_label)); // non-container payloads have no keys
+
+            ctx.emitter.label(&indexed_label);
+            ctx.emitter.instruction("cmp rdx, -1"); // key_hi == -1 marks an integer key
+            ctx.emitter
+                .instruction(&format!("jne {}", missing_label)); // string keys never exist in indexed arrays
+            abi::emit_call_label(ctx.emitter, "__rt_array_key_exists");
+            ctx.emitter
+                .instruction(&format!("jmp {}", done_label)); // result already in rax
+
+            ctx.emitter.label(&hash_label);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+            ctx.emitter
+                .instruction(&format!("jmp {}", done_label)); // found flag already in rax
+
+            ctx.emitter.label(&missing_label);
+            ctx.emitter.instruction("xor eax, eax"); // missing/unsupported containers answer false
+            ctx.emitter.label(&done_label);
+        }
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Lowers indexed-array key existence through the bounds-check runtime helper.
@@ -90,6 +188,12 @@ fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: ValueId) -> 
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
             Ok(())
         }
+        PhpType::Float => {
+            ctx.load_value_to_reg(key, "d0")?;
+            ctx.emitter.instruction("fcvtzs x1, d0"); // PHP casts float array keys to integer keys
+            abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
+            Ok(())
+        }
         // PHP null normalizes to the empty string "" as an array key.
         PhpType::Void | PhpType::Never => {
             let (label, len) = ctx.data.add_string(b"");
@@ -116,6 +220,12 @@ fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: ValueId) -> R
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.load_value_to_reg(key, "rsi")?;
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+            Ok(())
+        }
+        PhpType::Float => {
+            ctx.load_value_to_reg(key, "xmm0")?;
+            ctx.emitter.instruction("cvttsd2si rsi, xmm0"); // PHP casts float array keys to integer keys
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
             Ok(())
         }
@@ -149,9 +259,9 @@ fn materialize_mixed_hash_key_aarch64(
     ctx.emitter.instruction("cmp x0, #1");                                      // string mixed keys need PHP numeric-string normalization
     ctx.emitter.instruction(&format!("b.eq {}", string_key));                   // route string keys through the normal hash-key helper
     ctx.emitter.instruction("cmp x0, #8");                                      // null mixed keys normalize to the empty string like PHP
-    ctx.emitter.instruction(&format!("b.eq {}", null_key));                    // route null keys to the empty-string key path
+    ctx.emitter.instruction(&format!("b.eq {}", null_key));                     // route null keys to the empty-string key path
     ctx.emitter.instruction("cmp x0, #0");                                      // integer mixed keys are already scalar hash keys
-    ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                  // keep integer keys as integer hash keys
+    ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep integer keys as integer hash keys
     ctx.emitter.instruction("cmp x0, #3");                                      // boolean mixed keys normalize like integer keys
     ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep boolean keys as integer keys
     ctx.emitter.instruction("mov x1, #0");                                      // unsupported mixed key tags fall back to integer key zero
@@ -183,11 +293,11 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction("cmp rax, 1");                                      // string mixed keys need PHP numeric-string normalization
     ctx.emitter.instruction(&format!("je {}", string_key));                     // route string keys through the normal hash-key helper
     ctx.emitter.instruction("cmp rax, 8");                                      // null mixed keys normalize to the empty string like PHP
-    ctx.emitter.instruction(&format!("je {}", null_key));                      // route null keys to the empty-string key path
+    ctx.emitter.instruction(&format!("je {}", null_key));                       // route null keys to the empty-string key path
     ctx.emitter.instruction("cmp rax, 0");                                      // integer mixed keys are already scalar hash keys
     ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep integer keys as integer hash keys
     ctx.emitter.instruction("cmp rax, 3");                                      // boolean mixed keys normalize like integer keys
-    ctx.emitter.instruction(&format!("je {}", scalar_key));                    // keep boolean keys as integer hash keys
+    ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep boolean keys as integer hash keys
     ctx.emitter.instruction("xor esi, esi");                                    // unsupported mixed key tags fall back to integer key zero
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks fallback mixed keys as integers
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after fallback selection
@@ -196,7 +306,7 @@ fn materialize_mixed_hash_key_x86_64(
     abi::emit_symbol_address(ctx.emitter, "rax", &empty_label);                 // null normalizes to the empty string "" hash key pointer
     abi::emit_load_int_immediate(ctx.emitter, "rdx", empty_len as i64);          // the empty-string key has zero length (string-key marker)
     ctx.emitter.instruction("mov rsi, rax");                                    // move the empty-string pointer into the hash ABI key low word
-    ctx.emitter.instruction(&format!("jmp {}", done));                         // skip the string-key normalization path
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the string-key normalization path
     ctx.emitter.label(&scalar_key);
     ctx.emitter.instruction("mov rsi, rdi");                                    // publish the unboxed scalar payload as key_lo
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks scalar mixed keys as integers

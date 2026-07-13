@@ -60,7 +60,7 @@ pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Ins
             }
             Arch::X86_64 => {
                 // rax holds the Mixed pointer; __rt_mixed_cast_int expects rdi
-                ctx.emitter.instruction("mov rdi, rax");                         // move the Mixed pointer into the first SysV argument register
+                ctx.emitter.instruction("mov rdi, rax");                        // move the Mixed pointer into the first SysV argument register
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
             }
         }
@@ -102,7 +102,7 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("mov rdi, rax");                         // move the Mixed pointer into the first SysV argument register
+                ctx.emitter.instruction("mov rdi, rax");                        // move the Mixed pointer into the first SysV argument register
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
             }
         }

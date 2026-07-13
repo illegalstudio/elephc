@@ -26,6 +26,45 @@ fn test_top_level_return_value_halts_and_is_discarded() {
     assert_eq!(out, "a");
 }
 
+/// Verifies `declare(strict_types=1);` is accepted and compiles as a no-op,
+/// so the rest of the program runs normally (elephc is always strict).
+#[test]
+fn test_declare_strict_types_is_accepted_and_noop() {
+    let out = compile_and_run("<?php declare(strict_types=1); echo 1 + 2;");
+    assert_eq!(out, "3");
+}
+
+/// Verifies the `declare(ticks=1) { ... }` block form runs its body in the
+/// enclosing scope.
+#[test]
+fn test_declare_block_runs_body() {
+    let out = compile_and_run("<?php declare(ticks=1) { echo \"ok\"; }");
+    assert_eq!(out, "ok");
+}
+
+/// Verifies PHP's alternative declare syntax compiles and executes its body.
+#[test]
+fn test_declare_alternative_syntax_runs_body() {
+    let out = compile_and_run("<?php declare(ticks=1): echo \"alternative\"; enddeclare;");
+    assert_eq!(out, "alternative");
+}
+
+/// Verifies PHP's single-statement declare form compiles and executes that statement.
+#[test]
+fn test_declare_single_statement_runs_body() {
+    let out = compile_and_run("<?php declare(ticks=1) echo \"single\";");
+    assert_eq!(out, "single");
+}
+
+/// Verifies empty and nested declare bodies preserve normal enclosing-scope execution.
+#[test]
+fn test_declare_empty_and_nested_bodies() {
+    let out = compile_and_run(
+        "<?php declare(ticks=1) {} declare(ticks=1): declare(ticks=1) echo \"nested\"; enddeclare;",
+    );
+    assert_eq!(out, "nested");
+}
+
 // --- IIFE (Immediately Invoked Function Expression) ---
 
 /// Compiles an IIFE that returns a string literal and verifies the value is echoed correctly.

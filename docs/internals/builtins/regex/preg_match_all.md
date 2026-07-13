@@ -2,7 +2,7 @@
 title: "preg_match_all() — internals"
 description: "Compiler internals for preg_match_all(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 316
+  order: 321
 ---
 
 ## `preg_match_all()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_match_all.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_match_all.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/regex.rs`:49](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/regex.rs#L49) (`lower_preg_match_all`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/regex.rs`:66](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/regex.rs#L66) (`lower_preg_match_all`)
 - **Function symbol**: `lower_preg_match_all()`
 
 
@@ -33,6 +33,12 @@ function preg_match_all(string $pattern, string $subject): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$matches`.
 
 ## Cross-references
 

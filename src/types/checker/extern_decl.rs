@@ -64,6 +64,7 @@ impl Checker {
                 PhpType::Str
                 | PhpType::Int
                 | PhpType::Bool
+                | PhpType::False
                 | PhpType::Resource(_)
                 | PhpType::Pointer(_)
                 | PhpType::Buffer(_)
@@ -186,7 +187,12 @@ impl Checker {
     pub(crate) fn callback_type_is_c_compatible(ty: &PhpType) -> bool {
         matches!(
             ty,
-            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Pointer(_) | PhpType::Void
+            PhpType::Int
+                | PhpType::Float
+                | PhpType::Bool
+                | PhpType::False
+                | PhpType::Pointer(_)
+                | PhpType::Void
         )
     }
 

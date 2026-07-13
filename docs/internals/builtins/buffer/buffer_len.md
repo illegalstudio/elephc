@@ -32,6 +32,11 @@ function buffer_len(buffer $buffer): int
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_len.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_len.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `buffer_len()`](../../../php/builtins/buffer/buffer_len.md)

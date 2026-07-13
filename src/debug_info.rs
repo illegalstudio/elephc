@@ -100,6 +100,7 @@ fn debug_info_sections(
             ".section .debug_abbrev,\"\",@progbits",
             ".section .debug_info,\"\",@progbits",
         ),
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
     };
     let name = escape_asm_string(source_path);
     let comp_dir = escape_asm_string(

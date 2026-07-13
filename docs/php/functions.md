@@ -338,6 +338,31 @@ $b = 2;
 echo $a; // 2
 ```
 
+## References to array elements
+
+A local can alias an element of an **indexed array** (`$b =& $a[0]`). Writing through
+the alias updates the element, and writing the element updates the alias:
+
+```php
+<?php
+$a = [1, 2, 3];
+$b =& $a[0];
+$b = 9;
+echo $a[0]; // 9
+$a[0] = 5;
+echo $b;    // 5
+```
+
+Current limits (see the incompatibilities list in [types](./types.md)):
+
+- The source must be an indexed array with an integer index. Associative arrays
+  (`$b =& $a['key']`) are rejected at compile time.
+- Referencing an out-of-range index does **not** create the element the way PHP's
+  autovivification does; the alias binds to a null cell instead.
+- The array must stay alive (and must not grow) while the alias is used: the alias
+  points into the array's storage, and operations that reallocate it (such as
+  `$a[] = ...`) detach the alias.
+
 ## References to object properties
 
 A local can alias an object property. Writing through the alias updates the property,

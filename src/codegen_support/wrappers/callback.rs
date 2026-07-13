@@ -46,8 +46,8 @@ pub(crate) fn emit_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCal
     emitter.instruction(&format!("stp x19, x20, [sp, #{}]", saved_callee_offset)); // preserve wrapper callee-saved registers
 
     let env_reg = incoming_env_reg(emitter, &wrapper.visible_arg_types);
-    emitter.instruction(&format!("mov x20, {}", env_reg)); // keep the callback environment pointer across argument reshuffling
-    emitter.instruction("ldr x19, [x20]"); // load the original captured closure entry point from env slot zero
+    emitter.instruction(&format!("mov x20, {}", env_reg));                      // keep the callback environment pointer across argument reshuffling
+    emitter.instruction("ldr x19, [x20]");                                      // load the original captured closure entry point from env slot zero
 
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     spill_captures(
@@ -104,8 +104,8 @@ fn emit_x86_64_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCallbac
     abi::store_at_offset(emitter, "r13", saved_env_offset);
 
     let env_reg = incoming_env_reg(emitter, &wrapper.visible_arg_types);
-    emitter.instruction(&format!("mov r13, {}", env_reg)); // keep the callback environment pointer across argument reshuffling
-    emitter.instruction("mov r12, QWORD PTR [r13]"); // load the original captured closure entry point from env slot zero
+    emitter.instruction(&format!("mov r13, {}", env_reg));                      // keep the callback environment pointer across argument reshuffling
+    emitter.instruction("mov r12, QWORD PTR [r13]");                            // load the original captured closure entry point from env slot zero
 
     spill_visible_args(emitter, &wrapper.visible_arg_types);
     spill_captures(

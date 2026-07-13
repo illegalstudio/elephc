@@ -1,7 +1,7 @@
 <?php
 
-// Type narrowing: `is_*` and `instanceof` guards let an untyped value be used
-// as a specific type inside the guarded branch — without an explicit cast.
+// Type narrowing: predicates, strict literal checks, and `instanceof` guards
+// refine variables and stable properties without explicit casts.
 
 class Money
 {
@@ -30,5 +30,30 @@ function render($value): string
     return "unknown";
 }
 
+function requireQuantity(int|false $value): int
+{
+    if ($value === false) {
+        throw new InvalidArgumentException("quantity unavailable");
+    }
+    return $value; // int|false has narrowed to int
+}
+
+class Cart
+{
+    public function __construct(public ?Money $discount)
+    {
+    }
+
+    public function requireDiscount(): Money
+    {
+        if (is_null($this->discount)) {
+            throw new LogicException("discount missing");
+        }
+        return $this->discount; // the stable property has narrowed to Money
+    }
+}
+
 echo render(7), "\n";
 echo render(new Money(1299)), "\n";
+echo "quantity ", requireQuantity(3), "\n";
+echo "discount ", (new Cart(new Money(250)))->requireDiscount()->format(), "\n";

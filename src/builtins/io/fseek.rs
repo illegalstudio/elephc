@@ -38,7 +38,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &cx.args[0],
         cx.env,
     )?;
-    Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::Bool]))
+    Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::False]))
 }
 
 /// Lowers an `fseek` call by dispatching to the shared io emitter.

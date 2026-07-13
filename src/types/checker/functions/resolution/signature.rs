@@ -92,6 +92,13 @@ impl Checker {
 
         let provisional_sig = FunctionSig {
             params: param_types.clone(),
+            param_type_exprs: decl
+                .param_types
+                .iter()
+                .cloned()
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
+                .collect(),
+            param_attributes: decl.param_attributes.clone(),
             defaults: decl.defaults.clone(),
             return_type: PhpType::Int,
             declared_return: decl.return_type.is_some(),
@@ -102,7 +109,7 @@ impl Checker {
                 .param_types
                 .iter()
                 .map(|type_ann| type_ann.is_some())
-                .chain(decl.variadic.iter().map(|_| false))
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
                 .collect(),
             variadic: decl.variadic.clone(),
         };
@@ -229,6 +236,13 @@ impl Checker {
 
         let sig = FunctionSig {
             params: param_types,
+            param_type_exprs: decl
+                .param_types
+                .iter()
+                .cloned()
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
+                .collect(),
+            param_attributes: decl.param_attributes.clone(),
             defaults: decl.defaults.clone(),
             return_type: return_type.clone(),
             declared_return: decl.return_type.is_some(),
@@ -238,7 +252,7 @@ impl Checker {
                 .param_types
                 .iter()
                 .map(|type_ann| type_ann.is_some())
-                .chain(decl.variadic.iter().map(|_| false))
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
                 .collect(),
             variadic: decl.variadic.clone(),
             deprecation: crate::types::checker::schema::validation::extract_deprecation(
