@@ -2915,11 +2915,17 @@ class PDOStatement implements Iterator {
                     $_order[$_bn] = $_gkeyM;
                     $_bn = $_bn + 1;
                 } else {
-                    // Append to the existing bucket. Read / append / write back rather than
-                    // `$_groups[$_gkeyS][] = $_grow`: a nested append through an element is a
-                    // known EIR write-through gap, and FETCH_NAMED uses this same three-step
-                    // form for the same reason.
+                    // Append to the existing bucket. Detach it from the map FIRST: after the
+                    // read the bucket has refcount 2 (the $_groups slot + $_bucket), so a bare
+                    // push would COW-clone the whole bucket every row — O(n^2) over a large
+                    // group (n = rows in the group). unset() drops the slot's reference to
+                    // refcount 1, so `$_bucket[] = …` mutates in place (amortized O(1)); the
+                    // same bucket is then reinserted under the same key. $_out is assembled
+                    // from $_order (first-seen), never from $_groups iteration order, so the
+                    // detach/reinsert cannot change the output; $_present is untouched, so the
+                    // key stays "seen". This is the O(n^2)->O(n) fix, with no compiler change.
                     $_bucket = $_groups[$_gkeyS];
+                    unset($_groups[$_gkeyS]);
                     $_bucket[] = $_grow;
                     $_groups[$_gkeyS] = $_bucket;
                 }

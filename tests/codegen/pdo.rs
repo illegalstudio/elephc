@@ -3649,6 +3649,55 @@ echo $s;
     );
 }
 
+/// O(n^2)->O(n) regression: `FETCH_GROUP`'s append branch used to read the bucket out of
+/// `$_groups`, push onto the local copy, then write it back — with the bucket sitting at
+/// refcount 2 (the map slot + the local) across every one of those pushes, so each one
+/// COW-cloned the whole bucket. The fix `unset()`s the map slot before the push so the
+/// bucket is refcount 1 and mutates in place. This drives ONE key through 60 rows — enough
+/// to have made the O(n^2) clone-per-row path expensive — interleaved with two single-row
+/// keys, so a bug in the unset()/reinsert sequence (wrong bucket, dropped rows, corrupted
+/// key order) would show up as either a short/garbled 'big' group or a scrambled key order.
+///
+/// Asserts, precisely: (1) the 60-row group contains ALL 60 rows, in RESULT order; (2) the
+/// two incidental single-row groups are untouched by the big group's growth; (3) all three
+/// keys come out in FIRST-SEEN order ('a', then 'big', then 'mid', then 'b' — 'mid' is
+/// inserted in the MIDDLE of the 'big' run, after 'big' is already first-seen, so its
+/// presence there also proves the interleaved unset()/reinsert of 'big' never disturbs an
+/// unrelated key's own bucket).
+#[test]
+fn test_pdo_fetch_all_group_large_group_is_on_via_unset_reinsert() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (kind TEXT, name TEXT, n INTEGER)");
+$ins = $db->prepare("INSERT INTO t (kind, name, n) VALUES (?, ?, ?)");
+$ins->execute(["a", "afirst", 0]);
+for ($i = 1; $i <= 30; $i++) {
+    $ins->execute(["big", "r" . $i, $i]);
+}
+$ins->execute(["mid", "midrow", 31]);
+for ($i = 31; $i <= 60; $i++) {
+    $ins->execute(["big", "r" . $i, $i + 1]);
+}
+$ins->execute(["b", "blast", 62]);
+
+$out = $db->query("SELECT kind, name FROM t ORDER BY n")->fetchAll(PDO::FETCH_GROUP | PDO::FETCH_COLUMN);
+
+$s = "";
+foreach ($out as $k => $vals) {
+    $s .= $k . "[" . count($vals) . "]=" . implode(",", $vals) . ";";
+}
+echo $s;
+"#,
+    );
+    let big_rows: Vec<String> = (1..=60).map(|i| format!("r{i}")).collect();
+    let expected = format!(
+        "a[1]=afirst;big[60]={};mid[1]=midrow;b[1]=blast;",
+        big_rows.join(",")
+    );
+    assert_eq!(out, expected);
+}
+
 /// F-STMT-15: the two combinations that are REFUSED LOUDLY rather than faked, both because
 /// column 0 is already consumed as the grouping key and something else wants it too.
 ///

@@ -965,3 +965,30 @@ echo $a[0], ":", $b[0];
     );
     assert_eq!(out, "5:6");
 }
+
+/// x86_64-only regression pin for `__rt_array_get_mixed_key`'s hash-storage branch
+/// (`src/codegen_support/runtime/arrays/array_get_mixed_key.rs`,
+/// `__rt_array_get_mixed_key_hash`). Mixing an int and a string value gives `$a` a
+/// statically Mixed element type, and the string-keyed write promotes its runtime
+/// storage from indexed (kind 2) to hash (kind 3) via `__rt_array_set_mixed_key`.
+/// Reading it back through a non-literal string key routes through
+/// `Op::ArrayGetMixedKey`, whose x86_64 hash branch previously read `__rt_hash_get`'s
+/// real return registers (`rax`=found, `rdi`=value_lo, `rsi`=value_hi, `rcx`=value_tag)
+/// as if they mirrored the ARM64 convention (`rsi`=value_lo, `rdx`=value_hi,
+/// `rcx`=value_tag) — `rdx` was never set by `__rt_hash_get`, so a garbage pointer got
+/// boxed into the returned `Mixed` cell and SIGSEGV'd on first deref. The ARM64 branch
+/// was always correct, so this test is only meaningful — and only regresses — on
+/// x86_64.
+#[test]
+fn test_array_get_mixed_key_hash_storage_string_key_roundtrip() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[0] = 1;
+$a["greeting"] = "hello world";
+$key = "greeting";
+echo $a[$key];
+"#,
+    );
+    assert_eq!(out, "hello world");
+}
