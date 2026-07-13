@@ -19832,32 +19832,63 @@ eval('enum bool { case Ready; }');
     );
 }
 
-/// Verifies eval rejects PHP-reserved bare class-like reference names.
+/// Asserts one eval fragment rejects a PHP-reserved bare class-like reference name.
+fn assert_eval_reserved_class_like_reference_name_fails(source: &str) {
+    let err = compile_and_run_expect_failure(source);
+    assert!(
+        err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+        "stderr did not contain eval unsupported-construct diagnostic: {err}"
+    );
+}
+
+/// Verifies eval rejects a reserved class name in an `extends` reference.
 #[test]
-fn test_eval_reserved_class_like_reference_name_fails() {
-    for source in [
+fn test_eval_reserved_extends_class_reference_name_fails() {
+    assert_eval_reserved_class_like_reference_name_fails(
         r#"<?php
 eval('class EvalBadExtends extends match {}');
 "#,
+    );
+}
+
+/// Verifies eval rejects a reserved class name in an `implements` reference.
+#[test]
+fn test_eval_reserved_implements_class_reference_name_fails() {
+    assert_eval_reserved_class_like_reference_name_fails(
         r#"<?php
 eval('class EvalBadImplements implements match {}');
 "#,
+    );
+}
+
+/// Verifies eval rejects a reserved trait name in a `use` reference.
+#[test]
+fn test_eval_reserved_trait_use_reference_name_fails() {
+    assert_eval_reserved_class_like_reference_name_fails(
         r#"<?php
 eval('class EvalBadTraitUse { use match; }');
 "#,
+    );
+}
+
+/// Verifies eval rejects a reserved class name in a `new` expression.
+#[test]
+fn test_eval_reserved_new_class_reference_name_fails() {
+    assert_eval_reserved_class_like_reference_name_fails(
         r#"<?php
 eval('$box = new match();');
 "#,
+    );
+}
+
+/// Verifies eval rejects a reserved class name in an `instanceof` expression.
+#[test]
+fn test_eval_reserved_instanceof_class_reference_name_fails() {
+    assert_eval_reserved_class_like_reference_name_fails(
         r#"<?php
 eval('$ok = $box instanceof match;');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-            "stderr did not contain eval unsupported-construct diagnostic: {err}"
-        );
-    }
+    );
 }
 
 /// Verifies eval-declared final class constants cannot be redeclared.
