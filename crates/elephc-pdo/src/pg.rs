@@ -294,6 +294,17 @@ pub fn parse_dsn(dsn: &str) -> Result<String, String> {
         if key == "connect_timeout" {
             saw_connect_timeout = true;
         }
+        // F-CORE-02: the prelude percent-encodes '%' and ';' on a constructor-supplied
+        // `user`/`password` value before folding it into the DSN, so it survives the
+        // `body.split(';')` above intact instead of truncating at an embedded ';'.
+        // Undo that encoding here — and only for these two keys, since every other
+        // value is passed straight through byte-identical — before escaping it into
+        // the libpq conninfo string below.
+        let value = if matches!(key, "user" | "password") {
+            percent_decode_credential(value)
+        } else {
+            value.to_string()
+        };
         // libpq connection strings quote values containing spaces/specials; a
         // simple single-quote wrap with backslash-escaping is sufficient here.
         let escaped = value.replace('\\', "\\\\").replace('\'', "\\'");
@@ -311,6 +322,40 @@ pub fn parse_dsn(dsn: &str) -> Result<String, String> {
         parts.push(format!("connect_timeout='{}'", DEFAULT_CONNECT_TIMEOUT_SECS));
     }
     Ok(parts.join(" "))
+}
+
+/// Percent-decodes a `user=`/`password=` DSN value (F-CORE-02). The prelude
+/// percent-encodes '%' and ';' on the credential it folds into the DSN — '%'
+/// first, so the '%' introduced by encoding ';' as `%3B` is not itself
+/// re-encoded — precisely so a ';' or '%' embedded in the username/password
+/// survives `body.split(';')` above instead of truncating the credential.
+/// This undoes that encoding; a value with no '%' is returned unchanged
+/// (byte-identical) without allocating a new string. An invalid or truncated
+/// escape (not two hex digits) is copied through verbatim rather than
+/// rejected, since a bare '%' is legal in a value that predates this scheme.
+fn percent_decode_credential(raw: &str) -> String {
+    if !raw.contains('%') {
+        return raw.to_string();
+    }
+    let b = raw.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && b[i + 1].is_ascii_hexdigit()
+            && b[i + 2].is_ascii_hexdigit()
+        {
+            let hi = (b[i + 1] as char).to_digit(16).unwrap() as u8;
+            let lo = (b[i + 2] as char).to_digit(16).unwrap() as u8;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// The PostgreSQL TLS parameters carried by a `pgsql:` DSN, extracted separately
@@ -964,6 +1009,14 @@ impl PgConn {
     /// `bigint` by default but a caller-chosen sequence can be any integer type,
     /// so a text round-trip avoids a lossy/failing numeric bridge. Empty string on
     /// error.
+    ///
+    /// F-CORE-18: an empty string is also the prelude's failure sentinel for
+    /// `PDO::lastInsertId()` (`string|false`), so a server error (most commonly
+    /// `lastval()`'s SQLSTATE 55000 when no sequence has been used yet in this
+    /// session) records the connection's real SQLSTATE/message/native code via
+    /// [`Self::fail`] before returning empty, instead of swallowing it — the
+    /// prelude reads `elephc_pdo_sqlstate`/`elephc_pdo_errmsg` right after this
+    /// call to decide between surfacing that error and a generic `IM001`.
     pub fn last_insert_id_text(&mut self, name: Option<&str>) -> String {
         let sql = match name {
             Some(n) if !n.is_empty() => {
@@ -973,7 +1026,10 @@ impl PgConn {
         };
         match self.client.query_one(&sql, &[]) {
             Ok(row) => row.try_get::<_, String>(0).unwrap_or_default(),
-            Err(_) => String::new(),
+            Err(e) => {
+                self.fail(e);
+                String::new()
+            }
         }
     }
 
@@ -1702,6 +1758,30 @@ mod tests {
         conn_str
             .parse::<Config>()
             .expect("conn string with dropped keys must still parse");
+    }
+
+    /// F-CORE-02: the prelude percent-encodes a constructor-supplied password
+    /// containing ';' (here `a;b` -> `a%3Bb`) before folding it into the DSN, so
+    /// it survives `body.split(';')` intact instead of truncating at the
+    /// embedded ';'. `parse_dsn` must undo that encoding before the value
+    /// reaches the libpq conninfo string, landing on the original `a;b` (quoted,
+    /// with no `%3B` left in it).
+    #[test]
+    fn parse_dsn_percent_decodes_a_password_containing_semicolon() {
+        let dsn = "pgsql:host=db.example.com;user=admin;password=a%3Bb";
+        let conn_str = parse_dsn(dsn).expect("dsn parses");
+        assert!(
+            conn_str.contains("password='a;b'"),
+            "expected the decoded password in: {conn_str}"
+        );
+        assert!(
+            !conn_str.contains("%3B"),
+            "the percent-escape must not reach the libpq conn string: {conn_str}"
+        );
+        // The whole point: tokio-postgres's own parser must accept the decoded value.
+        conn_str
+            .parse::<Config>()
+            .expect("conn string with a decoded password must still parse");
     }
 
     /// `parse_tls` captures `sslmode` (lowercased) and the three file paths.

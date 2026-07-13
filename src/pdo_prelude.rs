@@ -762,13 +762,27 @@ class PDO {
         // `match key { "user" => user = Some(value), … }` into ONE slot per key — a later
         // duplicate simply overwrites the earlier one, i.e. the parser is LAST-WINS. The
         // DSN's own `user=`/`password=` therefore does not have to be stripped out.
+        //
+        // F-CORE-02 (follow-up): the LAST-WINS mechanism above still relies on the same
+        // `body.split(';')` the DSN itself is scanned with, so a ';' embedded in the
+        // constructor username/password would silently truncate the credential right
+        // there (and a stray '%' would collide with the percent-decoding this note is
+        // about to describe). Percent-encode '%' and ';' on the credential VALUE before
+        // appending it — '%' FIRST, so the '%' introduced by encoding ';' is not itself
+        // re-encoded — and percent-decode ONLY the user/password values on the bridge
+        // side (my.rs/pg.rs). '=' needs no encoding since the parser splits on the first
+        // '=' only. This leaves the ';'-splitter itself, and every non-credential value
+        // (host, dbname with '\' or '%', etc.), byte-identical; a credential with no
+        // special characters round-trips unchanged too.
         if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:")) {
             $_dsnIsMysql = str_starts_with($_dsn, "mysql:");
             if ($username !== null && ($_dsnIsMysql || !str_contains($_dsn, "user="))) {
-                $_dsn = $_dsn . ";user=" . $username;
+                $_encUser = str_replace(";", "%3B", str_replace("%", "%25", $username));
+                $_dsn = $_dsn . ";user=" . $_encUser;
             }
             if ($password !== null && ($_dsnIsMysql || !str_contains($_dsn, "password="))) {
-                $_dsn = $_dsn . ";password=" . $password;
+                $_encPass = str_replace(";", "%3B", str_replace("%", "%25", $password));
+                $_dsn = $_dsn . ";password=" . $_encPass;
             }
             // P2-1: ATTR_TIMEOUT maps to the driver's connect-time socket
             // timeout. libpq's `connect_timeout` conninfo key and the mysql
@@ -1285,12 +1299,31 @@ class PDO {
         return $_statement;
     }
 
-    public function lastInsertId(?string $name = null): string {
+    public function lastInsertId(?string $name = null): string|bool {
         // The name is a sequence for PostgreSQL (`currval($name)`); SQLite and
         // MySQL ignore it and return the last rowid / auto-increment id. The text
         // bridge is used so oversized PostgreSQL sequence values (which need not
         // fit in an i64) round-trip without truncation.
-        return elephc_pdo_last_insert_id_text($this->conn, $name ?? "");
+        //
+        // F-CORE-18: php-src's signature is `string|false`. SQLite and MySQL
+        // return "0" (never "") when there was no insert, and PostgreSQL's
+        // `lastval()` errors when no sequence has been used in the session
+        // (SQLSTATE 55000); the bridge reports every such failure — and an
+        // unknown handle — as "". An empty result is therefore the failure
+        // sentinel: surface the connection's real error when the driver set one
+        // (error-mode-aware, via failCode()), else a generic IM001, and return
+        // false rather than silently handing back "".
+        $_id = elephc_pdo_last_insert_id_text($this->conn, $name ?? "");
+        if ($_id !== "") {
+            return $_id;
+        }
+        $_sqlstate = elephc_pdo_sqlstate($this->conn);
+        if ($_sqlstate !== "00000") {
+            $this->failCode($_sqlstate, elephc_pdo_errmsg($this->conn));
+        } else {
+            $this->failCode("IM001", "driver does not support lastInsertId()");
+        }
+        return false;
     }
 
     public function beginTransaction(): bool {
@@ -2759,6 +2792,14 @@ class PDOStatement implements Iterator {
                 // Column 0 is already spoken for as the grouping key, so defaulting the
                 // value to it too would return [type => [type, type, …]].
                 $this->fetchColumn = 1;
+            } else {
+                // php-src: `stmt->fetch.column = arg2 ? Z_LVAL(arg2) : (how &
+                // PDO_FETCH_GROUP ? 1 : 0)` — the neither-branch of that ternary.
+                // Without this, a plain `fetchAll(PDO::FETCH_COLUMN)` (no index, no
+                // GROUP) would silently reuse whatever index a PRIOR
+                // `fetchAll(FETCH_COLUMN, $n)` call left on $this->fetchColumn instead
+                // of resetting to column 0.
+                $this->fetchColumn = 0;
             }
         } elseif (($_base == 8 || $_base == 9) && $classOrObject !== null) {
             // FETCH_CLASS's class name / FETCH_INTO's object: `stmt->fetch.cls.ce`.

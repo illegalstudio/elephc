@@ -335,8 +335,8 @@ pub fn build_opts(dsn: &str, found_rows: bool) -> Result<(OptsBuilder, Option<St
             "port" => port = value.parse::<u16>().ok(),
             "dbname" => dbname = Some(value),
             "unix_socket" | "socket" => socket = Some(value),
-            "user" => user = Some(value),
-            "password" => password = Some(value),
+            "user" => user = Some(percent_decode_credential(&value)),
+            "password" => password = Some(percent_decode_credential(&value)),
             "connect_timeout" => connect_timeout = value.parse::<u64>().ok(),
             "charset" => {
                 if !value.is_empty()
@@ -393,6 +393,40 @@ pub fn build_opts(dsn: &str, found_rows: bool) -> Result<(OptsBuilder, Option<St
     let secs = connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS);
     opts = opts.tcp_connect_timeout(Some(Duration::from_secs(secs)));
     Ok((opts, charset))
+}
+
+/// Percent-decodes a `user=`/`password=` DSN value (F-CORE-02). The prelude
+/// percent-encodes '%' and ';' on the credential it folds into the DSN — '%'
+/// first, so the '%' introduced by encoding ';' as `%3B` is not itself
+/// re-encoded — precisely so a ';' or '%' embedded in the username/password
+/// survives `body.split(';')` above instead of truncating the credential.
+/// This undoes that encoding; a value with no '%' is returned unchanged
+/// (byte-identical) without allocating a new string. An invalid or truncated
+/// escape (not two hex digits) is copied through verbatim rather than
+/// rejected, since a bare '%' is legal in a value that predates this scheme.
+fn percent_decode_credential(raw: &str) -> String {
+    if !raw.contains('%') {
+        return raw.to_string();
+    }
+    let b = raw.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && b[i + 1].is_ascii_hexdigit()
+            && b[i + 2].is_ascii_hexdigit()
+        {
+            let hi = (b[i + 1] as char).to_digit(16).unwrap() as u8;
+            let lo = (b[i + 2] as char).to_digit(16).unwrap() as u8;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Returns whether `b` is an identifier byte (`[A-Za-z0-9_]`), used to read a
@@ -1631,6 +1665,33 @@ mod tests {
     fn build_opts_leaves_charset_unset_by_default() {
         let (_opts, charset) = build_opts("mysql:host=localhost;dbname=testdb", false).unwrap();
         assert_eq!(charset, None);
+    }
+
+    /// F-CORE-02: the prelude percent-encodes a constructor-supplied password
+    /// containing ';' and '%' (here `a;b%c` -> `a%3Bb%25c`) before folding it
+    /// into the DSN, so it survives `body.split(';')` intact instead of
+    /// truncating at the embedded ';'. `build_opts` must undo that encoding —
+    /// `%3B` back to ';', `%25` back to '%' — landing on the original value.
+    #[test]
+    fn build_opts_percent_decodes_a_password_containing_semicolon_and_percent() {
+        let (opts, _charset) = build_opts(
+            "mysql:host=127.0.0.1;user=admin;password=a%3Bb%25c",
+            false,
+        )
+        .unwrap();
+        let opts: mysql::Opts = opts.into();
+        assert_eq!(opts.get_user(), Some("admin"));
+        assert_eq!(opts.get_pass(), Some("a;b%c"));
+    }
+
+    /// The percent-decoding above must be a no-op for a credential with no '%'
+    /// byte at all — the common case — so it round-trips byte-identical.
+    #[test]
+    fn build_opts_leaves_a_plain_password_byte_identical() {
+        let (opts, _charset) =
+            build_opts("mysql:host=127.0.0.1;user=admin;password=secret", false).unwrap();
+        let opts: mysql::Opts = opts.into();
+        assert_eq!(opts.get_pass(), Some("secret"));
     }
 
     /// An empty SSL config is always a no-op (plaintext), regardless of feature.

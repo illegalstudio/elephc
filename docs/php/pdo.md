@@ -802,6 +802,15 @@ default:
   here**. elephc raises HY093 for an *unresolvable* placeholder and for an out-of-range
   slot, from the driver's own answer — not from a client-side count comparison.
 - `CALL` behaves like a genuine prepared `CALL` rather than an emulated one.
+- **A literal `?` cannot be sent through a MySQL prepared statement.** Doubling it as
+  `??` (the usual way to escape a placeholder-like literal) is kept **verbatim** by the
+  scanner and allocates no bind slot, so the server still counts both `?` characters as
+  placeholders — the prepared statement then fails at `execute()` with a bind-count
+  mismatch. This is a direct consequence of always-native prepares: php-src sidesteps it
+  because its default emulation resolves placeholders **client-side** before the SQL ever
+  reaches the server, so an escaped `??` (or any local rewriting) never has to survive a
+  real `PREPARE`. There is no scanner-side fix that makes `??` mean a literal `?` under a
+  genuine MySQL native prepare — not a bug, a documented consequence of the model above.
 
 ### Other divergences
 

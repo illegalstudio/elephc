@@ -110,6 +110,37 @@ $db->exec("DROP TABLE pg_seq");
     assert_eq!(out, "2");
 }
 
+/// F-CORE-18: on a FRESH connection (a new session — `lastval()` is
+/// session-scoped, so this only holds because `pg_program` opens a new `PDO`
+/// per test), `lastInsertId()` before any INSERT/`nextval()` fails — pg's
+/// `lastval()` errors with SQLSTATE 55000 ("currval of sequence ... is not yet
+/// defined in this session") rather than returning a fabricated `"0"` — and the
+/// default EXCEPTION errmode surfaces that as a catchable `PDOException` whose
+/// `errorInfo[0]` carries the real (non-success) SQLSTATE. A subsequent real
+/// `SERIAL` insert still returns the real id, unaffected by the earlier failure.
+#[test]
+#[ignore]
+fn test_pgsql_last_insert_id_no_sequence_throws() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS pg_seq_fresh");
+$db->exec("CREATE TABLE pg_seq_fresh (id SERIAL PRIMARY KEY, n INTEGER)");
+$code = "no-throw";
+try {
+    $db->lastInsertId();
+} catch (PDOException $e) {
+    $code = $e->errorInfo[0];
+}
+$db->exec("INSERT INTO pg_seq_fresh (n) VALUES (42)");
+$id = $db->lastInsertId();
+$db->exec("DROP TABLE pg_seq_fresh");
+echo (strlen($code) === 5 && $code !== "00000") ? "err-ok" : $code;
+echo ":" . $id;
+"#,
+    ));
+    assert_eq!(out, "err-ok:1");
+}
+
 /// Column types decode to PHP scalars: integer, double, boolean (0/1), text, and
 /// SQL NULL.
 #[test]

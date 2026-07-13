@@ -1346,6 +1346,23 @@ echo $db->lastInsertId();
     assert_eq!(out, "2");
 }
 
+/// F-CORE-18: `lastInsertId()`'s success path still returns a plain string
+/// (compares `===` equal, not a boxed/coerced value) now that its return type is
+/// `string|bool` — SQLite always succeeds after an insert, so this is a
+/// regression guard that widening the signature left the success arm untouched.
+#[test]
+fn test_pdo_last_insert_id_success_strict_string() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+$db->exec("INSERT INTO t (name) VALUES ('a')");
+echo ($db->lastInsertId() === "1") ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// W6: the added PHP 8.4 constants resolve to their documented numeric values,
 /// including the OR-able fetch flags (hex).
 ///
@@ -3919,6 +3936,31 @@ echo implode(",", $col2);
 "#,
     );
     assert_eq!(out, "100,200");
+}
+
+/// `fetchAll(PDO::FETCH_COLUMN)` with no index must NOT reuse a stale index left
+/// on `$this->fetchColumn` by a PRIOR `fetchAll(FETCH_COLUMN, $n)` call on the
+/// same statement — it must reset to column 0, matching php-src's
+/// `stmt->fetch.column = arg2 ? Z_LVAL(arg2) : (how & PDO_FETCH_GROUP ? 1 : 0)`.
+/// Regression pin: the prelude's FETCH_COLUMN branch previously had no `else`,
+/// leaking whatever index the earlier explicit call left behind.
+#[test]
+fn test_pdo_fetch_all_column_no_index_does_not_leak_prior_index() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (a, b)");
+$db->exec("INSERT INTO t (a, b) VALUES (1, 10), (2, 20)");
+$stmt = $db->prepare("SELECT a, b FROM t ORDER BY a");
+$stmt->execute();
+$leaked = $stmt->fetchAll(PDO::FETCH_COLUMN, 1);
+$stmt2 = $db->prepare("SELECT a, b FROM t ORDER BY a");
+$stmt2->execute();
+$reset = $stmt2->fetchAll(PDO::FETCH_COLUMN);
+echo implode(",", $leaked) . "|" . implode(",", $reset);
+"#,
+    );
+    assert_eq!(out, "10,20|1,2");
 }
 
 /// A caught `PDOException` exposes a usable `errorInfo`: `null` for an unrecognized
