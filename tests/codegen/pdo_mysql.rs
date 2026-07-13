@@ -505,3 +505,444 @@ echo $db->quote("ab", PDO::PARAM_LOB);
     ));
     assert_eq!(out, "_binary'ab'");
 }
+
+/// F-MY-05 (P0-C follow-up): a `CALL` behind a LEADING COMMENT is still a `CALL`.
+/// This is the single highest-value live fixture of the wave: it pins the
+/// data-loss half of the P0-C regression rather than its detection half.
+/// `my.rs::sql_is_call_statement()` used to test only past leading WHITESPACE, so
+/// `/* hint */ CALL p()` (an optimizer-hint prefix, which real applications and
+/// ORMs emit routinely) and `-- note\nCALL p()` were classified as ordinary
+/// statements. A non-`CALL` statement's row materialization is gated on the
+/// PREPARE-time column count, and `COM_STMT_PREPARE` reports ZERO columns for a
+/// `CALL` (the result shape only exists once the procedure runs) — so the
+/// procedure's rows were silently dropped off the wire and `fetchAll()` returned
+/// an empty set with NO error. The fix skips `/* … */`, `-- …` and `# …` runs
+/// ahead of the keyword. `$db->query()` routes through `prepare()` + `execute()`
+/// in the prelude, so it exercises exactly that path.
+///
+/// Both comment spellings are asserted (block and line), and the row is read
+/// through a `count() > 0` guard so a REGRESSION reports a readable `0-:0-`
+/// rather than crashing on an out-of-range index. Docker: same server as
+/// `mysql_call_stored_procedure_returns_rows` above, e.g.:
+///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
+///       cargo test --test codegen_tests -- --ignored mysql_call_behind_leading_comment_returns_rows
+#[test]
+#[ignore]
+fn mysql_call_behind_leading_comment_returns_rows() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS my_call_cmt_src");
+$db->exec("CREATE TABLE my_call_cmt_src (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO my_call_cmt_src VALUES (1, 'a')");
+$db->exec("DROP PROCEDURE IF EXISTS my_call_cmt_sp");
+$db->exec("CREATE PROCEDURE my_call_cmt_sp() BEGIN SELECT id, name FROM my_call_cmt_src; END");
+$blockRows = $db->query("/* hint */ CALL my_call_cmt_sp()")->fetchAll(PDO::FETCH_ASSOC);
+$lineRows = $db->query("-- note\nCALL my_call_cmt_sp()")->fetchAll(PDO::FETCH_ASSOC);
+$block = (count($blockRows) > 0) ? $blockRows[0]["name"] : "-";
+$line = (count($lineRows) > 0) ? $lineRows[0]["name"] : "-";
+echo count($blockRows) . $block . ":" . count($lineRows) . $line;
+$db->exec("DROP PROCEDURE my_call_cmt_sp");
+$db->exec("DROP TABLE my_call_cmt_src");
+"#,
+    ));
+    assert_eq!(out, "1a:1a");
+}
+
+/// F-CORE-02: on the MYSQL driver the CONSTRUCTOR's `$username`/`$password` WIN
+/// over a `user=`/`password=` the DSN already carries. php-src's handle factory
+/// consults the DSN key only as a fallback for an ABSENT constructor argument
+/// (`if (!dbh->username && vars[5].optval) …`, `mysql_driver.c:948-953`), the
+/// opposite of pgsql's last-wins conninfo (`pgsql_driver.c:1377-1378`) — and this
+/// prelude used to apply the pgsql rule to both, so
+/// `new PDO("mysql:host=h;user=readonly", "admin", $pw)` connected as `readonly`:
+/// a SILENT PRIVILEGE SWAP.
+///
+/// Runnable against the standard test container without knowing its credentials:
+/// the real ones are lifted out of `ELEPHC_MY_DSN` itself, a bogus pair is
+/// APPENDED to that DSN (the bridge's `build_opts` parser is last-wins, so the
+/// appended pair overrides the env DSN's own), and they are then handed back as
+/// the constructor arguments. The first `new PDO($bogus)` — no constructor
+/// arguments at all — is the NEGATIVE CONTROL: it must be REJECTED by the server,
+/// proving the bogus credentials really are bogus and that the second connect
+/// succeeds because the constructor arguments displaced them, not because the
+/// server would have let anyone in. Docker: same server as above, e.g.:
+///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
+///       cargo test --test codegen_tests -- --ignored mysql_ctor_credentials_override_dsn_credentials
+#[test]
+#[ignore]
+fn mysql_ctor_credentials_override_dsn_credentials() {
+    let out = compile_and_run(
+        r#"<?php
+$dsn = (string) getenv("ELEPHC_MY_DSN");
+$user = "";
+$pass = "";
+$parts = explode(";", $dsn);
+foreach ($parts as $part) {
+    if (str_starts_with($part, "user=")) {
+        $user = substr($part, 5);
+    } elseif (str_starts_with($part, "password=")) {
+        $pass = substr($part, 9);
+    }
+}
+if ($user === "") {
+    echo "dsn-carries-no-user";
+} else {
+    $bogus = $dsn . ";user=elephc_no_such_user;password=elephc_wrong_password";
+    $control = "connected";
+    try {
+        $rejectMe = new PDO($bogus);
+    } catch (PDOException $e) {
+        $control = "rejected";
+    }
+    $db = new PDO($bogus, $user, $pass);
+    echo $control . ":" . $db->query("SELECT 1")->fetchColumn();
+}
+"#,
+    );
+    assert_eq!(out, "rejected:1");
+}
+
+/// Contrast half of `mysql_ctor_credentials_override_dsn_credentials`, pinning the
+/// behavior that was already correct and that the F-CORE-02 fix must not break: a
+/// DSN-ONLY credential set still connects. The constructor arguments are passed
+/// EXPLICITLY as `null` here (rather than omitted) because that is the exact
+/// condition the fix's append is gated on — `$username !== null` — so a future
+/// change that appended an empty `;user=` for a null argument would clobber the
+/// DSN's own `user=` (the parser is last-wins) and fail here, not silently in
+/// production. Docker: same server as above.
+#[test]
+#[ignore]
+fn mysql_dsn_only_credentials_still_connect() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO((string) getenv("ELEPHC_MY_DSN"), null, null);
+echo $db->query("SELECT 1")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// F-MY-06: `Pdo\Mysql::ATTR_FOUND_ROWS` switches what the server reports as an
+/// UPDATE's affected-row count — and therefore what `PDOStatement::rowCount()`
+/// returns — from "rows actually CHANGED" to "rows MATCHED by the WHERE clause".
+/// The attribute ORs `CLIENT_FOUND_ROWS` into the HANDSHAKE capability flags
+/// (php-src `mysql_driver.c:776-778`), so it is a per-CONNECTION property that
+/// must be known before authentication: it cannot be set after the fact, and the
+/// only observable difference is on an UPDATE that matches a row but changes
+/// nothing.
+///
+/// The fixture therefore UPDATEs a row TO ITS OWN CURRENT VALUE (`n = 5` where it
+/// already is 5) over two connections to the same server: the plain one reports
+/// 0 (nothing changed), the `ATTR_FOUND_ROWS` one reports 1 (one row matched).
+/// The plain connection doubles as the fixture's setup/teardown connection.
+/// Docker: same server as above, e.g.:
+///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
+///       cargo test --test codegen_tests -- --ignored mysql_attr_found_rows_reports_matched_rows
+#[test]
+#[ignore]
+fn mysql_attr_found_rows_reports_matched_rows() {
+    let out = compile_and_run(
+        r#"<?php
+$dsn = (string) getenv("ELEPHC_MY_DSN");
+$plain = new \Pdo\Mysql($dsn);
+$plain->exec("DROP TABLE IF EXISTS my_found_rows");
+$plain->exec("CREATE TABLE my_found_rows (id INTEGER PRIMARY KEY, n INTEGER)");
+$plain->exec("INSERT INTO my_found_rows (id, n) VALUES (1, 5)");
+
+$changedStmt = $plain->prepare("UPDATE my_found_rows SET n = 5 WHERE id = 1");
+$changedStmt->execute();
+$changed = $changedStmt->rowCount();
+
+$found = new \Pdo\Mysql($dsn, null, null, [\Pdo\Mysql::ATTR_FOUND_ROWS => true]);
+$matchedStmt = $found->prepare("UPDATE my_found_rows SET n = 5 WHERE id = 1");
+$matchedStmt->execute();
+$matched = $matchedStmt->rowCount();
+
+$plain->exec("DROP TABLE my_found_rows");
+echo $changed . ":" . $matched;
+"#,
+    );
+    assert_eq!(out, "0:1");
+}
+
+/// F-CORE-10: the DEFAULT connect timeout. `my.rs::build_opts()` now applies
+/// `DEFAULT_CONNECT_TIMEOUT_SECS` (30 s, php-src's own pdo_mysql default)
+/// UNCONDITIONALLY, so a DSN naming neither a `connect_timeout` key nor (through
+/// the prelude) `PDO::ATTR_TIMEOUT` no longer waits out the OS's TCP connect
+/// timeout — roughly 130 s on Linux (`tcp_syn_retries=6`) and ~75 s on macOS.
+/// Sibling of `test_mysql_attr_timeout_fails_fast`, which pins the EXPLICIT
+/// attribute; this one deliberately passes NO options at all, which is the
+/// configuration that used to hang.
+///
+/// Uses a non-routable TEST-NET-1 address (RFC 5737, `192.0.2.0/24`) so the SYN
+/// blackholes rather than drawing an immediate "connection refused" — the same
+/// address family the sibling test relies on. Needs no live server: the point is
+/// that the connection NEVER completes.
+///
+/// The compile+run is driven from a worker thread behind a `recv_timeout` so a
+/// regression FAILS this test rather than parking the whole suite on that OS
+/// timeout (the in-PHP `< 35.0` assertion alone cannot bound a hang). The
+/// warm-up run first pays for any lazy `cargo build -p elephc-pdo` of the bridge
+/// staticlib and the cached SDK/runtime-object lookups OFF the clock, so the
+/// guarded run is only ever a small compile plus the connect attempt itself, and
+/// the 120 s budget has no legitimate way to be reached.
+#[test]
+#[ignore]
+fn mysql_default_connect_timeout_bounds_blackholed_connect() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    // Warm-up: an in-process SQLite PDO program links the very same bridge
+    // staticlib, so it forces every lazy build/OnceLock the guarded run would
+    // otherwise be billed for. No server needed.
+    let warm = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+echo "warm";
+"#,
+    );
+    assert_eq!(warm, "warm");
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let out = compile_and_run(
+            r#"<?php
+$start = microtime(true);
+try {
+    $conn = new \Pdo\Mysql("mysql:host=192.0.2.1;port=3306;dbname=testdb");
+    echo "connected";
+} catch (PDOException $e) {
+    $elapsed = microtime(true) - $start;
+    echo ($elapsed < 35.0) ? "fast" : "slow";
+}
+"#,
+        );
+        let _ = tx.send(out);
+    });
+
+    match rx.recv_timeout(Duration::from_secs(120)) {
+        Ok(out) => assert_eq!(out, "fast"),
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!(
+            "connecting to a blackholed address with no ATTR_TIMEOUT was still running after \
+             120 s: build_opts() is no longer applying the default connect timeout"
+        ),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the compile/run worker panicked; its output is above")
+        }
+    }
+}
+
+/// F-CORE-16: the persistent pool is keyed on the (DSN, ATTR_PERSISTENT key) PAIR,
+/// not on the DSN alone. php-src builds the persistent hashkey from both
+/// (`pdo_dbh.c:389-404`): an `ATTR_PERSISTENT` that is a non-numeric, non-empty
+/// STRING is a user-supplied POOL KEY, and separating one DSN into several
+/// independent pooled connections is the entire point of that named form. Keying
+/// on the DSN alone silently collapsed them onto ONE shared server session.
+///
+/// `SELECT CONNECTION_ID()` is the observation: it is the server's own id for the
+/// session, so two handles that are really one connection cannot disagree on it.
+/// The third open REUSES the first key and is the NECESSARY CONTROL — without it
+/// a "distinct" result would also be produced by persistence being broken outright
+/// (every open making a fresh connection), which is the opposite bug. Sharing one
+/// pooled handle between two live PDO objects is safe: `elephc_pdo_close()`
+/// no-ops on a persistent id (`lib.rs:600-604`), so neither destructor closes the
+/// session out from under the other. Docker: same server as above, e.g.:
+///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
+///       cargo test --test codegen_tests -- --ignored mysql_persistent_key_separates_pooled_connections
+#[test]
+#[ignore]
+fn mysql_persistent_key_separates_pooled_connections() {
+    let out = compile_and_run(
+        r#"<?php
+$dsn = (string) getenv("ELEPHC_MY_DSN");
+$a = new PDO($dsn, null, null, [PDO::ATTR_PERSISTENT => "elephc_key_a"]);
+$b = new PDO($dsn, null, null, [PDO::ATTR_PERSISTENT => "elephc_key_b"]);
+$again = new PDO($dsn, null, null, [PDO::ATTR_PERSISTENT => "elephc_key_a"]);
+$idA = (string) $a->query("SELECT CONNECTION_ID()")->fetchColumn();
+$idB = (string) $b->query("SELECT CONNECTION_ID()")->fetchColumn();
+$idAgain = (string) $again->query("SELECT CONNECTION_ID()")->fetchColumn();
+echo (($idA !== $idB) ? "distinct" : "same") . ":" . (($idA === $idAgain) ? "reuse" : "new");
+"#,
+    );
+    assert_eq!(out, "distinct:reuse");
+}
+
+/// F-MY-08: `getColumnMeta()`'s `native_type` on a `mysql:` statement reports
+/// MySQL's OWN wire-type name, not the SQLite storage-class vocabulary
+/// ("integer"/"double"/"string") the prelude used to hand every driver. php-src
+/// builds the key from `type_to_name_native()`, whose `PDO_MYSQL_NATIVE_TYPE_NAME`
+/// macro simply stringifies the `MYSQL_TYPE_` suffix — so an `INT` is `LONG`, a
+/// `VARCHAR` is `VAR_STRING`, a `DECIMAL` is `NEWDECIMAL`, a `BLOB`/`TEXT` is
+/// `BLOB`, a `BIGINT` is `LONGLONG`, a `DATETIME` is `DATETIME`. That vocabulary is
+/// the whole point of the key: the storage class cannot tell a `VARCHAR` from a
+/// `BLOB` from a `NEWDECIMAL` (MySQL hands all three over as strings), which is
+/// exactly what a caller reading `native_type` is asking about.
+///
+/// The six expectations below were cross-read against `my.rs::native_type_name()`,
+/// the mapping actually implemented, and against php-src's switch: every arm agrees
+/// (php-src's list is STRING, VAR_STRING, TINY, SHORT, LONG, LONGLONG, INT24, FLOAT,
+/// DOUBLE, DECIMAL, NEWDECIMAL, GEOMETRY, TIMESTAMP, YEAR, SET, ENUM, DATE, NEWDATE,
+/// TIME, DATETIME, TINY_BLOB, MEDIUM_BLOB, LONG_BLOB, BLOB, NULL, BIT, JSON, and a
+/// `default:` that OMITS the key; `native_type_name` spells the same 27 names and
+/// returns `""` — the bridge's "no metadata" value — for the default). No name
+/// disagrees, so there is nothing to flag here.
+///
+/// The second half re-reads the SAME columns through a statement whose result set is
+/// EMPTY (`WHERE 1 = 0`). It must report the identical names: `column_native_type`
+/// reads the PREPARE-time column descriptor, never a live cell, so the DECLARED type
+/// survives a result set with no row to inspect — the property the storage-class
+/// derivation (which would report "null" for every column here) structurally cannot
+/// have. `JSON` is deliberately absent from the fixture: MariaDB aliases it to
+/// `LONGTEXT` and would report `BLOB`, pinning the server's alias rather than the
+/// mapping. Docker: same server as the other MySQL fixtures, e.g.:
+///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
+///       cargo test --test codegen_tests -- --ignored mysql_get_column_meta_native_types
+#[test]
+#[ignore]
+fn mysql_get_column_meta_native_types() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS my_native_meta");
+$db->exec("CREATE TABLE my_native_meta (i INT, v VARCHAR(20), m DECIMAL(10,2), b BLOB, big BIGINT, ts DATETIME)");
+$db->exec("INSERT INTO my_native_meta VALUES (42, 'ada', '1234.50', 'bin', 9000000000, '2024-01-15 10:30:00')");
+
+$rowed = $db->query("SELECT i, v, m, b, big, ts FROM my_native_meta");
+$withRow = [];
+for ($c = 0; $c < 6; $c++) {
+    $meta = $rowed->getColumnMeta($c);
+    $withRow[] = (string) $meta["native_type"];
+}
+
+$empty = $db->query("SELECT i, v, m, b, big, ts FROM my_native_meta WHERE 1 = 0");
+$noRow = [];
+for ($c = 0; $c < 6; $c++) {
+    $meta = $empty->getColumnMeta($c);
+    $noRow[] = (string) $meta["native_type"];
+}
+
+echo implode(",", $withRow) . "|" . implode(",", $noRow);
+$db->exec("DROP TABLE my_native_meta");
+"#,
+    ));
+    assert_eq!(
+        out,
+        "LONG,VAR_STRING,NEWDECIMAL,BLOB,LONGLONG,DATETIME|\
+         LONG,VAR_STRING,NEWDECIMAL,BLOB,LONGLONG,DATETIME"
+    );
+}
+
+/// F-MY-03: under the `NO_BACKSLASH_ESCAPES` `sql_mode`, backslash is an ORDINARY
+/// BYTE inside a MySQL string literal — doubling is the only escape left — so the
+/// placeholder scanner has to stop assuming backslash-escaping there, or it
+/// disagrees with the SERVER about where a literal ENDS and therefore about how many
+/// placeholders the statement has.
+///
+/// A string literal ending in a BACKSLASH, with a placeholder just past it, is the
+/// minimal statement that exposes it — `CONCAT('a\', txt) … WHERE txt = ?`. In this
+/// mode the server closes the literal at the quote right after the backslash (its
+/// value being the two bytes `a\`) and sees ONE placeholder. The old scanner read the
+/// `\'` as an ESCAPED QUOTE, ran off the end of the SQL looking for a close that was
+/// never coming, and swallowed the `?` as string content — so `translate_placeholders`
+/// allocated ZERO slots while the server's own prepare of that same text reported one,
+/// and the `execute()` below bound into a slot map with no slot 1. (A backslash in the
+/// MIDDLE of a literal, `'C:\path'`, is NOT a witness: the old scanner consumed the `p`
+/// and still found the real closing quote, so both modes agree. Only a TRAILING
+/// backslash moves the literal's end.) `my.rs::MyConn::prepare()` now threads the
+/// connection's LIVE `no_backslash_escape()` session state into the scan — the only
+/// place that flag can be read, `translate_placeholders` being a free function with no
+/// connection.
+///
+/// The literal is round-tripped through `CONCAT` against a real column, so the bound
+/// parameter sits in a `WHERE` like every other fixture here and the result column is a
+/// genuine string expression, not a bare `?` whose PREPARE-time type the server has not
+/// yet inferred. The value is asserted through `bin2hex()` (`615c78` = `a\x`), not as a
+/// printable string: the point is that the byte after `a` really is the backslash the
+/// server kept, so a regression that dropped it or re-escaped it cannot pass. Both
+/// placeholder spellings are driven, since `:name` and `?` share the string-literal scan
+/// but not the slot bookkeeping. Docker: same server as above, e.g.:
+///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
+///       cargo test --test codegen_tests -- --ignored mysql_no_backslash_escapes_placeholder_scan
+#[test]
+#[ignore]
+fn mysql_no_backslash_escapes_placeholder_scan() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->exec("SET SESSION sql_mode='NO_BACKSLASH_ESCAPES'");
+$db->exec("DROP TABLE IF EXISTS my_nbe");
+$db->exec("CREATE TABLE my_nbe (txt VARCHAR(32))");
+$db->exec("INSERT INTO my_nbe VALUES ('x'), ('y')");
+
+// PHP "\\" is ONE backslash, so the SQL really is:
+//     SELECT CONCAT('a\', txt) AS lit FROM my_nbe WHERE txt = ?
+$pos = $db->prepare("SELECT CONCAT('a\\', txt) AS lit FROM my_nbe WHERE txt = ?");
+$pos->execute(["x"]);
+$posLit = $pos->fetchColumn();
+
+$named = $db->prepare("SELECT CONCAT('a\\', txt) AS lit FROM my_nbe WHERE txt = :v");
+$named->execute([":v" => "y"]);
+$namedLit = $named->fetchColumn();
+
+echo bin2hex($posLit) . ":" . bin2hex($namedLit);
+$db->exec("DROP TABLE my_nbe");
+"#,
+    ));
+    assert_eq!(out, "615c78:615c79");
+}
+
+/// F-STMT-15 on a NON-SQLITE driver: `FETCH_GROUP` and `FETCH_UNIQUE` (which used to
+/// throw "not yet supported") reshape a live MySQL result set around a key taken from
+/// COLUMN 0, which both modes CONSUME — the key is excluded from the row, and the row
+/// is built from columns 1..n-1. `FETCH_GROUP` maps each key to a LIST of every row
+/// that carried it, in result order; `FETCH_UNIQUE` maps it to ONE row, LAST WRITE
+/// WINS (php-src overwrites with `zend_symtable_update` and never complains about the
+/// duplicate). This is the driver-independence proof for the prelude's new
+/// `fetchAllGrouped()`: it reads rows through `stepCursor()`/`columnValue()` like every
+/// other fetch path, so nothing about it is SQLite-specific, and this fixture is what
+/// says so rather than assuming it.
+///
+/// Four shapes, all on `('fruit','apple'), ('fruit','banana'), ('veg','carrot')`:
+///  - `GROUP|COLUMN` with NO explicit index is the classic `[kind => [name, …]]` idiom.
+///    It only works because php-src defaults the VALUE column to 1 when GROUP is set
+///    (column 0 is already the key, so defaulting it to 0 would return the key again);
+///    a regression there yields `[fruit => [fruit, fruit]]`, which this pins.
+///  - `GROUP|ASSOC` maps to a list of column-name rows with the key column absent.
+///  - `GROUP|NUM` proves the RE-INDEXING: the first column AFTER the key lands at [0],
+///    not at its original offset [1] (php-src walks the row with a separate output
+///    cursor). A row that kept its offsets would have no [0] at all.
+///  - `UNIQUE|ASSOC` proves last-wins: 'fruit' appears twice, and the surviving row is
+///    'banana', the LAST one.
+///
+/// Every key here is NON-NUMERIC on purpose. The one documented divergence in
+/// `fetchAllGrouped()` is that elephc's array keeps an integer-LOOKING group key a
+/// STRING key where PHP folds it back to an int; using kind names keeps this fixture
+/// about PDO's grouping semantics instead of about that array-semantics gap. Docker:
+/// same server as above, e.g.:
+///   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
+///       cargo test --test codegen_tests -- --ignored mysql_fetch_all_group_and_unique
+#[test]
+#[ignore]
+fn mysql_fetch_all_group_and_unique() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS my_group");
+$db->exec("CREATE TABLE my_group (kind VARCHAR(16), name VARCHAR(16), n INTEGER)");
+$db->exec("INSERT INTO my_group VALUES ('fruit', 'apple', 1), ('fruit', 'banana', 2), ('veg', 'carrot', 3)");
+
+$byCol = $db->query("SELECT kind, name FROM my_group ORDER BY n")->fetchAll(PDO::FETCH_GROUP | PDO::FETCH_COLUMN);
+$col = count($byCol["fruit"]) . ":" . $byCol["fruit"][0] . "," . $byCol["fruit"][1] . "/" . $byCol["veg"][0];
+
+$byAssoc = $db->query("SELECT kind, name, n FROM my_group ORDER BY n")->fetchAll(PDO::FETCH_GROUP | PDO::FETCH_ASSOC);
+$assoc = count($byAssoc["fruit"]) . ":" . $byAssoc["fruit"][1]["name"] . "=" . $byAssoc["fruit"][1]["n"];
+
+$byNum = $db->query("SELECT kind, name, n FROM my_group ORDER BY n")->fetchAll(PDO::FETCH_GROUP | PDO::FETCH_NUM);
+$num = $byNum["veg"][0][0] . "=" . $byNum["veg"][0][1];
+
+$uniq = $db->query("SELECT kind, name FROM my_group ORDER BY n")->fetchAll(PDO::FETCH_UNIQUE | PDO::FETCH_ASSOC);
+$last = $uniq["fruit"]["name"] . "/" . $uniq["veg"]["name"];
+
+echo $col . "|" . $assoc . "|" . $num . "|" . $last;
+$db->exec("DROP TABLE my_group");
+"#,
+    ));
+    assert_eq!(out, "2:apple,banana/carrot|2:banana=2|carrot=3|banana/carrot");
+}

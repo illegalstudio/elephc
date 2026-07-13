@@ -28,7 +28,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use postgres::types::{to_sql_checked, IsNull, ToSql, Type};
+use postgres::types::{to_sql_checked, IsNull, Kind, ToSql, Type};
 use postgres::{Client, Config, NoTls, Row, SimpleQueryMessage, Statement};
 
 /// One materialized column value, already decoded to a PHP-friendly scalar.
@@ -60,6 +60,9 @@ pub struct PgConn {
     pub client: Client,
     pub changes: i64,
     pub errmsg: String,
+    /// Native (driver-specific) error code for the connection's last operation, read
+    /// back as `errorInfo()[1]`: `0` on success, [`PG_NATIVE_ERRCODE`] on failure.
+    /// PostgreSQL has no integer error code — see that constant for the full rationale.
     pub errcode: i64,
     /// 5-char SQLSTATE for the connection's last operation, taken from the
     /// server's `ErrorResponse` (`tokio_postgres::error::Error::code`), which
@@ -223,7 +226,21 @@ fn parse_datetime_utc(
 /// value would need a post-connect `SET client_encoding = ...` to have any
 /// effect at all — not attempted here) — a silent no-op is preferable to a
 /// connection that never happens.
+///
+/// F-PG-03 / F-CORE-10: when neither the DSN body nor the caller's
+/// `PDO::ATTR_TIMEOUT` (which the prelude folds into the DSN as
+/// `;connect_timeout=<secs>`, so both arrive here as the same key) supplies a
+/// `connect_timeout`, one of 30 s is appended. php-src's pgsql handle factory
+/// does the same (`pgsql_driver.c:1350,1373,1381` default `connect_timeout = 30`
+/// and always append it to the conninfo), so every real-PHP pg connection is
+/// bounded; without it the pure-Rust `postgres` client has no application-level
+/// connect timeout and hangs for minutes on a black-holed host. php-src's *quirk*
+/// of overwriting a DSN-supplied `connect_timeout=` with its own value is
+/// deliberately NOT imitated: a value the DSN spells out wins, and the default
+/// only fills the gap when nothing else did.
 pub fn parse_dsn(dsn: &str) -> Result<String, String> {
+    // php-src's `pgsql_driver.c:1350` default connect timeout, in seconds.
+    const DEFAULT_CONNECT_TIMEOUT_SECS: u32 = 30;
     const ACCEPTED_KEYS: &[&str] = &[
         "user",
         "password",
@@ -248,6 +265,10 @@ pub fn parse_dsn(dsn: &str) -> Result<String, String> {
         .strip_prefix("pgsql:")
         .ok_or_else(|| "could not find driver (expected a pgsql: DSN)".to_string())?;
     let mut parts: Vec<String> = Vec::new();
+    // F-PG-03: tracks whether the caller already bounded the connect (either
+    // straight in the DSN or via `ATTR_TIMEOUT`, which the prelude folds into the
+    // DSN under the very same key) — if so, that value wins over the 30 s default.
+    let mut saw_connect_timeout = false;
     for pair in body.split(';') {
         let pair = pair.trim();
         if pair.is_empty() {
@@ -270,13 +291,24 @@ pub fn parse_dsn(dsn: &str) -> Result<String, String> {
         if !ACCEPTED_KEYS.contains(&key) {
             continue;
         }
+        if key == "connect_timeout" {
+            saw_connect_timeout = true;
+        }
         // libpq connection strings quote values containing spaces/specials; a
         // simple single-quote wrap with backslash-escaping is sufficient here.
         let escaped = value.replace('\\', "\\\\").replace('\'', "\\'");
         parts.push(format!("{}='{}'", key, escaped));
     }
+    // The emptiness check reads the caller's OWN keys, before the default timeout
+    // is folded in: a DSN carrying nothing usable (`pgsql:`) must still be the
+    // error it always was, not a connection string made non-empty by our default.
     if parts.is_empty() {
         return Err("empty pgsql DSN".to_string());
+    }
+    // F-PG-03: bound an otherwise unbounded connect at php-src's 30 s (see the
+    // doc comment) — only when the caller gave no `connect_timeout` of their own.
+    if !saw_connect_timeout {
+        parts.push(format!("connect_timeout='{}'", DEFAULT_CONNECT_TIMEOUT_SECS));
     }
     Ok(parts.join(" "))
 }
@@ -440,8 +472,36 @@ fn load_private_key(path: &str) -> Result<rustls::pki_types::PrivateKeyDer<'stat
 /// Returns whether `b` is an identifier byte (`[A-Za-z0-9_]`), used both to
 /// read a placeholder name and to test the "word boundary" before a possible
 /// `E'...'`/`e'...'` escape-string prefix.
+///
+/// Deliberately ASCII-only: php-src's bind-name class really is
+/// `BINDCHR = [:][a-zA-Z0-9_]+` (`pdo_sql_parser.re`), so a byte ≥ 0x80 ends a
+/// `:name` rather than extending it. The dollar-quote *tag* classes are the wider
+/// ones — see [`is_dolq_start`] / [`is_dolq_cont`], which must not be conflated
+/// with this.
 fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Returns whether `b` can OPEN a dollar-quote tag, per php-src's pgsql scanner
+/// rule `DOLQ_START = [A-Za-z\200-\377_]` (`pgsql_sql_parser.re:32`). The
+/// `\200-\377` half (every byte ≥ 0x80) is load-bearing, not decorative:
+/// PostgreSQL's own lexer treats multibyte "letters" as identifier characters, so
+/// `$café$ ... $café$` is a perfectly valid dollar-quoted string. Gating the tag
+/// on `is_ascii_alphabetic()` left such a tag unrecognized, the quote never
+/// opened, and the body fell through to the ordinary scanner — which then
+/// rewrote any `?`/`:name` inside the *string literal* into a real bind
+/// (F-PARSE-02).
+fn is_dolq_start(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'_' || b >= 0x80
+}
+
+/// Returns whether `b` can CONTINUE a dollar-quote tag, per php-src's
+/// `DOLQ_CONT = [A-Za-z\200-\377_0-9]` (`pgsql_sql_parser.re:33`) — [`is_dolq_start`]
+/// plus the digits. Every continuation byte of a multi-byte UTF-8 character is
+/// itself ≥ 0x80, so a tag scan driven by this predicate always stops on a char
+/// boundary and the tag can be sliced back out of the `&str` safely.
+fn is_dolq_cont(b: u8) -> bool {
+    is_dolq_start(b) || b.is_ascii_digit()
 }
 
 /// Returns the byte length of the UTF-8 sequence led by `b` (1 for ASCII, 2-4
@@ -485,16 +545,21 @@ fn utf8_len(b: u8) -> usize {
 ///   (a plain `'...'` string only recognizes the `''` doubling, per
 ///   `standard_conforming_strings`);
 /// - `"..."` double-quoted identifiers, with `""` as the doubled-quote escape;
-/// - `$tag$...$tag$` dollar-quoted strings (`tag` is `[A-Za-z_][A-Za-z0-9_]*` or
-///   empty, and must be followed by `$` to open; a `$` immediately followed by a
-///   digit, e.g. a literal `$1` in the input, can never start a tag and is
+/// - `$tag$...$tag$` dollar-quoted strings (`tag` is empty or matches php-src's
+///   `DOLQ_START DOLQ_CONT*` — see [`is_dolq_start`] / [`is_dolq_cont`], which
+///   accept non-ASCII bytes, so `$café$...$café$` opens a quote like PostgreSQL's
+///   own lexer — and must be followed by `$` to open; a `$` immediately followed
+///   by a digit, e.g. a literal `$1` in the input, can never start a tag and is
 ///   emitted as a plain `$`).
 ///
 /// A `??` (exactly two `?`) is PostgreSQL's jsonb `?`/`?|`/`?&` operator escape:
 /// it collapses to a single literal `?` in the output and allocates no
-/// placeholder slot. A lone `?` is a real positional placeholder. `::` (the
-/// cast operator) is left untouched rather than read as a named placeholder;
-/// `#` is not a comment introducer in PostgreSQL.
+/// placeholder slot. A lone `?` is a real positional placeholder. Symmetrically, a
+/// run of two or more `:` — `::`, the cast operator, and any longer run — is a
+/// single verbatim text token, never a named placeholder, and is consumed whole:
+/// php-src's `MULTICHAR = [:]{2,}` is greedy, so eating colons pairwise would let
+/// an odd run's last colon (`:::c`) be re-read as a phantom `:c` bind. `#` is not
+/// a comment introducer in PostgreSQL.
 ///
 /// A `:name` immediately preceded by an alphanumeric byte is NOT a named
 /// placeholder (matching php-src's `pdo_sql_parser.re`, which skips the same
@@ -611,9 +676,9 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, bool)
                     continue;
                 }
                 let mut j = i + 1;
-                if j < len && (bytes[j].is_ascii_alphabetic() || bytes[j] == b'_') {
+                if j < len && is_dolq_start(bytes[j]) {
                     j += 1;
-                    while j < len && is_ident_byte(bytes[j]) {
+                    while j < len && is_dolq_cont(bytes[j]) {
                         j += 1;
                     }
                 }
@@ -656,10 +721,20 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, bool)
                 i += 1;
             }
             b':' => {
-                // `::` is the cast operator, not a named placeholder.
-                if i + 1 < len && bytes[i + 1] == b':' {
-                    out.push_str("::");
-                    i += 2;
+                // A run of 2+ `:` (`::`, the cast operator, and any longer run) is a
+                // single verbatim text token, never a named placeholder — php-src's
+                // `MULTICHAR = [:]{2,}` rule (`pgsql_sql_parser.re:35`) is greedy
+                // (re2c's maximal munch swallows the whole contiguous run). The run
+                // must be consumed WHOLE: taking colons two at a time leaves the
+                // third one of an odd run (`:::c`) to be re-scanned as a fresh `:c`,
+                // conjuring a named placeholder php-src never emits.
+                let mut run_end = i + 1;
+                while run_end < len && bytes[run_end] == b':' {
+                    run_end += 1;
+                }
+                if run_end - i >= 2 {
+                    out.push_str(&sql[i..run_end]);
+                    i = run_end;
                     continue;
                 }
                 // Read the placeholder name (identifier chars after the colon).
@@ -723,6 +798,34 @@ fn pg_sqlstate(e: &postgres::Error) -> String {
         .unwrap_or_else(|| "HY000".to_string())
 }
 
+/// The "native" (driver-specific) error code this driver reports as PDO's
+/// `errorInfo()[1]` for every PostgreSQL failure — a deliberate, documented
+/// divergence from php-src rather than an oversight (D-07).
+///
+/// PostgreSQL has **no integer error code**. The wire protocol's `ErrorResponse`
+/// message carries only string fields (severity, SQLSTATE, message, detail, hint,
+/// position, …), and the SQLSTATE *is* the code — which PDO already surfaces as
+/// `errorInfo()[0]` (see [`pg_sqlstate`]). Accordingly the `postgres` crate's
+/// `Error`/`DbError` expose no integer at all: `DbError::code()` returns a
+/// `SqlState` (the 5-char SQLSTATE string), and the only other numeric accessors
+/// are the server's *source-file line* and the error's character *position* in the
+/// query — neither is an error code.
+///
+/// What php-src's pdo_pgsql puts in `errorInfo()[1]` is not a server code either:
+/// it is libpq's client-side `ExecStatusType` enum, i.e. `PQresultStatus()` of the
+/// failed `PGresult` (almost always `PGRES_FATAL_ERROR`). elephc's driver is the
+/// pure-Rust `postgres` client, which has no libpq and no `PGresult`, so that value
+/// simply does not exist here and could only be fabricated.
+///
+/// This driver therefore reports a single non-zero "an error occurred" marker. Zero
+/// is reserved for success: `errcode` doubles as the bridge's error flag (callers
+/// such as `copy_out`'s empty-vs-failed disambiguation test `elephc_pdo_errcode()`
+/// against 0), so the marker only has to be non-zero and stable. `1` also matches
+/// the value `my.rs` uses for its driver-level `HY093` (mixed placeholder styles)
+/// rejection, so the one error both drivers raise themselves reports the same
+/// native code on both.
+const PG_NATIVE_ERRCODE: i64 = 1;
+
 impl PgConn {
     /// Connects to PostgreSQL for a `pgsql:` DSN. Returns the connection or an
     /// error message for `last_open_error`. The connection is built through a
@@ -768,12 +871,28 @@ impl PgConn {
             .unwrap_or_default()
     }
 
-    /// Records an error message + a generic non-zero code, returning `-1`.
+    /// Records a server/transport error: its SQLSTATE (`errorInfo()[0]`), its message
+    /// (`errorInfo()[2]`) and the driver's single native error code
+    /// ([`PG_NATIVE_ERRCODE`], `errorInfo()[1]` — PostgreSQL has no integer code, see
+    /// the constant). Returns `-1`, the failure value of the row-count-returning
+    /// entry points. Every error path of this driver funnels through here or through
+    /// [`Self::fail_local`], so the native code is set in exactly those two places.
     fn fail(&mut self, e: postgres::Error) -> i64 {
         self.sqlstate = pg_sqlstate(&e);
         self.errmsg = e.to_string();
-        self.errcode = 1;
+        self.errcode = PG_NATIVE_ERRCODE;
         -1
+    }
+
+    /// Records a failure the *driver itself* raises, with no `postgres::Error` behind
+    /// it (the scanner's `HY093` rejection of a SQL text mixing `?` and `:name`), under
+    /// the same native error code as a server error ([`PG_NATIVE_ERRCODE`]). Returns
+    /// the recorded message, so a caller can `return Err(self.fail_local(…))`.
+    fn fail_local(&mut self, sqlstate: &str, msg: &str) -> String {
+        self.sqlstate = sqlstate.to_string();
+        self.errmsg = msg.to_string();
+        self.errcode = PG_NATIVE_ERRCODE;
+        self.errmsg.clone()
     }
 
     /// Runs a statement with no result rows (`PDO::exec`), returning the affected
@@ -819,9 +938,7 @@ impl PgConn {
         match self.client.batch_execute(sql) {
             Ok(()) => 1,
             Err(e) => {
-                self.sqlstate = pg_sqlstate(&e);
-                self.errmsg = e.to_string();
-                self.errcode = 1;
+                self.fail(e);
                 0
             }
         }
@@ -1024,11 +1141,10 @@ impl PgConn {
     pub fn prepare(&mut self, sql: &str) -> Result<PgStmt, String> {
         let (translated, named_map, mixed) = translate_placeholders(sql);
         if mixed {
-            self.errcode = 1;
-            self.sqlstate = "HY093".to_string();
-            self.errmsg =
-                "Invalid parameter number: mixed named and positional parameters".to_string();
-            return Err(self.errmsg.clone());
+            return Err(self.fail_local(
+                "HY093",
+                "Invalid parameter number: mixed named and positional parameters",
+            ));
         }
         match self.client.prepare(&translated) {
             Ok(statement) => {
@@ -1052,10 +1168,9 @@ impl PgConn {
                 })
             }
             Err(e) => {
-                self.sqlstate = pg_sqlstate(&e);
-                self.errmsg = e.to_string();
-                self.errcode = 1;
-                Err(e.to_string())
+                let msg = e.to_string();
+                self.fail(e);
+                Err(msg)
             }
         }
     }
@@ -1120,12 +1235,9 @@ impl PgStmt {
                     self.executed = true;
                     Ok(())
                 }
-                Err(e) => {
-                    conn.sqlstate = pg_sqlstate(&e);
-                    conn.errmsg = e.to_string();
-                    conn.errcode = 1;
-                    Err(-1)
-                }
+                // `fail` records the SQLSTATE/message/native code and yields the `-1`
+                // that `step()` propagates as the statement's error return.
+                Err(e) => Err(conn.fail(e)),
             }
         } else {
             match conn.client.query(&self.statement, &refs) {
@@ -1137,12 +1249,7 @@ impl PgStmt {
                     self.executed = true;
                     Ok(())
                 }
-                Err(e) => {
-                    conn.sqlstate = pg_sqlstate(&e);
-                    conn.errmsg = e.to_string();
-                    conn.errcode = 1;
-                    Err(-1)
-                }
+                Err(e) => Err(conn.fail(e)),
             }
         }
     }
@@ -1195,6 +1302,136 @@ impl PgStmt {
         }
     }
 
+    /// PostgreSQL native type name of result column `i` (0-based) — the server's
+    /// own `pg_type.typname` (`int4`, `bool`, `bytea`, `varchar`, …) that the
+    /// driver resolved at prepare time off the retained `Statement`. Because it
+    /// comes from the column descriptor rather than a live cell, it is available
+    /// whether or not a row is active and reflects the column's DECLARED type
+    /// instead of a NULL value's runtime storage class. Empty string for an
+    /// out-of-range index. Backs `getColumnMeta`'s `native_type` on a `pgsql:`
+    /// statement (P2-k).
+    pub fn column_native_type(&self, i: i64) -> String {
+        if i < 0 {
+            return String::new();
+        }
+        self.statement
+            .columns()
+            .get(i as usize)
+            .map(|c| c.type_().name().to_string())
+            .unwrap_or_default()
+    }
+
+    /// PostgreSQL type OID of result column `i` (0-based) — the `PQftype` value
+    /// carried by the column's `postgres::types::Type`. Backs `getColumnMeta`'s
+    /// `pgsql:oid` key and, prelude-side, the PDO param-type derivation
+    /// (BOOL→PARAM_BOOL, int-family→PARAM_INT, BYTEA→PARAM_LOB, else PARAM_STR).
+    /// `0` (the invalid OID) for an out-of-range index. (P2-k)
+    pub fn column_type_oid(&self, i: i64) -> i64 {
+        if i < 0 {
+            return 0;
+        }
+        self.statement
+            .columns()
+            .get(i as usize)
+            .map(|c| i64::from(c.type_().oid()))
+            .unwrap_or(0)
+    }
+
+    /// OID of the table result column `i` (0-based) was selected FROM, or `0`
+    /// (`InvalidOid`) when the column is not a plain table column — an expression,
+    /// a literal, an aggregate, a function result. Backs `getColumnMeta`'s
+    /// `pgsql:table_oid` key, which php-src's `pgsql_stmt_get_column_meta`
+    /// (`ext/pdo_pgsql/pgsql_statement.c`) emits UNCONDITIONALLY from `PQftable()`,
+    /// including the `0` for an expression column (F-PG-01).
+    ///
+    /// Exact `PQftable()` parity, straight off the wire: the RowDescription message
+    /// carries a per-field table OID, and tokio-postgres keeps it on `Column`
+    /// (`Column::table_oid()`, statement.rs:104). It normalizes the wire's `0` to
+    /// `None` (prepare.rs:100, `.filter(|n| *n != 0)`), so mapping `None` back to `0`
+    /// here restores the server's value byte for byte. No catalog lookup and no
+    /// per-fetch round trip are needed — contrary to the spec's premise, the pinned
+    /// crate does surface this.
+    ///
+    /// `0` for an out-of-range index, which is also the neutral `InvalidOid`.
+    pub fn column_table_oid(&self, i: i64) -> i64 {
+        if i < 0 {
+            return 0;
+        }
+        self.statement
+            .columns()
+            .get(i as usize)
+            .and_then(|c| c.table_oid())
+            .map(i64::from)
+            .unwrap_or(0)
+    }
+
+    /// Byte width of result column `i`'s type (0-based): a positive fixed width
+    /// (`int4` → 4, `timestamp` → 8, `uuid` → 16), `-1` for a variable-length
+    /// (varlena) type (`text`, `varchar`, `numeric`, `bytea`, `json`, any array),
+    /// or `-2` for a NUL-terminated C string (`cstring`, `unknown`). Backs
+    /// `getColumnMeta`'s `len`, which php-src fills from `col->maxlen`, itself set
+    /// straight from `PQfsize()` in `pgsql_stmt_describe`
+    /// (`ext/pdo_pgsql/pgsql_statement.c:496`) (F-PG-02).
+    ///
+    /// ⚠ LIMITATION — this is DERIVED, not the value the server sent. `PQfsize()` is
+    /// the RowDescription field's "data type size", and while postgres-protocol does
+    /// parse it (`message/backend.rs:820`, exposed as `Field::type_size()`),
+    /// tokio-postgres THROWS IT AWAY when it builds `Column` (prepare.rs:98-103 copies
+    /// only name/table_oid/column_id/type_modifier/type) — there is no
+    /// `Column::type_size()` to read. Reaching the real value would need either a
+    /// crate fork or a `pg_type` catalog query, and the latter is impossible here
+    /// anyway: this accessor takes `&self` with no `Client`, so it could only run at
+    /// prepare time, adding a server round trip to EVERY prepare for a metadata field
+    /// almost nothing reads.
+    ///
+    /// So the width is recomputed from the column's type instead — which is sound,
+    /// because that is exactly what the server does: `PQfsize()` returns
+    /// `pg_type.typlen`, a property of the TYPE, not of the column or the row (an
+    /// `int4` column is 4 bytes wide in every table of every database). See
+    /// [`type_len`] for the table and for the one case it cannot cover.
+    ///
+    /// `-1` for an out-of-range index (PostgreSQL's own "not a fixed width" value).
+    pub fn column_len(&self, i: i64) -> i64 {
+        if i < 0 {
+            return -1;
+        }
+        self.statement
+            .columns()
+            .get(i as usize)
+            .map(|c| type_len(c.type_()))
+            .unwrap_or(-1)
+    }
+
+    /// Type modifier (`atttypmod`) of result column `i` (0-based), or `-1` when the
+    /// type takes no modifier or the column carries none. Backs `getColumnMeta`'s
+    /// `precision`, which php-src fills from `col->precision`, itself set straight
+    /// from `PQfmod()` in `pgsql_stmt_describe`
+    /// (`ext/pdo_pgsql/pgsql_statement.c:497`) (F-PG-02).
+    ///
+    /// Exact `PQfmod()` parity: the RowDescription carries the type modifier per
+    /// field and tokio-postgres keeps it verbatim on `Column`
+    /// (`Column::type_modifier()`, statement.rs:114) — no catalog lookup needed.
+    ///
+    /// The value is the RAW `atttypmod`, deliberately NOT decoded into a
+    /// human-readable precision, because php-src does not decode it either — it
+    /// copies `PQfmod()` through unchanged, so `VARCHAR(20)` reports 24 (the length
+    /// plus `VARHDRSZ` = 4) and `NUMERIC(10,2)` reports 655366 (`((10 << 16) | 2) +
+    /// 4`). Decoding it here would be a divergence from PHP dressed up as an
+    /// improvement; a caller who wants the real precision must decode the modifier
+    /// exactly as it would have to against real PDO.
+    ///
+    /// `-1` for an out-of-range index (PostgreSQL's own "no type modifier" value).
+    pub fn column_precision(&self, i: i64) -> i64 {
+        if i < 0 {
+            return -1;
+        }
+        self.statement
+            .columns()
+            .get(i as usize)
+            .map(|c| i64::from(c.type_modifier()))
+            .unwrap_or(-1)
+    }
+
     /// Current row's column `i` as an integer.
     pub fn column_int(&self, i: i64) -> i64 {
         match self.cell(i) {
@@ -1217,17 +1454,6 @@ impl PgStmt {
         }
     }
 
-    /// Current row's column `i` as text.
-    pub fn column_text(&self, i: i64) -> String {
-        match self.cell(i) {
-            Some(Cell::Text(s)) => s.clone(),
-            Some(Cell::Bytes(b)) => String::from_utf8_lossy(b).into_owned(),
-            Some(Cell::Int(v)) => v.to_string(),
-            Some(Cell::Float(v)) => v.to_string(),
-            _ => String::new(),
-        }
-    }
-
     /// Current row's column `i` as byte-counted PDO data.
     pub fn column_data(&self, i: i64) -> Vec<u8> {
         match self.cell(i) {
@@ -1237,6 +1463,105 @@ impl PgStmt {
             Some(Cell::Float(v)) => v.to_string().into_bytes(),
             _ => Vec::new(),
         }
+    }
+}
+
+/// PostgreSQL's `pg_type.typlen` for `ty` — the byte width the server reports for a
+/// column of this type in the RowDescription's "data type size" field, i.e. exactly
+/// what `PQfsize()` hands back to php-src. Positive = a fixed width; `-1` = a
+/// variable-length (varlena) type; `-2` = a NUL-terminated C string.
+///
+/// Recomputed from the type rather than read off the wire because tokio-postgres
+/// discards the wire value (see [`PgStmt::column_len`]). That substitution is exact
+/// for everything below: `typlen` is a column of `pg_type`, so it is a property of
+/// the TYPE alone — the server looks it up by the very type OID the crate hands us.
+/// The constants are transcribed from PostgreSQL's own catalog seed data,
+/// `src/include/catalog/pg_type.dat`, not inferred.
+///
+/// Only the FIXED-width types are enumerated: `-1` is the fallback, and it is the
+/// right answer for every varlena type (`text`, `varchar`, `bpchar`, `numeric`,
+/// `bytea`, `json`/`jsonb`, `xml`, `bit`/`varbit`, `path`, `polygon`, `tsvector`,
+/// `record`, and every array/range/multirange/composite type, all of which are
+/// varlena by construction in PostgreSQL).
+///
+/// ⚠ The one case this cannot cover: a user-defined or extension type whose kind is
+/// `Simple` and whose OID is therefore not one of the constants below reports `-1`.
+/// That is correct for the varlena types extensions overwhelmingly define (`hstore`,
+/// `citext`, `ltree`, PostGIS `geometry`, …) but WRONG for a fixed-width one, which
+/// would report `-1` instead of its true width. `aclitem` is deliberately left out
+/// for the same reason from the other direction: its width is not stable across
+/// server versions (12 bytes until PostgreSQL 15, 16 from PostgreSQL 16, which
+/// widened `AclMode` to 64 bits), so hardcoding either value would be a lie for half
+/// the servers — it falls back to `-1`. `name` assumes the default `NAMEDATALEN` of
+/// 64, which a server can be recompiled to change.
+fn type_len(ty: &Type) -> i64 {
+    // Two kinds have a width fixed by construction rather than by a catalog constant,
+    // and their OIDs are assigned per-database so they can never match a constant
+    // below. An enum is always stored as an OID (`DefineEnum` creates the type with
+    // `sizeof(Oid)`), and a domain inherits its base type's width verbatim
+    // (`DefineDomain` copies `typlen` from the base), so recursing yields the truth.
+    // Arrays, ranges, multiranges and composites are always varlena — they need no arm,
+    // the `-1` fallback already covers them. `Kind` is `#[non_exhaustive]`.
+    match ty.kind() {
+        Kind::Enum(_) => return 4,
+        Kind::Domain(base) => return type_len(base),
+        _ => {}
+    }
+    match *ty {
+        // `bool` and `"char"` are single bytes.
+        Type::BOOL | Type::CHAR => 1,
+        Type::INT2 => 2,
+        // The 4-byte types: the 32-bit numerics, `date` (a day count), and the whole
+        // `reg*` family, every member of which is an OID under the hood.
+        Type::INT4
+        | Type::FLOAT4
+        | Type::OID
+        | Type::XID
+        | Type::CID
+        | Type::DATE
+        | Type::REGPROC
+        | Type::REGPROCEDURE
+        | Type::REGOPER
+        | Type::REGOPERATOR
+        | Type::REGCLASS
+        | Type::REGTYPE
+        | Type::REGCONFIG
+        | Type::REGDICTIONARY
+        | Type::REGNAMESPACE
+        | Type::REGROLE
+        | Type::REGCOLLATION
+        | Type::VOID => 4,
+        // `tid` is a block number (4) plus an offset (2); `macaddr` is 6 raw bytes.
+        Type::TID | Type::MACADDR => 6,
+        // The 8-byte types: 64-bit numerics, `money` (an int64 of cents), and the
+        // date/time types PostgreSQL stores as a 64-bit microsecond count.
+        Type::INT8
+        | Type::FLOAT8
+        | Type::MONEY
+        | Type::TIME
+        | Type::TIMESTAMP
+        | Type::TIMESTAMPTZ
+        | Type::MACADDR8
+        | Type::PG_LSN
+        | Type::XID8 => 8,
+        // `timetz` is a `time` (8) plus its UTC offset in seconds (4).
+        Type::TIMETZ => 12,
+        // `interval` is microseconds (8) + days (4) + months (4); `point` is two
+        // float8 coordinates.
+        Type::INTERVAL | Type::UUID | Type::POINT => 16,
+        // `line` is the three float8 coefficients of `Ax + By + C = 0`; `circle` is a
+        // centre `point` (16) plus a float8 radius.
+        Type::LINE | Type::CIRCLE => 24,
+        // Both are two `point`s: a segment's endpoints, a box's opposite corners.
+        Type::LSEG | Type::BOX => 32,
+        // `NAMEDATALEN`, the identifier type's fixed width.
+        Type::NAME => 64,
+        // The NUL-terminated C-string types. `unknown` is what an unresolved literal
+        // types as, so it can genuinely surface as a result column.
+        Type::CSTRING | Type::UNKNOWN => -2,
+        // Every remaining type is variable-length. See the doc comment for the one
+        // case this fallback gets wrong (a fixed-width user-defined type).
+        _ => -1,
     }
 }
 

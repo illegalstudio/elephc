@@ -52,7 +52,18 @@ extern "elephc_pdo" {
     // TLS), applied to the mysql: rustls backend (requires the opt-in `mysql-tls`
     // build feature); ignored for sqlite:/pgsql: DSNs — PostgreSQL carries its own
     // sslmode/sslrootcert in the DSN and needs no extra parameter.
-    function elephc_pdo_open_persistent(string $dsn, int $persistent, int $sqlite_flags, string $my_init_command, string $my_ssl_config): int;
+    // v25 adds the last two parameters:
+    // - $my_found_rows (F-MY-06): 1 when Pdo\Mysql::ATTR_FOUND_ROWS was set truthy in
+    //   the constructor's $options, which makes the bridge negotiate
+    //   CLIENT_FOUND_ROWS in the handshake so an UPDATE's rowCount() reports MATCHED
+    //   rather than CHANGED rows (php-src mysql_driver.c:776-778). Ignored for
+    //   sqlite:/pgsql: DSNs.
+    // - $persistent_key (F-CORE-16): the user-supplied ATTR_PERSISTENT key string,
+    //   which joins the DSN in the persistent pool's hash key exactly as php-src's
+    //   pdo_dbh.c:389-404 does ("" = the plain boolean-persistent pool). Two
+    //   persistent connections to the SAME DSN under DIFFERENT key strings are
+    //   therefore distinct pooled entries, which is the whole point of the key.
+    function elephc_pdo_open_persistent(string $dsn, int $persistent, int $sqlite_flags, string $my_init_command, string $my_ssl_config, int $my_found_rows, string $persistent_key): int;
     function elephc_pdo_last_open_error(): string;
     function elephc_pdo_close(int $conn): void;
     function elephc_pdo_exec(int $conn, string $sql): int;
@@ -82,7 +93,14 @@ extern "elephc_pdo" {
     function elephc_pdo_column_type(int $stmt, int $i): int;
     function elephc_pdo_column_int(int $stmt, int $i): int;
     function elephc_pdo_column_double(int $stmt, int $i): float;
-    function elephc_pdo_column_text(int $stmt, int $i): string;
+    // column_data_len/column_data_ptr are the length-counted TEXT/BLOB accessors
+    // every fetch path goes through (columnValue()): the bytes are handed over as a
+    // (pointer, length) pair copied in one go with ptr_read_string, so embedded NUL
+    // bytes survive. v24 REMOVED the NUL-terminated `elephc_pdo_column_text` extern
+    // that used to sit here (F-QUAL-03): it was dead code whose bridge side ran the
+    // value through store_cstr, silently truncating at the first NUL — a trap for
+    // whoever reached for the "obvious" text accessor. column_data_byte reads a
+    // single byte and is kept as the compat/fallback path.
     function elephc_pdo_column_data_len(int $stmt, int $i): int;
     function elephc_pdo_column_data_ptr(int $stmt, int $i): ptr;
     function elephc_pdo_column_data_byte(int $stmt, int $i, int $offset): int;
@@ -121,8 +139,10 @@ extern "elephc_pdo" {
     function elephc_pdo_get_notify(int $conn, int $timeout_ms): string;
     // v12: whole-BLOB / whole-large-object read (read-whole streams). blob_read
     // (SQLite) and lob_get (PostgreSQL) load the whole value into a shared buffer and
-    // return its byte length (-1 on error); blob_byte drains that buffer one byte at a
-    // time so embedded NUL bytes survive into the PHP string.
+    // return its byte length (-1 on error); blob_byte reads one byte out of that
+    // buffer. Since v24 the buffer is copied out in a single ptr_read_string through
+    // blob_data_ptr (below) rather than drained a byte at a time, so blob_byte is now
+    // only the fallback/compat accessor — both paths preserve embedded NUL bytes.
     function elephc_pdo_blob_read(int $conn, string $table, string $column, int $rowid, string $dbname): int;
     function elephc_pdo_lob_get(int $conn, string $oid): int;
     function elephc_pdo_blob_byte(int $offset): int;
@@ -163,6 +183,72 @@ extern "elephc_pdo" {
     // $inTxn flag") for PostgreSQL and MySQL/MariaDB, since neither client
     // crate this bridge uses exposes a public live transaction-status accessor.
     function elephc_pdo_in_transaction(int $conn): int;
+    // v23: per-column PostgreSQL type metadata for getColumnMeta (P2-k). Both are
+    // read off the prepared statement's column descriptors, so they are valid
+    // regardless of the current row and describe the DECLARED column type rather
+    // than a NULL cell's runtime storage class. native_type is the server's
+    // pg_type.typname ("int4"/"bool"/"bytea"/…), empty for a non-pgsql or
+    // out-of-range column; type_oid is the PQftype OID (0 for the same cases).
+    // The prelude keys the pg branch off a non-zero OID and derives pdo_type from
+    // it, mirroring php-src pdo_pgsql's PARAM_* switch. Empty/0 make SQLite and
+    // MySQL fall through to the generic storage-class metadata unchanged.
+    function elephc_pdo_column_native_type(int $stmt, int $i): string;
+    function elephc_pdo_column_type_oid(int $stmt, int $i): int;
+    // v24: bulk BLOB copy-out (F-QUAL-01). Points at the first byte of the shared
+    // whole-BLOB / large-object buffer last filled by blob_read/lob_get, or NULL when
+    // that buffer is empty. Same contract as column_data_ptr: valid only until the
+    // next call that rewrites the cell, so the prelude copies it immediately with
+    // ptr_read_string. Exists so blobStream() copies an N-byte value with ONE FFI call
+    // instead of N calls to blob_byte (each of which locks the bridge's handle table).
+    function elephc_pdo_blob_data_ptr(): ptr;
+    // v24: sqlite3_extended_result_codes() (F-SQLT-02), backing
+    // Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES (1002). With it on, the driver-specific
+    // code in errorInfo[1] is the EXTENDED result code — SQLITE_CONSTRAINT_UNIQUE
+    // (2067) rather than the plain SQLITE_CONSTRAINT (19) it degrades to otherwise.
+    // Returns 1 on success, 0 for a non-SQLite or unknown handle.
+    function elephc_pdo_set_extended_result_codes(int $conn, int $on): int;
+    // v26: the rest of PostgreSQL's per-column metadata, completing getColumnMeta
+    // (F-PG-01/F-PG-02). All three are read off the prepared statement's column
+    // descriptors, so they describe the DECLARED column and are valid before any row
+    // is fetched. Their neutral values for a non-pgsql statement are the SERVER'S OWN
+    // neutral answers, not sentinels, which is why the prelude can emit them straight:
+    // - table_oid = PQftable(): the OID of the table the column was selected FROM.
+    //   0 is InvalidOid — the server's own answer for a column that is NOT a plain
+    //   table column (an expression, a literal, an aggregate). php-src emits this key
+    //   UNCONDITIONALLY, 0 included, so the prelude must too.
+    // - len = PQfsize(): the type's BYTE WIDTH when it is fixed (int4 -> 4,
+    //   timestamp -> 8, uuid -> 16), and -1 for a VARLENA (text/varchar/numeric/bytea/
+    //   json/arrays). A VARCHAR(20) therefore reports len -1, NOT 20 — its declared 20
+    //   surfaces through precision instead. That is real PDO, not an approximation.
+    // - precision = PQfmod(): the RAW atttypmod, undecoded, exactly as php-src stores
+    //   it — VARCHAR(20) is 24 (20 + VARHDRSZ), NUMERIC(10,2) is 655366
+    //   (((10 << 16) | 2) + 4). Decoding it here would be a divergence dressed up as an
+    //   improvement.
+    // v26 ALSO widens elephc_pdo_column_native_type (declared with the v23 pair above)
+    // to mysql: statements, which now report MySQL's own wire-type names ("LONG",
+    // "VAR_STRING", "NEWDECIMAL", "BLOB", …) per php-src's type_to_name_native.
+    function elephc_pdo_column_table_oid(int $stmt, int $i): int;
+    function elephc_pdo_column_len(int $stmt, int $i): int;
+    function elephc_pdo_column_precision(int $stmt, int $i): int;
+}
+
+// F-SURF-01: php-src's ext/pdo/pdo.stub.php declares a GLOBAL `pdo_drivers(): array`
+// alongside the class surface — the procedural spelling of PDO::getAvailableDrivers(),
+// and still the one most capability probes reach for
+// (`in_array('pgsql', pdo_drivers(), true)`). It was absent here entirely, so such a
+// probe failed to compile rather than reporting the drivers this build has.
+//
+// The list is duplicated from PDO::getAvailableDrivers() rather than delegated to it: a
+// global function calling a static method is a dispatch shape this prelude uses nowhere
+// else, and the value is a one-line literal. The two MUST be kept in lockstep.
+//
+// KNOWN GAP (prelude-injection, not this function): the prelude is only injected for a
+// program that names a PDO class (src/pdo_prelude/detect.rs scans for PDO /
+// PDOStatement / PDOException / Pdo\<driver>), so a program whose ONLY PDO reference is
+// a bare `pdo_drivers()` call still needs `--with-pdo` to force injection. Teaching the
+// detector this function name is a one-line change in that file.
+function pdo_drivers(): array {
+    return ["mysql", "pgsql", "sqlite"];
 }
 
 class PDOException extends RuntimeException {
@@ -177,17 +263,68 @@ class PDOException extends RuntimeException {
     // connection-open failure with no server-reported SQLSTATE).
     public ?array $errorInfo = null;
 
-    // Divergence from PHP's (message, code, previous) signature: the native-code
-    // slot is dropped, because the base Exception $code is int-typed and cannot
-    // hold a 5-character SQLSTATE string, so the SQLSTATE travels in errorInfo[0]
-    // instead. getCode() therefore reports the base default rather than the
-    // SQLSTATE string; read $e->errorInfo[0] for the SQLSTATE.
-    public function __construct(string $message = "", ?array $errorInfo = null) {
+    // F-SURF-11: the previous exception in the chain. php-src keeps this in the base
+    // Exception's PRIVATE `$previous` slot, reachable only through getPrevious(); elephc's
+    // built-in Exception has no such slot at all (its getPrevious() is a compiler
+    // intrinsic, see below), so the chain is stored — and read back — here instead.
+    //
+    // KNOWN DIVERGENCE (compiler limitation, NOT faked): `$e->getPrevious()` still
+    // returns null. Every call to a Throwable "standard method" (getMessage/getCode/
+    // getFile/getLine/getTrace/getTraceAsString/getPrevious/__toString) on any
+    // Throwable-like receiver is intercepted in codegen BEFORE user-method dispatch
+    // (src/codegen/lower_inst.rs, is_throwable_standard_method_call →
+    // lower_throwable_standard_method) and getPrevious() is lowered to a hardcoded null
+    // (lower_throwable_null_previous). A `public function getPrevious()` override
+    // declared here would therefore be dead code — never dispatched — so none is
+    // declared, and the chain is exposed through this public property instead:
+    //   `$e->previous` (elephc)   ==   `$e->getPrevious()` (PHP).
+    public ?Throwable $previous = null;
+
+    // F-SURF-10/F-SURF-11 — divergences from PHP's inherited
+    // `Exception(string $message, int $code, ?Throwable $previous)` signature, all of them
+    // forced by elephc's type system:
+    //
+    //  * The 2nd parameter is `?array $errorInfo`, not `int $code`. php-src populates
+    //    PDOException::$errorInfo from PDO internals (pdo_throw_exception) and never from
+    //    the constructor, but elephc's prelude has no internal channel to reach a
+    //    just-constructed object's property from the throw site, so the triple is passed in
+    //    here. Making the slot polymorphic (`mixed $codeOrErrorInfo`) to accept BOTH shapes
+    //    was rejected: an untyped/Mixed value flowing into the `?array $errorInfo` property
+    //    is exactly the corrupting shape the property comment above documents. Consequence:
+    //    `new PDOException($msg, $code, $prev)` — the inherited PHP form — is a type error;
+    //    use `new PDOException($msg, $errorInfo, $prev)`.
+    //  * php-src stores the SQLSTATE **string** in `$code` (pdo_throw_exception does
+    //    `zend_update_property_string(..., "code", ..., *pdo_error)`; the stub types it
+    //    `int|string`). elephc's base Exception `$code` is `protected int`
+    //    (src/types/checker/builtin_types/exception.rs), so a 5-character SQLSTATE cannot
+    //    live there. The SQLSTATE stays in `errorInfo[0]`, exactly as before — read
+    //    `$e->errorInfo[0]` where PHP code reads `$e->getCode()`. What `$code` DOES carry
+    //    now (it was never assigned before, so getCode() was a constant 0) is the
+    //    driver-specific integer code, i.e. `errorInfo[1]` — the same integer php-src puts
+    //    in `errorInfo[1]` and interpolates into the "SQLSTATE[%s] [%d] %s" message.
+    public function __construct(string $message = "", ?array $errorInfo = null, ?Throwable $previous = null) {
         // The built-in Exception constructor is a checker-synthesized method with
         // no linkable symbol, so `parent::__construct()` cannot be called; the
         // public `$message` property (see getMessage()) is assigned directly.
         $this->message = $message;
         $this->errorInfo = $errorInfo;
+        $this->previous = $previous;
+        // F-SURF-10: populate the inherited `protected int $code` with the ONLY meaningful
+        // integer this exception carries — the driver-specific error code. `$code` is a
+        // real property slot of the built-in Throwable payload (the compiler's getCode()
+        // intrinsic reads that same slot), so this assignment is what makes getCode()
+        // report something other than 0. is_array() narrowing (not `!== null`) is used
+        // because it is the guard shape the checker narrows most reliably here, and the
+        // element is re-checked with is_int() because errorInfo[1] is null for a
+        // connect-time failure with no server-reported code.
+        if (is_array($errorInfo)) {
+            if (count($errorInfo) > 1) {
+                $_driverCode = $errorInfo[1];
+                if (is_int($_driverCode)) {
+                    $this->code = (int) $_driverCode;
+                }
+            }
+        }
     }
 }
 
@@ -235,6 +372,23 @@ class PDO {
     const PARAM_INPUT_OUTPUT = 0x80000000;
     const PARAM_STR_NATL = 0x40000000;
     const PARAM_STR_CHAR = 0x20000000;
+    // F-SURF-03: the parameter-lifecycle event constants. Their values are the
+    // DECLARATION ORDER of `enum pdo_param_event` in php-src's
+    // ext/pdo/php_pdo_driver.h, which is the only thing that fixes them (the enum
+    // carries no explicit values). They exist for userspace/native PDO *driver*
+    // authorship — a driver's `param_hook` is called once per event so it can
+    // allocate, rewrite, or free a bound parameter around each stage of a
+    // statement's life. elephc's bridge implements the drivers natively in Rust and
+    // exposes no param-hook seam to PHP, so these constants are entirely INERT here:
+    // they are declared purely so code that references PDO::PARAM_EVT_* (portable
+    // driver shims, test suites enumerating the class surface) still compiles.
+    const PARAM_EVT_ALLOC = 0;
+    const PARAM_EVT_FREE = 1;
+    const PARAM_EVT_EXEC_PRE = 2;
+    const PARAM_EVT_EXEC_POST = 3;
+    const PARAM_EVT_FETCH_PRE = 4;
+    const PARAM_EVT_FETCH_POST = 5;
+    const PARAM_EVT_NORMALIZE = 6;
     // Driver/connection attribute constants (PHP 8.4 numeric values).
     const ATTR_AUTOCOMMIT = 0;
     const ATTR_PREFETCH = 1;
@@ -264,6 +418,19 @@ class PDO {
     const NULL_TO_STRING = 2;
     const CURSOR_FWDONLY = 0;
     const CURSOR_SCROLL = 1;
+    // F-SQLT-01: php-src registers the SQLite driver constants on the BASE \PDO
+    // class as well as on Pdo\Sqlite (ext/pdo_sqlite/pdo_sqlite.c registers them
+    // against pdo_dbh_ce, in parallel with the modern class-scoped spellings added
+    // in 8.1) — `PDO::SQLITE_ATTR_OPEN_FLAGS` and friends are the pre-8.1 API
+    // surface a great deal of real-world code still uses. Same values as the
+    // Pdo\Sqlite constants further down; the two spellings are aliases, both live.
+    const SQLITE_DETERMINISTIC = 2048;
+    const SQLITE_ATTR_OPEN_FLAGS = 1000;
+    const SQLITE_OPEN_READONLY = 1;
+    const SQLITE_OPEN_READWRITE = 2;
+    const SQLITE_OPEN_CREATE = 4;
+    const SQLITE_ATTR_READONLY_STATEMENT = 1001;
+    const SQLITE_ATTR_EXTENDED_RESULT_CODES = 1002;
 
     private int $conn;
     private int $errMode;
@@ -286,7 +453,161 @@ class PDO {
     private int $attrCase;
     private int $oracleNulls;
 
+    // F-CORE-11: php-src supports an INDIRECT DSN — `new PDO("uri:<url>")` reads the
+    // real DSN from the FIRST LINE of the referenced stream (`dsn_from_uri`,
+    // pdo_dbh.c:208-220, called from the constructor at pdo_dbh.c:346-358, ahead of the
+    // driver lookup), so a credentials-bearing DSN can live outside the source tree.
+    // This prelude had no `uri:` handling at all, so such a DSN reached the bridge
+    // verbatim and failed as an unknown driver. Returns the DSN unchanged when it
+    // carries no `uri:` prefix, so every caller pipes its raw argument through this
+    // unconditionally (and re-running it on an already-resolved DSN is a no-op, which is
+    // what lets the driver subclasses resolve first and still hand the result to
+    // parent::__construct()).
+    //
+    // Two divergences, both forced by elephc's I/O surface rather than chosen:
+    // (1) php-src opens the URI through the full stream-wrapper stack. elephc's fopen()
+    //     has no `file://` wrapper (its wrapper table — src/codegen/lower_inst/builtins/
+    //     io.rs — covers php://, data://, ftp://, phar://, http://, compress.*:// and
+    //     nothing else), so the `file://` scheme — the very one PHP's own documentation
+    //     uses for this feature — is stripped here and the remainder opened as a plain
+    //     path. Any other scheme is handed to fopen() as-is and simply fails to open,
+    //     which lands on the same error below.
+    // (2) php-src's php_stream_get_line KEEPS the trailing newline; it is trimmed here,
+    //     since a DSN carrying a stray "\n" reaches the driver parsers as a garbage
+    //     trailing key.
+    //
+    // (3) php-src DEPRECATED this whole DSN form ("Looking up the DSN from a URI is
+    //     deprecated due to possible security concerns with DSNs coming from remote
+    //     URIs") and emits an E_DEPRECATED alongside the successful lookup. elephc has no
+    //     deprecation-diagnostic channel, so the notice is documented here instead of
+    //     raised; the feature still works, exactly as it still does in PHP.
+    //
+    // The two failure messages and their EXCEPTION CLASS were verified against a real
+    // PHP 8.5.6 CLI rather than read off the C source, because php-src raises them with
+    // `zend_argument_error(pdo_exception_ce, 1, …)` — an ARGUMENT-ERROR MESSAGE SHAPE
+    // ("…(): Argument #1 ($dsn) must be …") thrown as a **PDOException**, NOT as a
+    // ValueError. Reading only the `zend_argument_*` call would have produced the wrong
+    // class here:
+    //   unreadable URI / empty first line -> "…must be a valid data source URI"
+    //   first line with no colon in it    -> "…must be a valid data source name (via URI)"
+    protected function resolveDsnUri(string $dsn): string {
+        if (!str_starts_with($dsn, "uri:")) {
+            return $dsn . "";
+        }
+        $_uri = substr($dsn, 4);
+        if (str_starts_with($_uri, "file://")) {
+            $_uri = substr($_uri, 7);
+        }
+        $_uriHandle = fopen($_uri, "rb");
+        if ($_uriHandle === false) {
+            throw new PDOException("PDO::__construct(): Argument #1 (\$dsn) must be a valid data source URI", null);
+        }
+        $_uriLine = fgets($_uriHandle);
+        fclose($_uriHandle);
+        if ($_uriLine === false) {
+            // EOF on the very first read: the stream opened but is empty, which php-src
+            // reports identically to an unopenable one (dsn_from_uri returns NULL for both).
+            throw new PDOException("PDO::__construct(): Argument #1 (\$dsn) must be a valid data source URI", null);
+        }
+        // Explicit cast: the checker does not narrow fgets()'s `string|false` out of the
+        // `=== false` guard above (the same accepted gap copyFromFile() casts around for
+        // file_get_contents).
+        $_resolved = rtrim((string) $_uriLine, "\r\n");
+        if (strpos($_resolved, ":") === false) {
+            throw new PDOException("PDO::__construct(): Argument #1 (\$dsn) must be a valid data source name (via URI)", null);
+        }
+        return $_resolved;
+    }
+
+    // F-CORE-13: php-src validates the DSN in two steps, with two DIFFERENT messages,
+    // both before any driver is asked to connect (pdo_dbh.c:346-372):
+    //   1. no colon at all -> the ARGUMENT-ERROR message shape
+    //      "PDO::__construct(): Argument #1 ($dsn) must be a valid data source name";
+    //   2. a colon but no driver registered for the prefix -> the BARE message
+    //      "could not find driver" (php-src deliberately keeps the DSN out of that text:
+    //      it may carry a password).
+    // Neither existed here: the constructor let the bridge fail the open and surfaced ITS
+    // message, "could not find driver (only sqlite:, pgsql:, and mysql: DSNs are
+    // supported)", while PDO::connect() threw php-src's bare text — two different messages
+    // for one failure inside one class, and a colonless DSN got neither. The helpful
+    // driver list survives in this comment and in docs/php/pdo.md rather than in an
+    // exception message callers may match on.
+    //
+    // BOTH are PDOExceptions — VERIFIED against a real PHP 8.5.6 CLI, and worth stating
+    // because the C source misleads: case 1 is raised with
+    // `zend_argument_error(pdo_exception_ce, 1, …)`, whose first parameter is the
+    // exception class entry, so it produces an argument-error MESSAGE SHAPE thrown as a
+    // **PDOException** — NOT a ValueError, despite reading like every other
+    // zend_argument_* call site in the tree. `get_class($e)` on a real
+    // `new PDO("nocolon")` is "PDOException".
+    //
+    // Divergence: the message names `PDO::__construct()` even when the call came through
+    // a driver subclass (php-src names the called scope). elephc has no late static
+    // binding — `static::` lowers to the DEFINING class (src/ir_lower/expr/mod.rs:9654) —
+    // so the called scope is not observable from here.
+    protected function checkDsnIsSupported(string $dsn): void {
+        // The `null` second argument is passed EXPLICITLY at both throw sites (not left to
+        // PDOException's default): a bare `new PDOException($msg)` omitting it does not
+        // actually read back as `null` (a pre-existing, general
+        // default-argument-materialization bug — reproducible with plain
+        // `throw new PDOException("x")`, unrelated to PDO). php-src leaves errorInfo null
+        // for both of these: no driver ever attempted a connection, so there is no
+        // SQLSTATE to report.
+        if (strpos($dsn, ":") === false) {
+            throw new PDOException("PDO::__construct(): Argument #1 (\$dsn) must be a valid data source name", null);
+        }
+        if (!str_starts_with($dsn, "sqlite:") && !str_starts_with($dsn, "pgsql:") && !str_starts_with($dsn, "mysql:")) {
+            throw new PDOException("could not find driver", null);
+        }
+    }
+
+    // F-CORE-01: php-src refuses to open a FOREIGN DSN through a driver-specific
+    // subclass — `create_driver_specific_pdo_object` (pdo_dbh.c:222-299) compares the
+    // DSN's driver against the called scope and throws when they differ. elephc's three
+    // subclasses forwarded blindly (and Pdo\Mysql had no constructor at all), so
+    // `new Pdo\Sqlite("mysql:host=…")` happily returned a Pdo\Sqlite object holding a
+    // live MySQL connection — an object whose class lies about what it is, and whose
+    // SQLite-only methods (openBlob, createFunction, …) then fail deep in the bridge.
+    //
+    // Called from each subclass constructor BEFORE parent::__construct(), i.e. before
+    // any connection attempt, which is where php-src runs it too. A DSN whose prefix is
+    // no driver this bridge knows is deliberately NOT rejected here: that is a different
+    // failure with a different message, owned by checkDsnIsSupported() a moment later.
+    //
+    // Divergence (unfixable without late static binding, see checkDsnIsSupported()):
+    // php-src throws the same error for the STATIC form, `Pdo\Sqlite::connect("mysql:…")`,
+    // with "connect()" swapped in for "__construct()". PDO::connect() is a plain
+    // inherited static here and cannot see which subclass it was called through, so that
+    // spelling still dispatches on the DSN prefix alone.
+    protected function checkDriverSubclassDsn(string $dsn, string $calledClass, string $expectedDriver): void {
+        if (str_starts_with($dsn, $expectedDriver . ":")) {
+            return;
+        }
+        $_dsnDriver = "";
+        $_dsnClass = "";
+        if (str_starts_with($dsn, "sqlite:")) {
+            $_dsnDriver = "sqlite";
+            $_dsnClass = "Pdo\\Sqlite";
+        } elseif (str_starts_with($dsn, "mysql:")) {
+            $_dsnDriver = "mysql";
+            $_dsnClass = "Pdo\\Mysql";
+        } elseif (str_starts_with($dsn, "pgsql:")) {
+            $_dsnDriver = "pgsql";
+            $_dsnClass = "Pdo\\Pgsql";
+        }
+        if ($_dsnDriver === "") {
+            return;
+        }
+        throw new PDOException($calledClass . "::__construct() cannot be used for connecting to the \"" . $_dsnDriver . "\" driver, either call " . $_dsnClass . "::__construct() or PDO::__construct() instead");
+    }
+
     public function __construct(string $dsn, ?string $username = null, ?string $password = null, ?array $options = null) {
+        // F-CORE-11 / F-CORE-13: resolve an indirect `uri:` DSN and validate the result
+        // FIRST — php-src does both ahead of the options loop and the driver connect
+        // (pdo_dbh.c:346-372). Every later DSN test in this method reads $_dsn, never the
+        // raw $dsn parameter, which for a `uri:` DSN still says "uri:…".
+        $_dsn = $this->resolveDsnUri($dsn);
+        $this->checkDsnIsSupported($_dsn);
         $this->errMode = 2;
         $this->persistent = false;
         $this->attributes = [];
@@ -320,6 +641,11 @@ class PDO {
         $_mySslCert = "";
         $_mySslKey = "";
         $_mySslVerify = -1;
+        // F-MY-06: Pdo\Mysql::ATTR_FOUND_ROWS (1005), threaded to the bridge's connect
+        // path below. F-CORE-16: the user-supplied ATTR_PERSISTENT pool key ("" = the
+        // plain boolean-persistent pool). Both are read from $options in the loop below.
+        $_myFoundRows = 0;
+        $_persistentKey = "";
         // Constructor options affect the connection that is opened below, so
         // apply them before the bridge sees the DSN. In particular,
         // ATTR_PERSISTENT selects the bridge's process-local DSN pool.
@@ -329,26 +655,78 @@ class PDO {
                 if ($_iattr == 3) {
                     // P1-h: same ATTR_ERRMODE value validation as setAttribute() below —
                     // a bad mode must not silently take effect via the constructor either.
-                    $this->checkErrMode((int) $_val);
-                    $this->errMode = (int) $_val;
+                    // F-CORE-03: including the SHAPE check (attrIntValue), which php-src
+                    // runs on the constructor's options array through the very same
+                    // pdo_get_long_param() path — this loop had the identical blind-cast
+                    // hole, so `new PDO($dsn, null, null, [PDO::ATTR_ERRMODE => "banana"])`
+                    // used to open the connection in ERRMODE_SILENT.
+                    $_ctorErrMode = $this->attrIntValue($_val);
+                    $this->checkErrMode($_ctorErrMode);
+                    $this->errMode = $_ctorErrMode;
                 } elseif ($_iattr == 12) {
-                    $this->persistent = (bool) $_val;
+                    // F-CORE-16: the CONSTRUCTOR's ATTR_PERSISTENT does NOT go through
+                    // pdo_get_bool_param — pdo_dbh.c:389-404 special-cases it entirely, in
+                    // two arms this branch mirrors one for one:
+                    //   * a NON-NUMERIC, NON-EMPTY STRING is a user-supplied POOL KEY: the
+                    //     connection is persistent AND that string joins the DSN in the
+                    //     persistent pool's hash key, so two persistent connections to one
+                    //     DSN under different keys stay DISTINCT handles (that separation is
+                    //     the entire point of the named form);
+                    //   * anything else is `is_persistent = zval_get_long(v) ? 1 : 0` — a
+                    //     plain NUMERIC COERCION, so a numeric string, an empty string, a
+                    //     float and a bool all just coerce, and NONE of them is an error.
+                    // Both arms were wrong here: this used to call attrBoolValue(), which
+                    // threw the pool key away AND raised a spurious TypeError for every
+                    // string form. Verified against a real PHP 8.5.6 CLI:
+                    // ATTR_PERSISTENT => "keyA" gives persistent true; => "0" and => "" both
+                    // give false, with no error raised for either.
+                    if (is_string($_val) && ((string) $_val) !== "" && !is_numeric((string) $_val)) {
+                        $this->persistent = true;
+                        $_persistentKey = (string) $_val;
+                    } else {
+                        $this->persistent = ((int) $_val) != 0;
+                    }
                 } elseif ($_iattr == 19) {
                     // P1-h: same ATTR_DEFAULT_FETCH_MODE validation as setAttribute() below.
-                    $this->checkDefaultFetchMode((int) $_val);
-                    $this->defaultFetchMode = (int) $_val;
+                    $_ctorFetchMode = $this->attrIntValue($_val);
+                    $this->checkDefaultFetchMode($_ctorFetchMode);
+                    $this->defaultFetchMode = $_ctorFetchMode;
                 } elseif ($_iattr == 17) {
-                    $this->stringifyFetches = (bool) $_val;
+                    $this->stringifyFetches = $this->attrBoolValue($_val);
                 } elseif ($_iattr == 8) {
                     // P2-e: same ATTR_CASE value validation as setAttribute() below.
-                    $this->checkAttrCase((int) $_val);
-                    $this->attrCase = (int) $_val;
+                    $_ctorCase = $this->attrIntValue($_val);
+                    $this->checkAttrCase($_ctorCase);
+                    $this->attrCase = $_ctorCase;
                 } elseif ($_iattr == 11) {
-                    $this->oracleNulls = (int) $_val;
+                    $this->oracleNulls = $this->attrIntValue($_val);
+                } elseif ($_iattr == 2) {
+                    // F-CORE-03: ATTR_TIMEOUT is consumed further down from
+                    // $this->attributes (it needs the DSN, then a live connection), but
+                    // its value must be shape-checked at the same point setAttribute()
+                    // checks it — the RAW value is what gets stored below, and every
+                    // later read does a bare `(int)` on it. attrIntValue()'s only job at
+                    // this call site is therefore to raise the TypeError; its normalized
+                    // result is deliberately unused.
+                    $_unusedTimeout = $this->attrIntValue($_val);
                 } elseif ($_iattr == 1000) {
                     $_openFlags = (int) $_val;
                 } elseif ($_iattr == 1002) {
                     $_myInitCommand = (string) $_val;
+                } elseif ($_iattr == 1005) {
+                    // F-MY-06: Pdo\Mysql::ATTR_FOUND_ROWS. The value is 1005, NOT 1013
+                    // (which is ATTR_MULTI_STATEMENTS): under mysqlnd — PHP's default, and
+                    // the build this prelude's constant block mirrors — php-src's
+                    // php_pdo_mysql_int.h enum omits MAX_BUFFER_SIZE/READ_DEFAULT_FILE/
+                    // READ_DEFAULT_GROUP, so ATTR_COMPRESS=1003, ATTR_DIRECT_QUERY=1004 and
+                    // ATTR_FOUND_ROWS=1005. Threaded to the bridge's connect path, which
+                    // ORs CLIENT_FOUND_ROWS into the handshake capability flags
+                    // (mysql_driver.c:776-778) so an UPDATE's rowCount() reports the number
+                    // of rows MATCHED rather than the number actually CHANGED — the
+                    // difference between 1 and 0 for an UPDATE writing the value a row
+                    // already holds. No sqlite:/pgsql: constant shares this number, and the
+                    // bridge only consults it for a mysql: DSN, so it is inert elsewhere.
+                    $_myFoundRows = ((bool) $_val) ? 1 : 0;
                 } elseif ($_iattr == 1009) {
                     $_mySslCa = (string) $_val;
                 } elseif ($_iattr == 1008) {
@@ -361,18 +739,35 @@ class PDO {
                 $this->attributes[$_iattr] = $_val;
             }
         }
-        // SQLite ignores credentials. For PostgreSQL and MySQL, the user/password
-        // may be passed as the PDO constructor arguments (PHP-style); fold them
-        // into the DSN's `key=value` list, where the bridge parses them. P2-6:
-        // DSN-embedded credentials win over the constructor arguments (PHP
-        // parity) — only append a key the DSN does not already carry, instead of
-        // unconditionally duplicating it.
-        $_dsn = $dsn;
-        if (str_starts_with($dsn, "pgsql:") || str_starts_with($dsn, "mysql:")) {
-            if ($username !== null && !str_contains($dsn, "user=")) {
+        // SQLite ignores credentials. For PostgreSQL and MySQL, the user/password may be
+        // passed as the PDO constructor arguments (PHP-style); fold them into the DSN's
+        // `key=value` list, where the bridge parses them.
+        //
+        // F-CORE-02: php-src's CREDENTIAL PRECEDENCE IS ASYMMETRIC BY DRIVER, and this
+        // prelude used to apply the pgsql rule to both:
+        //   pgsql (pgsql_driver.c:1377-1378) — the conninfo string is assembled with the
+        //     DSN's own keys AFTER the constructor's user/password, and libpq's conninfo
+        //     parsing is last-wins, so the DSN WINS. (P2-6 already implemented this, and
+        //     it is correct: only a key the DSN does not carry is appended.)
+        //   mysql (mysql_driver.c:948-953) — `if (!dbh->username && vars[5].optval)
+        //     dbh->username = …` (same shape for the password): the DSN key is consulted
+        //     ONLY as a fallback for an absent constructor argument, so the CONSTRUCTOR
+        //     ARGUMENT WINS. `new PDO("mysql:host=h;user=readonly", "admin", $pw)`
+        //     connects as `admin` in real PHP and used to connect as `readonly` here — a
+        //     silent privilege swap in whichever direction the caller did not expect.
+        //
+        // MECHANISM (verified by reading the bridge parser, not assumed): a plain APPEND
+        // is enough to make the constructor argument win for mysql, because
+        // crates/elephc-pdo/src/my.rs::build_opts walks `body.split(';')` and assigns
+        // `match key { "user" => user = Some(value), … }` into ONE slot per key — a later
+        // duplicate simply overwrites the earlier one, i.e. the parser is LAST-WINS. The
+        // DSN's own `user=`/`password=` therefore does not have to be stripped out.
+        if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:")) {
+            $_dsnIsMysql = str_starts_with($_dsn, "mysql:");
+            if ($username !== null && ($_dsnIsMysql || !str_contains($_dsn, "user="))) {
                 $_dsn = $_dsn . ";user=" . $username;
             }
-            if ($password !== null && !str_contains($dsn, "password=")) {
+            if ($password !== null && ($_dsnIsMysql || !str_contains($_dsn, "password="))) {
                 $_dsn = $_dsn . ";password=" . $password;
             }
             // P2-1: ATTR_TIMEOUT maps to the driver's connect-time socket
@@ -382,7 +777,7 @@ class PDO {
             // `key=value` pairs their respective parsers already understand, so
             // folding this into the DSN needs no further bridge change — only
             // applied when the DSN does not already specify it.
-            if (isset($this->attributes[2]) && !str_contains($dsn, "connect_timeout=")) {
+            if (isset($this->attributes[2]) && !str_contains($_dsn, "connect_timeout=")) {
                 $_dsn = $_dsn . ";connect_timeout=" . ((int) $this->attributes[2]);
             }
         }
@@ -404,7 +799,7 @@ class PDO {
         if ($_mySslVerify != -1) {
             $_mySslConfig = $_mySslConfig . "verify=" . $_mySslVerify . ";";
         }
-        $this->conn = elephc_pdo_open_persistent($_dsn, $this->persistent ? 1 : 0, $_openFlags, $_myInitCommand, $_mySslConfig);
+        $this->conn = elephc_pdo_open_persistent($_dsn, $this->persistent ? 1 : 0, $_openFlags, $_myInitCommand, $_mySslConfig, $_myFoundRows, $_persistentKey);
         if ($this->conn < 0) {
             $_openMsg = elephc_pdo_last_open_error();
             // P1-4: when a real driver recognized the DSN but the connection
@@ -416,23 +811,16 @@ class PDO {
             // same class real PHP drivers default to for a connect-time failure:
             // "08006" (SQLSTATE connection-exception) for the network-facing
             // pgsql/mysql drivers, "HY000" (generic error — pdo_sqlite's own
-            // default) otherwise; native code is unknown here (null). An
-            // unrecognized DSN prefix is a different failure (no driver even
-            // attempted the connection) and keeps PHP's bare "could not find
-            // driver" shape — no SQLSTATE prefix, errorInfo stays null
-            // (verified against a real PHP 8.5 CLI). The `null` is passed
-            // EXPLICITLY (not left to the constructor's default): a bare
-            // `new PDOException($msg)` omitting the second argument does not
-            // actually read back as `null` (a pre-existing, general
-            // default-argument-materialization bug, reproducible with plain
-            // `throw new PDOException("x")` — unrelated to this fix), so an
-            // explicit `null` here is required for the omitted-driver branch to
-            // truly leave `errorInfo` null.
-            if (str_starts_with($_dsn, "sqlite:") || str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:")) {
-                $_sqlstate = str_starts_with($_dsn, "sqlite:") ? "HY000" : "08006";
-                throw new PDOException("SQLSTATE[" . $_sqlstate . "]: " . $_openMsg, [$_sqlstate, null, $_openMsg]);
-            }
-            throw new PDOException($_openMsg, null);
+            // default) otherwise; native code is unknown here (null).
+            //
+            // F-CORE-13: an UNRECOGNIZED DSN can no longer reach this point at all —
+            // checkDsnIsSupported(), at the top of this constructor, already rejected it
+            // with php-src's bare "could not find driver" (no SQLSTATE prefix, errorInfo
+            // left null) before the bridge was ever called. So every failure here is a
+            // genuine connect failure of a known driver and always carries a SQLSTATE;
+            // the old prefix re-test and its bare-message fallback are gone with it.
+            $_sqlstate = str_starts_with($_dsn, "sqlite:") ? "HY000" : "08006";
+            throw new PDOException("SQLSTATE[" . $_sqlstate . "]: " . $_openMsg, [$_sqlstate, null, $_openMsg]);
         }
         // ATTR_TIMEOUT needs a live connection, so apply it after the open (the
         // pre-open loop only records it). PHP's value is in seconds; SQLite's
@@ -459,6 +847,61 @@ class PDO {
             throw new PDOException("SQLSTATE[" . $_sqlstate . "]: " . $message, [$_sqlstate, $_native, $message]);
         }
         fwrite(STDERR, "PDO error: SQLSTATE[" . $_sqlstate . "]: " . $message . "\n");
+    }
+
+    // F-CORE-04/F-CORE-05: a SYNTHETIC (non-driver) connection-level error, mirroring
+    // php-src's `pdo_raise_impl_error` — it writes a caller-given SQLSTATE instead of
+    // reading the driver's live error state, because there was no failed query to read
+    // one from. Fully errMode-aware, exactly like fail() above: EXCEPTION throws,
+    // WARNING writes to stderr, SILENT is quiet — and in every mode the caller goes on
+    // to return its own failure value. PDOStatement has carried the identical helper
+    // since P1-i; \PDO was missing it, which is precisely why getAttribute() used to
+    // answer a nonsense attribute number with a bare null instead of raising IM001.
+    // (setAttribute() deliberately does NOT use it — see its own F-CORE-04 comment: real
+    // PHP rejects an unknown attribute there SILENTLY.)
+    private function failCode(string $sqlstate, string $message): void {
+        if ($this->errMode == 0) {
+            return;
+        }
+        if ($this->errMode == 2) {
+            throw new PDOException("SQLSTATE[" . $sqlstate . "]: " . $message, [$sqlstate, null, $message]);
+        }
+        fwrite(STDERR, "PDO error: SQLSTATE[" . $sqlstate . "]: " . $message . "\n");
+    }
+
+    // F-CORE-04/F-CORE-05: the boundary between "an attribute number this PDO surface
+    // knows about" and "a number that is not a PDO attribute at all". php-src's
+    // setAttribute falls through to `pdo_raise_impl_error(dbh, NULL, "IM001", "driver
+    // does not support setting attributes")`, and getAttribute to IM001 "driver does not
+    // support that attribute", once neither the generic switch nor the driver's own hook
+    // claims the attribute. This prelude used to store-and-return-true for ANY integer
+    // and read back null for anything unlisted, so `setAttribute(9999, 'x')` reported
+    // success and `getAttribute(9999)` was indistinguishable from a legitimately-null
+    // attribute.
+    //
+    // The boundary is drawn on the attribute NUMBER, deliberately, and deliberately
+    // GENEROUSLY — the goal is to name nonsense, not to police attributes real code
+    // legitimately round-trips:
+    //  - 0..21 is the whole CONTIGUOUS generic PDO_ATTR_* space this class declares
+    //    (ATTR_AUTOCOMMIT=0 … ATTR_DEFAULT_STR_PARAM=21). Several of these are acted on
+    //    by no driver here but ARE stored and echoed back through $this->attributes
+    //    (ATTR_STATEMENT_CLASS, ATTR_CURSOR, ATTR_EMULATE_PREPARES…), and callers depend
+    //    on that — including this prelude's own prepare(), which snapshots attribute 20
+    //    via getAttribute() — so the whole range stays accepted and stored.
+    //  - 1000..1015 is the driver-specific range: PDO_ATTR_DRIVER_SPECIFIC (1000) up to
+    //    the highest constant any of the three driver subclasses declares
+    //    (Pdo\Mysql::ATTR_LOCAL_INFILE_DIRECTORY = 1015). The drivers deliberately OVERLAP
+    //    in this range (1002 is both Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES and
+    //    Pdo\Mysql::ATTR_INIT_COMMAND), and php-src likewise hands the entire range to the
+    //    driver hook rather than validating it per-driver at the PDO layer, so it is
+    //    accepted wholesale rather than narrowed against the live connection's driver.
+    // Everything else — a negative number, 22..999, anything above 1015 — is what IM001
+    // now names.
+    private function isKnownAttribute(int $attribute): bool {
+        if ($attribute >= 0 && $attribute <= 21) {
+            return true;
+        }
+        return $attribute >= 1000 && $attribute <= 1015;
     }
 
     // P1-h: ATTR_ERRMODE (3) only accepts PDO::ERRMODE_SILENT/WARNING/EXCEPTION
@@ -503,27 +946,141 @@ class PDO {
         }
     }
 
+    // F-CORE-03: php-src names the offending value with zend_zval_value_name() in
+    // the TypeError the two helpers below raise; mirror the spellings it produces
+    // for every shape a PHP-level attribute value can actually reach here.
+    private function attrValueTypeName(mixed $value): string {
+        if (is_int($value)) {
+            return "int";
+        }
+        if (is_bool($value)) {
+            return "bool";
+        }
+        if (is_float($value)) {
+            return "float";
+        }
+        if (is_string($value)) {
+            return "string";
+        }
+        if (is_array($value)) {
+            return "array";
+        }
+        if (is_null($value)) {
+            return "null";
+        }
+        return "object";
+    }
+
+    // F-CORE-03 (SECURITY-adjacent): php-src checks the SHAPE of an attribute
+    // value BEFORE any per-attribute range check — pdo_get_long_param() accepts
+    // only IS_LONG, IS_TRUE/IS_FALSE, or a string that is_numeric_str_function()
+    // reports as IS_LONG, and raises a TypeError otherwise. This prelude used to
+    // cast blindly with `(int) $value`, and `(int) "banana"` is 0 — which is
+    // PDO::ERRMODE_SILENT, a value checkErrMode() happily accepts — so
+    // `setAttribute(PDO::ATTR_ERRMODE, "banana")` silently switched the connection
+    // to SILENT and swallowed every subsequent error. Shared by setAttribute() and
+    // the constructor's $options loop, which had the identical blind-cast problem.
+    private function attrIntValue(mixed $value): int {
+        if (is_int($value) || is_bool($value)) {
+            return (int) $value;
+        }
+        if (is_string($value)) {
+            $_sval = (string) $value;
+            // php-src takes a string only when it parses as IS_LONG, so an
+            // INTEGER-shaped numeric string passes while a float-shaped one
+            // ("1.5", "1e3" — both IS_DOUBLE) falls through to the TypeError;
+            // is_numeric() alone would wrongly accept those, hence the explicit
+            // fractional/exponent rejection.
+            if (is_numeric($_sval) && strpos($_sval, ".") === false && strpos($_sval, "e") === false && strpos($_sval, "E") === false) {
+                return (int) $_sval;
+            }
+        }
+        throw new TypeError("Attribute value must be of type int for selected attribute, " . $this->attrValueTypeName($value) . " given");
+    }
+
+    // F-CORE-03: the bool-typed counterpart, mirroring pdo_get_bool_param() —
+    // only IS_TRUE/IS_FALSE/IS_LONG are accepted there (its `case IS_STRING:`
+    // deliberately falls through to the TypeError, so a string is NOT a valid
+    // bool attribute value even when it looks like one).
+    private function attrBoolValue(mixed $value): bool {
+        if (is_bool($value) || is_int($value)) {
+            return (bool) $value;
+        }
+        throw new TypeError("Attribute value must be of type bool for selected attribute, " . $this->attrValueTypeName($value) . " given");
+    }
+
     public function setAttribute(int $attribute, $value): bool {
         if ($attribute == 3) {
-            $this->checkErrMode((int) $value);
-            $this->errMode = (int) $value;
+            // F-CORE-03: the shape check runs BEFORE the range check, exactly as
+            // php-src's pdo_get_long_param() does — see attrIntValue() for why a
+            // blind cast here was actively dangerous for ATTR_ERRMODE.
+            $_attrErrMode = $this->attrIntValue($value);
+            $this->checkErrMode($_attrErrMode);
+            $this->errMode = $_attrErrMode;
         } elseif ($attribute == 12) {
-            $this->persistent = (bool) $value;
+            $this->persistent = $this->attrBoolValue($value);
         } elseif ($attribute == 2) {
             // ATTR_TIMEOUT: SQLite maps it to a busy-timeout; PHP's unit is
             // seconds, SQLite's is milliseconds. Other drivers accept it as a
             // no-op (see the bridge).
-            elephc_pdo_set_busy_timeout($this->conn, ((int) $value) * 1000);
+            elephc_pdo_set_busy_timeout($this->conn, $this->attrIntValue($value) * 1000);
         } elseif ($attribute == 19) {
-            $this->checkDefaultFetchMode((int) $value);
-            $this->defaultFetchMode = (int) $value;
+            $_attrFetchMode = $this->attrIntValue($value);
+            $this->checkDefaultFetchMode($_attrFetchMode);
+            $this->defaultFetchMode = $_attrFetchMode;
         } elseif ($attribute == 17) {
-            $this->stringifyFetches = (bool) $value;
+            $this->stringifyFetches = $this->attrBoolValue($value);
         } elseif ($attribute == 8) {
-            $this->checkAttrCase((int) $value);
-            $this->attrCase = (int) $value;
+            $_attrCase = $this->attrIntValue($value);
+            $this->checkAttrCase($_attrCase);
+            $this->attrCase = $_attrCase;
         } elseif ($attribute == 11) {
-            $this->oracleNulls = (int) $value;
+            $this->oracleNulls = $this->attrIntValue($value);
+        } elseif ($attribute == 1002 && elephc_pdo_driver_name($this->conn) === "sqlite") {
+            // F-SQLT-02: Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES. php-src's
+            // pdo_sqlite_set_attribute calls sqlite3_extended_result_codes(), which
+            // widens the driver-specific code in errorInfo[1] from the coarse primary
+            // code (SQLITE_CONSTRAINT, 19) to the extended one that says WHICH
+            // constraint failed (SQLITE_CONSTRAINT_UNIQUE, 2067) — the difference
+            // between "a constraint broke" and an actionable error.
+            //
+            // The driver guard is required, not defensive noise: 1002 is a colliding
+            // number. It is Pdo\Mysql::ATTR_INIT_COMMAND (a STRING, consumed at
+            // connect time by the constructor's $options loop) on a mysql: connection,
+            // so an unguarded branch would push that string through attrBoolValue()
+            // and raise a spurious TypeError. Each driver owns its own 1000+ range;
+            // this attribute only means "extended result codes" for sqlite:.
+            elephc_pdo_set_extended_result_codes($this->conn, $this->attrBoolValue($value) ? 1 : 0);
+        } elseif (!$this->isKnownAttribute($attribute)) {
+            // F-CORE-04 (CORRECTED — the finalization spec was WRONG about this, and an
+            // earlier pass implemented the spec's version): an UNKNOWN attribute number
+            // makes real PHP's setAttribute() return **false SILENTLY**. It raises
+            // nothing — no exception, no error state — not even under
+            // ERRMODE_EXCEPTION. VERIFIED against a real PHP 8.5.6 CLI:
+            // `$pdo->setAttribute(9999, 1)` on an ERRMODE_EXCEPTION handle returns
+            // bool(false) and `$pdo->errorCode()` still reads "00000".
+            //
+            // WHY, in php-src's own terms: pdo_dbh_attribute_set() only reaches
+            // `pdo_raise_impl_error(…, "IM001", "driver does not support setting
+            // attributes")` on the `!dbh->methods->set_attribute` arm — a driver with NO
+            // set_attribute hook AT ALL. All three drivers this bridge implements
+            // (pdo_sqlite, pdo_mysql, pdo_pgsql) HAVE one, and each simply `return 0`s
+            // for an attribute it does not recognize WITHOUT setting an error, so the
+            // PDO_HANDLE_DBH_ERR() that follows finds SQLSTATE "00000" and raises
+            // nothing. The IM001 arm is therefore unreachable for every driver here.
+            //
+            // getAttribute() is GENUINELY ASYMMETRIC and its IM001 (further down) stays:
+            // pdo_sqlite's get_attribute hook returning 0 lands on an EXPLICIT
+            // pdo_raise_impl_error, so `getAttribute(9999)` really does throw on a real
+            // CLI. The asymmetry looks like a bug in php-src; it is nonetheless the
+            // behavior, and mirroring it is the whole point of this surface.
+            //
+            // What DOES survive from the original finding: NOTHING is stored. The old
+            // code's store-and-return-TRUE was wrong under any reading — a rejected
+            // attribute must not read back out of getAttribute() — so the reject
+            // boundary (isKnownAttribute(), see its own comment) still governs; only the
+            // loudness of the rejection changes.
+            return false;
         }
         $this->attributes[$attribute] = $value;
         return true;
@@ -589,13 +1146,52 @@ class PDO {
         if ($attribute == 7) {
             return "Connection OK; waiting to send.";
         }
+        // F-SQLT-02 (DECISION: php-src parity, not echo-back).
+        // Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES (1002) is WRITE-ONLY in real PHP:
+        // pdo_sqlite_set_attribute handles it, but pdo_sqlite_get_attribute has NO
+        // case for it, so PDO falls through and getAttribute() yields NULL — it does
+        // not echo back what you set, and there is no sqlite3 C API to read the flag
+        // back either. The generic $this->attributes lookup below WOULD echo it back
+        // (setAttribute stores every attribute unconditionally), which is exactly the
+        // divergence this early return exists to prevent.
+        //
+        // Scoped to sqlite: because 1002 is also Pdo\Mysql::ATTR_INIT_COMMAND (see
+        // setAttribute) — a different attribute, on a different driver, that this
+        // prelude does read back out of $this->attributes.
+        if ($attribute == 1002 && elephc_pdo_driver_name($this->conn) === "sqlite") {
+            return null;
+        }
         if (isset($this->attributes[$attribute])) {
             return $this->attributes[$attribute];
+        }
+        // F-CORE-05: php-src's getAttribute fall-through — IM001 "driver does not support
+        // that attribute" once the generic switch AND the driver hook have both declined
+        // (pdo_dbh.c's `case 0:` arm), returning FALSE (php-src's literal `RETURN_FALSE`,
+        // not NULL). errMode-aware like every other synthetic failure: ERRMODE_SILENT and
+        // ERRMODE_WARNING still get `false` back rather than a throw. Unlike setAttribute's
+        // IM001 (see the divergence note there), THIS one is exactly what real PHP does:
+        // `(new PDO("sqlite::memory:"))->getAttribute(9999)` on a real 8.5.6 CLI throws
+        // `SQLSTATE[IM001] … driver does not support that attribute`.
+        //
+        // A KNOWN attribute number with nothing stored keeps returning null, unchanged —
+        // that is this surface's long-standing "the attribute exists, nobody set it"
+        // answer (ATTR_SERVER_INFO's documented null above depends on reaching exactly
+        // here), and the finding is about numbers that are not attributes at all.
+        if (!$this->isKnownAttribute($attribute)) {
+            $this->failCode("IM001", "driver does not support that attribute");
+            return false;
         }
         return null;
     }
 
     public function exec(string $statement): int|bool {
+        // F-CORE-21/P2-f: real PHP validates this before any driver call at all —
+        // php-src's PHP_METHOD(PDO, exec) raises the ValueError from its own
+        // argument check, exactly like the prepare() guard just below (which this
+        // method was inconsistently missing, so `exec("")` reached the bridge).
+        if ($statement === "") {
+            throw new ValueError("PDO::exec(): Argument #1 (\$statement) must not be empty");
+        }
         $_affected = elephc_pdo_exec($this->conn, $statement);
         if ($_affected < 0) {
             $this->fail(elephc_pdo_errmsg($this->conn));
@@ -653,6 +1249,15 @@ class PDO {
     }
 
     public function query(string $query, ?int $fetchMode = null, mixed $arg1 = null, mixed $arg2 = null): PDOStatement|bool {
+        // F-CORE-22: php-src's PHP_METHOD(PDO, query) carries its OWN empty-statement
+        // check, so this must not be left to the prepare() call below — an empty query
+        // did throw, but under the wrong method name ("PDO::prepare(): ..."). php-src's
+        // own message names the argument `$statement` here (the C-level parameter its
+        // check validates) even though this prelude's parameter is `$query`; keep
+        // php-src's text verbatim so a caller matching on the message sees real PHP's.
+        if ($query === "") {
+            throw new ValueError("PDO::query(): Argument #1 (\$statement) must not be empty");
+        }
         $_statement = $this->prepare($query);
         if ($_statement === false) {
             return false;
@@ -764,9 +1369,16 @@ class PDO {
         // return the base \PDO because the subclasses ARE \PDO and elephc has no
         // `static` return type; the runtime object is the exact subclass. An
         // unrecognized prefix throws, matching PHP's "could not find driver".
-        // Divergence: the DSN prefix, not the receiver class, selects the driver, so
-        // a subclass-qualified mismatched call (`Pdo\Sqlite::connect("mysql:...")`)
-        // is not rejected here as PHP would.
+        //
+        // F-CORE-01 (divergence that SURVIVES this wave): php-src rejects a
+        // subclass-qualified mismatched call — `Pdo\Sqlite::connect("mysql:…")` throws
+        // "…cannot be used for connecting to the \"mysql\" driver…", with "connect()"
+        // in place of "__construct()". The `new Pdo\Sqlite("mysql:…")` spelling IS now
+        // rejected (see \PDO::checkDriverSubclassDsn(), run from each subclass
+        // constructor), but this STATIC form cannot be: elephc has no late static
+        // binding — `static::` lowers to the DEFINING class (src/ir_lower/expr/mod.rs:9654)
+        // — so an inherited static method cannot observe which subclass it was called
+        // through, and this factory therefore still dispatches on the DSN prefix alone.
         if (str_starts_with($dsn, "sqlite:")) {
             return new \Pdo\Sqlite($dsn, $username, $password, $options);
         }
@@ -793,17 +1405,26 @@ class PDO {
         // that Pdo\Sqlite::openBlob() / Pdo\Pgsql::lobOpen() return. The caller has
         // already populated the shared bridge buffer (elephc_pdo_blob_read /
         // elephc_pdo_lob_get) and passes its byte length here; a negative length
-        // signals a bridge error and yields false. The buffer is drained one byte at
-        // a time (via chr()) so embedded NUL bytes survive into the PHP string, which
-        // is then wrapped in a rewound in-memory read/write stream. This is a
+        // signals a bridge error and yields false. The buffer is copied out in ONE
+        // call and wrapped in a rewound in-memory read/write stream. This is a
         // read-whole snapshot: writing back to the stream does not update the stored
         // BLOB / large object.
+        //
+        // F-QUAL-01: this used to drain the buffer one byte at a time through
+        // elephc_pdo_blob_byte()+chr() — one FFI call (and one string concatenation)
+        // per byte, which for a BLOB is exactly the value class where that is most
+        // expensive. blob_data_ptr + ptr_read_string copies an EXACT byte count with
+        // no NUL-termination semantics, so embedded NUL bytes still survive into the
+        // PHP string, which was the byte loop's whole reason for existing. As in
+        // columnValue(), the zero-length guard is required rather than merely tidy:
+        // the bridge hands back a NULL pointer for an empty buffer and
+        // ptr_read_string fatals on NULL before it ever inspects the length.
         if ($length < 0) {
             return false;
         }
         $_data = "";
-        for ($_j = 0; $_j < $length; $_j++) {
-            $_data = $_data . \chr(\elephc_pdo_blob_byte($_j));
+        if ($length > 0) {
+            $_data = \ptr_read_string(\elephc_pdo_blob_data_ptr(), $length);
         }
         $_stream = \fopen("php://memory", "r+");
         \fwrite($_stream, $_data);
@@ -919,8 +1540,75 @@ class PDO {
     public function __clone(): void {
         throw new Error("Trying to clone an uncloneable object of class " . get_class($this));
     }
+
+    // F-CORE-15 (SECURITY-adjacent): php-src marks `class PDO` — and PDOStatement —
+    // `/** @not-serializable */` in ext/pdo/pdo.stub.php, which installs
+    // zend_class_serialize_deny, so `serialize($pdo)` throws
+    // `Exception: Serialization of 'PDO' is not allowed`. elephc has no per-class engine
+    // flag for that, and its serialize() simply WALKED THE PROPERTIES: it emitted a blob
+    // containing this object's private `$conn` — the raw integer bridge handle — and
+    // unserialize() handed back a zombie PDO whose handle indexes nothing (every bridge
+    // call then answers with an unknown-handle sentinel: driver_name "", errcode 0…).
+    // Silent misbehavior where php-src is loud, and a serialized blob that leaks internal
+    // handle numbering into whatever store it lands in.
+    //
+    // elephc's serialize() DOES honor the magic hooks, so this is enforceable from the
+    // prelude: __rt_serialize_object consults the per-class `_class_serialize_ptrs` table
+    // FIRST and falls back to `_class_sleep_ptrs`
+    // (src/codegen_support/runtime/system/serialize.rs:559-636; both tables are emitted
+    // per class_id, resolving through the implementing class so subclasses inherit the
+    // entry — src/codegen_support/runtime/data/user.rs:288-306). BOTH are declared here:
+    // __serialize() is the one that actually fires today, __sleep() is the fallback the
+    // runtime reaches when a class has no __serialize(), and declaring both means no
+    // ordering change in that runtime can ever quietly re-open the property-walk path.
+    // The throw unwinds out of the runtime's serialize frame through the ordinary
+    // longjmp-to-handler path, like any exception raised inside a magic method.
+    //
+    // get_class($this), not a literal "PDO": php-src's deny handler names the OBJECT's
+    // class, so `serialize(new \Pdo\Sqlite(...))` reports
+    // `Serialization of 'Pdo\Sqlite' is not allowed` — and the subclasses inherit these
+    // two methods, so they get that message for free. The thrown class is a plain
+    // `Exception` (not PDOException): zend_class_serialize_deny passes a NULL class entry
+    // to zend_throw_exception_ex, which is the base Exception.
+    public function __serialize(): array {
+        throw new Exception("Serialization of '" . get_class($this) . "' is not allowed");
+    }
+
+    public function __sleep(): array {
+        throw new Exception("Serialization of '" . get_class($this) . "' is not allowed");
+    }
 }
 
+// F-STMT-11 (INVESTIGATED, DELIBERATELY NOT CHANGED) — php-src declares
+// `class PDOStatement implements IteratorAggregate`, with an INTERNAL, userland-invisible
+// iterator object behind its get_iterator handler (pdo_stmt_iter_*). elephc implements
+// `Iterator` directly. foreach BEHAVIOR is identical either way (both walk the forward-only
+// cursor in the statement's current fetch mode with sequential integer keys); what differs
+// is reflection:
+//     $stmt instanceof \Iterator            elephc: true    php: false
+//     $stmt instanceof \IteratorAggregate    elephc: false   php: true
+//     method_exists($stmt, 'rewind'|'valid'|'current'|'key'|'next')
+//                                            elephc: true    php: false
+// (`$stmt instanceof \Traversable` is true in BOTH, which is what every framework actually
+// tests, and `foreach`/`getIterator()` work in both.)
+//
+// The switch was investigated and is NOT blocked by the compiler: elephc supports
+// IteratorAggregate end-to-end, including a `getIterator(): Iterator` returning a separate
+// concrete iterator, both for a statically-typed source and for a dynamic/union-typed one
+// (src/codegen/lower_inst/iterators.rs: object_iterator_source /
+// resolve_dynamic_object_iterator_source). It is not taken because the trade is bad:
+//   * elephc cannot express php's INTERNAL iterator. The aggregate form needs a real,
+//     userland-visible class (`class PDOStatementIterator implements Iterator`) holding the
+//     statement — so it would remove five public methods php does not have by ADDING a
+//     public class php does not have. The reflection divergence moves; it does not vanish.
+//   * every `foreach ($stmt as ...)` in existing code — including all statements coming out
+//     of `query()`/`prepare()`, whose declared return type is the UNION `PDOStatement|bool`
+//     and therefore lowers through the DYNAMIC iterator path — would switch to a different
+//     codegen path (getIterator() dispatch + source replacement) for a purely cosmetic
+//     reflection gain. foreach over a PDOStatement is the single most-used PDO idiom here.
+// A regression in foreach is strictly worse than a divergence in `instanceof`, so the
+// divergence above is documented and kept. Re-open only alongside a compiler feature for
+// non-public/internal classes.
 class PDOStatement implements Iterator {
     private int $stmt;
     private int $conn;
@@ -928,8 +1616,25 @@ class PDOStatement implements Iterator {
     private int $fetchMode;
     private $fetchTarget;
     private array $boundParams;
+    // F-STMT-12: the placeholder NAME each bind was made with (":name" / "name" exactly as
+    // the caller spelled it), or "" for a positional bind. $boundParams above records the
+    // RESOLVED 1-based driver slot, which is all execute() needs but destroys the name
+    // debugDumpParams() has to print ("Key: Name: [9] :calories"). Kept as a fourth parallel
+    // array — appended and cleared in lockstep with the other three — rather than folded into
+    // one array of records, because a per-bind array-of-arrays is exactly the heterogeneous
+    // Mixed shape that miscompiles here.
+    private array $boundNames;
     private array $boundValues;
     private array $boundTypes;
+    // F-STMT-12: the PDO::PARAM_* type php-src would REPORT for each bind, which is not
+    // always the one elephc dispatches on ($boundTypes above). bindValue() records the
+    // caller's raw $type in both. execute($params) is where they part: php-src's
+    // pdo_stmt_bind_input_params stamps EVERY element of that array PDO_PARAM_STR (2) —
+    // regardless of the PHP value's type — while $boundTypes has to keep the per-value
+    // dispatch tag (1 int/bool, 0 null, 2 string, 100 = internal float marker) so a later
+    // no-arg execute() re-binds each value with the right driver call. Only
+    // debugDumpParams() reads this array; nothing binds from it.
+    private array $boundPhpTypes;
     private int $fetchColumn;
     private int $rowCount;
     private $iterRow;
@@ -944,7 +1649,29 @@ class PDOStatement implements Iterator {
     // consumes it instead of stepping again, which would otherwise skip row 1.
     private bool $hasPendingStep;
     private int $pendingStep;
-    public string $queryString;
+    // F-STMT-13: php-src makes $queryString read-only through a custom property-write
+    // handler (dbstmt_prop_write: `zend_throw_error(NULL, "Property queryString is read
+    // only")`), so `$stmt->queryString = 'x'` is an Error, not a silent overwrite of the
+    // SQL the object reports. elephc has no property-write hook, but it DOES have
+    // `readonly`: assignable once from the declaring class's constructor (the only place
+    // this is written — see __construct), rejected everywhere else. The SQL a statement
+    // reports can therefore never be overwritten, which is the point of the finding.
+    //
+    // HOW THE REJECTION SURFACES IS RECEIVER-TYPE DEPENDENT — verified by running both
+    // shapes, not assumed (pinned by test_pdo_statement_query_string_is_readonly):
+    //
+    //   * Receiver narrowed to a concrete PDOStatement (e.g. behind an
+    //     `instanceof PDOStatement` guard): a catchable `Error` is raised, matching php.
+    //     NEAR-PARITY on the text only — elephc raises PHP's generic readonly message
+    //     ("Cannot modify readonly property PDOStatement::$queryString"), not pdo_stmt.c's
+    //     custom "Property queryString is read only". Same class, same catchability.
+    //   * Receiver left as the `PDOStatement|bool` union that prepare()/query() return
+    //     (the common shape): the write is SILENTLY DROPPED — no Error, but the property
+    //     keeps its constructor value. This is a PRE-EXISTING COMPILER LIMITATION, not a
+    //     PDO one: a readonly write through a union-typed receiver is not checked at all
+    //     (reproduced on a plain user class whose factory returns `Box|bool`). php would
+    //     throw here. The value is still protected; only the diagnostic is missing.
+    public readonly string $queryString;
     // P1-11 (best-effort): mirrors PDO::$stringifyFetches, snapshotted at
     // prepare() time via setStringifyFetches(). Applied in columnValue() so
     // every fetch path (assoc/num/both/named/obj/class/key-pair/fetchColumn)
@@ -1004,8 +1731,10 @@ class PDOStatement implements Iterator {
         $this->fetchMode = 4;
         $this->fetchTarget = null;
         $this->boundParams = [];
+        $this->boundNames = [];
         $this->boundValues = [];
         $this->boundTypes = [];
+        $this->boundPhpTypes = [];
         $this->fetchColumn = 0;
         $this->rowCount = 0;
         // Initialized to null (not false) so the inferred property type widens to
@@ -1117,6 +1846,46 @@ class PDOStatement implements Iterator {
         $this->fetchMode = $mode;
     }
 
+    // F-STMT-17: names the offending value the way php-src's zend_zval_value_name() does in
+    // an argument TypeError. It is a near-copy of PDO::attrValueTypeName() (see the
+    // F-CORE-03 comment there) rather than a call to it: that one is `private` on a
+    // DIFFERENT class, and this prelude has no trait or shared-private mechanism to reach it
+    // from here — promoting it to `public static` on PDO would bolt a method onto PDO's
+    // public surface that real PHP does not have, a worse divergence than a short duplicate.
+    //
+    // It is NOT a byte-for-byte copy: zend_zval_value_name() spells a bool as "true"/"false"
+    // (PHP 8.3+), which is what real PHP prints here — verified against php 8.x:
+    // `setFetchMode(PDO::FETCH_COLUMN, true)` says "must be of type int, true given". The
+    // PDO-side copy still says "bool"; that is a pre-existing text divergence in the
+    // attribute TypeErrors, left alone here because its messages are pinned by tests.
+    // The one approximation left: php names an OBJECT by its class, this reports "object".
+    private function argValueTypeName(mixed $value): string {
+        if (is_int($value)) {
+            return "int";
+        }
+        if (is_bool($value)) {
+            // Explicit (bool) cast rather than a bare `if ($value)`: the value is a Mixed
+            // parameter, and every other truthiness test in this prelude casts first.
+            if ((bool) $value) {
+                return "true";
+            }
+            return "false";
+        }
+        if (is_float($value)) {
+            return "float";
+        }
+        if (is_string($value)) {
+            return "string";
+        }
+        if (is_array($value)) {
+            return "array";
+        }
+        if (is_null($value)) {
+            return "null";
+        }
+        return "object";
+    }
+
     public function setFetchMode(int $mode, mixed $classOrColumn = null): bool {
         // P2-d: reject an out-of-range base mode and a negative FETCH_COLUMN
         // index BEFORE storing anything (mirrors php-src's pdo_stmt_verify_mode /
@@ -1138,8 +1907,48 @@ class PDOStatement implements Iterator {
         if ($_base == 10) {
             throw new ValueError("Can only use PDO::FETCH_FUNC in PDOStatement::fetchAll()");
         }
-        if ($mode == 7 && $classOrColumn !== null && ((int) $classOrColumn) < 0) {
+        // F-STMT-09: every gate below tests $_base, the FLAG-MASKED mode — they used to
+        // test the RAW $mode, which is false the moment ANY high-bit flag is OR-ed in.
+        // `setFetchMode(PDO::FETCH_CLASS|PDO::FETCH_PROPS_LATE, 'Row')` therefore matched
+        // no gate at all: the arity checks were skipped AND the class name was dropped on
+        // the floor by the storage block at the bottom, leaving a statement in FETCH_CLASS
+        // mode with no target — which then silently fetched stdClass rows.
+        // F-STMT-17: php-src checks the column argument's TYPE before its RANGE
+        // (pdo_stmt.c's PDO_FETCH_COLUMN arm: `if (Z_TYPE(args[0]) != IS_LONG) {
+        // zend_argument_type_error(2, "must be of type int, %s given", ...); }` immediately
+        // ahead of the `< 0` value check below). The argument is variadic `mixed ...$args`
+        // in the stub, so it is NEVER juggled: a bool, a float, and even the numeric string
+        // "3" are all IS_LONG-mismatches and all raise the TypeError — hence the strict
+        // is_int() here rather than an is_numeric()-style shape test. This prelude used to
+        // fall straight into the `(int) $classOrColumn` cast below, and `(int) "abc"` is 0,
+        // so `setFetchMode(PDO::FETCH_COLUMN, "abc")` silently selected column 0 and
+        // reported success.
+        //
+        // The message carries NO argument NAME — "Argument #2 must be of type int, string
+        // given" — because zend never names a variadic parameter in an argument error
+        // (verified against real php: `Argument #2 must be of type int, string given`, and
+        // likewise `Argument #2 must be greater than or equal to 0` for the range error
+        // below). FOLLOW-UP, deliberately not fixed here: the neighbouring ValueError texts
+        // in this method DO spell an `($args)` php never prints. Their exact strings are
+        // pinned by existing tests, so correcting them is a test-touching change and out of
+        // scope for this one.
+        if ($_base == 7 && $classOrColumn !== null && !is_int($classOrColumn)) {
+            throw new TypeError("PDOStatement::setFetchMode(): Argument #2 must be of type int, " . $this->argValueTypeName($classOrColumn) . " given");
+        }
+        if ($_base == 7 && $classOrColumn !== null && ((int) $classOrColumn) < 0) {
             throw new ValueError("PDOStatement::setFetchMode(): Argument #2 (\$args) must be greater than or equal to 0");
+        }
+        // F-STMT-09: FETCH_CLASSTYPE reads the class name from COLUMN 0'S VALUE at fetch
+        // time (see fetch()'s own CLASSTYPE branch), so an explicit class argument is not
+        // merely redundant — it is a contradiction, and php-src rejects the combination
+        // outright (pdo_stmt.c:1783-1790: the CLASSTYPE arm of the FETCH_CLASS case takes
+        // its class from the data and raises zend_argument_count_error the moment a
+        // variadic class argument accompanies it). This prelude used to accept the combo
+        // and quietly discard the argument. Same ArgumentCountError-vs-ValueError
+        // substitution as the arity gates below (elephc has no ArgumentCountError class),
+        // with php-src's literal message text.
+        if ($_base == 8 && ($mode & 0x40000) != 0 && $classOrColumn !== null) {
+            throw new ValueError("PDOStatement::setFetchMode() expects exactly 1 argument for the fetch mode provided, 2 given");
         }
         // P3: php-src's pdo_stmt_setup_fetch_mode raises an ArgumentCountError
         // when FETCH_COLUMN/FETCH_CLASS/FETCH_INTO is given with no further
@@ -1154,42 +1963,78 @@ class PDOStatement implements Iterator {
         // raises the closest available ValueError (still catchable via
         // `\Error`, just not via a real `\ArgumentCountError`) with php-src's
         // literal message text for the omitted case.
-        if ($mode == 7 && $classOrColumn === null) {
+        if ($_base == 7 && $classOrColumn === null) {
             throw new ValueError("PDOStatement::setFetchMode() expects exactly 2 arguments for the fetch mode provided, 1 given");
         }
-        if ($mode == 8 && $classOrColumn === null) {
+        // FETCH_CLASS is the one base mode whose class argument is OPTIONAL — but only
+        // under CLASSTYPE, which supplies it from the data instead (and which the gate
+        // above has already proven was NOT accompanied by an explicit one).
+        if ($_base == 8 && ($mode & 0x40000) == 0 && $classOrColumn === null) {
             throw new ValueError("PDOStatement::setFetchMode() expects at least 2 arguments for the fetch mode provided, 1 given");
         }
-        if ($mode == 9 && $classOrColumn === null) {
+        if ($_base == 9 && $classOrColumn === null) {
             throw new ValueError("PDOStatement::setFetchMode() expects exactly 2 arguments for the fetch mode provided, 1 given");
         }
         $this->fetchMode = $mode;
-        if ($mode == 7 && $classOrColumn !== null) {
+        if ($_base == 7 && $classOrColumn !== null) {
             $this->fetchColumn = (int) $classOrColumn;
-        } elseif (($mode == 8 || $mode == 9) && $classOrColumn !== null) {
+        } elseif (($_base == 8 || $_base == 9) && $classOrColumn !== null) {
             $this->fetchTarget = $classOrColumn;
         }
         return true;
     }
 
     public function bindValue($parameter, $value, int $type = 2): bool {
+        // F-STMT-05: php-src's PHP_METHOD(PDOStatement, bindValue) validates the
+        // parameter identifier BEFORE recording anything — a positional slot below 1
+        // is a ValueError ("must be greater than or equal to 1"), and an empty named
+        // placeholder is zend_argument_must_not_be_empty_error(1). This prelude used
+        // to cast blindly and report success for both, so `bindValue(0, 'x')` bound
+        // nothing and said it had worked.
+        if (is_int($parameter)) {
+            if (((int) $parameter) < 1) {
+                throw new ValueError("PDOStatement::bindValue(): Argument #1 (\$param) must be greater than or equal to 1");
+            }
+        } elseif (((string) $parameter) === "") {
+            throw new ValueError("PDOStatement::bindValue(): Argument #1 (\$param) must not be empty");
+        }
         // Resolve the 1-based slot index now and record it. The named-placeholder
         // lookup must not be interleaved with value binds in execute()'s loop: a
         // loop body that branches between "lookup index" and "no lookup" corrupts
         // a sibling bind in generated code. Recording resolved int slots keeps
-        // execute()'s bind loop uniform.
+        // execute()'s bind loop uniform. F-STMT-12: the caller's spelling of the
+        // placeholder is recorded alongside it ("" for a positional bind) — the resolved
+        // slot alone cannot reproduce debugDumpParams()'s "Key: Name:" block.
         if (is_int($parameter)) {
             $_slot = (int) $parameter;
+            $_pname = "";
         } else {
             $_slot = (int) elephc_pdo_bind_parameter_index($this->stmt, (string) $parameter);
+            $_pname = (string) $parameter;
         }
         $this->boundParams[] = $_slot;
+        $this->boundNames[] = $_pname;
         $this->boundValues[] = $value;
         $this->boundTypes[] = $type;
+        // F-STMT-12: php-src reports a bindValue()/bindParam() bind with the type the
+        // caller passed, flags and all (param->param_type is stored verbatim) — so the
+        // reported type and the dispatch type are the same value on this path.
+        $this->boundPhpTypes[] = $type;
         return true;
     }
 
     public function bindParam($parameter, $variable, int $type = 2, int $maxLength = 0, mixed $driverOptions = null): bool {
+        // F-STMT-05: php-src validates bindParam()'s own Argument #1 exactly as it
+        // validates bindValue()'s, so the guard is repeated here rather than left to
+        // the bindValue() delegation below — otherwise the ValueError would name the
+        // wrong method.
+        if (is_int($parameter)) {
+            if (((int) $parameter) < 1) {
+                throw new ValueError("PDOStatement::bindParam(): Argument #1 (\$param) must be greater than or equal to 1");
+            }
+        } elseif (((string) $parameter) === "") {
+            throw new ValueError("PDOStatement::bindParam(): Argument #1 (\$param) must not be empty");
+        }
         // Unlike PHP, the value is recorded now (not read by reference at execute
         // time): bind right before execute(), or use bindValue(). $maxLength (the
         // LOB/output-buffer length hint) and $driverOptions are accepted for
@@ -1203,6 +2048,17 @@ class PDOStatement implements Iterator {
     }
 
     public function bindColumn(string|int $column, mixed &$var, int $type = 2, int $maxLength = 0, mixed $driverOptions = null): bool {
+        // F-STMT-05: php-src validates bindColumn()'s Argument #1 with the same two
+        // checks bindValue()/bindParam() get, and it does so during parameter
+        // validation — i.e. AHEAD of any driver dispatch. So the ValueError must win
+        // over the not-supported PDOException below, keeping the failure a caller
+        // sees for a malformed argument identical to real PHP's.
+        if (is_int($column) && ((int) $column) < 1) {
+            throw new ValueError("PDOStatement::bindColumn(): Argument #1 (\$column) must be greater than or equal to 1");
+        }
+        if (is_string($column) && ((string) $column) === "") {
+            throw new ValueError("PDOStatement::bindColumn(): Argument #1 (\$column) must not be empty");
+        }
         // P0-4: NOT SUPPORTED — fails loudly rather than silently accepting the
         // binding and doing nothing. PHP's bindColumn() stores a reference to
         // $var and writes each fetched column into it on every subsequent
@@ -1226,6 +2082,17 @@ class PDOStatement implements Iterator {
         $this->executed = true;
         elephc_pdo_reset($this->stmt);
         elephc_pdo_clear_bindings($this->stmt);
+        // F-STMT-06 / F-PARSE-06: neither replay loop below used to check the
+        // resolved slot index OR any elephc_pdo_bind_* return code, so a named
+        // placeholder the prepared SQL never declares (bind_parameter_index()
+        // returns 0 for "unknown") and an out-of-range positional slot (every
+        // bind_* returns 0 there — the driver's own bounds check / SQLITE_RANGE)
+        // both bound NOTHING while execute() reported success, silently dropping
+        // the value. php-src raises HY093 for both. Each loop records the failure
+        // in $_bindError and breaks; it is reported once past the branch, so the
+        // errMode-aware error path is shared and neither loop body has to unwind
+        // out of its own iteration.
+        $_bindError = "";
         // P1-c: php-src's PHP_METHOD(PDOStatement, execute) REPLACES the bound
         // parameters with $input_params when it is given — it never layers the
         // call-time array on top of earlier bindValue()/bindParam() bindings, so
@@ -1242,28 +2109,64 @@ class PDOStatement implements Iterator {
             for ($_i = 0; $_i < $_count; $_i++) {
                 $_slot = (int) $this->boundParams[$_i];
                 $_value = $this->boundValues[$_i];
-                $_btype = $this->boundTypes[$_i];
+                // F-STMT-08: php-src ALWAYS reduces a bound type to its base type
+                // before dispatching on it — PDO_PARAM_TYPE(x) is
+                // `((x) & ~PDO_PARAM_FLAGS)` with PDO_PARAM_FLAGS = 0xFFFF0000, the
+                // high half where PARAM_INPUT_OUTPUT (0x80000000), PARAM_STR_NATL
+                // (0x40000000) and PARAM_STR_CHAR (0x20000000) live. Dispatching on
+                // the RAW value made `PDO::PARAM_INT|PDO::PARAM_INPUT_OUTPUT` match
+                // no branch at all and fall through to the generic TEXT one, binding
+                // an int as a string. The raw value stays in $this->boundTypes (it is
+                // what a caller bound); only the dispatch is masked. Same `& 0xFFFF`
+                // base-mode idiom the fetch-mode paths already use.
+                $_btype = ((int) $this->boundTypes[$_i]) & 0xFFFF;
+                if ($_slot < 1) {
+                    // bindValue()/bindParam() now reject a positional slot below 1 up
+                    // front, so a slot of 0 reaching here can only be a NAMED
+                    // placeholder that bind_parameter_index() could not resolve —
+                    // php-src's "parameter was not defined" flavor of HY093.
+                    $_bindError = "Invalid parameter number: parameter was not defined";
+                    break;
+                }
+                $_brc = 0;
                 if ($_btype == 0 || is_null($_value)) {
-                    elephc_pdo_bind_null($this->stmt, $_slot);
-                } elseif ($_btype == 1 || $_btype == 5) {
-                    elephc_pdo_bind_int($this->stmt, $_slot, (int) $_value);
+                    $_brc = elephc_pdo_bind_null($this->stmt, $_slot);
+                } elseif ($_btype == 1) {
+                    $_brc = elephc_pdo_bind_int($this->stmt, $_slot, (int) $_value);
+                } elseif ($_btype == 5) {
+                    // F-STMT-07: PDO::PARAM_BOOL gets the driver's own boolean bind
+                    // (php-src's PDO_PARAM_BOOL case) instead of being folded into
+                    // PARAM_INT — that is what makes PostgreSQL send a real 't'/'f'
+                    // for a BOOL column rather than an integer literal it will refuse.
+                    // The value is truthiness-reduced first, mirroring the zval_is_true()
+                    // php-src applies to this parameter type (so a bound `5` binds
+                    // true, not 5). SQLite/MySQL bind it as 0/1, exactly as before.
+                    $_bval = ((bool) $_value) ? 1 : 0;
+                    $_brc = elephc_pdo_bind_bool($this->stmt, $_slot, $_bval);
                 } elseif ($_btype == 3) {
                     // PDO::PARAM_LOB: route through bind_blob (raw bytes, embedded
                     // NUL preserved) rather than bind_text.
                     $_s = (string) $_value;
-                    elephc_pdo_bind_blob($this->stmt, $_slot, $_s, strlen($_s));
+                    $_brc = elephc_pdo_bind_blob($this->stmt, $_slot, $_s, strlen($_s));
                 } elseif ($_btype == 100) {
                     // P2 (not a real PDO::PARAM_* value): an internal marker
                     // recorded only by execute($params)'s array-bind rebuild
                     // below, for a PHP float element, so a later no-arg
                     // execute() replay re-binds it as a double instead of
                     // falling into the text branch and stringifying it.
-                    elephc_pdo_bind_double($this->stmt, $_slot, (float) $_value);
+                    $_brc = elephc_pdo_bind_double($this->stmt, $_slot, (float) $_value);
                 } else {
                     // PDO::PARAM_STR (and anything else): bind_text with the
                     // measured byte length so an embedded NUL byte survives.
                     $_s = (string) $_value;
-                    elephc_pdo_bind_text($this->stmt, $_slot, $_s, strlen($_s));
+                    $_brc = elephc_pdo_bind_text($this->stmt, $_slot, $_s, strlen($_s));
+                }
+                if ($_brc == 0) {
+                    // The slot resolved but the driver refused it: an out-of-range
+                    // positional index (e.g. bindValue(5, ...) on a 2-placeholder
+                    // statement), which is php-src's bare "Invalid parameter number".
+                    $_bindError = "Invalid parameter number";
+                    break;
                 }
             }
         } else {
@@ -1277,39 +2180,80 @@ class PDOStatement implements Iterator {
             // the driver binds, so the replay loop above sees exactly this
             // call's array on a subsequent no-arg execute().
             $this->boundParams = [];
+            $this->boundNames = [];
             $this->boundValues = [];
             $this->boundTypes = [];
+            $this->boundPhpTypes = [];
             // Apply this call's parameter array (positional ? and named :name).
             foreach ($params as $_key => $_pv) {
                 if (is_int($_key)) {
                     $_idx = $_key + 1;
+                    // F-STMT-12: no name for a positional element, exactly as php-src's
+                    // pdo_stmt_bind_input_params leaves param->name NULL for an integer key.
+                    $_pname = "";
                 } else {
                     $_idx = elephc_pdo_bind_parameter_index($this->stmt, (string) $_key);
+                    // php-src records the array key VERBATIM (with or without its leading
+                    // colon — it tries both spellings when binding), so record it verbatim.
+                    $_pname = (string) $_key;
                 }
                 $_pslot = (int) $_idx;
+                if ($_pslot < 1) {
+                    // F-STMT-06: the same unresolvable-name case as the replay loop
+                    // above — an `execute([':nope' => 1])` key the prepared SQL does
+                    // not declare resolves to slot 0 and used to vanish silently.
+                    $_bindError = "Invalid parameter number: parameter was not defined";
+                    break;
+                }
+                $_prc = 0;
                 if (is_int($_pv)) {
-                    elephc_pdo_bind_int($this->stmt, $_pslot, (int) $_pv);
+                    $_prc = elephc_pdo_bind_int($this->stmt, $_pslot, (int) $_pv);
                     $this->boundTypes[] = 1;
                 } elseif (is_bool($_pv)) {
-                    elephc_pdo_bind_int($this->stmt, $_pslot, (int) $_pv);
+                    $_prc = elephc_pdo_bind_int($this->stmt, $_pslot, (int) $_pv);
                     $this->boundTypes[] = 1;
                 } elseif (is_float($_pv)) {
-                    elephc_pdo_bind_double($this->stmt, $_pslot, (float) $_pv);
+                    $_prc = elephc_pdo_bind_double($this->stmt, $_pslot, (float) $_pv);
                     // 100: see the replay loop's matching comment above.
                     $this->boundTypes[] = 100;
                 } elseif (is_null($_pv)) {
-                    elephc_pdo_bind_null($this->stmt, $_pslot);
+                    $_prc = elephc_pdo_bind_null($this->stmt, $_pslot);
                     $this->boundTypes[] = 0;
                 } else {
                     // The array-bind path carries no PDO type, so PARAM_STR /
                     // length-safe TEXT (embedded NUL preserved) is correct here.
                     $_ps = (string) $_pv;
-                    elephc_pdo_bind_text($this->stmt, $_pslot, $_ps, strlen($_ps));
+                    $_prc = elephc_pdo_bind_text($this->stmt, $_pslot, $_ps, strlen($_ps));
                     $this->boundTypes[] = 2;
                 }
                 $this->boundParams[] = $_pslot;
+                $this->boundNames[] = $_pname;
                 $this->boundValues[] = $_pv;
+                // F-STMT-12: php-src stamps PDO_PARAM_STR (2) on every element of an
+                // execute($params) array, whatever the PHP value's type — verified against
+                // real PHP 8.x: `execute([1])` then debugDumpParams() prints param_type=2
+                // for the integer. The dispatch tag recorded in $boundTypes above (1/0/100)
+                // is elephc-internal and must NOT leak into the dump.
+                $this->boundPhpTypes[] = 2;
+                if ($_prc == 0) {
+                    // F-PARSE-06: a positional key past the placeholder count (the
+                    // array is 0-based, the slot 1-based) — php-src's bare
+                    // "Invalid parameter number".
+                    $_bindError = "Invalid parameter number";
+                    break;
+                }
             }
+        }
+        if ($_bindError !== "") {
+            // Nothing has been run on the driver yet, so the statement is NOT
+            // executed — clear the flag set at the top of this method so a later
+            // fetch() cannot step a statement whose binds were rejected. failCode()
+            // is errMode-aware exactly like every other statement failure
+            // (EXCEPTION throws, WARNING warns, SILENT is quiet); all three modes
+            // return false from execute() rather than reporting a phantom success.
+            $this->executed = false;
+            $this->failCode("HY093", $_bindError);
+            return false;
         }
         // A statement with no result columns (INSERT/UPDATE/DELETE/DDL) is run
         // now.
@@ -1385,10 +2329,25 @@ class PDOStatement implements Iterator {
             }
             return null;
         }
+        // F-QUAL-01: TEXT/BLOB values are copied out of the bridge in ONE call. This
+        // is the dispatch point for every fetch path (assoc/num/both/named/obj/class/
+        // into/key-pair/fetchColumn), and it used to loop over column_data_byte once
+        // per byte — N FFI calls, each locking and unlocking the bridge's statement
+        // table, plus N string concatenations, so an N-byte column cost O(N) FFI and
+        // built the string in O(N^2). column_data_ptr/column_data_len are the
+        // length-counted pair (they never go through the NUL-stripping store_cstr) and
+        // ptr_read_string copies an EXACT byte count with no NUL-termination
+        // semantics, so this stays byte-exact for values with embedded NUL bytes —
+        // the sole reason the byte loop existed in the first place.
+        //
+        // The $_len == 0 guard is load-bearing, not cosmetic: the bridge returns a
+        // NULL pointer for an empty buffer (store_bytes) and ptr_read_string fatals on
+        // a NULL pointer (__rt_ptr_check_nonnull, which runs before the length is even
+        // looked at), so an empty TEXT column must not reach it.
         $_len = elephc_pdo_column_data_len($this->stmt, $index);
         $_out = "";
-        for ($_j = 0; $_j < $_len; $_j++) {
-            $_out = $_out . chr(elephc_pdo_column_data_byte($this->stmt, $index, $_j));
+        if ($_len > 0) {
+            $_out = ptr_read_string(elephc_pdo_column_data_ptr($this->stmt, $index), $_len);
         }
         // P2-e: ATTR_ORACLE_NULLS's NULL_EMPTY_STRING (1) converts an empty
         // TEXT/BLOB value to null, mirroring php-src's fetch_value() (its
@@ -1421,7 +2380,20 @@ class PDOStatement implements Iterator {
     }
 
     private function assignColumns(mixed $object, int $count): mixed {
-        for ($_i = 0; $_i < $count; $_i++) {
+        return $this->assignColumnsFrom($object, 0, $count);
+    }
+
+    // The same hydration, but starting at column $start rather than column 0 — the one
+    // thing FETCH_CLASSTYPE (F-STMT-02), FETCH_GROUP and FETCH_UNIQUE (F-STMT-15) all
+    // need. Each of those CONSUMES column 0 (as the class name / as the grouping key),
+    // and php-src then EXCLUDES it from the row it hydrates: do_fetch() literally
+    // advances its column cursor past it (`fetch_value(stmt, &val, i++, NULL)` for
+    // CLASSTYPE, pdo_stmt.c:805-829; `i++` after reading the group key, pdo_stmt.c:897-909)
+    // so the value that became the key never also becomes a property/element. A row whose
+    // key column was silently re-assigned as data would be wrong in the way that is
+    // hardest to notice — an extra property nobody asked for.
+    private function assignColumnsFrom(mixed $object, int $start, int $count): mixed {
+        for ($_i = $start; $_i < $count; $_i++) {
             $_value = $this->columnValue($_i);
             $_name = $this->columnName($_i);
             $object->{$_name} = $_value;
@@ -1444,11 +2416,29 @@ class PDOStatement implements Iterator {
         return elephc_pdo_step($this->stmt);
     }
 
-    public function fetch(int $mode = 0, mixed $classOrObject = null, int $cursorOffset = 0): mixed {
-        // $cursorOffset (PHP's $cursorOrientation-paired scroll offset) is accepted
-        // for signature compatibility with PHP's 3-arg `fetch()` but ignored — the
-        // bridge's cursor is forward-only (PDO::CURSOR_FWDONLY), matching every
-        // driver here, so there is nothing to seek to.
+    // F-STMT-01: php-src's signature, restored. This method's SECOND PARAMETER USED TO BE
+    // FABRICATED — a `mixed $classOrObject` that let a caller pass FETCH_CLASS's class or
+    // FETCH_INTO's object straight to fetch(). Real PDO has NO such facility: the stub is
+    //   fetch(int $mode = PDO::FETCH_DEFAULT,
+    //         int $cursorOrientation = PDO::FETCH_ORI_NEXT,
+    //         int $cursorOffset = 0): mixed
+    // and position 2 is an INT ORIENTATION, so the invented idiom
+    // `fetch(PDO::FETCH_CLASS, Row::class)` is a TypeError in real PHP, while the
+    // LEGITIMATE `fetch($mode, PDO::FETCH_ORI_NEXT)` used to push an int into the class
+    // slot. Class/object targeting is done EXCLUSIVELY through setFetchMode() beforehand
+    // (or fetchObject()), so FETCH_CLASS/FETCH_INTO now read $this->fetchTarget and
+    // nothing else.
+    //
+    // $cursorOrientation is ACCEPTED and every value is treated as FETCH_ORI_NEXT: this
+    // bridge's cursors are forward-only (PDO::CURSOR_FWDONLY — no driver here opens a
+    // scrollable one, and PDO::ATTR_CURSOR is inert), and php-src likewise ignores the
+    // orientation on a forward-only cursor. On a CURSOR_SCROLL statement real PHP WOULD
+    // honor FETCH_ORI_FIRST/LAST/PRIOR/ABS/REL (with $cursorOffset for the last two) and
+    // seek accordingly; that is the divergence, and it is a property of the cursor, not
+    // of this signature. Both parameters are read once here so neither trips the
+    // unused-parameter warning.
+    public function fetch(int $mode = 0, int $cursorOrientation = 0, int $cursorOffset = 0): mixed {
+        $_unusedCursorOrientation = $cursorOrientation;
         $_unusedCursorOffset = $cursorOffset;
         if (!$this->executed) {
             return false;
@@ -1460,12 +2450,23 @@ class PDOStatement implements Iterator {
         // friends live in the high bits) and dispatch on the base, so a flagged
         // mode is not silently treated as FETCH_BOTH.
         $_base = $mode & 0xFFFF;
-        // P2: real php-src's `pdo_stmt_verify_mode` raises a ValueError (not a
-        // PDOException) for every one of these mode-validation failures; a
-        // PDOException here would be uncatchable by code written against real
-        // PHP's `catch (\ValueError $e)`.
+        // F-STMT-03: the FETCH_LAZY restriction used to be INVERTED. php-src's
+        // pdo_stmt_verify_mode rejects FETCH_LAZY ONLY when fetch_all is true — i.e. only
+        // in fetchAll() (where the rejection now lives) — and it WORKS in fetch(),
+        // returning a lazy PDORow whose columns materialize on property access.
+        //
+        // elephc has no PDORow class (F-SURF-02: it is the one class of php-src's PDO
+        // surface this prelude does not declare, because a lazily-materializing row object
+        // needs a __get that can reach back into a live statement cursor), so fetch(LAZY)
+        // cannot return the one thing it is defined to return. It therefore fails LOUDLY
+        // and says exactly why, rather than substituting an eager row of some other shape
+        // and letting a caller believe it got a PDORow — the class is observable
+        // (`instanceof PDORow`, `$row->queryString`), so a stand-in would be a lie.
+        // A PDOException (not the old ValueError) because this is an unsupported-feature
+        // error, not a rejected argument — the same shape, and the same reasoning, as
+        // fetchAll()'s FETCH_FUNC refusal.
         if ($_base == 1) {
-            throw new ValueError("PDO::FETCH_LAZY is not supported");
+            throw new PDOException("PDO::FETCH_LAZY is not supported: elephc has no PDORow class");
         }
         // P0-3: real PHP restricts FETCH_FUNC to fetchAll() and raises exactly
         // this ValueError (verified against php-src: `zend_value_error("Can
@@ -1541,23 +2542,60 @@ class PDOStatement implements Iterator {
             return $this->assignColumns(new stdClass(), $_count);
         }
         if ($_base == 8) {
-            if ($classOrObject !== null) {
-                return $this->assignColumns(new $classOrObject(), $_count);
+            // F-STMT-02: FETCH_CLASSTYPE (0x40000) means the class name is NOT the one
+            // configured on the statement — it is READ FROM COLUMN 0'S RUNTIME VALUE, row
+            // by row, so one result set can hydrate a different class per row
+            // (`SELECT type_col, … FROM t` with `type_col` holding 'Cat' or 'Dog').
+            // php-src (pdo_stmt.c:805-829) does exactly three things this prelude used to
+            // do none of: it fetch_value()s column 0, it zend_lookup_class()es that string
+            // and FALLS BACK TO stdClass when no such class exists, and it then hydrates
+            // from column 1 onward — column 0 was CONSUMED as the type tag and must not
+            // also land in a property. The old code ignored the flag entirely, used the
+            // literal configured class, and assigned every column including 0.
+            //
+            // The stdClass fallback is implemented WITHOUT class_exists(): elephc's
+            // class_exists() is an AOT constant-fold (src/codegen/lower_inst/builtins.rs:
+            // lower_class_like_exists requires a CONST STRING operand) and simply does not
+            // compile against a runtime string, which is the only kind of string that can
+            // ever reach here. What IS available is the semantics of dynamic `new` itself:
+            // `new $name()` lowers to DynamicObjectNewMixed, whose runtime miss path
+            // (__rt_new_by_name, src/codegen_support/runtime/objects/new_by_name.rs) returns
+            // PHP **null** for a name in no class table. So the construction attempt IS the
+            // existence probe — one dynamic-new, no second lookup — and a null result is
+            // precisely php-src's "zend_lookup_class() found nothing" arm.
+            //
+            // The two arms are kept as two RETURNS rather than one reassigned local: the
+            // dynamic-new result is a Mixed, and rebinding that same local to a
+            // concrete `new stdClass()` would ask the checker to unify Mixed with
+            // Object(stdClass) in a slot that is about to be dynamic-property-written —
+            // exactly the shape of the known untyped-dynamic-prop corruption. Two
+            // straight-line returns give each object its own, single-typed local.
+            if (($mode & 0x40000) != 0) {
+                $_ctName = (string) $this->columnValue(0);
+                return $this->assignColumnsFromOrStd(new $_ctName(), 1, $_count);
             }
             if ($this->fetchTarget !== null) {
                 $_classTarget = $this->fetchTarget;
                 return $this->assignColumns(new $_classTarget(), $_count);
             }
+            // No target configured: php-src's own default for a bare FETCH_CLASS is
+            // stdClass (pdo_stmt_setup_fetch_mode leaves stmt->fetch.cls.ce NULL, which
+            // do_fetch resolves to zend_standard_class_def).
             return $this->assignColumns(new stdClass(), $_count);
         }
         if ($_base == 9) {
-            if ($classOrObject !== null) {
-                return $this->assignColumns($classOrObject, $_count);
-            }
             if ($this->fetchTarget !== null) {
                 return $this->assignColumns($this->fetchTarget, $_count);
             }
-            return $this->assignColumns(new stdClass(), $_count);
+            // F-STMT-04: FETCH_INTO with NO object configured used to hand back a fresh,
+            // anonymous stdClass — a silent success that threw the caller's row into an
+            // object they never see. php-src raises HY000 "No fetch-into object specified."
+            // (pdo_stmt.c:864-871, via pdo_raise_impl_error, hence errmode-aware: it
+            // THROWS under ERRMODE_EXCEPTION and returns false under SILENT/WARNING).
+            // FETCH_INTO without a target is not a mode, it is a mistake — the target is
+            // the entire point of the mode.
+            $this->failCode("HY000", "No fetch-into object specified.");
+            return false;
         }
         if ($_base == 3) {
             $_numRow = [];
@@ -1631,19 +2669,30 @@ class PDOStatement implements Iterator {
     public function fetchAll(int $mode = 0, mixed $classOrObject = null, mixed $ctorArgs = null): array {
         // $ctorArgs (FETCH_CLASS's constructor-argument array in PHP's
         // `fetchAll(PDO::FETCH_CLASS, 'Row', [...])` idiom) is accepted for
-        // signature compatibility but not forwarded — new $classOrObject() below
-        // (via fetch()) is always built with no arguments, the same documented
-        // divergence as fetchObject()'s $constructorArgs.
+        // signature compatibility but not forwarded — the target class is always built
+        // with no arguments, the same documented divergence as fetchObject()'s
+        // $constructorArgs.
+        //
+        // NOTE that fetchAll() KEEPS its `mixed $classOrObject` second parameter while
+        // fetch() (F-STMT-01) loses its own: that is not an inconsistency, it is php-src.
+        // fetchAll's stub really does take the fetch-mode's extra arguments
+        // (`fetchAll(int $mode = PDO::FETCH_DEFAULT, mixed ...$args)`); fetch's really
+        // does not (its 2nd parameter is `int $cursorOrientation`). The two methods
+        // diverge in php-src exactly as they now diverge here.
         $_unusedCtorArgs = $ctorArgs;
         if ($mode == 0) {
             $mode = $this->fetchMode;
         }
         $_base = $mode & 0xFFFF;
-        // FETCH_GROUP (0x10000) / FETCH_UNIQUE (0x30000) reshape the whole result
-        // set; returning a flat list would be silently wrong, so fail loudly until
-        // they are implemented.
-        if (($mode & 0x10000) != 0) {
-            throw new PDOException("PDO::FETCH_GROUP and PDO::FETCH_UNIQUE are not yet supported");
+        // F-STMT-03: FETCH_LAZY is rejected HERE, and ONLY here. php-src's
+        // pdo_stmt_verify_mode takes a `fetch_all` flag and refuses FETCH_LAZY on that
+        // arm alone — fetchAll() is the one place real PHP forbids it, because a lazy
+        // PDORow is a view onto the CURRENT row and a list of them would all alias the
+        // last one. This prelude used to have the restriction exactly BACKWARDS: it
+        // rejected LAZY in fetch() (where php-src allows it) and accepted it here (where
+        // php-src does not). Message verbatim from php-src.
+        if ($_base == 1) {
+            throw new ValueError("PDOStatement::fetchAll(): Argument #1 (\$mode) cannot be PDO::FETCH_LAZY");
         }
         if ($_base == 10) {
             // P0-3 FETCH_FUNC: real PHP calls `$callback(...$columns)` once per
@@ -1691,23 +2740,260 @@ class PDOStatement implements Iterator {
             }
             return $_pairs;
         }
-        if ($_base == 7 && $classOrObject !== null) {
-            // FETCH_COLUMN: PHP applies the 2nd argument as the column index for this
-            // call (`stmt->fetch.column = Z_LVAL(arg2)`). fetch()'s FETCH_COLUMN branch
-            // reads $this->fetchColumn, so set it here (mirroring setFetchMode) before
-            // the row loop — otherwise fetchAll(PDO::FETCH_COLUMN, $n) silently returns
-            // column 0's data regardless of $n.
-            $this->fetchColumn = (int) $classOrObject;
+        // The 2nd argument is applied to the STATEMENT before the row loop, never handed
+        // to fetch() — php-src does the same (PHP_METHOD(PDOStatement, fetchAll) writes
+        // stmt->fetch.column / stmt->fetch.cls.ce up front and then loops do_fetch), and
+        // since F-STMT-01 fetch() has no target parameter to hand it to anyway.
+        if ($_base == 7) {
+            // FETCH_COLUMN: `stmt->fetch.column = Z_LVAL(arg2)`. Without this,
+            // fetchAll(PDO::FETCH_COLUMN, $n) would silently return column 0 regardless
+            // of $n, since fetch()'s FETCH_COLUMN branch reads $this->fetchColumn.
+            if ($classOrObject !== null) {
+                $this->fetchColumn = (int) $classOrObject;
+            } elseif (($mode & 0x10000) != 0) {
+                // F-STMT-15: FETCH_COLUMN|FETCH_GROUP with NO explicit index defaults the
+                // VALUE column to 1, not 0 — php-src's fetchAll() spells this out
+                // (`stmt->fetch.column = arg2 ? … : (how & PDO_FETCH_GROUP ? 1 : 0)`),
+                // and it is what makes the classic idiom work: on `SELECT type, name`,
+                // `fetchAll(FETCH_GROUP|FETCH_COLUMN)` gives [type => [name, name, …]].
+                // Column 0 is already spoken for as the grouping key, so defaulting the
+                // value to it too would return [type => [type, type, …]].
+                $this->fetchColumn = 1;
+            }
+        } elseif (($_base == 8 || $_base == 9) && $classOrObject !== null) {
+            // FETCH_CLASS's class name / FETCH_INTO's object: `stmt->fetch.cls.ce`.
+            $this->fetchTarget = $classOrObject;
+        }
+        // F-STMT-15: FETCH_GROUP (0x10000) and FETCH_UNIQUE (0x30000 — note it CONTAINS
+        // the GROUP bit, so it is tested first) reshape the whole result set around a key
+        // taken from column 0. They used to throw "not yet supported"; they are now real.
+        if (($mode & 0x10000) != 0) {
+            // Two combinations stay refused rather than faked, both because column 0 is
+            // already consumed as the grouping key and something else wants it too:
+            //  - FETCH_CLASSTYPE also reads column 0 (as the class name). php-src resolves
+            //    the collision by consuming TWO columns (key from 0, class from 1, props
+            //    from 2), which is a shape no caller of this prelude has ever been able to
+            //    ask for, so it is refused rather than invented.
+            //  - FETCH_BOUND/FETCH_INTO/FETCH_NAMED under GROUP have no meaningful
+            //    per-group row here (BOUND writes to bound columns this prelude does not
+            //    support, INTO would hand every group the SAME object, NAMED's duplicate-
+            //    name grouping is a second, orthogonal reshaping). Loud beats silently
+            //    wrong: a caller gets an error naming the combination, not a plausible
+            //    array of the wrong shape.
+            if (($mode & 0x40000) != 0) {
+                throw new PDOException("PDO::FETCH_CLASSTYPE is not supported with PDO::FETCH_GROUP or PDO::FETCH_UNIQUE");
+            }
+            if ($_base != 2 && $_base != 3 && $_base != 4 && $_base != 5 && $_base != 7 && $_base != 8) {
+                throw new PDOException("PDO::FETCH_GROUP and PDO::FETCH_UNIQUE are not supported with this fetch mode");
+            }
+            if (!$this->executed) {
+                return [];
+            }
+            // Both modes CONSUME COLUMN 0 as the key — it becomes the array key and is
+            // excluded from the row (groupRow() starts at column 1). They differ only in
+            // what a key maps to:
+            //   FETCH_GROUP  -> a LIST of every row that carried that key, in result order
+            //                   (php-src: add_next_index_zval into the group's array);
+            //   FETCH_UNIQUE -> ONE row, LAST WRITE WINS (php-src: zend_symtable_update, a
+            //                   plain overwrite — it does not complain about a duplicate).
+            //
+            // FETCH_UNIQUE (0x30000) is a SUPERSET of FETCH_GROUP (0x10000), not a sibling
+            // of it, so "is this unique?" must test the whole 0x30000 mask — a bare
+            // `& 0x20000` would also accept a nonsense 0x20000-without-GROUP mode, and a
+            // bare `& 0x10000` (the caller's own dispatch test above) is true for BOTH.
+            //
+            // The key is CAST TO STRING, exactly as php-src does (`convert_to_string`)
+            // before it ever reaches the hash table. DIVERGENCE, and the only one here:
+            // real PHP's array then folds an integer-LOOKING string key back to an int key,
+            // so a grouping column holding 1 yields `$out[1]`; elephc's array keeps "1" a
+            // string key, so read it back as `$out["1"]`. A non-numeric key (the
+            // overwhelmingly common case: a type name, a status, a category) is identical.
+            //
+            // TWO TYPES OF THE SAME KEY are carried per row, on purpose. The split is what
+            // makes this both COMPILE and not CRASH, and every op below is one this backend
+            // is known to support:
+            //
+            //   $_gkeyM (groupKey(), `mixed`) keys the OUTPUT array. A statically Str-typed
+            //     key would make $_out a genuine AssocArray, and returning THAT from this
+            //     method's `: array` needs an AssocArray -> Array(Mixed) conversion the EIR
+            //     backend does not implement. A Mixed key keeps $_out an Array(Mixed) — the
+            //     shape FETCH_KEY_PAIR above already relies on, with columnValue()'s Mixed
+            //     return as its key.
+            //
+            //   $_gkeyS (a plain `(string)`) keys the bucket map $_groups and the presence
+            //     map $_present. A Str-keyed READ and STORE are both proven — FETCH_NAMED
+            //     above does exactly that on $_namedRow.
+            //
+            // EXISTENCE IS TESTED BY A count() PROBE, not by isset()/array_key_exists(),
+            // because NEITHER is available here:
+            //   - isset() on a MIXED key COMPILES and then SIGSEGVs at run time (verified:
+            //     dropping just that branch makes the same loop run clean, and FETCH_UNIQUE,
+            //     whose store tests no membership, always passed);
+            //   - isset() on a STR key does not compile at all ("runtime_call with receiver
+            //     PHP type Void");
+            //   - array_key_exists() on a Str key is unsupported too, as FETCH_NAMED's own
+            //     comment above records.
+            // Storing a key into $_present grows the map ONLY when that key is new, so the
+            // count DELTA is an exact, allocation-free existence test that needs to read
+            // nothing. It is sound for any key value, null included.
+            //
+            // FETCH_NAMED's alternative — counting prior matches by hand — is O(n^2), which
+            // is fine across a row's COLUMNS but not here, where n is the number of ROWS.
+            $_unique = ($mode & 0x30000) == 0x30000;
+            $_present = [];
+            $_groups = [];
+            $_order = [];
+            $_bn = 0;
+            $_out = [];
+            while (true) {
+                $_grc = $this->stepCursor();
+                if ($_grc < 0) {
+                    $this->fail(elephc_pdo_errmsg($this->conn));
+                    break;
+                }
+                if ($_grc == 0) {
+                    break;
+                }
+                $_gcount = elephc_pdo_column_count($this->stmt);
+                $_gkeyM = $this->groupKey(0);
+                $_gkeyS = (string) $_gkeyM;
+                $_grow = $this->groupRow($_base, $_gcount);
+                if ($_unique) {
+                    // LAST WRITE WINS (php-src: zend_symtable_update, a plain overwrite that
+                    // neither detects nor complains about a duplicate key), so no membership
+                    // test is needed at all — the store IS the semantics.
+                    $_out[$_gkeyM] = $_grow;
+                    continue;
+                }
+                $_before = count($_present);
+                $_present[$_gkeyS] = 1;
+                if (count($_present) > $_before) {
+                    // First sighting of this key: open its bucket, and remember the key (in
+                    // its Mixed form, for the output store) at its first-seen position.
+                    $_groups[$_gkeyS] = [$_grow];
+                    $_order[$_bn] = $_gkeyM;
+                    $_bn = $_bn + 1;
+                } else {
+                    // Append to the existing bucket. Read / append / write back rather than
+                    // `$_groups[$_gkeyS][] = $_grow`: a nested append through an element is a
+                    // known EIR write-through gap, and FETCH_NAMED uses this same three-step
+                    // form for the same reason.
+                    $_bucket = $_groups[$_gkeyS];
+                    $_bucket[] = $_grow;
+                    $_groups[$_gkeyS] = $_bucket;
+                }
+            }
+            if (!$_unique) {
+                // Assembled in FIRST-SEEN order, which is php-src's: a group is created when
+                // its key is first met and later rows are appended to it, so the groups come
+                // out in the order their keys first appeared in the result set. Nothing is
+                // ever read back out of $_out — it is written exactly once per distinct key.
+                for ($_gi = 0; $_gi < $_bn; $_gi++) {
+                    $_gkOut = $_order[$_gi];
+                    $_out[$_gkOut] = $_groups[(string) $_gkOut];
+                }
+            }
+            return $_out;
         }
         $_rows = [];
         while (true) {
-            $_row = $this->fetch($mode, $classOrObject);
+            $_row = $this->fetch($mode);
             if ($_row === false) {
                 break;
             }
             $_rows[] = $_row;
         }
         return $_rows;
+    }
+
+    // F-STMT-02: assignColumnsFrom(), plus php-src's "class not found -> stdClass" arm
+    // (zend_lookup_class() failing, pdo_stmt.c:805-829). $object is whatever a dynamic
+    // `new $name()` produced: the object, or NULL when the name is in no class table.
+    //
+    // The not-found probe is the CONSTRUCTION ITSELF — there is no class_exists() call and
+    // cannot be one: elephc's class_exists() is an AOT constant-fold (lower_class_like_exists
+    // needs a CONST string operand) and cannot see the runtime string that is the only kind
+    // ever reaching here. __rt_new_by_name returns PHP null for an unknown name, which is
+    // exactly php-src's not-found arm, so one dynamic-new answers both questions at once.
+    //
+    // The null test lives HERE, on a PARAMETER, rather than at the call site on a local, and
+    // that placement is load-bearing: routing a dynamic-new's result through a caller LOCAL
+    // MISCOMPILES — the object reaches the callee no longer an instance of its class and
+    // with none of its properties. Written INLINE as the argument (`new $_ctName()` straight
+    // into this call) it arrives sound, and a parameter then holds it safely. Verified both
+    // ways; the local form silently produced a property-less non-instance.
+    private function assignColumnsFromOrStd(mixed $object, int $start, int $count): mixed {
+        if ($object === null) {
+            return $this->assignColumnsFrom(new stdClass(), $start, $count);
+        }
+        return $this->assignColumnsFrom($object, $start, $count);
+    }
+
+    // F-STMT-15: the FETCH_GROUP / FETCH_UNIQUE grouping key, taken from column 0 and CAST
+    // TO STRING exactly as php-src does (pdo_stmt.c do_fetch: `convert_to_string(&grp_val)`
+    // before the key ever reaches the hash table).
+    //
+    // Declared `: mixed` DELIBERATELY, not `: string` — see the call site. Returning the
+    // key as Mixed is what keeps fetchAll()'s $_out an Array(Mixed) instead of promoting it
+    // to a statically-typed AssocArray it could then not return through `: array`.
+    private function groupKey(int $index): mixed {
+        return (string) $this->columnValue($index);
+    }
+
+    // F-STMT-15: builds ONE grouped row — the part of the result that is NOT the key —
+    // in the shape the base fetch mode asks for, always starting from COLUMN 1 because
+    // column 0 was consumed as the grouping key by the caller.
+    //
+    // The numeric keys of FETCH_NUM/FETCH_BOTH are RE-INDEXED FROM 0, not left as the
+    // original column positions: php-src walks the row with two cursors — the column
+    // index `i` (which starts at 1 after the key was taken) and the output index `idx`
+    // (which starts at 0) — so the first column AFTER the key lands at [0]. A row that
+    // kept its original offsets would start at [1] and have no [0] at all.
+    private function groupRow(int $base, int $count): mixed {
+        if ($base == 7) {
+            // FETCH_COLUMN: the single configured value column (defaulted to 1 by
+            // fetchAll() when GROUP is set — see there), not a row at all.
+            return $this->columnValue($this->fetchColumn);
+        }
+        if ($base == 5) {
+            return $this->assignColumnsFrom(new stdClass(), 1, $count);
+        }
+        if ($base == 8) {
+            if ($this->fetchTarget !== null) {
+                $_gClass = $this->fetchTarget;
+                return $this->assignColumnsFrom(new $_gClass(), 1, $count);
+            }
+            return $this->assignColumnsFrom(new stdClass(), 1, $count);
+        }
+        if ($base == 3) {
+            $_gNum = [];
+            $_gIdx = 0;
+            for ($_i = 1; $_i < $count; $_i++) {
+                $_gNum[$_gIdx] = $this->columnValue($_i);
+                $_gIdx = $_gIdx + 1;
+            }
+            return $_gNum;
+        }
+        if ($base == 2) {
+            $_gAssoc = [];
+            for ($_i = 1; $_i < $count; $_i++) {
+                $_gName = $this->columnName($_i);
+                $_gAssoc[$_gName] = $this->columnValue($_i);
+            }
+            return $_gAssoc;
+        }
+        // FETCH_BOTH (4), the remaining accepted base — fetchAll()'s own guard has
+        // already rejected every mode that is not one of the six handled here.
+        $_gBoth = [];
+        $_gPos = 0;
+        for ($_i = 1; $_i < $count; $_i++) {
+            $_gBothName = $this->columnName($_i);
+            $_gBothVal = $this->columnValue($_i);
+            $_gBoth[$_gBothName] = $_gBothVal;
+            $_gBoth[$_gPos] = $_gBothVal;
+            $_gPos = $_gPos + 1;
+        }
+        return $_gBoth;
     }
 
     public function fetchColumn(int $column = 0): mixed {
@@ -1819,6 +3105,11 @@ class PDOStatement implements Iterator {
         // setting attributes" (pdo_raise_impl_error) instead of the previous
         // unconditional accept-and-store. errMode-aware, like every other
         // statement failure; always returns false regardless of mode.
+        //
+        // BOTH parameters are explicitly parked: no attribute is supported, so neither the
+        // name nor the value is ever read, and an unparked one is a compiler warning emitted
+        // against every program that so much as links this prelude.
+        $_unusedAttribute = $attribute;
         $_unusedValue = $value;
         $this->failCode("IM001", "This driver doesn't support setting attributes");
         return false;
@@ -1853,27 +3144,32 @@ class PDOStatement implements Iterator {
         // (P1-8), matching PHP's ext/pdo_sqlite/sqlite_statement.c exactly (verified
         // against a real PHP 8.5 CLI): a BLOB column reports native_type "string"
         // with "blob" pushed into flags and pdo_type PARAM_STR, never its own
-        // native_type/pdo_type. PHP's remaining metadata (len, precision, table) is
-        // not surfaced by the bridge, so those keys are present with neutral values
-        // rather than omitted, so callers that read them do not error. Returns
-        // false for an out-of-range column index.
+        // native_type/pdo_type. For SQLite, PHP's remaining metadata (len, precision,
+        // table) genuinely has no source — pdo_sqlite does not emit those keys at all —
+        // so they are present with neutral values rather than omitted, and callers that
+        // read them do not error. Returns false for an out-of-range column index.
         //
         // P2-h: also false when the statement hasn't been executed yet — there is
         // no result set (or, for a non-SELECT statement, no columns) to describe.
         //
-        // P2-k (KNOWN LIMITATION, documented rather than fixed in this slice): for a
-        // `pgsql:` statement this still reports the generic SQLite-storage-class
-        // metadata above (native_type "integer"/"double"/"string", no "blob" flag for
-        // a real `bytea` column) instead of PostgreSQL's actual native_type
-        // (`int4`/`bool`/`bytea`/…) or the `pgsql:oid`/`pgsql:table` keys php-src's
-        // pdo_pgsql reports (ext/pdo_pgsql/pgsql_statement.c, via `PQftype`/
-        // `PQftable`). A real fix means threading the bridge's
-        // `postgres::types::Type` (available per-column off the prepared
-        // `Statement`'s `columns()`, already retained on `PgStmt`) through a new
-        // driver-aware accessor and an OID→name/pdo_type table here — involved
-        // enough that it is out of scope for this slice; `pdo_type`/"flags" for a
-        // pg BOOL or bytea column are therefore currently wrong (never
-        // PARAM_BOOL/PARAM_LOB).
+        // P2-k / F-PG-01 / F-PG-02: a `pgsql:` statement instead reports PostgreSQL's real
+        // per-column metadata, in FULL as of v26. `elephc_pdo_column_type_oid` returns the
+        // column's `PQftype` OID (0 for a non-pg statement or out-of-range index),
+        // threaded from the prepared statement's retained `postgres::types::Type`; a
+        // non-zero OID selects the pg branch below, which reports the server's native_type
+        // (`int4`/`bool`/`bytea`/… via `elephc_pdo_column_native_type`, i.e.
+        // `pg_type.typname`), the matching `pdo_type` (BOOL→PARAM_BOOL,
+        // {INT2,INT4,INT8}→PARAM_INT, {BYTEA,OID}→PARAM_LOB, else PARAM_STR — the
+        // exact switch in php-src's ext/pdo_pgsql/pgsql_statement.c), the `pgsql:oid` key,
+        // and now `len` (PQfsize), `precision` (PQfmod) and `pgsql:table_oid` (PQftable).
+        // php-src's `table` NAME still needs a `pg_class` catalog lookup this bridge does
+        // not perform, so `table` alone stays empty (present, not omitted, so a caller
+        // reading it never errors) — it is the one pg key left neutral.
+        //
+        // F-MY-08: a `mysql:` statement gets OID 0 and falls through to the generic branch
+        // like SQLite, but its native_type is then OVERRIDDEN with MySQL's own wire-type
+        // name ("LONG", "VAR_STRING", "NEWDECIMAL", …) — see that branch. SQLite falls
+        // through unchanged, storage class and all.
         //
         // P3: a negative column index throws a `ValueError` BEFORE the
         // executed/range checks below, mirroring php-src's exact ordering and
@@ -1892,6 +3188,62 @@ class PDOStatement implements Iterator {
         if ($column >= elephc_pdo_column_count($this->stmt)) {
             return false;
         }
+        $_oid = elephc_pdo_column_type_oid($this->stmt, $column);
+        if ($_oid > 0) {
+            // pgsql (P2-k): describe with the real PostgreSQL type. pdo_type
+            // mirrors php-src pdo_pgsql's OID switch exactly
+            // (ext/pdo_pgsql/pgsql_statement.c:690-706) — BOOLOID (16) is
+            // PARAM_BOOL (5); the integer family INT8/INT2/INT4 (20/21/23) is
+            // PARAM_INT (1); OIDOID (26) shares the PARAM_LOB (3) case with
+            // BYTEAOID (17) — `case OIDOID: case BYTEAOID:` is a literal pair in
+            // that switch, because an OID is a large-object handle to pdo_pgsql,
+            // not an integer value (F-PG-04: it was grouped with the ints here);
+            // and every other OID (text/varchar/numeric/timestamptz/json/…) is
+            // PARAM_STR (2). Raw integer literals here (not the PDO::PARAM_*
+            // constants) match the storage-class branch below.
+            $_pgType = 2;
+            if ($_oid == 16) {
+                $_pgType = 5;
+            } elseif ($_oid == 17 || $_oid == 26) {
+                $_pgType = 3;
+            } elseif ($_oid == 20 || $_oid == 21 || $_oid == 23) {
+                $_pgType = 1;
+            }
+            // F-PG-01/F-PG-02 (v26): the three remaining pg metadata fields, which used to
+            // be hardcoded 0 / omitted.
+            //
+            // `pgsql:table_oid` is emitted UNCONDITIONALLY, **0 included** — php-src's
+            // pgsql_stmt_get_column_meta adds the key on every column with no test at all,
+            // and 0 is InvalidOid, the server's OWN answer for a column that is not a plain
+            // table column (an expression, a literal, an aggregate). Suppressing the key on
+            // 0 would make `array_key_exists('pgsql:table_oid', $meta)` diverge from real
+            // PDO on exactly the columns where a caller is most likely to test it.
+            //
+            // `len` and `precision` are PQfsize() and PQfmod() STRAIGHT, and they are NOT
+            // what the names suggest:
+            //   * len is the TYPE's byte width when it has a fixed one (int4 -> 4,
+            //     timestamp -> 8, uuid -> 16) and **-1** for any VARLENA — text, varchar,
+            //     numeric, bytea, json, every array type. A VARCHAR(20) reports len -1,
+            //     NOT 20.
+            //   * precision is the RAW atttypmod, undecoded. VARCHAR(20)'s declared 20
+            //     surfaces HERE, as 24 (20 + VARHDRSZ); NUMERIC(10,2) is 655366
+            //     (((10 << 16) | 2) + 4).
+            // Both are counter-intuitive and both are exactly what real PDO reports.
+            // Decoding atttypmod into a human-readable precision here would be a
+            // divergence dressed up as a courtesy — a caller who wants the real precision
+            // must decode the modifier, precisely as it would have to against real PDO.
+            return [
+                "name" => $this->columnName($column),
+                "native_type" => elephc_pdo_column_native_type($this->stmt, $column),
+                "pdo_type" => $_pgType,
+                "len" => elephc_pdo_column_len($this->stmt, $column),
+                "precision" => elephc_pdo_column_precision($this->stmt, $column),
+                "flags" => [],
+                "table" => "",
+                "pgsql:oid" => $_oid,
+                "pgsql:table_oid" => elephc_pdo_column_table_oid($this->stmt, $column),
+            ];
+        }
         $_type = elephc_pdo_column_type($this->stmt, $column);
         $_native = "null";
         $_pdoType = 0;
@@ -1909,6 +3261,30 @@ class PDOStatement implements Iterator {
             $_native = "string";
             $_pdoType = 2;
             $_flags[] = "blob";
+        }
+        // F-MY-08 (v26): a MySQL column reports MySQL's OWN wire-type name, not the
+        // storage-class name derived just above. php-src's pdo_mysql builds native_type
+        // from `type_to_name_native()`, whose PDO_MYSQL_NATIVE_TYPE_NAME macro stringifies
+        // the MYSQL_TYPE_ suffix — so an INT column is "LONG", a VARCHAR is "VAR_STRING",
+        // a DECIMAL is "NEWDECIMAL", a BLOB/TEXT is "BLOB". Those spellings are the whole
+        // point: a caller inspecting native_type wants to know it has a NEWDECIMAL (which
+        // MySQL hands over as a string to preserve exactness), not that the value
+        // currently in the cell happens to look like a "string".
+        //
+        // The bridge returns "" for SQLite BY DESIGN, which is what keeps this branch a
+        // no-op there: php-src's own sqlite driver reports the runtime STORAGE CLASS
+        // ("integer"/"double"/"string"/"null") exactly as derived above, so SQLite's
+        // output must stay byte-identical — and does. An empty string also covers an
+        // unknown handle, an out-of-range index, and a MySQL wire type php-src's switch
+        // has no case for (its `default:` OMITS the key entirely, so falling back to the
+        // storage class is strictly more informative than php-src there, not less).
+        //
+        // pdo_type, len, precision and flags stay as derived: this widens the type NAME
+        // only. MySQL's own PDO param-type mapping and column widths would need a
+        // separate metadata channel, and no finding asks for them.
+        $_myNative = elephc_pdo_column_native_type($this->stmt, $column);
+        if ($_myNative !== "") {
+            $_native = $_myNative;
         }
         $_meta = [
             "name" => $this->columnName($column),
@@ -1932,13 +3308,69 @@ class PDOStatement implements Iterator {
     }
 
     public function debugDumpParams(): ?bool {
-        // Reduced PDOStatement::debugDumpParams: writes the SQL and the number of
-        // bound parameters to stdout. PHP additionally prints per-parameter detail;
-        // that format is a debugging aid and is not contractual, so elephc emits the
-        // load-bearing SQL + parameter count. Always returns null (never false here,
-        // as elephc keeps no unparsed-query state PHP would report failure for).
+        // F-STMT-12: full php-src line shapes (pdo_stmt.c:1963-2020) — the SQL line, the
+        // parameter count, then ONE block per bound parameter:
+        //
+        //     SQL: [<bytes>] <sql>
+        //     Params:  <n>
+        //     Key: Name: [<bytes>] :name      (named)   /   Key: Position #<paramno>:
+        //     paramno=<paramno>
+        //     name=[<bytes>] ":name"
+        //     is_param=1
+        //     param_type=<int>
+        //
+        // Note the two spaces after "Params:" and the QUOTED name on the `name=` line —
+        // both are php-src's own spacing/quoting (`"paramno=" ZEND_LONG_FMT "\nname=[%zd]
+        // \"%.*s\"\nis_param=%d\nparam_type=%d\n"`), not a typo here.
+        //
+        // "Sent SQL:" is correctly ABSENT: php-src prints it only when
+        // stmt->active_query_string differs from the original, i.e. only for an EMULATED
+        // prepare. elephc never emulates (every statement is a real driver prepare), so
+        // there is no second string to show — the same reason php's own native-prepare
+        // drivers omit the line.
+        //
+        // TWO documented divergences, both forced by the shape of the recorded binds
+        // (param_type is NOT one of them — see $boundPhpTypes, which reproduces php-src's
+        // reported type exactly on both bind paths):
+        //   1. php-src's stmt->bound_params is a HASH keyed by name (named) or by paramno
+        //      (positional), so re-binding the same parameter REPLACES its entry and
+        //      `Params:` counts DISTINCT parameters. elephc records an append-only list, so
+        //      `bindValue(1,'a'); bindValue(1,'b');` prints TWO blocks and `Params:  2`
+        //      where php prints one and `Params:  1`. The value actually sent is the same
+        //      (execute() replays in order, last write wins).
+        //   2. paramno for a NAMED parameter: php-src stores -1 until the driver's
+        //      EVT_NORMALIZE/EXEC_PRE hook resolves it, so a dump taken BEFORE the first
+        //      execute() shows -1 and one taken after shows the 0-based slot (verified
+        //      against real PHP). elephc resolves the name eagerly at bind time
+        //      (bindValue()), so the resolved 0-based slot is shown from the start — the
+        //      two agree from the first execute() onward, and -1 appears only when the
+        //      placeholder does not exist in the SQL at all (which execute() then rejects
+        //      with HY093). Faking the -1 would mean keying the dump off "has execute() run
+        //      yet", which closeCursor() would then get wrong; the resolved slot is both
+        //      honest and strictly more informative.
         echo "SQL: [" . strlen($this->queryString) . "] " . $this->queryString . "\n";
-        echo "Params:  " . count($this->boundValues) . "\n";
+        $_pcount = count($this->boundValues);
+        echo "Params:  " . $_pcount . "\n";
+        for ($_i = 0; $_i < $_pcount; $_i++) {
+            $_dname = (string) $this->boundNames[$_i];
+            // php's paramno is 0-based; the recorded slot is the driver's 1-based index.
+            $_dno = ((int) $this->boundParams[$_i]) - 1;
+            $_dtype = (int) $this->boundPhpTypes[$_i];
+            $_dlen = strlen($_dname);
+            if ($_dname === "") {
+                echo "Key: Position #" . $_dno . ":\n";
+            } else {
+                echo "Key: Name: [" . $_dlen . "] " . $_dname . "\n";
+            }
+            echo "paramno=" . $_dno . "\n";
+            echo "name=[" . $_dlen . "] \"" . $_dname . "\"\n";
+            // is_param is 1 for every entry of bound_params; php's 0 case is a bound COLUMN
+            // (bindColumn), which lives in a different hash and is not dumped here.
+            echo "is_param=1\n";
+            echo "param_type=" . $_dtype . "\n";
+        }
+        // Always null (never false): php returns false only when it cannot open
+        // php://output, which has no elephc equivalent.
         return null;
     }
 
@@ -1972,8 +3404,11 @@ class PDOStatement implements Iterator {
     public function getIterator(): \Iterator {
         // PHP 8 declares `PDOStatement implements IteratorAggregate`, so
         // `getIterator()` is the documented way to obtain the traversable; this
-        // prelude implements `Iterator` directly instead (see the comment above
-        // rewind()), so the statement itself already satisfies that contract.
+        // prelude implements `Iterator` directly instead (see the F-STMT-11 note on the
+        // class declaration for why that is deliberate), so the statement itself already
+        // satisfies that contract and can hand back `$this` — `foreach ($stmt->getIterator()
+        // as $row)` therefore walks the same forward-only cursor as `foreach ($stmt as $row)`,
+        // exactly as it does in PHP.
         return $this;
     }
 
@@ -1990,6 +3425,20 @@ class PDOStatement implements Iterator {
     // destructed first finalizes the handle out from under the survivor.
     public function __clone(): void {
         throw new Error("Trying to clone an uncloneable object of class " . get_class($this));
+    }
+
+    // F-CORE-15: mirrors \PDO::__serialize()/__sleep() (see the long rationale there) —
+    // php-src marks PDOStatement `/** @not-serializable */` too, and elephc's
+    // property-walking serialize() would otherwise emit this object's private `$stmt`
+    // and `$conn` bridge handles into the blob, yielding a zombie statement on
+    // unserialize(). Same php-src message shape, same plain `Exception` class, same
+    // get_class($this) so the reported name is the object's real class.
+    public function __serialize(): array {
+        throw new Exception("Serialization of '" . get_class($this) . "' is not allowed");
+    }
+
+    public function __sleep(): array {
+        throw new Exception("Serialization of '" . get_class($this) . "' is not allowed");
     }
 }
 
@@ -2040,9 +3489,16 @@ namespace Pdo {
         private array $udfCallbacks;
 
         public function __construct(string $dsn, ?string $username = null, ?string $password = null, ?array $options = null) {
+            // F-CORE-01/F-CORE-11: resolve an indirect `uri:` DSN FIRST (php-src resolves
+            // it before it compares the DSN's driver against the called scope), then reject
+            // a DSN belonging to another driver BEFORE any connection is attempted. The
+            // resolved DSN is what goes up to \PDO, so the file is read exactly once —
+            // resolveDsnUri() is a no-op on an already-resolved DSN.
+            $_sqliteDsn = $this->resolveDsnUri($dsn);
+            $this->checkDriverSubclassDsn($_sqliteDsn, "Pdo\\Sqlite", "sqlite");
             // Forward to \PDO to open the connection, then initialise the callback
             // root (an uninitialised typed array property is not implicitly []).
-            parent::__construct($dsn, $username, $password, $options);
+            parent::__construct($_sqliteDsn, $username, $password, $options);
             $this->udfCallbacks = [];
         }
 
@@ -2051,6 +3507,17 @@ namespace Pdo {
             // auto-derived, as PHP's loadExtension does), throwing on failure.
             // Extension loading runs native code from the named library, so it
             // weakens the standalone-binary guarantee — use only trusted extensions.
+            //
+            // F-SQLT-05: an EMPTY name is rejected during argument validation, ahead of
+            // any driver dispatch — php-src's pdo_sqlite.c:80-87 is
+            // `if (ZSTR_LEN(extension) == 0) { zend_argument_must_not_be_empty_error(1);
+            // RETURN_THROWS(); }`, whose ValueError reads "…(): Argument #1 ($name) must
+            // not be empty". elephc used to hand "" straight to sqlite3_load_extension and
+            // surface its failure as the generic PDOException below, which is both the
+            // wrong exception class and the wrong stage.
+            if ($name === "") {
+                throw new \ValueError("Pdo\\Sqlite::loadExtension(): Argument #1 (\$name) must not be empty");
+            }
             if (\elephc_pdo_load_extension($this->connectionId(), $name) !== 1) {
                 throw new \PDOException("Failed to load SQLite extension: " . $name);
             }
@@ -2160,6 +3627,17 @@ namespace Pdo {
         const ATTR_SSL_VERIFY_SERVER_CERT = 1014;
         const ATTR_LOCAL_INFILE_DIRECTORY = 1015;
 
+        public function __construct(string $dsn, ?string $username = null, ?string $password = null, ?array $options = null) {
+            // F-CORE-01: this class had NO constructor at all, so `new Pdo\Mysql("sqlite:…")`
+            // inherited \PDO's and cheerfully opened a SQLite database behind a Pdo\Mysql
+            // object. The override exists solely to run the driver guard (and the `uri:`
+            // resolution it depends on) before any connection is attempted; it adds no
+            // MySQL-specific state of its own. See \PDO::checkDriverSubclassDsn().
+            $_mysqlDsn = $this->resolveDsnUri($dsn);
+            $this->checkDriverSubclassDsn($_mysqlDsn, "Pdo\\Mysql", "mysql");
+            parent::__construct($_mysqlDsn, $username, $password, $options);
+        }
+
         public function getWarningCount(): int {
             // The number of warnings raised by the last statement executed on this
             // connection (MySQL/MariaDB `@@warning_count`).
@@ -2188,10 +3666,15 @@ namespace Pdo {
         private $noticeCallback;
 
         public function __construct(string $dsn, ?string $username = null, ?string $password = null, ?array $options = null) {
+            // F-CORE-01/F-CORE-11: resolve an indirect `uri:` DSN, then reject a DSN
+            // belonging to another driver, both BEFORE any connection is attempted — see
+            // \PDO::checkDriverSubclassDsn().
+            $_pgsqlDsn = $this->resolveDsnUri($dsn);
+            $this->checkDriverSubclassDsn($_pgsqlDsn, "Pdo\\Pgsql", "pgsql");
             // Forward to \PDO to open the connection, then seed a no-op callback so
             // drainNotices() always has a callable to hand each notice to (a notice
             // arriving before setNoticeCallback() is drained and discarded).
-            parent::__construct($dsn, $username, $password, $options);
+            parent::__construct($_pgsqlDsn, $username, $password, $options);
             $this->noticeCallback = function($_message) {};
         }
 
@@ -2286,10 +3769,25 @@ namespace Pdo {
             // PostgreSQL COPY text format defaults DELIMITER to a tab and NULL to
             // "\N", so only emit a WITH clause when the caller overrides them. A tab
             // delimiter must use the E'\t' escape-string form.
-            if ($separator === "\t" && $nullAs === "\\N") {
+            //
+            // F-PG-05: the separator is TRUNCATED TO ITS FIRST BYTE. PostgreSQL's COPY
+            // grammar admits only a single one-byte delimiter, and all four of php-src's
+            // COPY builders dereference exactly one byte of the argument —
+            // `(pg_delim_len ? *pg_delim : '\t')` (pgsql_driver.c:654, 773, 882, 973) —
+            // silently dropping the rest. This prelude interpolated the WHOLE string, so
+            // `copyFromArray(…, "::")` emitted `DELIMITER '::'` and the SERVER rejected the
+            // statement, where real PHP quietly copies with `:`. Truncating is not
+            // "accepting garbage": it is the documented, observable behavior of the
+            // function being reimplemented, and the alternative (a hard error) would fail
+            // code that works on real PDO.
+            //
+            // An EMPTY separator falls back to the tab default, which is php-src's own
+            // `pg_delim_len ? … : '\t'` ternary — the length test, not the byte.
+            $_sep = $separator === "" ? "\t" : \substr($separator, 0, 1);
+            if ($_sep === "\t" && $nullAs === "\\N") {
                 return "";
             }
-            $_delim = $separator === "\t" ? "E'\\t'" : "'" . $separator . "'";
+            $_delim = $_sep === "\t" ? "E'\\t'" : "'" . $_sep . "'";
             $_null = "'" . \str_replace("'", "''", $nullAs) . "'";
             return " WITH (DELIMITER " . $_delim . ", NULL " . $_null . ")";
         }

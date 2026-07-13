@@ -17,8 +17,11 @@
 //! - Each fixture opens its connection from `getenv("ELEPHC_PG_DSN")` and uses
 //!   `DROP TABLE IF EXISTS` on a fixture-specific table so reruns are idempotent.
 //! - The same prelude drives both drivers; these tests exercise the PostgreSQL
-//!   specifics: `$1`-placeholder translation, `SERIAL`/`lastInsertId`, and
-//!   bool/float/null type decoding.
+//!   specifics: `$1`-placeholder translation (including the cast-run and
+//!   dollar-quote-tag scanner rules), `SERIAL`/`lastInsertId`, bool/float/null type
+//!   decoding, `PARAM_BOOL`'s real `'t'`/`'f'` bind, the full `getColumnMeta()` column
+//!   description (type OID, table OID, raw `PQfsize`/`PQfmod`), the `COPY` methods, and
+//!   the libpq `connect_timeout` default.
 
 use crate::support::*;
 
@@ -405,4 +408,360 @@ echo $db->query("SELECT 'tls-ok'")->fetchColumn();
 "#,
     );
     assert_eq!(out, "tls-ok");
+}
+
+/// P2-k: `getColumnMeta()` on a `pgsql:` statement reports the column's REAL
+/// PostgreSQL type — the server native_type name (`int4`/`bool`/`bytea`/`text`),
+/// the correct pdo_type (INT4→PARAM_INT=1, BOOL→PARAM_BOOL=5, BYTEA→PARAM_LOB=3,
+/// TEXT→PARAM_STR=2), and the `pgsql:oid` type OID (23/16/17/25) — instead of the
+/// generic SQLite storage-class metadata elephc emitted for every driver before
+/// ABI v23. The name/OID are threaded from the prepared statement's
+/// `postgres::types::Type`, so they describe the DECLARED column type even though
+/// the table is empty (no row is fetched here).
+#[test]
+#[ignore]
+fn test_pgsql_get_column_meta_native_types() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS pg_meta");
+$db->exec("CREATE TABLE pg_meta (id INT4, flag BOOL, payload BYTEA, label TEXT)");
+$stmt = $db->query("SELECT id, flag, payload, label FROM pg_meta");
+$parts = [];
+for ($i = 0; $i < 4; $i++) {
+    $m = $stmt->getColumnMeta($i);
+    $parts[] = $m["native_type"] . ":" . $m["pdo_type"] . ":" . $m["pgsql:oid"];
+}
+echo implode(",", $parts);
+$db->exec("DROP TABLE pg_meta");
+"#,
+    ));
+    assert_eq!(out, "int4:1:23,bool:5:16,bytea:3:17,text:2:25");
+}
+
+/// v1 §6 gap: `Pdo\Pgsql::setNoticeCallback()` end-to-end. Registers a callback,
+/// then runs a `DROP TABLE IF EXISTS` on a missing table — which the server
+/// answers with a `NOTICE: ... does not exist, skipping` — and confirms the
+/// buffered notice is drained and dispatched to the callback right after the
+/// exec() (delivery is poll-based, not fired mid-protocol). Uses a plain
+/// `DROP ... IF EXISTS` rather than a `DO $$ RAISE NOTICE $$` block so the fixture
+/// needs no dollar-quoting. The callback asserts inside itself (echoing "got" on a
+/// substring match, tolerant of libpq's severity prefix / trailing whitespace)
+/// rather than accumulating into a `use (&$var)` by-reference capture: a by-ref
+/// capture stored on the statement's callback property and invoked from another
+/// method (drainNotices) trips a separate, pre-existing closure limitation, which
+/// is orthogonal to whether the notice is delivered.
+#[test]
+#[ignore]
+fn test_pgsql_set_notice_callback_e2e() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
+$db->setNoticeCallback(function($msg) { echo str_contains($msg, "does not exist") ? "got" : ("other:" . $msg); });
+$db->exec("DROP TABLE IF EXISTS pg_notice_probe_zzz");
+"#,
+    );
+    assert_eq!(out, "got");
+}
+
+/// P2-a end-to-end: preparing a statement that mixes a positional `?` with a
+/// named `:name` placeholder is rejected with SQLSTATE HY093 BEFORE the server is
+/// asked to prepare it (from the placeholder scanner's `mixed` flag, whose unit
+/// is `pg_translate_placeholders_mixed_flag`). Handles both dispositions — under
+/// the default EXCEPTION errmode prepare() throws a PDOException carrying
+/// errorInfo[0] = "HY093"; a silent errmode would instead return false with the
+/// same SQLSTATE on the connection.
+#[test]
+#[ignore]
+fn test_pgsql_mixed_placeholder_styles_reject_hy093() {
+    let out = compile_and_run(&pg_program(
+        r#"
+try {
+    $r = $db->prepare("SELECT * FROM (VALUES (1)) v WHERE ? = :a");
+    echo ($r === false) ? $db->errorInfo()[0] : "no-error";
+} catch (\PDOException $e) {
+    echo $e->errorInfo[0];
+}
+"#,
+    ));
+    assert_eq!(out, "HY093");
+}
+
+/// F-PG-01 / F-PG-02 (v26): `getColumnMeta()` on a `pgsql:` statement now reports the
+/// three fields it used to hardcode — `pgsql:table_oid` (PQftable), `len` (PQfsize) and
+/// `precision` (PQfmod) — and reports them RAW, exactly as php-src's
+/// `pgsql_stmt_describe` copies them off the wire
+/// (`ext/pdo_pgsql/pgsql_statement.c:496-497` for len/precision; the `pgsql:table_oid`
+/// key is added unconditionally in `pgsql_stmt_get_column_meta`).
+///
+/// Three counter-intuitive semantics are pinned here on purpose, because each one is a
+/// place a well-meaning "fix" would silently diverge from real PDO:
+///
+/// * `pgsql:table_oid` is present on EVERY column, `0` included. `0` is `InvalidOid`,
+///   the server's own answer for a column that is not a plain table column — here the
+///   computed `id + 1` expression. php-src emits the key with no test at all, so
+///   suppressing it on `0` would break `isset($meta['pgsql:table_oid'])` on exactly the
+///   columns a caller is most likely to probe. A real table column reports the table's
+///   `pg_class` OID, which is non-zero (it is assigned per-database, so only its sign
+///   can be asserted).
+/// * `len` is the TYPE's byte width when it has a fixed one and `-1` for any varlena.
+///   `int4` reports 4; `VARCHAR(20)` reports **-1**, NOT 20; `NUMERIC(10,2)` reports
+///   -1 too. Both are varlena types, and `PQfsize()` is `pg_type.typlen`.
+/// * `precision` is the RAW `atttypmod`, undecoded. `VARCHAR(20)`'s declared 20 surfaces
+///   HERE, as **24** (20 + `VARHDRSZ`), and `NUMERIC(10,2)` as **655366**
+///   (`((10 << 16) | 2) + 4`). A type carrying no modifier (`int4`) reports -1. The
+///   values were read back off a live pg16 with
+///   `SELECT atttypmod FROM pg_attribute …` and match byte for byte.
+#[test]
+#[ignore]
+fn test_pgsql_get_column_meta_table_oid_len_precision() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS pg_meta_full");
+$db->exec("CREATE TABLE pg_meta_full (id INT4, label VARCHAR(20), money NUMERIC(10,2))");
+$stmt = $db->query("SELECT id, label, money, id + 1 AS expr FROM pg_meta_full");
+$id = $stmt->getColumnMeta(0);
+$label = $stmt->getColumnMeta(1);
+$money = $stmt->getColumnMeta(2);
+$expr = $stmt->getColumnMeta(3);
+$db->exec("DROP TABLE pg_meta_full");
+echo ((((int) $id["pgsql:table_oid"]) > 0) ? "tbl-y" : "tbl-n")
+    . ":" . (isset($expr["pgsql:table_oid"]) ? "key-y" : "key-n")
+    . ":" . $expr["pgsql:table_oid"]
+    . "|" . $id["len"] . "," . $label["len"] . "," . $money["len"]
+    . "|" . $id["precision"] . "," . $label["precision"] . "," . $money["precision"];
+"#,
+    ));
+    assert_eq!(out, "tbl-y:key-y:0|4,-1,-1|-1,24,655366");
+}
+
+/// F-PG-04 (Wave 1): an `oid` column is `PDO::PARAM_LOB` (3), not `PDO::PARAM_INT`.
+/// php-src's pdo_pgsql type switch pairs the two cases literally —
+/// `case OIDOID: case BYTEAOID:` (`ext/pdo_pgsql/pgsql_statement.c:690-706`) — because
+/// to pdo_pgsql an OID is a large-object HANDLE, not an integer value: it is what you
+/// feed to `lobOpen()`. Grouping it with INT2/INT4/INT8 (as elephc did before Wave 1)
+/// made `getColumnMeta()` advertise a LOB handle as a plain integer.
+///
+/// `len` is asserted alongside as 4 — `oid` is one of PostgreSQL's fixed-width 4-byte
+/// types (`pg_type.typlen` = 4), so it does NOT take the varlena `-1` that `bytea`, its
+/// partner in that same switch arm, reports.
+#[test]
+#[ignore]
+fn test_pgsql_get_column_meta_oid_column_is_param_lob() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$m = $db->query("SELECT '1'::oid AS o")->getColumnMeta(0);
+echo $m["native_type"] . ":" . $m["pdo_type"] . ":" . $m["pgsql:oid"] . ":" . $m["len"];
+"#,
+    ));
+    assert_eq!(out, "oid:3:26:4");
+}
+
+/// F-PG-05: a MULTI-character COPY separator is TRUNCATED TO ITS FIRST BYTE and the
+/// COPY succeeds. PostgreSQL's COPY grammar admits only a one-byte `DELIMITER`, and all
+/// four of php-src's COPY builders dereference exactly one byte of the argument —
+/// `(pg_delim_len ? *pg_delim : '\t')` (`ext/pdo_pgsql/pgsql_driver.c:654,773,882,973`) —
+/// silently dropping the rest. elephc used to interpolate the WHOLE string, so
+/// `copyFromArray(…, "::")` emitted `DELIMITER '::'` and the SERVER rejected the
+/// statement, where real PHP quietly copies with `:`.
+///
+/// Round-tripped through `copyToArray()` with the same `"::"` so the truncation is
+/// proved to be consistent in both directions: the rows go in split on `:` and come
+/// back joined on `:`.
+#[test]
+#[ignore]
+fn test_pgsql_copy_multi_char_separator_truncates_to_first_byte() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
+$db->exec("DROP TABLE IF EXISTS pg_copy_delim");
+$db->exec("CREATE TABLE pg_copy_delim (id INT, name TEXT)");
+$ok = $db->copyFromArray("pg_copy_delim", ["1:Ada", "2:Bob"], "::") ? "1" : "0";
+$rows = $db->copyToArray("pg_copy_delim", "::");
+$db->exec("DROP TABLE pg_copy_delim");
+if (is_array($rows)) {
+    $joined = implode("", $rows);
+    echo $ok . ":" . count($rows) . ":" . (strpos($joined, "1:Ada") !== false ? "y" : "n") . (strpos($joined, "2:Bob") !== false ? "y" : "n");
+} else {
+    echo $ok . ":err";
+}
+"#,
+    );
+    assert_eq!(out, "1:2:yy");
+}
+
+/// `Pdo\Pgsql::copyFromFile()` / `copyToFile()` round-trip through client-side files —
+/// the two COPY methods no other fixture exercised at all. The file written by
+/// `copyToFile()` must be byte-identical to the one `copyFromFile()` consumed (default
+/// tab delimiter, `\N` NULL marker, trailing newline per row).
+///
+/// php-src's own 8.4 source builds `COPY … TO STDIN` for `copyToArray`/`copyToFile`
+/// (`ext/pdo_pgsql/pgsql_driver.c:882,884,973,975`) — an INVALID direction in
+/// PostgreSQL's COPY grammar, which only knows `FROM STDIN` and `TO STDOUT`. elephc
+/// correctly emits `TO STDOUT`. That divergence is DELIBERATE and must NOT be "aligned"
+/// with php-src: aligning it would make every `copyTo*` call fail at the server.
+#[test]
+#[ignore]
+fn test_pgsql_copy_from_file_to_file_round_trip() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
+$db->exec("DROP TABLE IF EXISTS pg_copy_file");
+$db->exec("CREATE TABLE pg_copy_file (id INT, name TEXT)");
+$src = tempnam(sys_get_temp_dir(), "elephc_pg_copy_in_");
+file_put_contents($src, "1\tAda\n2\tBob\n");
+$in = $db->copyFromFile("pg_copy_file", $src) ? "1" : "0";
+$dst = tempnam(sys_get_temp_dir(), "elephc_pg_copy_out_");
+$out = $db->copyToFile("pg_copy_file", $dst) ? "1" : "0";
+$back = (string) file_get_contents($dst);
+unlink($src);
+unlink($dst);
+$db->exec("DROP TABLE pg_copy_file");
+echo $in . $out . ":" . (($back === "1\tAda\n2\tBob\n") ? "same" : "diff");
+"#,
+    );
+    assert_eq!(out, "11:same");
+}
+
+/// F-PARSE-01 end-to-end, in the only two dispositions a live PostgreSQL admits.
+///
+/// The first half is the executable one: a CHAINED cast (`:v::int::text`, two separate
+/// two-colon runs) prepares and executes with its named bind intact — the `::` runs are
+/// emitted verbatim and only `:v` becomes `$1`.
+///
+/// The second half pins the odd-run rule, and it cannot be an "it executes" assertion:
+/// PostgreSQL's lexer has no token for a 3+-colon run (`typecast` is exactly `"::"` and
+/// a bare `:` is a self char legal only inside an array subscript), so `SELECT 1 :::c`
+/// is a syntax error on a real server — verified against a live pg16, which answers
+/// SQLSTATE **42601**. There is therefore NO valid SQL text carrying a 3+-colon run for
+/// the placeholder scanner to translate, and "prepares and executes correctly" is
+/// unattainable for one by construction.
+///
+/// What the fix changes is WHOSE error it is. php-src's `MULTICHAR = [:]{2,}`
+/// (`pgsql_sql_parser.re:35`) is greedy, so the whole run is one verbatim text token.
+/// elephc's scanner used to eat colons PAIRWISE, leaving the third colon of an odd run
+/// to be re-scanned as a fresh `:c` — a named bind php-src never emits. Next to the `?`
+/// in the same statement that phantom bind set the `mixed` flag, and elephc rejected the
+/// statement ITSELF with HY093 before the server ever saw it. Post-fix no named bind is
+/// allocated, the text reaches the server unchanged, and the server delivers its own
+/// verdict. So `42601` (and specifically NOT `HY093`) is the assertion that discriminates
+/// the fixed scanner from the broken one.
+#[test]
+#[ignore]
+fn test_pgsql_multi_colon_run_no_phantom_bind() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$st = $db->prepare("SELECT :v::int::text AS a");
+$st->execute([":v" => 41]);
+$a = $st->fetchColumn();
+$code = "";
+try {
+    $bad = $db->prepare("SELECT 1 :::c , ? FROM (VALUES (1)) v(x)");
+    $code = ($bad === false) ? $db->errorInfo()[0] : "prepared";
+} catch (\PDOException $e) {
+    $code = $e->errorInfo[0];
+}
+echo $a . ":" . $code;
+"#,
+    ));
+    assert_eq!(out, "41:42601");
+}
+
+/// F-PARSE-02 end-to-end: a dollar-quote TAG may carry non-ASCII bytes, so
+/// `$café$ … $café$` is a real dollar-quoted string — php-src spells the classes
+/// `DOLQ_START = [A-Za-z\200-\377_]` / `DOLQ_CONT = [A-Za-z\200-\377_0-9]`
+/// (`pgsql_sql_parser.re:32-33`), matching PostgreSQL's own lexer.
+///
+/// Gating the tag on `is_ascii_alphabetic()` meant the quote never opened: the body fell
+/// through to the ordinary scanner and the `?` INSIDE the string literal was rewritten
+/// into a positional bind. That did two things at once, and both are pinned here — it
+/// corrupted the SQL text the server received, and, alongside the real `:n` named bind,
+/// it set the `mixed` flag and got the statement rejected with HY093 before the server
+/// saw it. Post-fix the body is copied through untouched (the `?` survives as literal
+/// text in the result) and `:n` is the statement's only parameter.
+///
+/// The SQL is single-quoted in PHP so `$café$` is not read as a variable interpolation.
+#[test]
+#[ignore]
+fn test_pgsql_non_ascii_dollar_quote_tag_executes() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$st = $db->prepare('SELECT $café$a ? b$café$ AS dq, :n::text AS n');
+$st->execute([":n" => "ok"]);
+$row = $st->fetch(PDO::FETCH_ASSOC);
+echo $row["dq"] . "|" . $row["n"];
+"#,
+    ));
+    assert_eq!(out, "a ? b|ok");
+}
+
+/// F-PG-03: a connection with NO `PDO::ATTR_TIMEOUT` still fails in bounded time.
+/// php-src's pgsql handle factory defaults libpq's `connect_timeout` to 30 s
+/// (`ext/pdo_pgsql/pgsql_driver.c:1350,1373,1381`), and elephc now appends
+/// `connect_timeout='30'` to the conninfo whenever the DSN supplies none — so a
+/// blackholed address fails at ~30 s instead of waiting out the OS's own TCP connect
+/// timeout (75 s+ on Linux, longer on macOS).
+///
+/// `10.255.255.1` is a non-routable RFC 1918 address that silently drops packets rather
+/// than answering `ECONNREFUSED`, which is what makes this test measure the TIMEOUT and
+/// not the round trip. The 45 s bound is the guard: it is comfortably above the 30 s
+/// default (leaving room for DNS/TLS setup on a loaded CI box) and comfortably below
+/// every OS default, so the assertion can only fail if the default went missing. The
+/// libpq timeout itself is what keeps the fixture from hanging the suite — the test
+/// cannot outlive it.
+#[test]
+#[ignore]
+fn test_pgsql_default_connect_timeout_bounds_unreachable_host() {
+    let out = compile_and_run(
+        r#"<?php
+$start = microtime(true);
+try {
+    $conn = new \Pdo\Pgsql("pgsql:host=10.255.255.1;port=5432;dbname=testdb;user=test;password=test");
+    echo "connected";
+} catch (PDOException $e) {
+    $elapsed = microtime(true) - $start;
+    echo ($elapsed < 45.0) ? "bounded" : "unbounded";
+}
+"#,
+    );
+    assert_eq!(out, "bounded");
+}
+
+/// F-STMT-07 (Wave 1) against a real `BOOL` column: `PDO::PARAM_BOOL` takes the driver's
+/// own boolean bind (php-src's `PDO_PARAM_BOOL` case in `pdo_stmt.c`'s bind dispatch)
+/// instead of being folded into `PARAM_INT`. PostgreSQL is the driver that needs it —
+/// the dedicated `elephc_pdo_bind_bool` extern exists so pg can send a real `'t'`/`'f'`
+/// for a `bool` parameter, where SQLite and MySQL are happy with 0/1.
+///
+/// Both polarities are round-tripped, and each is also used as a `WHERE flag = ?`
+/// PREDICATE rather than only as an INSERT value: that is the half a stringified or
+/// integer bind cannot fake, because the parameter's type is inferred as `bool` from the
+/// comparison and the value has to arrive as a boolean to satisfy it.
+#[test]
+#[ignore]
+fn test_pgsql_param_bool_round_trip() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS pg_bool");
+$db->exec("CREATE TABLE pg_bool (id INT, flag BOOL)");
+$ins = $db->prepare("INSERT INTO pg_bool (id, flag) VALUES (?, ?)");
+$ins->bindValue(1, 1, PDO::PARAM_INT);
+$ins->bindValue(2, true, PDO::PARAM_BOOL);
+$ins->execute();
+$ins2 = $db->prepare("INSERT INTO pg_bool (id, flag) VALUES (?, ?)");
+$ins2->bindValue(1, 2, PDO::PARAM_INT);
+$ins2->bindValue(2, false, PDO::PARAM_BOOL);
+$ins2->execute();
+$selTrue = $db->prepare("SELECT id FROM pg_bool WHERE flag = ?");
+$selTrue->bindValue(1, true, PDO::PARAM_BOOL);
+$selTrue->execute();
+$trueId = $selTrue->fetchColumn();
+$selFalse = $db->prepare("SELECT id FROM pg_bool WHERE flag = ?");
+$selFalse->bindValue(1, false, PDO::PARAM_BOOL);
+$selFalse->execute();
+$falseId = $selFalse->fetchColumn();
+$db->exec("DROP TABLE pg_bool");
+echo $trueId . ":" . $falseId;
+"#,
+    ));
+    assert_eq!(out, "1:2");
 }

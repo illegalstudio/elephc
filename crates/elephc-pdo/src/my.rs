@@ -13,10 +13,12 @@
 //!   to `?` at prepare time, with a per-`?` `order` recording which bound slot
 //!   feeds it, so a `:name` used several times binds the same value to each `?`.
 //!   A scanner skips `--`/`#`/`/* */` comments and `'…'`/`"…"`/`` `…` `` quoted
-//!   regions (all with their driver-correct escape rules) so a `?`/`:name`
-//!   inside any of those is never mistaken for a real placeholder. PDO forbids
-//!   mixing `?` and `:name` in one statement; `prepare()` rejects the mix with
-//!   `HY093` before ever asking the server to prepare it.
+//!   regions (all with their driver-correct escape rules, string literals
+//!   following the connection's live `NO_BACKSLASH_ESCAPES` `sql_mode`) so a
+//!   `?`/`:name` inside any of those is never mistaken for a real placeholder,
+//!   and the scanner's placeholder count always agrees with the server's own.
+//!   PDO forbids mixing `?` and `:name` in one statement; `prepare()` rejects the
+//!   mix with `HY093` before ever asking the server to prepare it.
 //! - A statement is prepared server-side for column metadata, then executed
 //!   lazily on the first `step()`. The whole result set is materialized into typed
 //!   `Cell` values, so the column accessors read from owned data and per-value
@@ -29,7 +31,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use mysql::consts::ColumnType;
+use mysql::consts::{CapabilityFlags, ColumnType};
 use mysql::prelude::Queryable;
 use mysql::{Column, Conn, OptsBuilder, Statement, Value};
 
@@ -76,6 +78,17 @@ enum ColKind {
 /// both pairs share the same wire `ColumnType` (`MYSQL_TYPE_VAR_STRING` /
 /// `MYSQL_TYPE_STRING`).
 const MYSQL_BINARY_CHARSET: u16 = 63;
+
+/// The connect timeout applied when neither the DSN nor `PDO::ATTR_TIMEOUT`
+/// supplies one (F-CORE-10). php-src's mysql handle factory reads
+/// `connect_timeout = pdo_attr_lval(driver_options, PDO_ATTR_TIMEOUT, 30)`
+/// (`mysql_driver.c:755`) and unconditionally feeds it to
+/// `mysql_options(MYSQL_OPT_CONNECT_TIMEOUT, …)` (`mysql_driver.c:784`) — the 30 s
+/// bound is ALWAYS in force, and `ATTR_TIMEOUT` only *changes* its value, never
+/// removes it. Without this default, a plain `mysql:` connection to a black-holed
+/// host fell back on the OS TCP timeout and could hang for minutes where real PHP
+/// gives up after 30 s.
+const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 30;
 
 impl ColKind {
     /// Classifies a MySQL column into the text-rendering bucket the decoder
@@ -124,6 +137,63 @@ impl ColKind {
     }
 }
 
+/// MySQL's own name for a wire column type — the `native_type` key of
+/// `PDOStatement::getColumnMeta()` (F-MY-08).
+///
+/// The strings are php-src's verbatim, produced by `type_to_name_native`
+/// (`ext/pdo_mysql/mysql_statement.c:716-770`), whose
+/// `PDO_MYSQL_NATIVE_TYPE_NAME(x)` macro stringifies the `MYSQL_TYPE_` suffix —
+/// hence the ones no one would guess from the SQL keyword: an `INT` column is
+/// `LONG`, a `TINYINT` is `TINY`, a `BIGINT` is `LONGLONG`, a `MEDIUMINT` is
+/// `INT24`, a `VARCHAR` is `VAR_STRING`, a `CHAR` is `STRING`, and a modern
+/// `DECIMAL` is `NEWDECIMAL` (`DECIMAL` is only the pre-5.0 legacy type).
+///
+/// Returns `""` for a type php-src's switch has no case for (its `default: return
+/// NULL`, which makes `pdo_mysql_stmt_col_meta` OMIT the `native_type` key
+/// entirely — `mysql_statement.c:812-815`). That covers the `mysql` crate's
+/// `MYSQL_TYPE_VARCHAR` (a server-internal type never sent on the wire),
+/// `MYSQL_TYPE_TIMESTAMP2`/`DATETIME2`/`TIME2` (likewise internal — the wire
+/// carries the plain `TIMESTAMP`/`DATETIME`/`TIME` codes), `MYSQL_TYPE_TYPED_ARRAY`
+/// (replication-only) and `MYSQL_TYPE_UNKNOWN`. php-src also names `VECTOR`
+/// (MySQL 9), but the `mysql` crate's `ColumnType` has no such variant to match on.
+/// The empty string is the bridge's neutral "no metadata" value, so the caller
+/// treats those exactly as php-src does: no `native_type` at all.
+fn native_type_name(t: ColumnType) -> &'static str {
+    match t {
+        ColumnType::MYSQL_TYPE_STRING => "STRING",
+        ColumnType::MYSQL_TYPE_VAR_STRING => "VAR_STRING",
+        ColumnType::MYSQL_TYPE_TINY => "TINY",
+        ColumnType::MYSQL_TYPE_BIT => "BIT",
+        ColumnType::MYSQL_TYPE_SHORT => "SHORT",
+        ColumnType::MYSQL_TYPE_LONG => "LONG",
+        ColumnType::MYSQL_TYPE_LONGLONG => "LONGLONG",
+        ColumnType::MYSQL_TYPE_INT24 => "INT24",
+        ColumnType::MYSQL_TYPE_FLOAT => "FLOAT",
+        ColumnType::MYSQL_TYPE_DOUBLE => "DOUBLE",
+        ColumnType::MYSQL_TYPE_DECIMAL => "DECIMAL",
+        ColumnType::MYSQL_TYPE_NEWDECIMAL => "NEWDECIMAL",
+        ColumnType::MYSQL_TYPE_GEOMETRY => "GEOMETRY",
+        ColumnType::MYSQL_TYPE_TIMESTAMP => "TIMESTAMP",
+        ColumnType::MYSQL_TYPE_YEAR => "YEAR",
+        ColumnType::MYSQL_TYPE_SET => "SET",
+        ColumnType::MYSQL_TYPE_ENUM => "ENUM",
+        ColumnType::MYSQL_TYPE_DATE => "DATE",
+        ColumnType::MYSQL_TYPE_NEWDATE => "NEWDATE",
+        ColumnType::MYSQL_TYPE_JSON => "JSON",
+        ColumnType::MYSQL_TYPE_TIME => "TIME",
+        ColumnType::MYSQL_TYPE_DATETIME => "DATETIME",
+        ColumnType::MYSQL_TYPE_TINY_BLOB => "TINY_BLOB",
+        ColumnType::MYSQL_TYPE_MEDIUM_BLOB => "MEDIUM_BLOB",
+        ColumnType::MYSQL_TYPE_LONG_BLOB => "LONG_BLOB",
+        ColumnType::MYSQL_TYPE_BLOB => "BLOB",
+        ColumnType::MYSQL_TYPE_NULL => "NULL",
+        // php-src's `default: return NULL` — see the doc comment. A wildcard (not
+        // the remaining variants spelled out) so a `mysql` crate bump that adds a
+        // wire type keeps compiling into this same php-src-faithful "omit the key".
+        _ => "",
+    }
+}
+
 /// A live MySQL/MariaDB connection plus the last operation's bookkeeping that PDO
 /// reads back (`rowCount`, `lastInsertId`, `errorCode`/`errorInfo`).
 pub struct MyConn {
@@ -160,6 +230,14 @@ pub struct MyStmt {
     col_names: Vec<String>,
     /// Result column kinds, parallel to `col_names`, for temporal text rendering.
     col_kinds: Vec<ColKind>,
+    /// Raw MySQL wire types, parallel to `col_names` (F-MY-08). Kept alongside the
+    /// coarser `col_kinds` because `getColumnMeta`'s `native_type` reports the
+    /// server's OWN type name (`VAR_STRING`, `NEWDECIMAL`, `LONGLONG`, …), a
+    /// distinction `ColKind` deliberately collapses — every non-temporal,
+    /// non-binary type lands in `ColKind::Other`. Refreshed from the live result
+    /// on execute, like `col_names`/`col_kinds`, so a `CALL`'s columns (unknown at
+    /// prepare time — see `execute`) get real names rather than none.
+    col_types: Vec<ColumnType>,
     /// Materialized rows; each row is a vector of decoded column cells.
     rows: Vec<Vec<Cell>>,
     /// Current 0-based row index; `-1` before the first `step()`.
@@ -215,7 +293,23 @@ fn err_sqlstate(e: &mysql::Error) -> String {
 /// characters a real MySQL charset name uses (`[A-Za-z0-9_]`), so a stray value
 /// cannot inject SQL into that generated statement; an invalid value is silently
 /// dropped (documented best-effort, matching the surrounding DSN parsing style).
-pub fn build_opts(dsn: &str) -> Result<(OptsBuilder, Option<String>), String> {
+///
+/// The connect timeout is ALWAYS applied (F-CORE-10), defaulting to
+/// [`DEFAULT_CONNECT_TIMEOUT_SECS`] (30 s) for php-src parity — pdo_mysql's
+/// `mysql_options(MYSQL_OPT_CONNECT_TIMEOUT, …)` is unconditional, with
+/// `PDO::ATTR_TIMEOUT` only *overriding* the 30 s value rather than lifting the
+/// bound. A `connect_timeout=` DSN key (the seam the prelude folds `ATTR_TIMEOUT`
+/// into) therefore wins over the default whenever it parses. Deliberate divergence
+/// from php-src: the bound is only enforced on the TCP path, since the `mysql`
+/// crate consults `tcp_connect_timeout` in `connect_tcp` alone and a `unix_socket`
+/// DSN connects locally (where a black-holed peer — the hang this guards against —
+/// cannot arise).
+///
+/// `found_rows` is the connection's `Pdo\Mysql::ATTR_FOUND_ROWS` constructor
+/// option (F-MY-06), threaded in from the open entrypoint rather than read from
+/// the DSN: it is an attribute, not a DSN key, and it has to be known *before*
+/// the handshake because it only exists as a capability bit negotiated there.
+pub fn build_opts(dsn: &str, found_rows: bool) -> Result<(OptsBuilder, Option<String>), String> {
     let body = dsn
         .strip_prefix("mysql:")
         .ok_or_else(|| "could not find driver (expected a mysql: DSN)".to_string())?;
@@ -257,19 +351,47 @@ pub fn build_opts(dsn: &str) -> Result<(OptsBuilder, Option<String>), String> {
         }
     }
     let mut opts = OptsBuilder::new().user(user).pass(password).db_name(dbname);
-    // A unix socket DSN connects locally; otherwise connect over TCP (defaulting
-    // the host so a `mysql:dbname=…` DSN still reaches a local server).
-    if let Some(sock) = socket {
-        opts = opts.socket(Some(sock));
-    } else {
-        opts = opts.ip_or_hostname(Some(host.unwrap_or_else(|| "localhost".to_string())));
-        if let Some(p) = port {
-            opts = opts.tcp_port(p);
+    // F-MY-02: `unix_socket` only wins when the DSN names no host, or names exactly
+    // `localhost`. php-src's handle factory takes the socket under precisely that
+    // condition — `if (vars[0].optval && !strcmp("localhost", vars[0].optval))`
+    // (`mysql_driver.c:940-946`), with the DSN parser defaulting an absent `host` to
+    // `"localhost"` — so `mysql:host=127.0.0.1;unix_socket=/tmp/mysql.sock` is
+    // TCP-only in real PHP, the socket key silently ignored. Preferring the socket
+    // whenever it was present (as this did) connected such a DSN to a DIFFERENT
+    // server than php-src would. The comparison is case-sensitive, matching the
+    // `strcmp`; `127.0.0.1` is deliberately NOT localhost here, exactly as in
+    // php-src (and in the mysql client itself, where the two are distinct).
+    // Otherwise connect over TCP, defaulting the host so a `mysql:dbname=…` DSN
+    // still reaches a local server.
+    let host_is_localhost = host.as_deref().is_none_or(|h| h == "localhost");
+    match socket.filter(|_| host_is_localhost) {
+        Some(sock) => opts = opts.socket(Some(sock)),
+        None => {
+            opts = opts.ip_or_hostname(Some(host.unwrap_or_else(|| "localhost".to_string())));
+            if let Some(p) = port {
+                opts = opts.tcp_port(p);
+            }
         }
     }
-    if let Some(secs) = connect_timeout {
-        opts = opts.tcp_connect_timeout(Some(Duration::from_secs(secs)));
+    // F-MY-06: `Pdo\Mysql::ATTR_FOUND_ROWS` ORs `CLIENT_FOUND_ROWS` into the connect
+    // capabilities (php-src `mysql_driver.c:776-778`), which switches what the server
+    // reports as the affected-row count of an UPDATE — and so `PDOStatement::
+    // rowCount()` — from "rows actually CHANGED" to "rows MATCHED by the WHERE
+    // clause". Without it there was no way to opt into the matched-rows semantics
+    // apps commonly rely on. The `mysql` crate ORs `additional_capabilities` into the
+    // handshake's client flags (`conn/mod.rs:739`), and its forbidden-flag filter
+    // covers only the capabilities the connection manages itself (`CLIENT_SSL`,
+    // `CLIENT_COMPRESS`, `CLIENT_PROTOCOL_41`, the MULTI_* pair, …) — never
+    // `CLIENT_FOUND_ROWS` — so the bit does reach the server.
+    if found_rows {
+        opts = opts.additional_capabilities(CapabilityFlags::CLIENT_FOUND_ROWS);
     }
+    // F-CORE-10: unconditional, so a DSN that names neither `connect_timeout` nor
+    // (through the prelude) `ATTR_TIMEOUT` still inherits php-src's 30 s bound
+    // instead of waiting out the OS TCP timeout. An explicit value — from either
+    // seam, both of which land in `connect_timeout` above — wins over the default.
+    let secs = connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS);
+    opts = opts.tcp_connect_timeout(Some(Duration::from_secs(secs)));
     Ok((opts, charset))
 }
 
@@ -304,19 +426,100 @@ fn utf8_len(b: u8) -> usize {
     }
 }
 
+/// Returns whether `bytes[i]` opens a MySQL comment and, if so, its exclusive end
+/// index. The single definition of MySQL's three comment forms, shared by
+/// `translate_placeholders` (which copies the region verbatim, never scanning it
+/// for placeholders) and `sql_is_call_statement` (which skips it) so the two can
+/// never drift apart:
+/// - `--` line comment, but only when the second dash is followed by one of the
+///   whitespace/control bytes `[ \t\v\f\r]` — the php-src `mysql_sql_parser.re`
+///   COMMENTS rule. Without that trailing byte `a--b` is the arithmetic `a - -b`
+///   (unlike PostgreSQL, where a bare `--` already comments);
+/// - `#` line comment, with no trailing-whitespace requirement;
+/// - `/* ... */` block comment, non-nested, running to EOF if unterminated.
+///
+/// A line comment ends *at* the newline (exclusive), which the caller then treats
+/// as ordinary text/whitespace. An out-of-range `i` opens nothing (`None`), so a
+/// caller scanning to EOF needs no separate bounds check.
+fn scan_my_comment(bytes: &[u8], i: usize) -> Option<usize> {
+    let len = bytes.len();
+    match *bytes.get(i)? {
+        b'-' if i + 2 < len
+            && bytes[i + 1] == b'-'
+            && matches!(bytes[i + 2], b' ' | b'\t' | b'\x0b' | b'\x0c' | b'\r') =>
+        {
+            let mut j = i + 2;
+            while j < len && bytes[j] != b'\n' {
+                j += 1;
+            }
+            Some(j)
+        }
+        b'#' => {
+            let mut j = i + 1;
+            while j < len && bytes[j] != b'\n' {
+                j += 1;
+            }
+            Some(j)
+        }
+        b'/' if i + 1 < len && bytes[i + 1] == b'*' => {
+            let mut j = i + 2;
+            while j + 1 < len && !(bytes[j] == b'*' && bytes[j + 1] == b'/') {
+                j += 1;
+            }
+            Some(if j + 1 < len { j + 2 } else { len })
+        }
+        _ => None,
+    }
+}
+
+/// Returns whether `b` is whitespace to MySQL's lexer (`[ \t\n\v\f\r]`, the
+/// `_MY_SPC` ctype class). Deliberately narrower than `str::trim_start`, which
+/// also strips Unicode spaces (e.g. NBSP) that the server would reject as a
+/// syntax error rather than skip.
+fn is_my_space(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\x0b' | b'\x0c' | b'\r')
+}
+
 /// Returns whether `sql` invokes a stored procedure (`CALL proc(...)`,
-/// case-insensitive, ignoring leading whitespace). Used by `prepare()` to set
-/// `MyStmt::is_call` — see `column_count`'s doc comment for why a `CALL`'s
-/// prepare-time column count needs this special-casing. Requires a non-identifier
-/// byte (or end of string) right after the keyword, so `CALLBACK(...)` — a
-/// (nonsensical but not a stored-procedure-call) function-call expression — is
-/// never mistaken for `CALL BACK(...)`.
+/// case-insensitive), ignoring any leading whitespace *and comments*. Used by
+/// `prepare()` to set `MyStmt::is_call` — see `column_count`'s doc comment for why
+/// a `CALL`'s prepare-time column count needs this special-casing. Requires a
+/// non-identifier byte (or end of string) right after the keyword, so
+/// `CALLBACK(...)` — a (nonsensical but not a stored-procedure-call) function-call
+/// expression — is never mistaken for `CALL BACK(...)`.
+///
+/// The comment skipping is load-bearing, not cosmetic: the server ignores whatever
+/// leads the statement, so `/* hint */ CALL p()` and `-- note\nCALL p()` are just as
+/// much stored-procedure calls as a bare `CALL p()`. Testing only past the
+/// whitespace left those mis-flagged as non-`CALL`, which handed the prelude the
+/// genuine (but meaningless) prepare-time column count of `0` and so routed a
+/// row-producing procedure into the no-result DML branch — silently discarding its
+/// first row (the row-dropping bug `column_count` documents).
 fn sql_is_call_statement(sql: &str) -> bool {
-    let trimmed = sql.trim_start();
-    if trimmed.len() < 4 || !trimmed.as_bytes()[..4].eq_ignore_ascii_case(b"call") {
+    let bytes = sql.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    // Whitespace and the three comment forms can interleave in any order and
+    // quantity ahead of the first keyword, so alternate between them until neither
+    // consumes anything (a line comment stops at its newline, which the whitespace
+    // pass then eats, so the loop always makes progress).
+    loop {
+        let start = i;
+        while i < len && is_my_space(bytes[i]) {
+            i += 1;
+        }
+        if let Some(end) = scan_my_comment(bytes, i) {
+            i = end;
+        }
+        if i == start {
+            break;
+        }
+    }
+    let rest = &bytes[i..];
+    if rest.len() < 4 || !rest[..4].eq_ignore_ascii_case(b"call") {
         return false;
     }
-    trimmed.as_bytes().get(4).is_none_or(|&b| !is_ident_byte(b))
+    rest.get(4).is_none_or(|&b| !is_ident_byte(b))
 }
 
 /// Scans a MySQL quoted region opened by `quote` (`'` or `"`) starting at
@@ -326,7 +529,18 @@ fn sql_is_call_statement(sql: &str) -> bool {
 /// escaping: a doubled quote (`''`/`""`) is a literal quote, and a backslash
 /// escapes the following byte unconditionally (so `\'`/`\"`/`\\` never
 /// terminate or mis-parse the string).
-fn scan_my_string(bytes: &[u8], start: usize, quote: u8) -> usize {
+///
+/// F-MY-03: under the `NO_BACKSLASH_ESCAPES` `sql_mode` (`no_backslash_escapes`
+/// true) the SERVER treats `\` as an ordinary byte inside a string literal —
+/// doubling is then the ONLY escape. This is the same server-side fact
+/// `PDO::quote()`'s MySQL branch already keys off (it falls back to `''`-doubling
+/// there), and the scanner has to agree with it: assuming backslash-escaping in
+/// that mode makes the scanner disagree with the server about where a literal
+/// ENDS, so a `?`/`:name` the server sees as a real placeholder can be swallowed
+/// as string content (e.g. `'a\' , ?` — the server closes the literal at the `'`
+/// after the backslash, this scanner would not), yielding a bound-parameter count
+/// that disagrees with the server's real placeholder count.
+fn scan_my_string(bytes: &[u8], start: usize, quote: u8, no_backslash_escapes: bool) -> usize {
     let len = bytes.len();
     let mut j = start + 1;
     loop {
@@ -334,7 +548,7 @@ fn scan_my_string(bytes: &[u8], start: usize, quote: u8) -> usize {
             return len;
         }
         let cj = bytes[j];
-        if cj == b'\\' && j + 1 < len {
+        if !no_backslash_escapes && cj == b'\\' && j + 1 < len {
             j += 2;
             continue;
         }
@@ -362,20 +576,30 @@ fn scan_my_string(bytes: &[u8], start: usize, quote: u8) -> usize {
 /// - `-- ...` and `# ...` line comments (to end of line or EOF);
 /// - `/* ... */` block comments (non-nested, to the first `*/` or EOF);
 /// - `'...'` and `"..."` string literals — both quote styles honor the doubled-
-///   quote escape (`''`/`""`) and backslash escapes (`\'`, `\"`, `\\`, …), per
-///   MySQL's default (non-`NO_BACKSLASH_ESCAPES`) `sql_mode`;
+///   quote escape (`''`/`""`) and, unless `no_backslash_escapes` is set, backslash
+///   escapes (`\'`, `\"`, `\\`, …), per MySQL's default `sql_mode`;
 /// - `` `...` `` backtick-quoted identifiers, with `` `` `` as the doubled-quote
 ///   escape (no backslash escaping here).
 ///
+/// `no_backslash_escapes` is the connection's LIVE `NO_BACKSLASH_ESCAPES`
+/// `sql_mode` state (F-MY-03), threaded in from `MyConn::prepare` — see
+/// [`scan_my_string`] for why a scanner that disagrees with the server about
+/// backslash escaping also disagrees with it about the placeholder count. It only
+/// affects the two string-literal forms: a backtick-quoted identifier never
+/// honors backslash escapes in either mode, and a comment has no escapes at all.
+///
 /// A run of two or more `?` (e.g. `??`) is a single verbatim text token (php-src
 /// treats it the same way) and allocates no slot; only a lone `?` is a real
-/// positional placeholder. `::` is left untouched rather than read as a named
-/// placeholder.
+/// positional placeholder. Symmetrically, a run of two or more `:` is left
+/// untouched rather than read as a named placeholder.
 ///
 /// A `:name` immediately preceded by an alphanumeric byte is NOT a named
 /// placeholder (matching php-src's `pdo_sql_parser.re`, which skips the same
 /// way).
-pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, Vec<i64>, bool) {
+pub fn translate_placeholders(
+    sql: &str,
+    no_backslash_escapes: bool,
+) -> (String, HashMap<String, i64>, Vec<i64>, bool) {
     let bytes = sql.as_bytes();
     let len = bytes.len();
     let mut out = String::with_capacity(sql.len() + 8);
@@ -387,51 +611,18 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, Vec<i
     let mut saw_named = false;
     while i < len {
         let c = bytes[i];
+        // All three comment forms (`-- `, `#`, `/* */`) are copied verbatim, so the
+        // `?`/`:name` inside one is never mistaken for a placeholder. The rules live
+        // in `scan_my_comment`, shared with `sql_is_call_statement` — a comment must
+        // mean the same thing to both scanners.
+        if let Some(end) = scan_my_comment(bytes, i) {
+            out.push_str(&sql[i..end]);
+            i = end;
+            continue;
+        }
         match c {
-            b'-'
-                if i + 2 < len
-                    && bytes[i + 1] == b'-'
-                    && matches!(bytes[i + 2], b' ' | b'\t' | b'\x0b' | b'\x0c' | b'\r') =>
-            {
-                // Line comment: verbatim to the end of the line (exclusive of the
-                // newline itself, which the default arm then copies) or EOF. Unlike
-                // PostgreSQL, MySQL only treats `--` as a comment when the second
-                // dash is followed by a whitespace/control char (`[ \t\v\f\r]`, the
-                // php-src `mysql_sql_parser.re` COMMENTS rule): otherwise `a--b` is
-                // the arithmetic `a - -b`, and a `?`/`:name` after a bare `--` is a
-                // real placeholder — so the guard requires that trailing byte.
-                let start = i;
-                let mut j = i + 2;
-                while j < len && bytes[j] != b'\n' {
-                    j += 1;
-                }
-                out.push_str(&sql[start..j]);
-                i = j;
-            }
-            b'#' => {
-                // MySQL's `#` line comment: verbatim to end of line or EOF.
-                let start = i;
-                let mut j = i + 1;
-                while j < len && bytes[j] != b'\n' {
-                    j += 1;
-                }
-                out.push_str(&sql[start..j]);
-                i = j;
-            }
-            b'/' if i + 1 < len && bytes[i + 1] == b'*' => {
-                // Block comment: verbatim to the matching (non-nested) `*/`, or
-                // to EOF if unterminated.
-                let start = i;
-                let mut j = i + 2;
-                while j + 1 < len && !(bytes[j] == b'*' && bytes[j + 1] == b'/') {
-                    j += 1;
-                }
-                let end = if j + 1 < len { j + 2 } else { len };
-                out.push_str(&sql[start..end]);
-                i = end;
-            }
             b'\'' | b'"' => {
-                let end = scan_my_string(bytes, i, c);
+                let end = scan_my_string(bytes, i, c, no_backslash_escapes);
                 out.push_str(&sql[i..end]);
                 i = end;
             }
@@ -476,10 +667,20 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, Vec<i
                 }
             }
             b':' => {
-                // `::` is not a named placeholder; emit verbatim.
-                if i + 1 < len && bytes[i + 1] == b':' {
-                    out.push_str("::");
-                    i += 2;
+                // A run of 2+ `:` is a single verbatim text token, never a named
+                // placeholder — php-src's `MULTICHAR = [:]{2,}` rule is greedy
+                // (re2c's maximal munch swallows the whole contiguous run). The run
+                // must be consumed WHOLE: taking colons two at a time leaves the
+                // third one of an odd run (`:::c`) to be re-scanned as a fresh
+                // `:c`, conjuring a named placeholder php-src never emits. Mirrors
+                // the `?`-run handling above.
+                let mut run_end = i + 1;
+                while run_end < len && bytes[run_end] == b':' {
+                    run_end += 1;
+                }
+                if run_end - i >= 2 {
+                    out.push_str(&sql[i..run_end]);
+                    i = run_end;
                     continue;
                 }
                 let start = i + 1;
@@ -638,10 +839,21 @@ impl MyConn {
     /// `ssl_config` is the prelude's packed serialization of the
     /// `Pdo\Mysql::ATTR_SSL_*` constructor options (`ca=…;cert=…;key=…;verify=…`);
     /// an empty string means no TLS. It is only honored when the opt-in
-    /// `mysql-tls` feature is compiled in (see [`apply_ssl_opts`]). Returns the
-    /// connection or an error message for `last_open_error`.
-    pub fn open(dsn: &str, init_command: &str, ssl_config: &str) -> Result<MyConn, String> {
-        let (mut opts, charset) = build_opts(dsn)?;
+    /// `mysql-tls` feature is compiled in (see [`apply_ssl_opts`]).
+    ///
+    /// `found_rows` is the `Pdo\Mysql::ATTR_FOUND_ROWS` constructor option
+    /// (F-MY-06): it adds `CLIENT_FOUND_ROWS` to the capabilities negotiated in the
+    /// handshake, so an UPDATE's `rowCount()` reports the rows its WHERE clause
+    /// MATCHED rather than the rows it actually CHANGED. It can only be applied at
+    /// connect time (see [`build_opts`]). Returns the connection or an error message
+    /// for `last_open_error`.
+    pub fn open(
+        dsn: &str,
+        init_command: &str,
+        ssl_config: &str,
+        found_rows: bool,
+    ) -> Result<MyConn, String> {
+        let (mut opts, charset) = build_opts(dsn, found_rows)?;
         opts = apply_ssl_opts(opts, ssl_config)?;
         let mut init_statements: Vec<String> = Vec::new();
         if let Some(cs) = charset {
@@ -795,10 +1007,23 @@ impl MyConn {
     /// with `HY093` before ever asking the server to prepare it — PDO forbids
     /// combining the two styles in one statement, and MySQL's own placeholder
     /// syntax (a bare `?`) has no way to catch this itself.
+    ///
+    /// F-MY-03: the placeholder scan is handed this connection's LIVE
+    /// `NO_BACKSLASH_ESCAPES` `sql_mode` (the same session state
+    /// [`MyConn::no_backslash_escape`] reports to `PDO::quote()`), because that
+    /// mode changes where the SERVER thinks a `'…'`/`"…"` literal ends — and a
+    /// scanner that disagrees with the server about that disagrees with it about
+    /// how many placeholders the statement has. This is the only place the flag can
+    /// be read: `translate_placeholders` is a free function with no connection.
     pub fn prepare(&mut self, sql: &str) -> Result<MyStmt, String> {
-        let (translated, named_map, order, mixed) = translate_placeholders(sql);
+        let (translated, named_map, order, mixed) =
+            translate_placeholders(sql, self.no_backslash_escape());
         if mixed {
-            self.errcode = 0;
+            // Nonzero native code like every other error path here, and `1`
+            // specifically to match pg's identical HY093 branch (`pg.rs`,
+            // `PgConn::prepare`): the same logical error must not report
+            // `errorInfo()[1] == 0` on MySQL and `1` on PostgreSQL.
+            self.errcode = 1;
             self.sqlstate = "HY093".to_string();
             self.errmsg =
                 "Invalid parameter number: mixed named and positional parameters".to_string();
@@ -816,6 +1041,13 @@ impl MyConn {
                     .iter()
                     .map(ColKind::from_column)
                     .collect();
+                // F-MY-08: the raw wire type, kept beside the coarser `ColKind` so
+                // `getColumnMeta`'s `native_type` can report MySQL's own type name.
+                let col_types = statement
+                    .columns()
+                    .iter()
+                    .map(|c| c.column_type())
+                    .collect();
                 // Distinct slots run 1..=N contiguously, so the highest slot in
                 // `order` is the bound-value count.
                 let n_binds = order.iter().copied().max().unwrap_or(0) as usize;
@@ -829,6 +1061,7 @@ impl MyConn {
                     binds: vec![Bind::Null; n_binds],
                     col_names,
                     col_kinds,
+                    col_types,
                     rows: Vec::new(),
                     cursor: -1,
                     executed: false,
@@ -997,20 +1230,37 @@ impl MyStmt {
     fn execute(&mut self, conn: &mut MyConn) -> Result<(), i64> {
         let values = self.build_values();
         let statement = self.statement.clone();
-        type ExecOutcome = (i64, Option<u64>, Vec<Vec<Cell>>, bool, Vec<String>, Vec<ColKind>);
+        type ExecOutcome = (
+            i64,
+            Option<u64>,
+            Vec<Vec<Cell>>,
+            bool,
+            Vec<String>,
+            Vec<ColKind>,
+            Vec<ColumnType>,
+        );
         let outcome: Result<ExecOutcome, mysql::Error> = (|| {
             let mut res = conn.conn.exec_iter(&statement, values)?;
             let last = res.last_insert_id();
-            let (is_select, col_names, col_kinds) = {
+            let (is_select, col_names, col_kinds, col_types) = {
                 let live = res.columns();
                 let cols: &[Column] = live.as_ref();
                 if cols.is_empty() {
-                    (false, self.col_names.clone(), self.col_kinds.clone())
+                    (
+                        false,
+                        self.col_names.clone(),
+                        self.col_kinds.clone(),
+                        self.col_types.clone(),
+                    )
                 } else {
                     (
                         true,
                         cols.iter().map(|c| c.name_str().into_owned()).collect(),
                         cols.iter().map(ColKind::from_column).collect(),
+                        // F-MY-08: refreshed with the rest, so a `CALL`'s
+                        // `native_type`s come from its real (post-execution)
+                        // columns rather than the empty prepare-time set.
+                        cols.iter().map(|c| c.column_type()).collect(),
                     )
                 }
             };
@@ -1022,10 +1272,12 @@ impl MyStmt {
             }
             let affected = res.affected_rows() as i64;
             drop(res);
-            Ok((affected, last, rows, is_select, col_names, col_kinds))
+            Ok((
+                affected, last, rows, is_select, col_names, col_kinds, col_types,
+            ))
         })();
         match outcome {
-            Ok((affected, last, rows, is_select, col_names, col_kinds)) => {
+            Ok((affected, last, rows, is_select, col_names, col_kinds, col_types)) => {
                 conn.changes = if is_select {
                     rows.len() as i64
                 } else {
@@ -1036,6 +1288,7 @@ impl MyStmt {
                 conn.sqlstate = "00000".to_string();
                 self.col_names = col_names;
                 self.col_kinds = col_kinds;
+                self.col_types = col_types;
                 self.rows = rows;
                 self.executed = true;
                 Ok(())
@@ -1105,6 +1358,33 @@ impl MyStmt {
         self.col_names.get(i as usize).cloned().unwrap_or_default()
     }
 
+    /// MySQL native type name of result column `i` (0-based) — the server's own
+    /// name for the column's wire type (`LONG`, `VAR_STRING`, `NEWDECIMAL`, `BIT`,
+    /// `JSON`, `TIMESTAMP`, …), exactly as php-src's `type_to_name_native` spells
+    /// it (`ext/pdo_mysql/mysql_statement.c:716-770`; see [`native_type_name`]).
+    /// Backs `getColumnMeta`'s `native_type` on a `mysql:` statement (F-MY-08),
+    /// which until now fell through to the generic SQLite storage-class names
+    /// ("integer"/"double"/"string") — the wrong vocabulary for this driver, and
+    /// one that cannot distinguish a `VARCHAR` from a `BLOB` from a `DECIMAL`.
+    ///
+    /// Read from the column descriptor rather than a live cell (mirroring the pg
+    /// accessor), so it reports the column's DECLARED type whether or not a row is
+    /// active — a NULL value never degrades it to a runtime storage class.
+    ///
+    /// Empty string for an out-of-range index, and for the wire types php-src
+    /// itself has no name for (where it omits the `native_type` key entirely):
+    /// `""` is the neutral "no metadata / not this driver" value the bridge's
+    /// dispatch already uses.
+    pub fn column_native_type(&self, i: i64) -> String {
+        if i < 0 {
+            return String::new();
+        }
+        self.col_types
+            .get(i as usize)
+            .map(|&t| native_type_name(t).to_string())
+            .unwrap_or_default()
+    }
+
     /// SQLite-compatible type code for the current row's column `i`:
     /// 1=int, 2=float, 3=text, 4=blob, 5=null.
     pub fn column_type(&self, i: i64) -> i64 {
@@ -1136,17 +1416,6 @@ impl MyStmt {
             Some(Cell::Text(s)) => s.trim().parse().unwrap_or(0.0),
             Some(Cell::Bytes(b)) => String::from_utf8_lossy(b).trim().parse().unwrap_or(0.0),
             _ => 0.0,
-        }
-    }
-
-    /// Current row's column `i` as text.
-    pub fn column_text(&self, i: i64) -> String {
-        match self.cell(i) {
-            Some(Cell::Text(s)) => s.clone(),
-            Some(Cell::Bytes(b)) => String::from_utf8_lossy(b).into_owned(),
-            Some(Cell::Int(v)) => v.to_string(),
-            Some(Cell::Float(v)) => v.to_string(),
-            _ => String::new(),
         }
     }
 
@@ -1273,25 +1542,62 @@ mod tests {
         assert!(!sql_is_call_statement(""));
     }
 
+    /// F-MY-05 (re-opens P0-C for the commented variant): the server ignores
+    /// whatever leads a statement, so a `CALL` behind an optimizer hint or a note
+    /// is still a stored-procedure call. Recognizing only past the whitespace left
+    /// those flagged non-`CALL`, which fed the prelude the genuine (but meaningless)
+    /// prepare-time column count of `0` and routed a row-producing procedure into
+    /// the no-result DML branch — dropping its first row. All three comment forms
+    /// are covered, interleaved with whitespace and with each other.
+    ///
+    /// The negative half is the load-bearing one for the skipping logic itself: a
+    /// leading comment must never make an ordinary statement LOOK like a `CALL`,
+    /// whether the word appears inside the comment or not. And a bare `--` with no
+    /// trailing whitespace is not a MySQL comment at all (it is the arithmetic
+    /// `- -`, unlike PostgreSQL), so nothing behind it may be skipped. An
+    /// unterminated block comment swallows the rest of the statement, leaving no
+    /// keyword to test — also not a `CALL`.
+    #[test]
+    fn sql_is_call_statement_skips_leading_comments() {
+        assert!(sql_is_call_statement("/* hint */ CALL p()"));
+        assert!(sql_is_call_statement("-- note\nCALL p()"));
+        assert!(sql_is_call_statement("# note\ncall p(?)"));
+        assert!(sql_is_call_statement("  /* a */ -- b\n\t/* c */\nCALL p()"));
+        assert!(!sql_is_call_statement("/* CALL */ SELECT 1"));
+        assert!(!sql_is_call_statement("-- CALL p()\nSELECT 1"));
+        assert!(!sql_is_call_statement("# CALL p()\nSELECT 1"));
+        assert!(!sql_is_call_statement("--CALL p()"));
+        assert!(!sql_is_call_statement("/* unterminated CALL p()"));
+    }
+
     /// P2-1: a `connect_timeout=<secs>` DSN key (as the prelude folds in
     /// alongside `user=`/`password=` when `PDO::ATTR_TIMEOUT` is set) parses into
     /// the `mysql` client's `tcp_connect_timeout` option. Pure DSN-parsing logic,
-    /// no server needed — `build_opts` never dials out.
+    /// no server needed — `build_opts` never dials out. The explicit `5` also
+    /// proves it WINS over F-CORE-10's 30 s default below.
     #[test]
     fn build_opts_maps_connect_timeout_dsn_key() {
         let (opts, _charset) =
-            build_opts("mysql:host=localhost;dbname=testdb;connect_timeout=5").unwrap();
+            build_opts("mysql:host=localhost;dbname=testdb;connect_timeout=5", false).unwrap();
         let opts: mysql::Opts = opts.into();
         assert_eq!(opts.get_tcp_connect_timeout(), Some(Duration::from_secs(5)));
     }
 
-    /// A DSN with no `connect_timeout` key leaves the option unset (the client's
-    /// own default, effectively no timeout).
+    /// F-CORE-10: a DSN with no `connect_timeout` key (and no `PDO::ATTR_TIMEOUT`,
+    /// which the prelude folds into that same key) still gets php-src's
+    /// unconditional 30 s connect timeout — `mysql_driver.c:755,784` defaults
+    /// `PDO_ATTR_TIMEOUT` to 30 and always passes it to
+    /// `mysql_options(MYSQL_OPT_CONNECT_TIMEOUT, …)`. Leaving it unset (as this
+    /// previously asserted) fell back on the OS TCP timeout, hanging a connection
+    /// to a black-holed host far longer than real PHP does.
     #[test]
-    fn build_opts_leaves_connect_timeout_unset_by_default() {
-        let (opts, _charset) = build_opts("mysql:host=localhost;dbname=testdb").unwrap();
+    fn build_opts_defaults_connect_timeout_to_30s() {
+        let (opts, _charset) = build_opts("mysql:host=localhost;dbname=testdb", false).unwrap();
         let opts: mysql::Opts = opts.into();
-        assert_eq!(opts.get_tcp_connect_timeout(), None);
+        assert_eq!(
+            opts.get_tcp_connect_timeout(),
+            Some(Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS))
+        );
     }
 
     /// P2-3: a `charset=<name>` DSN key is captured (for `MyConn::open` to turn
@@ -1300,7 +1606,7 @@ mod tests {
     #[test]
     fn build_opts_captures_valid_charset() {
         let (_opts, charset) =
-            build_opts("mysql:host=localhost;dbname=testdb;charset=utf8mb4").unwrap();
+            build_opts("mysql:host=localhost;dbname=testdb;charset=utf8mb4", false).unwrap();
         assert_eq!(charset.as_deref(), Some("utf8mb4"));
     }
 
@@ -1314,6 +1620,7 @@ mod tests {
     fn build_opts_rejects_charset_with_unsafe_characters() {
         let (_opts, charset) = build_opts(
             "mysql:host=localhost;dbname=testdb;charset=utf8mb4' OR '1'='1",
+            false,
         )
         .unwrap();
         assert_eq!(charset, None);
@@ -1322,7 +1629,7 @@ mod tests {
     /// A DSN with no `charset` key leaves it unset.
     #[test]
     fn build_opts_leaves_charset_unset_by_default() {
-        let (_opts, charset) = build_opts("mysql:host=localhost;dbname=testdb").unwrap();
+        let (_opts, charset) = build_opts("mysql:host=localhost;dbname=testdb", false).unwrap();
         assert_eq!(charset, None);
     }
 
@@ -1350,5 +1657,54 @@ mod tests {
     #[test]
     fn apply_ssl_opts_builds_sslopts() {
         assert!(apply_ssl_opts(OptsBuilder::new(), "ca=/etc/ca.pem;verify=0").is_ok());
+    }
+
+    /// F-MY-08 (mandatory unit test, no server needed): the wire-type -> `native_type`
+    /// mapping backing `getColumnMeta()`'s MySQL branch is php-src's `type_to_name_native`
+    /// (`ext/pdo_mysql/mysql_statement.c:716-770`), whose `PDO_MYSQL_NATIVE_TYPE_NAME(x)`
+    /// macro STRINGIFIES THE `MYSQL_TYPE_` SUFFIX. The names therefore do NOT match the SQL
+    /// keyword a user wrote, and that is the whole point of pinning them: an `INT` column
+    /// reports `LONG`, a `TINYINT` reports `TINY`, a `BIGINT` reports `LONGLONG`, a
+    /// `MEDIUMINT` reports `INT24`, a `VARCHAR` reports `VAR_STRING`, a `CHAR` reports
+    /// `STRING`, and a modern `DECIMAL` reports `NEWDECIMAL` (plain `DECIMAL` is only the
+    /// pre-5.0 legacy type). A "helpful" mapping to the SQL spelling would be a divergence
+    /// from real PDO dressed up as a courtesy.
+    #[test]
+    fn native_type_name_matches_php_src_type_to_name_native() {
+        // The counter-intuitive ones — where the wire name and the SQL keyword differ.
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_LONG), "LONG"); // INT
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_TINY), "TINY"); // TINYINT
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_LONGLONG), "LONGLONG"); // BIGINT
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_INT24), "INT24"); // MEDIUMINT
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_VAR_STRING), "VAR_STRING"); // VARCHAR
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_STRING), "STRING"); // CHAR
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_NEWDECIMAL), "NEWDECIMAL"); // DECIMAL
+
+        // The ones that do read as expected, spot-checked across the type families.
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_SHORT), "SHORT");
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_BIT), "BIT");
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_BLOB), "BLOB");
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_JSON), "JSON");
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_DATETIME), "DATETIME");
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_NULL), "NULL");
+    }
+
+    /// F-MY-08, the `default:` arm: php-src's switch has no case for a server-INTERNAL type
+    /// and `return NULL`s, which makes `pdo_mysql_stmt_col_meta` OMIT the `native_type` key
+    /// entirely (`mysql_statement.c:812-815`). The bridge's neutral stand-in for that is the
+    /// EMPTY STRING, and the empty string is load-bearing downstream: the prelude's
+    /// `getColumnMeta()` only OVERRIDES its derived storage-class `native_type` when this
+    /// returns something non-empty, so `""` is exactly what keeps SQLite's metadata (where
+    /// this is never called with a real MySQL type) byte-identical.
+    ///
+    /// `MYSQL_TYPE_TIMESTAMP2`/`DATETIME2`/`TIME2` are the internal ones worth naming: the
+    /// wire carries the plain `TIMESTAMP`/`DATETIME`/`TIME` codes, so these must never reach
+    /// a real column — and if one somehow does, omitting the key beats inventing a name.
+    #[test]
+    fn native_type_name_is_empty_for_types_php_src_has_no_case_for() {
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_TIMESTAMP2), "");
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_DATETIME2), "");
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_TIME2), "");
+        assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_UNKNOWN), "");
     }
 }

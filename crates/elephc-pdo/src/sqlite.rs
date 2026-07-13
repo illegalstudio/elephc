@@ -13,26 +13,144 @@
 //!   dependency.
 //! - Column type codes match SQLite's: 1=INTEGER, 2=FLOAT, 3=TEXT, 4=BLOB,
 //!   5=NULL — the same codes the PDO prelude's `columnValue()` reads.
+//! - Handle ownership: `SqliteConn` owns its `sqlite3*` and `SqliteStmt` owns its
+//!   `sqlite3_stmt*` (it only *borrows* the connection's `sqlite3*`). Each native
+//!   handle is released exactly once — by the explicit `close()` / `finalize()`
+//!   that `lib.rs` calls, with an `impl Drop` as the structural safety net for any
+//!   path that drops one of these values without calling them.
+//! - Thread safety: the bridge locks its connection and statement tables under two
+//!   SEPARATE mutexes, so overlapping calls on one `sqlite3*` are only defined
+//!   under a mutexed SQLite build; `assert_sqlite_threadsafe` pins that invariant
+//!   at the first open.
 
+use std::cell::Cell;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
+use std::sync::Once;
 
 use libsqlite3_sys as ffi;
 
+use crate::ffi_guard;
+
 /// A live SQLite connection. The raw pointer is `Send` in practice because
 /// elephc programs drive one connection from one thread at a time.
+///
+/// The struct OWNS its `sqlite3*`: the handle is released exactly once, either by
+/// the explicit `close()` (`elephc_pdo_close`'s only call site, which has to run
+/// first because it finalizes the connection's statements) or, failing that, by
+/// the `Drop` net below. `released` is what makes those two idempotent with
+/// respect to each other. It is a separate flag rather than a null-out of `db`
+/// because `close()` only ever holds a `&self` — `lib.rs` reaches it through
+/// `HashMap::get` on the connection table — and because `db` has to stay a plain
+/// `*mut` field that `lib.rs` can read out by `Copy` to decide which registered
+/// statements belong to this connection.
 pub struct SqliteConn {
+    /// The owned native connection handle.
     pub db: *mut ffi::sqlite3,
+    /// Whether `db` has already been handed back to SQLite (see the type docs).
+    released: Cell<bool>,
 }
 unsafe impl Send for SqliteConn {}
 
+impl Drop for SqliteConn {
+    /// Defense-in-depth release of the native handle, alongside (not instead of)
+    /// the explicit `close()`. Rust's default drop of a bare raw pointer is a
+    /// no-op, so without this a future path that merely drops a `SqliteConn` — one
+    /// built but never registered, or removed from the connection table some other
+    /// way — would leak the handle with no crash and no warning.
+    ///
+    /// Sound because a `SqliteConn` is never cloned or copied (it has no such impl,
+    /// and a `Drop` type cannot be `Copy`) and is only ever *moved* — into
+    /// `Conn::Sqlite`, then into the connection table — and a move never drops its
+    /// source. Both release paths go through `released`, so after a successful
+    /// `close()` this is a no-op and `elephc_pdo_close`'s close-then-remove sequence
+    /// still frees the handle exactly once.
+    fn drop(&mut self) {
+        if self.released.replace(true) || self.db.is_null() {
+            return;
+        }
+        // `sqlite3_close` (not `_v2`) declines with SQLITE_BUSY when statements are
+        // still live rather than freeing the handle underneath them, so this net can
+        // never yank a db out from under a statement that is still registered: at
+        // worst it degrades to the very leak it exists to prevent, never to a
+        // use-after-free.
+        unsafe { ffi::sqlite3_close(self.db) };
+        self.db = ptr::null_mut();
+    }
+}
+
 /// A live SQLite prepared statement plus the connection pointer it belongs to.
+///
+/// The struct OWNS `ptr` but only BORROWS `db`, which stays owned by the
+/// `SqliteConn` — hence the asymmetry in `Drop`, which finalizes the statement and
+/// never touches the connection. `released` guards `ptr` exactly as `SqliteConn`'s
+/// flag guards `db`.
 pub struct SqliteStmt {
+    /// The owned native statement handle.
     pub ptr: *mut ffi::sqlite3_stmt,
+    /// The connection the statement was prepared on. Borrowed, never released here:
+    /// the error accessors need it because SQLite tracks error state per-connection.
     pub db: *mut ffi::sqlite3,
+    /// Whether `ptr` has already been handed back to SQLite (see the type docs).
+    released: Cell<bool>,
 }
 unsafe impl Send for SqliteStmt {}
+
+impl Drop for SqliteStmt {
+    /// Defense-in-depth finalize of the native statement, alongside (not instead of)
+    /// the explicit `finalize()`, for the same reason `SqliteConn`'s `Drop` exists:
+    /// a dropped raw pointer releases nothing.
+    ///
+    /// Sound because a `SqliteStmt` is never cloned or copied and is only ever moved
+    /// (out of `prepare`, into `Stmt::Sqlite`, into the statement table), because
+    /// `released` makes it a no-op after `elephc_pdo_finalize`'s explicit
+    /// `finalize()`, and because it releases only `ptr` — `db` is the connection's
+    /// handle, owned by `SqliteConn`. `sqlite3_finalize` also needs its connection
+    /// still open, which holds on every path: `elephc_pdo_finalize` drops one
+    /// statement while its connection stays registered, `elephc_pdo_close` finalizes
+    /// and drops *every* statement of a connection before closing it, and the global
+    /// tables are `OnceLock` statics that are never dropped at process exit, so no
+    /// teardown order can invert that.
+    fn drop(&mut self) {
+        if self.released.replace(true) || self.ptr.is_null() {
+            return;
+        }
+        unsafe { ffi::sqlite3_finalize(self.ptr) };
+        self.ptr = ptr::null_mut();
+    }
+}
+
+/// Checks once, at the first connection open, that the linked SQLite is not the
+/// mutex-free build. The bridge locks its connection table and its statement table
+/// under two SEPARATE mutexes (`lib.rs`'s `conns()` / `stmts()`), so nothing stops
+/// an `sqlite3_step()` driven from one thread from overlapping an `sqlite3_exec()`
+/// on the same `sqlite3*` from another; that overlap is only defined when SQLite
+/// serializes API entry on the connection's own mutex (`SQLITE_THREADSAFE=1`).
+/// `libsqlite3-sys`'s `bundled` feature — which this crate pins — compiles the
+/// amalgamation with `-DSQLITE_THREADSAFE=1`, so the invariant holds by
+/// construction today; the assertion pins it against a later switch to a system
+/// SQLite or a hand-set compile flag, which would otherwise corrupt data silently
+/// instead of failing. `sqlite3_threadsafe()` only reports whether the mutex code
+/// was compiled in, so it rules out the single-threaded build (the one that is
+/// actually unsound here) rather than proving the serialized mode specifically —
+/// the mutex-free build is the only variant `bundled` could realistically produce.
+///
+/// The check is skipped on wasm, where `libsqlite3-sys` deliberately builds the
+/// amalgamation with `SQLITE_THREADSAFE=0`: that target has no threads, so the
+/// overlap this invariant guards against cannot arise there.
+fn assert_sqlite_threadsafe() {
+    static CHECKED: Once = Once::new();
+    CHECKED.call_once(|| {
+        #[cfg(not(target_family = "wasm"))]
+        assert!(
+            unsafe { ffi::sqlite3_threadsafe() } != 0,
+            "elephc-pdo requires a thread-safe SQLite build: the bridge locks its connection \
+             and statement tables separately, so calls on one sqlite3* can overlap across \
+             threads, which is only safe under SQLITE_THREADSAFE=1 (serialized)",
+        );
+    });
+}
 
 /// Reads SQLite's current error message for a connection into an owned `String`.
 unsafe fn read_errmsg(db: *mut ffi::sqlite3) -> String {
@@ -76,6 +194,7 @@ impl SqliteConn {
     /// (P2-9's URI DSN, e.g. `sqlite:file:test.db?mode=ro`), `SQLITE_OPEN_URI`
     /// is OR-ed in regardless of `open_flags` so the query-string is honored.
     pub fn open(path: &str, open_flags: i64) -> Result<SqliteConn, String> {
+        assert_sqlite_threadsafe();
         let Ok(c_path) = CString::new(path) else {
             return Err("invalid database path".to_string());
         };
@@ -105,7 +224,10 @@ impl SqliteConn {
         // failing immediately with SQLITE_BUSY. `ATTR_TIMEOUT`/`setAttribute`
         // still override this later via `set_busy_timeout`.
         unsafe { ffi::sqlite3_busy_timeout(db, 60_000) };
-        Ok(SqliteConn { db })
+        Ok(SqliteConn {
+            db,
+            released: Cell::new(false),
+        })
     }
 
     /// Runs one or more statements with no result rows (`PDO::exec`). Returns the
@@ -190,12 +312,25 @@ impl SqliteConn {
         Ok(SqliteStmt {
             ptr: stmt,
             db: self.db,
+            released: Cell::new(false),
         })
     }
 
-    /// Closes the connection (the caller finalizes its statements first).
+    /// Closes the connection (the caller finalizes its statements first), releasing
+    /// the native handle. Idempotent: a second call — or the `Drop` net — is a no-op
+    /// once SQLite has taken the handle back, so it is freed exactly once.
     pub fn close(&self) {
-        unsafe { ffi::sqlite3_close(self.db) };
+        if self.released.get() || self.db.is_null() {
+            return;
+        }
+        // Only SQLITE_OK means SQLite actually freed the handle. Anything else
+        // (SQLITE_BUSY: a statement of this connection outlived the caller's
+        // finalize loop) leaves it live and un-released, so `Drop` still gets a shot
+        // at it — re-closing a live handle is safe, re-closing a freed one would be
+        // a use-after-free.
+        if unsafe { ffi::sqlite3_close(self.db) } == ffi::SQLITE_OK {
+            self.released.set(true);
+        }
     }
 
     /// Returns the 5-char SQLSTATE for the connection's last operation.
@@ -207,6 +342,25 @@ impl SqliteConn {
     /// giving up with `SQLITE_BUSY` (`sqlite3_busy_timeout`). Returns `1`/`0`.
     pub fn set_busy_timeout(&self, ms: i64) -> i64 {
         let rc = unsafe { ffi::sqlite3_busy_timeout(self.db, ms as c_int) };
+        (rc == ffi::SQLITE_OK) as i64
+    }
+
+    /// Turns SQLite's extended result codes on (`on != 0`) or off, backing
+    /// `PDO::setAttribute(Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES, …)`. php-src's
+    /// `pdo_sqlite_set_attr` (`ext/pdo_sqlite/sqlite_driver.c`) makes exactly this
+    /// `sqlite3_extended_result_codes(H->db, lval)` call: with extended codes on,
+    /// `sqlite3_errcode()` — the value PDO reports as `errorInfo[1]` — returns the
+    /// refined code (2067 `SQLITE_CONSTRAINT_UNIQUE`) where it would otherwise
+    /// return the primary one (19 `SQLITE_CONSTRAINT`). Returns `1` on `SQLITE_OK`,
+    /// `0` otherwise.
+    ///
+    /// `sqlite_sqlstate` is deliberately left keying off the unmasked code, so an
+    /// extended code falls through its match to the generic `HY000`. That is not an
+    /// oversight: php-src's `pdo_sqlite_error` switches on the same unmasked
+    /// `sqlite3_errcode()` value, so its SQLSTATE degrades identically once the
+    /// attribute is on.
+    pub fn set_extended_result_codes(&self, on: i64) -> i64 {
+        let rc = unsafe { ffi::sqlite3_extended_result_codes(self.db, (on != 0) as c_int) };
         (rc == ffi::SQLITE_OK) as i64
     }
 
@@ -566,18 +720,26 @@ thread_local! {
 /// Stages a compiled-PHP UDF string/blob return into the per-thread result stash so
 /// `x_scalar` can copy it into SQLite after the adapter releases its Mixed. `is_blob`
 /// selects `sqlite3_result_blob` over `_text`. A null pointer or non-positive length
-/// stages an empty value.
+/// stages an empty value, and so does a caught panic — `x_scalar` then hands SQLite an
+/// empty result rather than aborting the process.
+///
+/// [`ffi_guard`] wraps this like every other `#[no_mangle]` body (F-QUAL-02): it is the
+/// one bridge entry point outside `lib.rs`, and it is reached from a compiled-PHP UDF
+/// callback running inside SQLite's own call stack — so an unwind out of it would cross
+/// TWO `extern "C"` frames (this one and SQLite's `xFunc`) and abort.
 ///
 /// # Safety
 /// `ptr` must reference `len` readable bytes for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_udf_stash_bytes(ptr: *const u8, len: i64, is_blob: i64) {
-    let bytes = if ptr.is_null() || len <= 0 {
-        Vec::new()
-    } else {
-        std::slice::from_raw_parts(ptr, len as usize).to_vec()
-    };
-    UDF_RESULT_STASH.with(|stash| *stash.borrow_mut() = (bytes, is_blob != 0));
+    ffi_guard((), || {
+        let bytes = if ptr.is_null() || len <= 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(ptr, len as usize).to_vec()
+        };
+        UDF_RESULT_STASH.with(|stash| *stash.borrow_mut() = (bytes, is_blob != 0));
+    })
 }
 
 /// Takes and clears the staged UDF string/blob return `(bytes, is_blob)`.
@@ -1049,11 +1211,6 @@ impl SqliteStmt {
         unsafe { ffi::sqlite3_column_double(self.ptr, i as c_int) }
     }
 
-    /// Returns the current row's column `i` (0-based) text representation.
-    pub fn column_text(&self, i: i64) -> String {
-        String::from_utf8_lossy(&self.column_data(i)).into_owned()
-    }
-
     /// Returns the current row's column `i` (0-based) as raw SQLite bytes.
     /// This uses SQLite's byte-counted column API, so embedded NUL bytes are
     /// preserved for BLOBs and text values alike.
@@ -1070,8 +1227,14 @@ impl SqliteStmt {
         }
     }
 
-    /// Finalizes the statement.
+    /// Finalizes the statement, releasing the native handle. Idempotent: a second
+    /// call — or the `Drop` net — is a no-op. `sqlite3_finalize` destroys the
+    /// statement whatever it returns (its result code reports the *last step's*
+    /// error, not a failure to free), so one call always releases.
     pub fn finalize(&self) {
+        if self.released.replace(true) || self.ptr.is_null() {
+            return;
+        }
         unsafe { ffi::sqlite3_finalize(self.ptr) };
     }
 

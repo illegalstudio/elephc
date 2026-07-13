@@ -1,0 +1,168 @@
+name: PDO Live Databases
+
+# F-QUAL-06. The PDO live-server tests are all `#[ignore]`, so the main CI
+# (`ci.yml`) has NEVER executed a single one of them: nextest skips ignored tests
+# by default, and `ci.yml` is macOS-aarch64 + Linux runners with no database
+# services. Every live regression so far (the `CALL` stored-procedure row-drop,
+# a live test that did not even compile) slipped through the per-phase gates and
+# was only caught by a hand-rolled Docker run. This workflow is that Docker run,
+# automated.
+#
+# It is deliberately OPT-IN, not part of the PR loop:
+# - the project keeps Docker/database containers out of the per-phase gate to
+#   keep the main loop fast;
+# - service containers are free on `ubuntu-latest`, so this runs there nightly
+#   and on demand instead of on every push.
+#
+# Run it by hand from the Actions tab ("Run workflow"), or wait for the nightly.
+on:
+  schedule:
+    - cron: '0 3 * * *' # daily at 03:00 UTC, off the main CI's peak
+  workflow_dispatch:
+
+# One live run at a time: the services bind fixed ports and the suites create and
+# drop the same fixture tables (`pdo_rt`, `my_call_src`, ...) in a single shared
+# database, so two concurrent runs would race each other's DDL.
+concurrency:
+  group: pdo-live-${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  pdo-live:
+    name: PDO live suites (PostgreSQL 16 + MariaDB 11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d testdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: testdb
+          MARIADB_USER: test
+          MARIADB_PASSWORD: test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # ONE family of variables now drives BOTH live suites. The codegen suites
+      # (tests/codegen/pdo_pgsql.rs, tests/codegen/pdo_mysql.rs) read these names
+      # from the compiled PHP via getenv(); the in-crate live tests
+      # (crates/elephc-pdo/src/lib.rs) prefer their legacy ELEPHC_*_TEST_DSN names
+      # but fall back to these, which is exactly the F-QUAL-06 fallback this job
+      # exercises. Do NOT also export ELEPHC_PG_TEST_DSN / ELEPHC_MY_TEST_DSN here:
+      # leaving them unset is what keeps the fallback under test.
+      ELEPHC_PG_DSN: 'pgsql:host=127.0.0.1;port=5432;dbname=testdb;user=test;password=test'
+      ELEPHC_MY_DSN: 'mysql:host=127.0.0.1;port=3306;dbname=testdb;user=test;password=test'
+      # Turns "no DSN in the environment" into a panic instead of a silent early
+      # return in the in-crate live tests. Without it, a variable that gets renamed
+      # or dropped from this job would make a live test that executed NOTHING look
+      # exactly like a live test that passed — the precise failure mode F-QUAL-06 is
+      # about.
+      ELEPHC_PDO_LIVE_REQUIRED: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-pdo-live-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-pdo-live-
+
+      - name: Install native test dependencies
+        # Same set the linux jobs in ci.yml install: the codegen runner links and
+        # executes real native binaries.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Grant the MariaDB test user stored-procedure privileges
+        # The mariadb entrypoint grants the MARIADB_USER rights on MARIADB_DATABASE,
+        # but the live suite CREATEs and CALLs stored procedures
+        # (`mysql_call_stored_procedure_returns_rows`,
+        # `mysql_call_behind_leading_comment_returns_rows` — the P0-C row-drop
+        # regression), which needs CREATE ROUTINE / ALTER ROUTINE / EXECUTE
+        # explicitly. Issued through `docker exec` on the service container so the
+        # job does not depend on a MySQL client being present on the runner image.
+        run: |
+          docker exec ${{ job.services.mariadb.id }} \
+            mariadb -uroot -proot -e "
+              GRANT ALL PRIVILEGES ON testdb.* TO 'test'@'%';
+              GRANT CREATE ROUTINE, ALTER ROUTINE, EXECUTE ON testdb.* TO 'test'@'%';
+              FLUSH PRIVILEGES;"
+
+      - name: Build the PDO bridge staticlib
+        # The codegen runner links compiled PHP programs against libelephc_pdo.a and
+        # will shell out to `cargo build -p elephc-pdo` itself if the archive is
+        # missing; building it up front keeps that out of the (bounded-parallelism)
+        # test run. Built WITHOUT the `mysql-tls` feature — see the TLS note below.
+        run: cargo build -p elephc-pdo
+
+      - name: Live bridge tests (in-crate, elephc-pdo)
+        # pg_round_trip + my_round_trip. These read ELEPHC_PG_TEST_DSN /
+        # ELEPHC_MY_TEST_DSN first and fall back to the ELEPHC_*_DSN names exported
+        # above; ELEPHC_PDO_LIVE_REQUIRED=1 makes a missing DSN fail loudly.
+        run: cargo test -p elephc-pdo -- --ignored
+
+      - name: Live codegen tests (pgsql)
+        # Every #[ignore] test under tests/codegen/pdo_pgsql.rs. `--test-threads=4`
+        # is a hard requirement, not a tuning knob: the codegen suite compiles and
+        # links a native binary per test and melts the runner at higher concurrency.
+        #
+        # pgsql_tls_round_trip is EXCLUDED: it needs a TLS-serving PostgreSQL, i.e.
+        # a generated server cert/key chowned to the postgres uid and mounted into
+        # the container with `-c ssl=on`. GitHub service containers take no volume
+        # mounts and no extra server args, so standing that up would mean dropping
+        # the service-container model entirely and hand-running docker. Run it
+        # locally instead — the recipe is in the test's own docblock.
+        run: cargo test --test codegen_tests -- --ignored pgsql --skip pgsql_tls_round_trip --test-threads=4
+
+      - name: Live codegen tests (mysql)
+        # Every #[ignore] test under tests/codegen/pdo_mysql.rs, same parallelism
+        # bound.
+        #
+        # mysql_tls_round_trip is EXCLUDED for two reasons: it needs a TLS-serving
+        # server (see above) AND the staticlib must be rebuilt with the opt-in
+        # `mysql-tls` cargo feature (it pulls aws-lc-rs), which would mean a second
+        # full bridge build in this job. Run it locally — recipe in its docblock.
+        run: cargo test --test codegen_tests -- --ignored mysql --skip mysql_tls_round_trip --test-threads=4

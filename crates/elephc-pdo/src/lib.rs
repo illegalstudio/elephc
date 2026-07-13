@@ -21,6 +21,12 @@
 //! - Fallible entry points collapse failure to a `-1`/`0` sentinel. String
 //!   results return `*const c_char` into a per-result static buffer that elephc
 //!   copies into an owned PHP string immediately on return.
+//! - Every `extern "C"` entry point runs its body inside `ffi_guard`, a
+//!   `catch_unwind` panic firewall (F-QUAL-02), and takes every table lock through
+//!   `lock_recover`. Without the pair, one panic under a `conns()`/`stmts()` lock
+//!   would poison that mutex and brick PDO for the whole process, and the unwind
+//!   out of a plain `extern "C"` function would abort the compiled program instead
+//!   of surfacing a catchable `PDOException`.
 //! - The drivers are bundled (SQLite) / pure-Rust (PostgreSQL, MySQL/MariaDB), so
 //!   compiled PHP binaries have no system database-client runtime dependency.
 
@@ -32,7 +38,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// A live connection, tagged by its driver.
 enum Conn {
@@ -60,10 +66,19 @@ fn stmts() -> &'static Mutex<HashMap<i64, Stmt>> {
     STMTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Process-local persistent connection pool, keyed by the fully materialized
-/// DSN passed into the bridge after constructor credentials have been folded in.
-fn persistent_conns() -> &'static Mutex<HashMap<String, i64>> {
-    static PERSISTENT_CONNS: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+/// Process-local persistent connection pool, keyed by the pair of the fully
+/// materialized DSN passed into the bridge (after constructor credentials have been
+/// folded in) and the caller's `PDO::ATTR_PERSISTENT` key string.
+///
+/// The key string is the second half of the key because php-src's persistent
+/// hashkey is built from the DSN *and* that string whenever `ATTR_PERSISTENT` was
+/// given as a non-numeric, non-empty string (`pdo_dbh.c:389-404`) — so two
+/// persistent connections to the SAME DSN under DIFFERENT key strings are distinct
+/// pooled entries, and only a plain boolean-persistent open (key `""`, F-CORE-16)
+/// pools by DSN alone. Keying on the DSN by itself, as this did, wrongly collapsed
+/// two differently-named pools onto one shared connection.
+fn persistent_conns() -> &'static Mutex<HashMap<(String, String), i64>> {
+    static PERSISTENT_CONNS: OnceLock<Mutex<HashMap<(String, String), i64>>> = OnceLock::new();
     PERSISTENT_CONNS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -79,6 +94,59 @@ fn persistent_ids() -> &'static Mutex<HashSet<i64>> {
 fn next_id() -> i64 {
     static NEXT: AtomicI64 = AtomicI64::new(1);
     NEXT.fetch_add(1, Ordering::SeqCst)
+}
+
+/// Runs an FFI entry-point body, converting any panic into `fallback` so a panic
+/// never unwinds across the C ABI boundary (F-QUAL-02). These entry points are plain
+/// `extern "C"` (not `extern "C-unwind"`), so on rustc ≥ 1.81 an unwinding panic out
+/// of one ABORTS the whole compiled PHP process — over an internal `unwrap`, a
+/// debug-build overflow, or an unexpected panic from the `postgres`/`mysql` client
+/// crates. Catching it here degrades the call into the same well-defined "failed"
+/// answer the entry point's own docblock already promises for an unknown handle
+/// (`-1`/`0`, the empty string, …), which the prelude turns into a catchable
+/// `PDOException`. Mirrors the same pair in `elephc-image` / `elephc-phar`.
+///
+/// `AssertUnwindSafe` is sound here: the bodies touch only the process-global handle
+/// tables, each guarded by its own `Mutex`, and a lock poisoned by a caught panic is
+/// reclaimed by [`lock_recover`] rather than re-panicking — so a caught panic can
+/// leave a table logically stale, never memory-unsafe.
+///
+/// `pub(crate)` (like `elephc-image`'s) so the driver modules can guard their own
+/// externs too: `sqlite::elephc_pdo_udf_stash_bytes` is the one entry point outside
+/// this file, and it is guarded as well — the firewall covers every `#[no_mangle]` body
+/// in the crate without exception.
+pub(crate) fn ffi_guard<T>(fallback: T, body: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(value) => value,
+        Err(_) => fallback,
+    }
+}
+
+/// Locks a process-global table, recovering the guard if a previously caught panic
+/// poisoned the mutex. This is the other half of the [`ffi_guard`] firewall: once a
+/// panic escapes a body that held a `conns()`/`stmts()` lock, that mutex stays
+/// poisoned forever, and a plain `.lock().unwrap()` would then panic on EVERY later
+/// PDO call in the process — unrelated connections included — each of those panics
+/// aborting across the C ABI. The payload is still structurally valid (the tables are
+/// plain maps, the cells plain buffers), so reusing it lets the bridge keep serving.
+/// `pub(crate)` for the same reason as [`ffi_guard`].
+pub(crate) fn lock_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Returns a pointer to a `'static` NUL-terminated C string literal. Used as the
+/// [`ffi_guard`] fallback of the `*const c_char` entry points, which must hand back a
+/// readable C string even in the panic path. It deliberately does NOT route through
+/// the per-result static cells: the panic being caught may have happened while one of
+/// those cells was locked or half-written, so the fallback must not depend on any
+/// state the panicking body could have touched.
+fn static_cstr(bytes: &'static [u8]) -> *const c_char {
+    debug_assert_eq!(
+        bytes.last(),
+        Some(&0),
+        "static_cstr needs a NUL-terminated literal"
+    );
+    bytes.as_ptr() as *const c_char
 }
 
 /// Static buffer holding the last message captured by a failed `elephc_pdo_open`.
@@ -105,8 +173,8 @@ fn decltype_cell() -> &'static Mutex<CString> {
     C.get_or_init(|| Mutex::new(CString::default()))
 }
 
-/// Static buffer for the most recent `elephc_pdo_column_text` result.
-fn coltext_cell() -> &'static Mutex<CString> {
+/// Static buffer for the most recent `elephc_pdo_column_native_type` result.
+fn native_type_cell() -> &'static Mutex<CString> {
     static C: OnceLock<Mutex<CString>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(CString::default()))
 }
@@ -162,8 +230,9 @@ fn pg_text_result_cell() -> &'static Mutex<CString> {
 }
 
 /// Static byte buffer for the most recent whole BLOB / large-object read
-/// (`elephc_pdo_blob_read` / `elephc_pdo_lob_get`), drained byte-by-byte through
-/// `elephc_pdo_blob_byte`. A `Vec<u8>` rather than a `CString` because BLOBs are
+/// (`elephc_pdo_blob_read` / `elephc_pdo_lob_get`), bulk-copied out through
+/// `elephc_pdo_blob_data_ptr` (or, on the fallback path, drained byte-by-byte through
+/// `elephc_pdo_blob_byte`). A `Vec<u8>` rather than a `CString` because BLOBs are
 /// binary and may contain embedded NUL bytes; shared because the prelude copies each
 /// result into a PHP string (wrapped in a `php://memory` stream) before the next read
 /// overwrites the cell.
@@ -178,7 +247,7 @@ fn blob_cell() -> &'static Mutex<Vec<u8>> {
 fn store_cstr(cell: &'static Mutex<CString>, s: &str) -> *const c_char {
     let bytes: Vec<u8> = s.bytes().filter(|&b| b != 0).collect();
     let cstr = CString::new(bytes).unwrap_or_default();
-    let mut guard = cell.lock().unwrap();
+    let mut guard = lock_recover(cell);
     *guard = cstr;
     guard.as_ptr()
 }
@@ -187,7 +256,7 @@ fn store_cstr(cell: &'static Mutex<CString>, s: &str) -> *const c_char {
 /// to the first byte, or null for an empty buffer. Valid until the next column
 /// data pointer call; elephc copies it immediately through `ptr_read_string`.
 fn store_bytes(bytes: Vec<u8>) -> *const c_char {
-    let mut guard = coldata_cell().lock().unwrap();
+    let mut guard = lock_recover(coldata_cell());
     *guard = bytes;
     if guard.is_empty() {
         std::ptr::null()
@@ -225,23 +294,24 @@ unsafe fn bytes_arg(p: *const c_char, len: i64) -> Vec<u8> {
 }
 
 /// Opens the driver connection for a validated DSN string. `sqlite_open_flags`
-/// (P1-10/P2-9) is only consulted for a `sqlite:` DSN; `my_init_command` (P1-9)
-/// and `my_ssl_config` (the packed `Pdo\Mysql::ATTR_SSL_*` options) only for a
-/// `mysql:` DSN. PostgreSQL reads its own `sslmode`/`sslrootcert` straight from
-/// the DSN, so it takes no extra parameter here; the other driver's parameters
-/// are ignored.
+/// (P1-10/P2-9) is only consulted for a `sqlite:` DSN; `my_init_command` (P1-9),
+/// `my_ssl_config` (the packed `Pdo\Mysql::ATTR_SSL_*` options) and `my_found_rows`
+/// (`Pdo\Mysql::ATTR_FOUND_ROWS`, F-MY-06) only for a `mysql:` DSN. PostgreSQL reads
+/// its own `sslmode`/`sslrootcert` straight from the DSN, so it takes no extra
+/// parameter here; the other driver's parameters are ignored.
 fn open_conn_for_dsn(
     dsn: &str,
     sqlite_open_flags: i64,
     my_init_command: &str,
     my_ssl_config: &str,
+    my_found_rows: bool,
 ) -> Result<Conn, String> {
     if let Some(path) = dsn.strip_prefix("sqlite:") {
         sqlite::SqliteConn::open(path, sqlite_open_flags).map(Conn::Sqlite)
     } else if dsn.starts_with("pgsql:") {
         pg::PgConn::open(dsn).map(Conn::Postgres)
     } else if dsn.starts_with("mysql:") {
-        my::MyConn::open(dsn, my_init_command, my_ssl_config).map(Conn::Mysql)
+        my::MyConn::open(dsn, my_init_command, my_ssl_config, my_found_rows).map(Conn::Mysql)
     } else {
         Err(
             "could not find driver (only sqlite:, pgsql:, and mysql: DSNs are supported)"
@@ -253,7 +323,7 @@ fn open_conn_for_dsn(
 /// Registers a newly opened connection and returns the public handle ID.
 fn register_conn(conn: Conn) -> i64 {
     let id = next_id();
-    conns().lock().unwrap().insert(id, conn);
+    lock_recover(conns()).insert(id, conn);
     id
 }
 
@@ -264,8 +334,15 @@ fn open_nonpersistent_dsn(
     sqlite_open_flags: i64,
     my_init_command: &str,
     my_ssl_config: &str,
+    my_found_rows: bool,
 ) -> i64 {
-    match open_conn_for_dsn(dsn, sqlite_open_flags, my_init_command, my_ssl_config) {
+    match open_conn_for_dsn(
+        dsn,
+        sqlite_open_flags,
+        my_init_command,
+        my_ssl_config,
+        my_found_rows,
+    ) {
         Ok(conn) => register_conn(conn),
         Err(msg) => {
             store_cstr(open_error_cell(), &msg);
@@ -274,31 +351,42 @@ fn open_nonpersistent_dsn(
     }
 }
 
-/// Opens or reuses a process-local persistent connection for the full DSN.
-/// `sqlite_open_flags`/`my_init_command`/`my_ssl_config` are only applied on a fresh open — the
-/// persistent pool is keyed by DSN alone, so a later open reusing an
-/// already-pooled connection does not re-apply a different flags/init-command
-/// request (matching how no other constructor option retroactively affects a
-/// reused persistent handle either).
+/// Opens or reuses a process-local persistent connection for the `(dsn,
+/// persistent_key)` pool key (F-CORE-16; `persistent_key` is `""` for the plain
+/// boolean-persistent case — see [`persistent_conns`] for why the key string is part
+/// of the key at all).
+///
+/// `sqlite_open_flags`/`my_init_command`/`my_ssl_config`/`my_found_rows` are only
+/// applied on a fresh open: they are not part of the pool key, so a later open
+/// reusing an already-pooled connection does not re-apply a different
+/// flags/init-command/capability request (matching how no other constructor option
+/// retroactively affects a reused persistent handle either — and mirroring php-src,
+/// whose hashkey is likewise built from the DSN and the persistent key alone).
 fn open_persistent_dsn(
     dsn: &str,
+    persistent_key: &str,
     sqlite_open_flags: i64,
     my_init_command: &str,
     my_ssl_config: &str,
+    my_found_rows: bool,
 ) -> i64 {
-    if let Some(id) = persistent_conns().lock().unwrap().get(dsn).copied() {
-        if conns().lock().unwrap().contains_key(&id) {
+    let pool_key = (dsn.to_string(), persistent_key.to_string());
+    if let Some(id) = lock_recover(persistent_conns()).get(&pool_key).copied() {
+        if lock_recover(conns()).contains_key(&id) {
             return id;
         }
     }
-    match open_conn_for_dsn(dsn, sqlite_open_flags, my_init_command, my_ssl_config) {
+    match open_conn_for_dsn(
+        dsn,
+        sqlite_open_flags,
+        my_init_command,
+        my_ssl_config,
+        my_found_rows,
+    ) {
         Ok(conn) => {
             let id = register_conn(conn);
-            persistent_conns()
-                .lock()
-                .unwrap()
-                .insert(dsn.to_string(), id);
-            persistent_ids().lock().unwrap().insert(id);
+            lock_recover(persistent_conns()).insert(pool_key, id);
+            lock_recover(persistent_ids()).insert(id);
             id
         }
         Err(msg) => {
@@ -363,39 +451,100 @@ fn open_persistent_dsn(
 /// caller's own flag") for PostgreSQL and MySQL/MariaDB, neither of which
 /// exposes a public live transaction-status accessor through this bridge's
 /// client crates.
+/// v23 adds `elephc_pdo_column_native_type` and `elephc_pdo_column_type_oid`,
+/// which thread a `pgsql:` result column's `postgres::types::Type` (the server's
+/// `pg_type.typname` and `PQftype` OID, resolved at prepare time) through to
+/// `PDOStatement::getColumnMeta()` (P2-k). The prelude uses them to report the
+/// real PostgreSQL `native_type` (`int4`/`bool`/`bytea`/…), the correct
+/// `pdo_type` (BOOL→PARAM_BOOL, int-family→PARAM_INT, BYTEA→PARAM_LOB, else
+/// PARAM_STR), and the `pgsql:oid` key, instead of the generic SQLite
+/// storage-class metadata it emitted for every driver before. Both return a
+/// neutral empty string / `0` for a non-PostgreSQL statement, so SQLite and
+/// MySQL keep their existing storage-class metadata path unchanged.
+/// v24 adds `elephc_pdo_blob_data_ptr`, which hands back a pointer to the whole
+/// shared blob buffer so the prelude can bulk-copy a BLOB / large object with one
+/// `ptr_read_string` instead of draining it a byte at a time through
+/// `elephc_pdo_blob_byte` (kept as the fallback path), and
+/// `elephc_pdo_set_extended_result_codes`, which calls
+/// `sqlite3_extended_result_codes` for a `sqlite:` connection to back
+/// `Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES` (F-SQLT-02). It REMOVES
+/// `elephc_pdo_column_text` (F-QUAL-03): it was declared by the prelude but never
+/// called, and it silently stripped embedded NUL bytes on the way out — every live
+/// column read goes through the NUL-preserving
+/// `elephc_pdo_column_data_len`/`elephc_pdo_column_data_ptr` pair instead.
+/// v25 adds two trailing parameters to `elephc_pdo_open_persistent`. `my_found_rows`
+/// (`0`/`1`) ORs `CLIENT_FOUND_ROWS` into a `mysql:` connection's negotiated
+/// capabilities, backing `Pdo\Mysql::ATTR_FOUND_ROWS` (F-MY-06): it switches an
+/// UPDATE's `rowCount()` from "rows actually CHANGED" to "rows MATCHED by the WHERE
+/// clause", a capability that can only be selected in the connect handshake; it is
+/// ignored for `sqlite:`/`pgsql:` DSNs. `persistent_key` is the caller's
+/// `PDO::ATTR_PERSISTENT` string when that option was given as a non-numeric,
+/// non-empty string (else `""`), and now forms the persistent pool key TOGETHER with
+/// the DSN (F-CORE-16): php-src builds its persistent hashkey from both
+/// (`pdo_dbh.c:389-404`), so two persistent connections to the same DSN under
+/// different key strings are DISTINCT pooled entries rather than one wrongly shared
+/// connection. It is ignored when `persistent` is `0`.
+/// v26 adds the three remaining PostgreSQL column-metadata accessors —
+/// `elephc_pdo_column_table_oid` (`PQftable`), `elephc_pdo_column_len` (`PQfsize`)
+/// and `elephc_pdo_column_precision` (`PQfmod`) — which back `getColumnMeta`'s
+/// `pgsql:table_oid`, `len` and `precision` keys (F-PG-01, F-PG-02). php-src emits
+/// `pgsql:table_oid` UNCONDITIONALLY, `0` (`InvalidOid`, i.e. "not a plain table
+/// column") included, so the prelude emits the key even for a `0`; `len` is the
+/// TYPE's byte width (`int4` → 4, `timestamp` → 8) and `-1` for any varlena
+/// (`text`, `varchar`, `numeric`, `bytea`, `json`, arrays), whose declared `n`
+/// surfaces instead through `precision` as the RAW, undecoded `atttypmod`
+/// (`VARCHAR(20)` → 24) — exactly as php-src stores them. All three return their
+/// PostgreSQL-neutral value (`0` / `-1` / `-1`) for a non-`pgsql:` statement, so
+/// SQLite and MySQL are untouched. v26 also extends `elephc_pdo_column_native_type`
+/// to `mysql:` statements, which previously fell through to the empty string and
+/// therefore reported the generic storage-class metadata: a MySQL column now
+/// reports php-src's real `type_to_name_native` name
+/// (`ext/pdo_mysql/mysql_statement.c:716-770`) — `LONG`, `VAR_STRING`, `BIT`,
+/// `NEWDECIMAL`, `BLOB`, … — the stringified `MYSQL_TYPE_` suffix rather than the
+/// friendlier SQL spelling (F-MY-08); a wire type php-src's own switch has no case
+/// for still yields the empty string, matching its `default: return NULL`, which
+/// makes php-src omit the key entirely.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    22
+    // Guarded like every other extern purely for uniformity — "every `#[no_mangle]`
+    // body opens with `ffi_guard`" is a grep-checkable invariant, and a constant
+    // body simply never reaches the fallback.
+    ffi_guard(26, || 26)
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
 /// (`"sqlite"`, `"pgsql"`, or `"mysql"`), or an empty string for an unknown
 /// handle. Backs `PDO::getAttribute(PDO::ATTR_DRIVER_NAME)`. Valid until the next
-/// `elephc_pdo_driver_name`.
+/// `elephc_pdo_driver_name`. A caught panic degrades to the same empty string.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_driver_name(conn_id: i64) -> *const c_char {
-    let name = match conns().lock().unwrap().get(&conn_id) {
-        Some(Conn::Sqlite(_)) => "sqlite",
-        Some(Conn::Postgres(_)) => "pgsql",
-        Some(Conn::Mysql(_)) => "mysql",
-        None => "",
-    };
-    store_cstr(drivername_cell(), name)
+    ffi_guard(static_cstr(b"\0"), || {
+        let name = match lock_recover(conns()).get(&conn_id) {
+            Some(Conn::Sqlite(_)) => "sqlite",
+            Some(Conn::Postgres(_)) => "pgsql",
+            Some(Conn::Mysql(_)) => "mysql",
+            None => "",
+        };
+        store_cstr(drivername_cell(), name)
+    })
 }
 
 /// Opens a non-persistent database for a PDO DSN, dispatching on the driver
 /// prefix. Returns an `i64` connection handle, or `-1` on failure with the
-/// message stashed for `elephc_pdo_last_open_error`.
+/// message stashed for `elephc_pdo_last_open_error`. A caught panic degrades to the
+/// same `-1` (with whatever message was last stashed) rather than aborting.
 ///
 /// # Safety
 /// `dsn` must point to a NUL-terminated string valid for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_open(dsn: *const c_char) -> i64 {
-    let Some(dsn) = cstr_arg(dsn) else {
-        store_cstr(open_error_cell(), "invalid DSN");
-        return -1;
-    };
-    open_nonpersistent_dsn(dsn, 0, "", "")
+    ffi_guard(-1, || {
+        let Some(dsn) = cstr_arg(dsn) else {
+            store_cstr(open_error_cell(), "invalid DSN");
+            return -1;
+        };
+        open_nonpersistent_dsn(dsn, 0, "", "", false)
+    })
 }
 
 /// Opens a database for a PDO DSN, reusing a process-local pooled connection when
@@ -411,10 +560,19 @@ pub unsafe extern "C" fn elephc_pdo_open(dsn: *const c_char) -> i64 {
 /// no TLS) applied to the `mysql:` connection's rustls backend; it is ignored for
 /// SQLite/PostgreSQL DSNs (PostgreSQL carries its own `sslmode`/`sslrootcert` in
 /// the DSN) and requires the opt-in `mysql-tls` feature to take effect.
+/// `my_found_rows` (v25) is `1` to OR `CLIENT_FOUND_ROWS` into a `mysql:`
+/// connection's negotiated capabilities and `0` not to; it backs
+/// `Pdo\Mysql::ATTR_FOUND_ROWS` (F-MY-06), which makes an UPDATE's `rowCount()`
+/// report the rows its WHERE clause MATCHED instead of the rows it actually CHANGED,
+/// and is ignored for SQLite/PostgreSQL DSNs. `persistent_key` (v25) is the caller's
+/// `PDO::ATTR_PERSISTENT` string when that option was a non-numeric, non-empty string
+/// (`""` otherwise, and for the plain boolean-persistent case); together with the DSN
+/// it forms the persistent pool key (F-CORE-16), and it is ignored when `persistent`
+/// is `0`. A caught panic degrades to the same `-1` failure sentinel as a failed open.
 ///
 /// # Safety
-/// `dsn` and, when non-null, `my_init_command`/`my_ssl_config` must each point to
-/// a NUL-terminated string valid for the duration of the call.
+/// `dsn` and, when non-null, `my_init_command`/`my_ssl_config`/`persistent_key` must
+/// each point to a NUL-terminated string valid for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_open_persistent(
     dsn: *const c_char,
@@ -422,106 +580,125 @@ pub unsafe extern "C" fn elephc_pdo_open_persistent(
     sqlite_open_flags: i64,
     my_init_command: *const c_char,
     my_ssl_config: *const c_char,
+    my_found_rows: i64,
+    persistent_key: *const c_char,
 ) -> i64 {
-    let Some(dsn) = cstr_arg(dsn) else {
-        store_cstr(open_error_cell(), "invalid DSN");
-        return -1;
-    };
-    let init_command = cstr_arg(my_init_command).unwrap_or("");
-    let ssl_config = cstr_arg(my_ssl_config).unwrap_or("");
-    if persistent == 0 {
-        open_nonpersistent_dsn(dsn, sqlite_open_flags, init_command, ssl_config)
-    } else {
-        open_persistent_dsn(dsn, sqlite_open_flags, init_command, ssl_config)
-    }
+    ffi_guard(-1, || {
+        let Some(dsn) = cstr_arg(dsn) else {
+            store_cstr(open_error_cell(), "invalid DSN");
+            return -1;
+        };
+        let init_command = cstr_arg(my_init_command).unwrap_or("");
+        let ssl_config = cstr_arg(my_ssl_config).unwrap_or("");
+        let found_rows = my_found_rows != 0;
+        if persistent == 0 {
+            open_nonpersistent_dsn(dsn, sqlite_open_flags, init_command, ssl_config, found_rows)
+        } else {
+            // A null / non-UTF-8 key degrades to `""`, i.e. the plain
+            // boolean-persistent pool for this DSN — the pre-v25 behavior.
+            let key = cstr_arg(persistent_key).unwrap_or("");
+            open_persistent_dsn(dsn, key, sqlite_open_flags, init_command, ssl_config, found_rows)
+        }
+    })
 }
 
 /// Returns a pointer to the message captured by the most recent failed
-/// `elephc_pdo_open`. Valid until the next failed open.
+/// `elephc_pdo_open`. Valid until the next failed open. A caught panic degrades to
+/// an empty message.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_last_open_error() -> *const c_char {
-    open_error_cell().lock().unwrap().as_ptr()
+    ffi_guard(static_cstr(b"\0"), || {
+        lock_recover(open_error_cell()).as_ptr()
+    })
 }
 
 /// Closes a connection (finalizing any SQLite statements still registered against
-/// it) and removes it from the table. Unknown handles are ignored.
+/// it) and removes it from the table. Unknown handles are ignored, and a caught
+/// panic is likewise swallowed (`PDO`'s own `__destruct`/`close` has no failure
+/// channel to report one through).
 #[no_mangle]
 pub extern "C" fn elephc_pdo_close(conn_id: i64) {
-    if persistent_ids().lock().unwrap().contains(&conn_id) {
-        return;
-    }
-    // The SQLite db pointer of the connection being closed, so only *its*
-    // statements are finalized (statements from other open SQLite connections
-    // must be left alone). `None` when the connection is PostgreSQL or unknown.
-    let sqlite_db = match conns().lock().unwrap().get(&conn_id) {
-        Some(Conn::Sqlite(c)) => Some(c.db),
-        _ => None,
-    };
-    // Finalize and drop the statements belonging to this connection so
-    // sqlite3_close does not fail with SQLITE_BUSY; PostgreSQL/MySQL statements
-    // live server-side and are dropped with the client.
-    let owned: Vec<i64> = stmts()
-        .lock()
-        .unwrap()
-        .iter()
-        .filter_map(|(k, s)| match s {
-            Stmt::Sqlite(st) if sqlite_db == Some(st.db) => Some(*k),
-            Stmt::Postgres(p) if p.conn_id == conn_id => Some(*k),
-            Stmt::Mysql(m) if m.conn_id == conn_id => Some(*k),
-            _ => None,
-        })
-        .collect();
-    {
-        let mut guard = stmts().lock().unwrap();
-        for k in owned {
-            if let Some(Stmt::Sqlite(s)) = guard.get(&k) {
-                s.finalize();
-            }
-            guard.remove(&k);
+    ffi_guard((), || {
+        if lock_recover(persistent_ids()).contains(&conn_id) {
+            return;
         }
-    }
-    if let Some(Conn::Sqlite(c)) = conns().lock().unwrap().get(&conn_id) {
-        c.close();
-    }
-    conns().lock().unwrap().remove(&conn_id);
+        // The SQLite db pointer of the connection being closed, so only *its*
+        // statements are finalized (statements from other open SQLite connections
+        // must be left alone). `None` when the connection is PostgreSQL or unknown.
+        let sqlite_db = match lock_recover(conns()).get(&conn_id) {
+            Some(Conn::Sqlite(c)) => Some(c.db),
+            _ => None,
+        };
+        // Finalize and drop the statements belonging to this connection so
+        // sqlite3_close does not fail with SQLITE_BUSY; PostgreSQL/MySQL statements
+        // live server-side and are dropped with the client.
+        let owned: Vec<i64> = lock_recover(stmts())
+            .iter()
+            .filter_map(|(k, s)| match s {
+                Stmt::Sqlite(st) if sqlite_db == Some(st.db) => Some(*k),
+                Stmt::Postgres(p) if p.conn_id == conn_id => Some(*k),
+                Stmt::Mysql(m) if m.conn_id == conn_id => Some(*k),
+                _ => None,
+            })
+            .collect();
+        {
+            let mut guard = lock_recover(stmts());
+            for k in owned {
+                if let Some(Stmt::Sqlite(s)) = guard.get(&k) {
+                    s.finalize();
+                }
+                guard.remove(&k);
+            }
+        }
+        if let Some(Conn::Sqlite(c)) = lock_recover(conns()).get(&conn_id) {
+            c.close();
+        }
+        lock_recover(conns()).remove(&conn_id);
+    })
 }
 
 /// Runs one or more SQL statements with no result rows (`PDO::exec`). Returns the
-/// number of rows changed, or `-1` on error.
+/// number of rows changed, or `-1` on error — the same sentinel a caught panic
+/// degrades to.
 ///
 /// # Safety
 /// `sql` must point to a NUL-terminated string valid for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_exec(conn_id: i64, sql: *const c_char) -> i64 {
-    let mut guard = conns().lock().unwrap();
-    match guard.get_mut(&conn_id) {
-        Some(Conn::Sqlite(c)) => c.exec(sql),
-        Some(Conn::Postgres(c)) => match cstr_arg(sql) {
-            Some(s) => c.exec(s),
+    ffi_guard(-1, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.exec(sql),
+            Some(Conn::Postgres(c)) => match cstr_arg(sql) {
+                Some(s) => c.exec(s),
+                None => -1,
+            },
+            Some(Conn::Mysql(c)) => match cstr_arg(sql) {
+                Some(s) => c.exec(s),
+                None => -1,
+            },
             None => -1,
-        },
-        Some(Conn::Mysql(c)) => match cstr_arg(sql) {
-            Some(s) => c.exec(s),
-            None => -1,
-        },
-        None => -1,
-    }
+        }
+    })
 }
 
 /// Returns the id of the most recent INSERT: the SQLite rowid, or for PostgreSQL
 /// `currval(name)` when a non-empty sequence name is given else `lastval()`.
+/// Unknown handles — and a caught panic — report `0`.
 ///
 /// # Safety
 /// `name`, when non-null, must point to a NUL-terminated string valid for the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_last_insert_id(conn_id: i64, name: *const c_char) -> i64 {
-    let mut guard = conns().lock().unwrap();
-    match guard.get_mut(&conn_id) {
-        Some(Conn::Sqlite(c)) => c.last_insert_id(),
-        Some(Conn::Postgres(c)) => c.last_insert_id(cstr_arg(name)),
-        Some(Conn::Mysql(c)) => c.last_insert_id(cstr_arg(name)),
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.last_insert_id(),
+            Some(Conn::Postgres(c)) => c.last_insert_id(cstr_arg(name)),
+            Some(Conn::Mysql(c)) => c.last_insert_id(cstr_arg(name)),
+            None => 0,
+        }
+    })
 }
 
 /// Like `elephc_pdo_last_insert_id`, but returns a pointer to the id rendered as
@@ -529,7 +706,8 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id(conn_id: i64, name: *const c_
 /// (a caller-chosen sequence can be any integer type), so text avoids a lossy or
 /// failing numeric bridge; likewise (P2-2) a MySQL `BIGINT UNSIGNED`
 /// AUTO_INCREMENT id can exceed `i64::MAX`. Empty string on an unknown handle or
-/// error. Valid until the next `elephc_pdo_last_insert_id_text`.
+/// error — the same answer a caught panic degrades to. Valid until the next
+/// `elephc_pdo_last_insert_id_text`.
 ///
 /// # Safety
 /// `name`, when non-null, must point to a NUL-terminated string valid for the call.
@@ -538,64 +716,78 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id_text(
     conn_id: i64,
     name: *const c_char,
 ) -> *const c_char {
-    let text = {
-        let mut guard = conns().lock().unwrap();
-        match guard.get_mut(&conn_id) {
-            Some(Conn::Sqlite(c)) => c.last_insert_id().to_string(),
-            Some(Conn::Postgres(c)) => c.last_insert_id_text(cstr_arg(name)),
-            Some(Conn::Mysql(c)) => c.last_insert_id_text(cstr_arg(name)),
-            None => String::new(),
-        }
-    };
-    store_cstr(last_insert_id_text_cell(), &text)
+    ffi_guard(static_cstr(b"\0"), || {
+        let text = {
+            let mut guard = lock_recover(conns());
+            match guard.get_mut(&conn_id) {
+                Some(Conn::Sqlite(c)) => c.last_insert_id().to_string(),
+                Some(Conn::Postgres(c)) => c.last_insert_id_text(cstr_arg(name)),
+                Some(Conn::Mysql(c)) => c.last_insert_id_text(cstr_arg(name)),
+                None => String::new(),
+            }
+        };
+        store_cstr(last_insert_id_text_cell(), &text)
+    })
 }
 
-/// Returns the number of rows changed by the most recent statement.
+/// Returns the number of rows changed by the most recent statement. Unknown handles
+/// — and a caught panic — report `0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_changes(conn_id: i64) -> i64 {
-    let guard = conns().lock().unwrap();
-    match guard.get(&conn_id) {
-        Some(Conn::Sqlite(c)) => c.changes(),
-        Some(Conn::Postgres(c)) => c.changes,
-        Some(Conn::Mysql(c)) => c.changes,
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.changes(),
+            Some(Conn::Postgres(c)) => c.changes,
+            Some(Conn::Mysql(c)) => c.changes,
+            None => 0,
+        }
+    })
 }
 
-/// Begins a transaction (`PDO::beginTransaction`). Returns `1`/`0`.
+/// Begins a transaction (`PDO::beginTransaction`). Returns `1`/`0`; a caught panic
+/// reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_begin(conn_id: i64) -> i64 {
-    let mut guard = conns().lock().unwrap();
-    match guard.get_mut(&conn_id) {
-        Some(Conn::Sqlite(c)) => c.exec_simple(b"BEGIN"),
-        Some(Conn::Postgres(c)) => c.exec_simple("BEGIN"),
-        Some(Conn::Mysql(c)) => c.exec_simple("BEGIN"),
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.exec_simple(b"BEGIN"),
+            Some(Conn::Postgres(c)) => c.exec_simple("BEGIN"),
+            Some(Conn::Mysql(c)) => c.exec_simple("BEGIN"),
+            None => 0,
+        }
+    })
 }
 
-/// Commits the active transaction (`PDO::commit`). Returns `1`/`0`.
+/// Commits the active transaction (`PDO::commit`). Returns `1`/`0`; a caught panic
+/// reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_commit(conn_id: i64) -> i64 {
-    let mut guard = conns().lock().unwrap();
-    match guard.get_mut(&conn_id) {
-        Some(Conn::Sqlite(c)) => c.exec_simple(b"COMMIT"),
-        Some(Conn::Postgres(c)) => c.exec_simple("COMMIT"),
-        Some(Conn::Mysql(c)) => c.exec_simple("COMMIT"),
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.exec_simple(b"COMMIT"),
+            Some(Conn::Postgres(c)) => c.exec_simple("COMMIT"),
+            Some(Conn::Mysql(c)) => c.exec_simple("COMMIT"),
+            None => 0,
+        }
+    })
 }
 
-/// Rolls back the active transaction (`PDO::rollBack`). Returns `1`/`0`.
+/// Rolls back the active transaction (`PDO::rollBack`). Returns `1`/`0`; a caught
+/// panic reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_rollback(conn_id: i64) -> i64 {
-    let mut guard = conns().lock().unwrap();
-    match guard.get_mut(&conn_id) {
-        Some(Conn::Sqlite(c)) => c.exec_simple(b"ROLLBACK"),
-        Some(Conn::Postgres(c)) => c.exec_simple("ROLLBACK"),
-        Some(Conn::Mysql(c)) => c.exec_simple("ROLLBACK"),
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.exec_simple(b"ROLLBACK"),
+            Some(Conn::Postgres(c)) => c.exec_simple("ROLLBACK"),
+            Some(Conn::Mysql(c)) => c.exec_simple("ROLLBACK"),
+            None => 0,
+        }
+    })
 }
 
 /// Returns the connection's LIVE transaction state (P1-g), so a transaction
@@ -610,171 +802,219 @@ pub extern "C" fn elephc_pdo_rollback(conn_id: i64) -> i64 {
 /// unrelated `no_backslash_escape()` reads a status bit), so `-1` is returned.
 /// PostgreSQL similarly has no live read: the sync `postgres` crate exposes no
 /// public transaction-status getter on `Client`, so `-1` is returned there too.
+/// A caught panic degrades to that same `-1` ("unknown"), which the prelude
+/// already knows how to fall back from.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_in_transaction(conn_id: i64) -> i64 {
-    let guard = conns().lock().unwrap();
-    match guard.get(&conn_id) {
-        Some(Conn::Sqlite(c)) => c.in_transaction(),
-        Some(Conn::Postgres(_)) => -1,
-        Some(Conn::Mysql(_)) => -1,
-        None => -1,
-    }
+    ffi_guard(-1, || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.in_transaction(),
+            Some(Conn::Postgres(_)) => -1,
+            Some(Conn::Mysql(_)) => -1,
+            None => -1,
+        }
+    })
 }
 
-/// Returns the driver's result code for the connection's last operation.
+/// Returns the driver's result code for the connection's last operation. Unknown
+/// handles — and a caught panic — report `-1`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_errcode(conn_id: i64) -> i64 {
-    let guard = conns().lock().unwrap();
-    match guard.get(&conn_id) {
-        Some(Conn::Sqlite(c)) => c.errcode(),
-        Some(Conn::Postgres(c)) => c.errcode,
-        Some(Conn::Mysql(c)) => c.errcode,
-        None => -1,
-    }
+    ffi_guard(-1, || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.errcode(),
+            Some(Conn::Postgres(c)) => c.errcode,
+            Some(Conn::Mysql(c)) => c.errcode,
+            None => -1,
+        }
+    })
 }
 
 /// Returns a pointer to the connection's current error message. Valid until the
-/// next `elephc_pdo_errmsg`.
+/// next `elephc_pdo_errmsg`. A caught panic degrades to an empty message.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_errmsg(conn_id: i64) -> *const c_char {
-    let msg = {
-        let guard = conns().lock().unwrap();
-        match guard.get(&conn_id) {
-            Some(Conn::Sqlite(c)) => c.errmsg(),
-            Some(Conn::Postgres(c)) => c.errmsg.clone(),
-            Some(Conn::Mysql(c)) => c.errmsg.clone(),
-            None => String::new(),
-        }
-    };
-    store_cstr(errmsg_cell(), &msg)
+    ffi_guard(static_cstr(b"\0"), || {
+        let msg = {
+            let guard = lock_recover(conns());
+            match guard.get(&conn_id) {
+                Some(Conn::Sqlite(c)) => c.errmsg(),
+                Some(Conn::Postgres(c)) => c.errmsg.clone(),
+                Some(Conn::Mysql(c)) => c.errmsg.clone(),
+                None => String::new(),
+            }
+        };
+        store_cstr(errmsg_cell(), &msg)
+    })
 }
 
 /// Returns a pointer to the 5-char SQLSTATE for the connection's last operation
 /// (`"00000"` on success). Unknown handles also report `"00000"` (no operation
-/// has been recorded for them). Valid until the next `elephc_pdo_sqlstate`.
+/// has been recorded for them), and so does a caught panic — the call that panicked
+/// has already reported its own `-1`/`0` failure, which is what the prelude raises
+/// on. Valid until the next `elephc_pdo_sqlstate`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_sqlstate(conn_id: i64) -> *const c_char {
-    let state = {
-        let guard = conns().lock().unwrap();
-        match guard.get(&conn_id) {
-            Some(Conn::Sqlite(c)) => c.sqlstate(),
-            Some(Conn::Postgres(c)) => c.sqlstate.clone(),
-            Some(Conn::Mysql(c)) => c.sqlstate.clone(),
-            None => "00000".to_string(),
-        }
-    };
-    store_cstr(sqlstate_cell(), &state)
+    ffi_guard(static_cstr(b"00000\0"), || {
+        let state = {
+            let guard = lock_recover(conns());
+            match guard.get(&conn_id) {
+                Some(Conn::Sqlite(c)) => c.sqlstate(),
+                Some(Conn::Postgres(c)) => c.sqlstate.clone(),
+                Some(Conn::Mysql(c)) => c.sqlstate.clone(),
+                None => "00000".to_string(),
+            }
+        };
+        store_cstr(sqlstate_cell(), &state)
+    })
 }
 
 /// Sets the busy-wait timeout (in milliseconds) for lock contention: SQLite calls
 /// `sqlite3_busy_timeout`; PostgreSQL/MySQL have no equivalent client-side knob
 /// for this bridge's one-statement-at-a-time connections, so they no-op and
-/// report success. Returns `1`/`0`.
+/// report success. Returns `1`/`0`; a caught panic reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_set_busy_timeout(conn_id: i64, ms: i64) -> i64 {
-    let guard = conns().lock().unwrap();
-    match guard.get(&conn_id) {
-        Some(Conn::Sqlite(c)) => c.set_busy_timeout(ms),
-        Some(Conn::Postgres(_)) => 1,
-        Some(Conn::Mysql(_)) => 1,
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.set_busy_timeout(ms),
+            Some(Conn::Postgres(_)) => 1,
+            Some(Conn::Mysql(_)) => 1,
+            None => 0,
+        }
+    })
+}
+
+/// Enables or disables SQLite's extended result codes for a `sqlite:` connection
+/// (`sqlite3_extended_result_codes`), backing
+/// `Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES` (1002, F-SQLT-02): with it on,
+/// `errorInfo()[1]` reports the specific code (e.g. 2067 `SQLITE_CONSTRAINT_UNIQUE`)
+/// instead of the primary one (19 `SQLITE_CONSTRAINT`). Returns `1` on success, `0`
+/// for a non-SQLite connection, an unknown handle, or a caught panic.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_set_extended_result_codes(conn_id: i64, on: i64) -> i64 {
+    ffi_guard(0, || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.set_extended_result_codes(on),
+            _ => 0,
+        }
+    })
 }
 
 /// Returns a pointer to the connection's server/library version string: SQLite's
 /// bundled `sqlite3_libversion()`, or the PostgreSQL/MySQL server's reported
-/// version. Empty for an unknown handle. Valid until the next
-/// `elephc_pdo_server_version`.
+/// version. Empty for an unknown handle — and for a caught panic. Valid until the
+/// next `elephc_pdo_server_version`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_server_version(conn_id: i64) -> *const c_char {
-    let version = {
-        let mut guard = conns().lock().unwrap();
-        match guard.get_mut(&conn_id) {
-            Some(Conn::Sqlite(c)) => c.server_version(),
-            Some(Conn::Postgres(c)) => c.server_version(),
-            Some(Conn::Mysql(c)) => c.server_version(),
-            None => String::new(),
-        }
-    };
-    store_cstr(server_version_cell(), &version)
+    ffi_guard(static_cstr(b"\0"), || {
+        let version = {
+            let mut guard = lock_recover(conns());
+            match guard.get_mut(&conn_id) {
+                Some(Conn::Sqlite(c)) => c.server_version(),
+                Some(Conn::Postgres(c)) => c.server_version(),
+                Some(Conn::Mysql(c)) => c.server_version(),
+                None => String::new(),
+            }
+        };
+        store_cstr(server_version_cell(), &version)
+    })
 }
 
 /// Returns the PostgreSQL backend process id for a `pgsql:` connection (backs
-/// `Pdo\Pgsql::getPid()`); 0 for a SQLite/MySQL connection or an unknown handle.
+/// `Pdo\Pgsql::getPid()`); 0 for a SQLite/MySQL connection, an unknown handle, or a
+/// caught panic.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_backend_pid(conn_id: i64) -> i64 {
-    let mut guard = conns().lock().unwrap();
-    match guard.get_mut(&conn_id) {
-        Some(Conn::Postgres(c)) => c.backend_pid(),
-        Some(Conn::Sqlite(_)) => 0,
-        Some(Conn::Mysql(_)) => 0,
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Postgres(c)) => c.backend_pid(),
+            Some(Conn::Sqlite(_)) => 0,
+            Some(Conn::Mysql(_)) => 0,
+            None => 0,
+        }
+    })
 }
 
 /// Returns the number of warnings from the last statement on a `mysql:` connection
-/// (backs `Pdo\Mysql::getWarningCount()`); 0 for a SQLite/PostgreSQL connection or
-/// an unknown handle.
+/// (backs `Pdo\Mysql::getWarningCount()`); 0 for a SQLite/PostgreSQL connection, an
+/// unknown handle, or a caught panic.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_warning_count(conn_id: i64) -> i64 {
-    let mut guard = conns().lock().unwrap();
-    match guard.get_mut(&conn_id) {
-        Some(Conn::Mysql(c)) => c.warning_count(),
-        Some(Conn::Sqlite(_)) => 0,
-        Some(Conn::Postgres(_)) => 0,
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.warning_count(),
+            Some(Conn::Sqlite(_)) => 0,
+            Some(Conn::Postgres(_)) => 0,
+            None => 0,
+        }
+    })
 }
 
 /// Returns `1` when a `mysql:` connection's session has `NO_BACKSLASH_ESCAPES`
 /// active in its `sql_mode` (backslash is then a literal character in a string
 /// literal, so `PDO::quote()`'s usual backslash-escaping is unsafe there and
 /// must fall back to `''`-doubling only — P1-f); `0` for a SQLite/PostgreSQL
-/// connection or an unknown handle.
+/// connection, an unknown handle, or a caught panic (`0` = "escape as usual", the
+/// conservative answer, since the connection's real `sql_mode` could not be read).
 #[no_mangle]
 pub extern "C" fn elephc_pdo_no_backslash_escapes(conn_id: i64) -> i64 {
-    let guard = conns().lock().unwrap();
-    match guard.get(&conn_id) {
-        Some(Conn::Mysql(c)) => c.no_backslash_escape() as i64,
-        _ => 0,
-    }
+    ffi_guard(0, || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Mysql(c)) => c.no_backslash_escape() as i64,
+            _ => 0,
+        }
+    })
 }
 
 /// Creates a large object and returns its OID as text for a `pgsql:` connection
 /// (`Pdo\Pgsql::lobCreate()`); empty string for a non-PostgreSQL connection, an
-/// unknown handle, or an error.
+/// unknown handle, an error, or a caught panic.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_lob_create(conn_id: i64) -> *const c_char {
-    let text = {
-        let mut guard = conns().lock().unwrap();
-        match guard.get_mut(&conn_id) {
-            Some(Conn::Postgres(c)) => c.lob_create(),
-            _ => String::new(),
-        }
-    };
-    store_cstr(pg_text_result_cell(), &text)
+    ffi_guard(static_cstr(b"\0"), || {
+        let text = {
+            let mut guard = lock_recover(conns());
+            match guard.get_mut(&conn_id) {
+                Some(Conn::Postgres(c)) => c.lob_create(),
+                _ => String::new(),
+            }
+        };
+        store_cstr(pg_text_result_cell(), &text)
+    })
 }
 
 /// Deletes a large object by OID for a `pgsql:` connection (`Pdo\Pgsql::lobUnlink()`);
-/// returns 1 on success, 0 for a non-PostgreSQL connection, unknown handle, or error.
+/// returns 1 on success, 0 for a non-PostgreSQL connection, unknown handle, error, or
+/// a caught panic.
 ///
 /// # Safety
 /// `oid` must point to a NUL-terminated string valid for the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_lob_unlink(conn_id: i64, oid: *const c_char) -> i64 {
-    let Some(oid) = cstr_arg(oid) else {
-        return 0;
-    };
-    let mut guard = conns().lock().unwrap();
-    match guard.get_mut(&conn_id) {
-        Some(Conn::Postgres(c)) => c.lob_unlink(oid),
-        _ => 0,
-    }
+    ffi_guard(0, || {
+        let Some(oid) = cstr_arg(oid) else {
+            return 0;
+        };
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Postgres(c)) => c.lob_unlink(oid),
+            _ => 0,
+        }
+    })
 }
 
 /// Runs a prelude-built `COPY … FROM STDIN` for a `pgsql:` connection, streaming
 /// `data` into it (`Pdo\Pgsql::copyFromArray()` / `copyFromFile()`); returns the row
-/// count copied, or -1 for a non-PostgreSQL connection, unknown handle, or error.
+/// count copied, or -1 for a non-PostgreSQL connection, unknown handle, error, or a
+/// caught panic.
 ///
 /// # Safety
 /// `copy_sql` and `data` must point to NUL-terminated strings valid for the call.
@@ -784,14 +1024,16 @@ pub unsafe extern "C" fn elephc_pdo_copy_in(
     copy_sql: *const c_char,
     data: *const c_char,
 ) -> i64 {
-    let (Some(sql), Some(data)) = (cstr_arg(copy_sql), cstr_arg(data)) else {
-        return -1;
-    };
-    let mut guard = conns().lock().unwrap();
-    match guard.get_mut(&conn_id) {
-        Some(Conn::Postgres(c)) => c.copy_in(sql, data.as_bytes()),
-        _ => -1,
-    }
+    ffi_guard(-1, || {
+        let (Some(sql), Some(data)) = (cstr_arg(copy_sql), cstr_arg(data)) else {
+            return -1;
+        };
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Postgres(c)) => c.copy_in(sql, data.as_bytes()),
+            _ => -1,
+        }
+    })
 }
 
 /// Runs a prelude-built `COPY … TO STDOUT` for a `pgsql:` connection and returns the
@@ -800,7 +1042,8 @@ pub unsafe extern "C" fn elephc_pdo_copy_in(
 /// "really empty" apart from "error" by this return value alone — `copy_out` always
 /// resets `elephc_pdo_errcode()` to `0` on success (even an empty one) and sets it
 /// non-zero on error, so the prelude checks that accessor right after this call to
-/// make the distinction, satisfying `copyToArray()`'s `array|false` contract.
+/// make the distinction, satisfying `copyToArray()`'s `array|false` contract. A
+/// caught panic degrades to that same empty string.
 ///
 /// # Safety
 /// `copy_sql` must point to a NUL-terminated string valid for the call.
@@ -809,33 +1052,37 @@ pub unsafe extern "C" fn elephc_pdo_copy_out(
     conn_id: i64,
     copy_sql: *const c_char,
 ) -> *const c_char {
-    let Some(sql) = cstr_arg(copy_sql) else {
-        return store_cstr(pg_text_result_cell(), "");
-    };
-    let text = {
-        let mut guard = conns().lock().unwrap();
-        match guard.get_mut(&conn_id) {
-            Some(Conn::Postgres(c)) => c.copy_out(sql),
-            _ => String::new(),
-        }
-    };
-    store_cstr(pg_text_result_cell(), &text)
+    ffi_guard(static_cstr(b"\0"), || {
+        let Some(sql) = cstr_arg(copy_sql) else {
+            return store_cstr(pg_text_result_cell(), "");
+        };
+        let text = {
+            let mut guard = lock_recover(conns());
+            match guard.get_mut(&conn_id) {
+                Some(Conn::Postgres(c)) => c.copy_out(sql),
+                _ => String::new(),
+            }
+        };
+        store_cstr(pg_text_result_cell(), &text)
+    })
 }
 
 /// Polls a `pgsql:` connection for a pending LISTEN/NOTIFY notification
 /// (`Pdo\Pgsql::getNotify()`), returning it as `channel\tpid\tpayload`, or an empty
 /// string if none arrives within `timeout_ms` (or for a non-PostgreSQL connection /
-/// unknown handle).
+/// unknown handle / a caught panic).
 #[no_mangle]
 pub extern "C" fn elephc_pdo_get_notify(conn_id: i64, timeout_ms: i64) -> *const c_char {
-    let text = {
-        let mut guard = conns().lock().unwrap();
-        match guard.get_mut(&conn_id) {
-            Some(Conn::Postgres(c)) => c.get_notify(timeout_ms),
-            _ => String::new(),
-        }
-    };
-    store_cstr(pg_text_result_cell(), &text)
+    ffi_guard(static_cstr(b"\0"), || {
+        let text = {
+            let mut guard = lock_recover(conns());
+            match guard.get_mut(&conn_id) {
+                Some(Conn::Postgres(c)) => c.get_notify(timeout_ms),
+                _ => String::new(),
+            }
+        };
+        store_cstr(pg_text_result_cell(), &text)
+    })
 }
 
 /// Drains one buffered server NOTICE message from a `pgsql:` connection
@@ -843,23 +1090,27 @@ pub extern "C" fn elephc_pdo_get_notify(conn_id: i64, timeout_ms: i64) -> *const
 /// none is pending (or for a non-PostgreSQL connection / unknown handle). The prelude
 /// calls this in a loop after each `exec()`/`query()` and dispatches each message to
 /// the registered PHP callback. The returned pointer is valid until the next
-/// PostgreSQL text-returning bridge call on this thread.
+/// PostgreSQL text-returning bridge call on this thread. A caught panic reports the
+/// same empty string as "nothing pending", which simply ends the prelude's drain loop.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_get_notice(conn_id: i64) -> *const c_char {
-    let text = {
-        let guard = conns().lock().unwrap();
-        match guard.get(&conn_id) {
-            Some(Conn::Postgres(c)) => c.drain_notice(),
-            _ => String::new(),
-        }
-    };
-    store_cstr(pg_text_result_cell(), &text)
+    ffi_guard(static_cstr(b"\0"), || {
+        let text = {
+            let guard = lock_recover(conns());
+            match guard.get(&conn_id) {
+                Some(Conn::Postgres(c)) => c.drain_notice(),
+                _ => String::new(),
+            }
+        };
+        store_cstr(pg_text_result_cell(), &text)
+    })
 }
 
 /// Reads a SQLite BLOB cell whole into the shared blob buffer (`Pdo\Sqlite::openBlob()`),
 /// returning its length in bytes, or -1 for a non-SQLite connection, an unknown handle,
-/// or a read error (missing row/column). The bytes are then drained with
-/// `elephc_pdo_blob_byte`, which preserves embedded NUL bytes.
+/// a read error (missing row/column), or a caught panic. The bytes are then copied out
+/// in one shot with `elephc_pdo_blob_data_ptr` (or, on the fallback path, drained with
+/// `elephc_pdo_blob_byte`); both preserve embedded NUL bytes.
 ///
 /// # Safety
 /// `table`, `column`, and `dbname` must point to NUL-terminated strings valid for the
@@ -872,160 +1123,201 @@ pub unsafe extern "C" fn elephc_pdo_blob_read(
     rowid: i64,
     dbname: *const c_char,
 ) -> i64 {
-    let (Some(table), Some(column)) = (cstr_arg(table), cstr_arg(column)) else {
-        return -1;
-    };
-    let dbname = cstr_arg(dbname).unwrap_or("main");
-    let result = {
-        let mut guard = conns().lock().unwrap();
-        match guard.get_mut(&conn_id) {
-            Some(Conn::Sqlite(c)) => c.blob_read(dbname, table, column, rowid),
-            _ => return -1,
+    ffi_guard(-1, || {
+        let (Some(table), Some(column)) = (cstr_arg(table), cstr_arg(column)) else {
+            return -1;
+        };
+        let dbname = cstr_arg(dbname).unwrap_or("main");
+        let result = {
+            let mut guard = lock_recover(conns());
+            match guard.get_mut(&conn_id) {
+                Some(Conn::Sqlite(c)) => c.blob_read(dbname, table, column, rowid),
+                _ => return -1,
+            }
+        };
+        match result {
+            Ok(bytes) => {
+                let len = bytes.len() as i64;
+                *lock_recover(blob_cell()) = bytes;
+                len
+            }
+            Err(_) => -1,
         }
-    };
-    match result {
-        Ok(bytes) => {
-            let len = bytes.len() as i64;
-            *blob_cell().lock().unwrap() = bytes;
-            len
-        }
-        Err(_) => -1,
-    }
+    })
 }
 
 /// Reads a PostgreSQL large object whole into the shared blob buffer
 /// (`Pdo\Pgsql::lobOpen()`), returning its length in bytes, or -1 for a
-/// non-PostgreSQL connection, an unknown handle, a non-numeric OID, or a server error
-/// (no such object). The bytes are then drained with `elephc_pdo_blob_byte`.
+/// non-PostgreSQL connection, an unknown handle, a non-numeric OID, a server error
+/// (no such object), or a caught panic. The bytes are then copied out with
+/// `elephc_pdo_blob_data_ptr` (or drained with `elephc_pdo_blob_byte`).
 ///
 /// # Safety
 /// `oid` must point to a NUL-terminated string valid for the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_lob_get(conn_id: i64, oid: *const c_char) -> i64 {
-    let Some(oid) = cstr_arg(oid) else {
-        return -1;
-    };
-    let result = {
-        let mut guard = conns().lock().unwrap();
-        match guard.get_mut(&conn_id) {
-            Some(Conn::Postgres(c)) => c.lob_get(oid),
-            _ => return -1,
+    ffi_guard(-1, || {
+        let Some(oid) = cstr_arg(oid) else {
+            return -1;
+        };
+        let result = {
+            let mut guard = lock_recover(conns());
+            match guard.get_mut(&conn_id) {
+                Some(Conn::Postgres(c)) => c.lob_get(oid),
+                _ => return -1,
+            }
+        };
+        match result {
+            Some(bytes) => {
+                let len = bytes.len() as i64;
+                *lock_recover(blob_cell()) = bytes;
+                len
+            }
+            None => -1,
         }
-    };
-    match result {
-        Some(bytes) => {
-            let len = bytes.len() as i64;
-            *blob_cell().lock().unwrap() = bytes;
-            len
+    })
+}
+
+/// Returns a pointer to the first byte of the shared blob buffer filled by the most
+/// recent `elephc_pdo_blob_read` / `elephc_pdo_lob_get`, or a NULL pointer when that
+/// buffer is empty (which is also the caught-panic sentinel). Mirrors the
+/// `elephc_pdo_column_data_ptr` contract: the pointer is valid until the next call
+/// that rewrites the cell, and the prelude copies the whole run of
+/// `elephc_pdo_blob_read`-reported bytes out immediately through `ptr_read_string`.
+/// It exists so a BLOB is bulk-copied in one call instead of one PHP-level bridge
+/// call per byte through `elephc_pdo_blob_byte` (kept as the fallback/compat path).
+#[no_mangle]
+pub extern "C" fn elephc_pdo_blob_data_ptr() -> *const c_char {
+    ffi_guard(std::ptr::null(), || {
+        let guard = lock_recover(blob_cell());
+        if guard.is_empty() {
+            std::ptr::null()
+        } else {
+            guard.as_ptr() as *const c_char
         }
-        None => -1,
-    }
+    })
 }
 
 /// Returns the byte at `offset` in the shared blob buffer populated by the most recent
-/// `elephc_pdo_blob_read` / `elephc_pdo_lob_get`, or 0 when out of range. The prelude
-/// drains the buffer one byte at a time (the same shape as `elephc_pdo_column_data_byte`)
-/// so embedded NUL bytes survive the round-trip into a PHP string.
+/// `elephc_pdo_blob_read` / `elephc_pdo_lob_get`, or 0 when out of range (or on a caught
+/// panic). This is the fallback/compat drain path — one bridge call per byte — kept
+/// alongside the bulk `elephc_pdo_blob_data_ptr`; like `elephc_pdo_column_data_byte`,
+/// it preserves embedded NUL bytes on the round-trip into a PHP string.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_blob_byte(offset: i64) -> i64 {
-    if offset < 0 {
-        return 0;
-    }
-    let guard = blob_cell().lock().unwrap();
-    guard.get(offset as usize).map(|&b| b as i64).unwrap_or(0)
+    ffi_guard(0, || {
+        if offset < 0 {
+            return 0;
+        }
+        let guard = lock_recover(blob_cell());
+        guard.get(offset as usize).map(|&b| b as i64).unwrap_or(0)
+    })
 }
 
 /// Prepares a statement (`PDO::prepare` / `PDO::query`) and returns an `i64`
-/// statement handle, or `-1` on a compile error.
+/// statement handle, or `-1` on a compile error — the same sentinel a caught panic
+/// degrades to.
 ///
 /// # Safety
 /// `sql` must point to a NUL-terminated string valid for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_prepare(conn_id: i64, sql: *const c_char) -> i64 {
-    let prepared: Result<Stmt, ()> = {
-        let mut guard = conns().lock().unwrap();
-        match guard.get_mut(&conn_id) {
-            Some(Conn::Sqlite(c)) => c.prepare(sql).map(Stmt::Sqlite),
-            Some(Conn::Postgres(c)) => match cstr_arg(sql) {
-                Some(s) => match c.prepare(s) {
-                    Ok(mut st) => {
-                        st.conn_id = conn_id;
-                        Ok(Stmt::Postgres(st))
-                    }
-                    Err(_) => Err(()),
+    ffi_guard(-1, || {
+        let prepared: Result<Stmt, ()> = {
+            let mut guard = lock_recover(conns());
+            match guard.get_mut(&conn_id) {
+                Some(Conn::Sqlite(c)) => c.prepare(sql).map(Stmt::Sqlite),
+                Some(Conn::Postgres(c)) => match cstr_arg(sql) {
+                    Some(s) => match c.prepare(s) {
+                        Ok(mut st) => {
+                            st.conn_id = conn_id;
+                            Ok(Stmt::Postgres(st))
+                        }
+                        Err(_) => Err(()),
+                    },
+                    None => Err(()),
+                },
+                Some(Conn::Mysql(c)) => match cstr_arg(sql) {
+                    Some(s) => match c.prepare(s) {
+                        Ok(mut st) => {
+                            st.conn_id = conn_id;
+                            Ok(Stmt::Mysql(st))
+                        }
+                        Err(_) => Err(()),
+                    },
+                    None => Err(()),
                 },
                 None => Err(()),
-            },
-            Some(Conn::Mysql(c)) => match cstr_arg(sql) {
-                Some(s) => match c.prepare(s) {
-                    Ok(mut st) => {
-                        st.conn_id = conn_id;
-                        Ok(Stmt::Mysql(st))
-                    }
-                    Err(_) => Err(()),
-                },
-                None => Err(()),
-            },
-            None => Err(()),
+            }
+        };
+        match prepared {
+            Ok(stmt) => {
+                let id = next_id();
+                lock_recover(stmts()).insert(id, stmt);
+                id
+            }
+            Err(()) => -1,
         }
-    };
-    match prepared {
-        Ok(stmt) => {
-            let id = next_id();
-            stmts().lock().unwrap().insert(id, stmt);
-            id
-        }
-        Err(()) => -1,
-    }
+    })
 }
 
-/// Resolves a named placeholder to its 1-based bind index, or `0` when unknown.
+/// Resolves a named placeholder to its 1-based bind index, or `0` when unknown (also
+/// the caught-panic sentinel).
 ///
 /// # Safety
 /// `name` must point to a NUL-terminated string valid for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_bind_parameter_index(stmt_id: i64, name: *const c_char) -> i64 {
-    let guard = stmts().lock().unwrap();
-    let Some(name) = cstr_arg(name) else {
-        return 0;
-    };
-    match guard.get(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.bind_parameter_index(name),
-        Some(Stmt::Postgres(s)) => s.bind_parameter_index(name),
-        Some(Stmt::Mysql(s)) => s.bind_parameter_index(name),
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let guard = lock_recover(stmts());
+        let Some(name) = cstr_arg(name) else {
+            return 0;
+        };
+        match guard.get(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.bind_parameter_index(name),
+            Some(Stmt::Postgres(s)) => s.bind_parameter_index(name),
+            Some(Stmt::Mysql(s)) => s.bind_parameter_index(name),
+            None => 0,
+        }
+    })
 }
 
-/// Binds an integer to the 1-based placeholder `idx`. Returns `1`/`0`.
+/// Binds an integer to the 1-based placeholder `idx`. Returns `1`/`0`; a caught panic
+/// reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_bind_int(stmt_id: i64, idx: i64, val: i64) -> i64 {
-    let mut guard = stmts().lock().unwrap();
-    match guard.get_mut(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.bind_int(idx, val),
-        Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Int(val)),
-        Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Int(val)),
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let mut guard = lock_recover(stmts());
+        match guard.get_mut(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.bind_int(idx, val),
+            Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Int(val)),
+            Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Int(val)),
+            None => 0,
+        }
+    })
 }
 
-/// Binds a double to the 1-based placeholder `idx`. Returns `1`/`0`.
+/// Binds a double to the 1-based placeholder `idx`. Returns `1`/`0`; a caught panic
+/// reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_bind_double(stmt_id: i64, idx: i64, val: f64) -> i64 {
-    let mut guard = stmts().lock().unwrap();
-    match guard.get_mut(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.bind_double(idx, val),
-        Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Float(val)),
-        Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Float(val)),
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let mut guard = lock_recover(stmts());
+        match guard.get_mut(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.bind_double(idx, val),
+            Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Float(val)),
+            Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Float(val)),
+            None => 0,
+        }
+    })
 }
 
 /// Binds a text value to the 1-based placeholder `idx`, using the
 /// caller-supplied `len` (the value's true byte length) rather than a
 /// NUL-terminated-string decode, so a value with an embedded NUL byte binds in
 /// full instead of silently truncating at the first NUL (v20/P0-A). A null
-/// pointer binds SQL NULL. Returns `1`/`0`.
+/// pointer binds SQL NULL. Returns `1`/`0`; a caught panic reports the `0` failure
+/// sentinel.
 ///
 /// # Safety
 /// `val`, when non-null, must point to at least `len` readable bytes valid for
@@ -1037,66 +1329,74 @@ pub unsafe extern "C" fn elephc_pdo_bind_text(
     val: *const c_char,
     len: i64,
 ) -> i64 {
-    let mut guard = stmts().lock().unwrap();
-    match guard.get_mut(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.bind_text(idx, val, len),
-        Some(Stmt::Postgres(s)) => {
-            let bind = if val.is_null() {
-                pg::Bind::Null
-            } else {
-                pg::Bind::Text(String::from_utf8_lossy(&bytes_arg(val, len)).into_owned())
-            };
-            s.bind(idx, bind)
+    ffi_guard(0, || {
+        let mut guard = lock_recover(stmts());
+        match guard.get_mut(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.bind_text(idx, val, len),
+            Some(Stmt::Postgres(s)) => {
+                let bind = if val.is_null() {
+                    pg::Bind::Null
+                } else {
+                    pg::Bind::Text(String::from_utf8_lossy(&bytes_arg(val, len)).into_owned())
+                };
+                s.bind(idx, bind)
+            }
+            Some(Stmt::Mysql(s)) => {
+                let bind = if val.is_null() {
+                    my::Bind::Null
+                } else {
+                    my::Bind::Text(String::from_utf8_lossy(&bytes_arg(val, len)).into_owned())
+                };
+                s.bind(idx, bind)
+            }
+            None => 0,
         }
-        Some(Stmt::Mysql(s)) => {
-            let bind = if val.is_null() {
-                my::Bind::Null
-            } else {
-                my::Bind::Text(String::from_utf8_lossy(&bytes_arg(val, len)).into_owned())
-            };
-            s.bind(idx, bind)
-        }
-        None => 0,
-    }
+    })
 }
 
-/// Binds SQL NULL to the 1-based placeholder `idx`. Returns `1`/`0`.
+/// Binds SQL NULL to the 1-based placeholder `idx`. Returns `1`/`0`; a caught panic
+/// reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_bind_null(stmt_id: i64, idx: i64) -> i64 {
-    let mut guard = stmts().lock().unwrap();
-    match guard.get_mut(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.bind_null(idx),
-        Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Null),
-        Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Null),
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let mut guard = lock_recover(stmts());
+        match guard.get_mut(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.bind_null(idx),
+            Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Null),
+            Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Null),
+            None => 0,
+        }
+    })
 }
 
 /// Binds a boolean to the 1-based placeholder `idx`: SQLite and MySQL bind it as
 /// an integer `0`/`1`; PostgreSQL binds a real boolean value through the text
 /// `'t'`/`'f'` parameter format PostgreSQL accepts for `bool` columns (and
 /// coerces from for untyped/text columns, matching PDO/PHP's text-parameter
-/// convention). Returns `1`/`0`.
+/// convention). Returns `1`/`0`; a caught panic reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_bind_bool(stmt_id: i64, idx: i64, val: i64) -> i64 {
-    let truthy = (val != 0) as i64;
-    let mut guard = stmts().lock().unwrap();
-    match guard.get_mut(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.bind_int(idx, truthy),
-        Some(Stmt::Postgres(s)) => {
-            let text = if truthy != 0 { "t" } else { "f" };
-            s.bind(idx, pg::Bind::Text(text.to_string()))
+    ffi_guard(0, || {
+        let truthy = (val != 0) as i64;
+        let mut guard = lock_recover(stmts());
+        match guard.get_mut(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.bind_int(idx, truthy),
+            Some(Stmt::Postgres(s)) => {
+                let text = if truthy != 0 { "t" } else { "f" };
+                s.bind(idx, pg::Bind::Text(text.to_string()))
+            }
+            Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Int(truthy)),
+            None => 0,
         }
-        Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Int(truthy)),
-        None => 0,
-    }
+    })
 }
 
 /// Binds raw bytes (embedded NUL preserved) to the 1-based placeholder `idx`:
 /// SQLite copies them via `SQLITE_TRANSIENT` (`sqlite3_bind_blob`); PostgreSQL and
 /// MySQL bind them through each driver's raw-bytes value path (bypassing the
 /// text re-encoding the other bind functions use), so arbitrary binary content
-/// round-trips unchanged. Returns `1`/`0`.
+/// round-trips unchanged. Returns `1`/`0`; a caught panic reports the `0` failure
+/// sentinel.
 ///
 /// # Safety
 /// `ptr`, when non-null, must point to at least `len` readable bytes valid for
@@ -1108,162 +1408,319 @@ pub unsafe extern "C" fn elephc_pdo_bind_blob(
     ptr: *const c_char,
     len: i64,
 ) -> i64 {
-    let mut guard = stmts().lock().unwrap();
-    match guard.get_mut(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.bind_blob(idx, ptr, len),
-        Some(Stmt::Postgres(s)) => {
-            let bind = if ptr.is_null() {
-                pg::Bind::Null
-            } else {
-                pg::Bind::Bytes(bytes_arg(ptr, len))
-            };
-            s.bind(idx, bind)
+    ffi_guard(0, || {
+        let mut guard = lock_recover(stmts());
+        match guard.get_mut(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.bind_blob(idx, ptr, len),
+            Some(Stmt::Postgres(s)) => {
+                let bind = if ptr.is_null() {
+                    pg::Bind::Null
+                } else {
+                    pg::Bind::Bytes(bytes_arg(ptr, len))
+                };
+                s.bind(idx, bind)
+            }
+            Some(Stmt::Mysql(s)) => {
+                let bind = if ptr.is_null() {
+                    my::Bind::Null
+                } else {
+                    my::Bind::Bytes(bytes_arg(ptr, len))
+                };
+                s.bind(idx, bind)
+            }
+            None => 0,
         }
-        Some(Stmt::Mysql(s)) => {
-            let bind = if ptr.is_null() {
-                my::Bind::Null
-            } else {
-                my::Bind::Bytes(bytes_arg(ptr, len))
-            };
-            s.bind(idx, bind)
-        }
-        None => 0,
-    }
+    })
 }
 
-/// Resets a statement, keeping its parameter bindings. Returns `1`/`0`.
+/// Resets a statement, keeping its parameter bindings. Returns `1`/`0`; a caught
+/// panic reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_reset(stmt_id: i64) -> i64 {
-    let mut guard = stmts().lock().unwrap();
-    match guard.get_mut(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.reset(),
-        Some(Stmt::Postgres(s)) => s.reset(),
-        Some(Stmt::Mysql(s)) => s.reset(),
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let mut guard = lock_recover(stmts());
+        match guard.get_mut(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.reset(),
+            Some(Stmt::Postgres(s)) => s.reset(),
+            Some(Stmt::Mysql(s)) => s.reset(),
+            None => 0,
+        }
+    })
 }
 
-/// Clears all parameter bindings on a statement. Returns `1`/`0`.
+/// Clears all parameter bindings on a statement. Returns `1`/`0`; a caught panic
+/// reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_clear_bindings(stmt_id: i64) -> i64 {
-    let mut guard = stmts().lock().unwrap();
-    match guard.get_mut(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.clear_bindings(),
-        Some(Stmt::Postgres(s)) => s.clear_bindings(),
-        Some(Stmt::Mysql(s)) => s.clear_bindings(),
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let mut guard = lock_recover(stmts());
+        match guard.get_mut(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.clear_bindings(),
+            Some(Stmt::Postgres(s)) => s.clear_bindings(),
+            Some(Stmt::Mysql(s)) => s.clear_bindings(),
+            None => 0,
+        }
+    })
 }
 
 /// Advances the statement one row: `1` for a row, `0` when exhausted, `-1` on
-/// error.
+/// error — the same `-1` a caught panic degrades to (the client crates are the most
+/// likely source of an unexpected panic, and this is where they run).
 #[no_mangle]
 pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
-    let mut sguard = stmts().lock().unwrap();
-    match sguard.get_mut(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.step(),
-        Some(Stmt::Postgres(s)) => {
-            let conn_id = s.conn_id;
-            let mut cguard = conns().lock().unwrap();
-            match cguard.get_mut(&conn_id) {
-                Some(Conn::Postgres(c)) => s.step(c),
-                _ => -1,
+    ffi_guard(-1, || {
+        let mut sguard = lock_recover(stmts());
+        match sguard.get_mut(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.step(),
+            Some(Stmt::Postgres(s)) => {
+                let conn_id = s.conn_id;
+                let mut cguard = lock_recover(conns());
+                match cguard.get_mut(&conn_id) {
+                    Some(Conn::Postgres(c)) => s.step(c),
+                    _ => -1,
+                }
             }
-        }
-        Some(Stmt::Mysql(s)) => {
-            let conn_id = s.conn_id;
-            let mut cguard = conns().lock().unwrap();
-            match cguard.get_mut(&conn_id) {
-                Some(Conn::Mysql(c)) => s.step(c),
-                _ => -1,
+            Some(Stmt::Mysql(s)) => {
+                let conn_id = s.conn_id;
+                let mut cguard = lock_recover(conns());
+                match cguard.get_mut(&conn_id) {
+                    Some(Conn::Mysql(c)) => s.step(c),
+                    _ => -1,
+                }
             }
+            None => -1,
         }
-        None => -1,
-    }
+    })
 }
 
-/// Returns the number of result columns for the statement.
+/// Returns the number of result columns for the statement. Unknown handles — and a
+/// caught panic — report `0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_count(stmt_id: i64) -> i64 {
-    let guard = stmts().lock().unwrap();
-    match guard.get(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.column_count(),
-        Some(Stmt::Postgres(s)) => s.column_count(),
-        Some(Stmt::Mysql(s)) => s.column_count(),
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let guard = lock_recover(stmts());
+        match guard.get(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.column_count(),
+            Some(Stmt::Postgres(s)) => s.column_count(),
+            Some(Stmt::Mysql(s)) => s.column_count(),
+            None => 0,
+        }
+    })
 }
 
-/// Returns a pointer to the name of result column `i` (0-based).
+/// Returns a pointer to the name of result column `i` (0-based). Unknown handles —
+/// and a caught panic — report the empty string.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_name(stmt_id: i64, i: i64) -> *const c_char {
-    let name = {
-        let guard = stmts().lock().unwrap();
-        match guard.get(&stmt_id) {
-            Some(Stmt::Sqlite(s)) => s.column_name(i),
-            Some(Stmt::Postgres(s)) => s.column_name(i),
-            Some(Stmt::Mysql(s)) => s.column_name(i),
-            None => String::new(),
-        }
-    };
-    store_cstr(colname_cell(), &name)
+    ffi_guard(static_cstr(b"\0"), || {
+        let name = {
+            let guard = lock_recover(stmts());
+            match guard.get(&stmt_id) {
+                Some(Stmt::Sqlite(s)) => s.column_name(i),
+                Some(Stmt::Postgres(s)) => s.column_name(i),
+                Some(Stmt::Mysql(s)) => s.column_name(i),
+                None => String::new(),
+            }
+        };
+        store_cstr(colname_cell(), &name)
+    })
 }
 
 /// Returns the SQLite-compatible type code for the current row's column `i`
-/// (0-based): 1=int, 2=float, 3=text, 4=blob/bytea, 5=null.
+/// (0-based): 1=int, 2=float, 3=text, 4=blob/bytea, 5=null. Unknown handles — and a
+/// caught panic — report `5` ("null"), the type that carries no payload to read.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_type(stmt_id: i64, i: i64) -> i64 {
-    let guard = stmts().lock().unwrap();
-    match guard.get(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.column_type(i),
-        Some(Stmt::Postgres(s)) => s.column_type(i),
-        Some(Stmt::Mysql(s)) => s.column_type(i),
-        None => 5,
-    }
+    ffi_guard(5, || {
+        let guard = lock_recover(stmts());
+        match guard.get(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.column_type(i),
+            Some(Stmt::Postgres(s)) => s.column_type(i),
+            Some(Stmt::Mysql(s)) => s.column_type(i),
+            None => 5,
+        }
+    })
 }
 
 /// Returns a pointer to the declared type of result column `i` (0-based) for a
 /// SQLite statement (`sqlite3_column_decltype`), or an empty string for a
 /// non-SQLite statement or an expression column. Feeds `getColumnMeta`'s
-/// native_type. Valid until the next `elephc_pdo_column_decltype`.
+/// native_type. Valid until the next `elephc_pdo_column_decltype`. A caught panic
+/// degrades to that same empty string.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_decltype(stmt_id: i64, i: i64) -> *const c_char {
-    let decltype = {
-        let guard = stmts().lock().unwrap();
+    ffi_guard(static_cstr(b"\0"), || {
+        let decltype = {
+            let guard = lock_recover(stmts());
+            match guard.get(&stmt_id) {
+                Some(Stmt::Sqlite(s)) => s.column_decltype(i),
+                _ => String::new(),
+            }
+        };
+        store_cstr(decltype_cell(), &decltype)
+    })
+}
+
+/// Returns a pointer to the driver-native type name of result column `i`
+/// (0-based), as that driver's own catalog spells it, for `getColumnMeta`'s
+/// `native_type`:
+/// - `pgsql:` — the server's `pg_type.typname` (`int4`, `bool`, `bytea`, …),
+///   resolved from the column's `postgres::types::Type` at prepare time (P2-k).
+/// - `mysql:` — the wire column type's MySQL name (`LONG`, `VAR_STRING`, `BIT`,
+///   `NEWDECIMAL`, …), reproducing php-src's `type_to_name_native` switch
+///   (`ext/pdo_mysql/mysql_statement.c:716-770`), whose
+///   `PDO_MYSQL_NATIVE_TYPE_NAME(x)` macro stringifies the `MYSQL_TYPE_` suffix —
+///   so an `INT` column is `LONG` and a `VARCHAR` is `VAR_STRING`, not the
+///   friendlier SQL spelling (F-MY-08).
+/// - `sqlite:` — deliberately empty. php-src's SQLite driver reports the column's
+///   storage class, which the prelude already derives itself from the live value;
+///   its declared type is a separate key, served by `elephc_pdo_column_decltype`.
+///
+/// Empty for a SQLite statement, an unknown handle, an out-of-range index, or a
+/// wire type php-src's own switch has no case for (its `default: return NULL`,
+/// which makes php-src OMIT the key entirely — `mysql_statement.c:812-815`). The
+/// prelude reads that empty string as "keep the generic storage-class metadata".
+/// Valid until the next `elephc_pdo_column_native_type`. A caught panic degrades
+/// to that same empty string, i.e. to the generic metadata path.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_column_native_type(stmt_id: i64, i: i64) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let native = {
+            let guard = lock_recover(stmts());
+            match guard.get(&stmt_id) {
+                Some(Stmt::Postgres(s)) => s.column_native_type(i),
+                Some(Stmt::Mysql(s)) => s.column_native_type(i),
+                _ => String::new(),
+            }
+        };
+        store_cstr(native_type_cell(), &native)
+    })
+}
+
+/// Returns the PostgreSQL type OID of result column `i` (0-based) — the
+/// `PQftype` value carried by the column's `postgres::types::Type`. `0` (the
+/// invalid OID) for a non-PostgreSQL statement or an out-of-range index. The
+/// prelude uses a non-zero value both as the "this is a pg column, describe it
+/// natively" signal and to derive the PDO param type (BOOL→PARAM_BOOL,
+/// int-family→PARAM_INT, BYTEA→PARAM_LOB, else PARAM_STR) plus the `pgsql:oid`
+/// metadata key (P2-k). A caught panic degrades to that same `0`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_column_type_oid(stmt_id: i64, i: i64) -> i64 {
+    ffi_guard(0, || {
+        let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
-            Some(Stmt::Sqlite(s)) => s.column_decltype(i),
-            _ => String::new(),
+            Some(Stmt::Postgres(s)) => s.column_type_oid(i),
+            _ => 0,
         }
-    };
-    store_cstr(decltype_cell(), &decltype)
+    })
+}
+
+/// Returns the OID of the table result column `i` (0-based) was selected FROM on a
+/// `pgsql:` statement — `PQftable()`. Backs `getColumnMeta`'s `pgsql:table_oid`
+/// key, which php-src's `pgsql_stmt_get_column_meta` emits UNCONDITIONALLY, `0`
+/// included (F-PG-01), so the prelude must emit the key even when this returns `0`.
+///
+/// `0` is `InvalidOid`, and it is the server's OWN answer for a column that is not
+/// a plain table column (an expression, a literal, an aggregate, a function
+/// result) — so it doubles as the neutral value here for a non-PostgreSQL
+/// statement, an unknown handle, an out-of-range index, and a caught panic. That
+/// conflation is intentional and safe: a caller cannot distinguish "not a table
+/// column" from "not a pg statement", but neither can real PDO, which only emits
+/// the key for a pg statement in the first place.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_column_table_oid(stmt_id: i64, i: i64) -> i64 {
+    ffi_guard(0, || {
+        let guard = lock_recover(stmts());
+        match guard.get(&stmt_id) {
+            Some(Stmt::Postgres(s)) => s.column_table_oid(i),
+            _ => 0,
+        }
+    })
+}
+
+/// Returns the byte width of result column `i`'s type (0-based) on a `pgsql:`
+/// statement: a positive fixed width (`int4` → 4, `timestamp` → 8, `uuid` → 16),
+/// or `-1` for a variable-length (varlena) type — `text`, `varchar`, `numeric`,
+/// `bytea`, `json`, any array. Backs `getColumnMeta`'s `len`, which php-src fills
+/// from `PQfsize()` (`ext/pdo_pgsql/pgsql_statement.c:496`) (F-PG-02).
+///
+/// Note that a varlena's `len` is `-1`, NOT its declared `n`: `VARCHAR(20)` reports
+/// `-1` here and surfaces its 20 through `elephc_pdo_column_precision` instead (as
+/// 24, the raw `atttypmod`). That is real PDO's behavior, not an approximation.
+///
+/// The value is DERIVED from the column's type rather than read off the wire —
+/// tokio-postgres parses the RowDescription's data-type-size field but drops it
+/// when building `Column`. This is sound because `PQfsize()` returns
+/// `pg_type.typlen`, a property of the TYPE and not of the column or row; see
+/// [`pg::PgStmt::column_len`] for the derivation table and its documented edges.
+///
+/// `-1` — PostgreSQL's own "not a fixed width" — for a non-PostgreSQL statement, an
+/// unknown handle, an out-of-range index, and a caught panic.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_column_len(stmt_id: i64, i: i64) -> i64 {
+    ffi_guard(-1, || {
+        let guard = lock_recover(stmts());
+        match guard.get(&stmt_id) {
+            Some(Stmt::Postgres(s)) => s.column_len(i),
+            _ => -1,
+        }
+    })
+}
+
+/// Returns the type modifier (`atttypmod`) of result column `i` (0-based) on a
+/// `pgsql:` statement — `PQfmod()`. Backs `getColumnMeta`'s `precision`, which
+/// php-src fills from it straight (`ext/pdo_pgsql/pgsql_statement.c:497`) (F-PG-02).
+///
+/// The value is the RAW modifier, deliberately NOT decoded, because php-src does
+/// not decode it either: `VARCHAR(20)` reports 24 (the length plus `VARHDRSZ` = 4)
+/// and `NUMERIC(10,2)` reports 655366 (`((10 << 16) | 2) + 4`). Decoding it into a
+/// human-readable precision here would be a divergence from PHP dressed up as an
+/// improvement — a caller who wants the real precision must decode the modifier
+/// exactly as it would have to against real PDO.
+///
+/// `-1` — PostgreSQL's own "no type modifier" — for a type that takes no modifier
+/// or a column carrying none, and equally for a non-PostgreSQL statement, an
+/// unknown handle, an out-of-range index, and a caught panic.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_column_precision(stmt_id: i64, i: i64) -> i64 {
+    ffi_guard(-1, || {
+        let guard = lock_recover(stmts());
+        match guard.get(&stmt_id) {
+            Some(Stmt::Postgres(s)) => s.column_precision(i),
+            _ => -1,
+        }
+    })
 }
 
 /// Loads a SQLite extension by path for a `sqlite:` connection
 /// (`Pdo\Sqlite::loadExtension()`), returning 1 on success or 0 for a
-/// non-SQLite connection, unknown handle, or load error.
+/// non-SQLite connection, unknown handle, load error, or a caught panic.
 ///
 /// # Safety
 /// `path` must point to a NUL-terminated string valid for the call, and loading an
 /// extension runs arbitrary native code from it.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_load_extension(conn_id: i64, path: *const c_char) -> i64 {
-    let Some(path) = cstr_arg(path) else {
-        return 0;
-    };
-    let guard = conns().lock().unwrap();
-    match guard.get(&conn_id) {
-        Some(Conn::Sqlite(c)) => c.load_extension(path),
-        _ => 0,
-    }
+    ffi_guard(0, || {
+        let Some(path) = cstr_arg(path) else {
+            return 0;
+        };
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.load_extension(path),
+            _ => 0,
+        }
+    })
 }
 
 /// Registers a custom SQLite collation from a compiled-PHP comparator
 /// (`Pdo\Sqlite::createCollation`). `descriptor` is the callable descriptor
 /// pointer and `adapter` the codegen collation-adapter address, both produced by
 /// the prelude via `__elephc_callable_ptr` / `__elephc_pdo_adapter_addr`. Returns
-/// `1` on success, `0` on error or a non-SQLite handle. Registration itself never
-/// fires the comparator (SQLite invokes it later, during an `ORDER BY … COLLATE`),
-/// so the connection lock is held only for the brief `sqlite3_create_collation_v2`.
+/// `1` on success, `0` on error, a non-SQLite handle, or a caught panic. Registration
+/// itself never fires the comparator (SQLite invokes it later, during an
+/// `ORDER BY … COLLATE`), so the connection lock is held only for the brief
+/// `sqlite3_create_collation_v2`.
 ///
 /// # Safety
 /// `name` must be a NUL-terminated string valid for the call; `descriptor`/`adapter`
@@ -1275,14 +1732,16 @@ pub unsafe extern "C" fn elephc_pdo_create_collation(
     descriptor: *mut c_void,
     adapter: *mut c_void,
 ) -> i64 {
-    let Some(name) = cstr_arg(name) else {
-        return 0;
-    };
-    let guard = conns().lock().unwrap();
-    match guard.get(&conn_id) {
-        Some(Conn::Sqlite(c)) => c.create_collation(name, descriptor, adapter as *const c_void),
-        _ => 0,
-    }
+    ffi_guard(0, || {
+        let Some(name) = cstr_arg(name) else {
+            return 0;
+        };
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.create_collation(name, descriptor, adapter as *const c_void),
+            _ => 0,
+        }
+    })
 }
 
 /// Registers a scalar SQL function `name` backed by a compiled-PHP callable
@@ -1290,7 +1749,7 @@ pub unsafe extern "C" fn elephc_pdo_create_collation(
 /// `flags` an optional `SQLITE_DETERMINISTIC`, and `descriptor`/`adapter` the callable
 /// descriptor pointer and the codegen scalar adapter address, produced by the prelude
 /// via `__elephc_callable_ptr` / `__elephc_pdo_adapter_addr`. Returns `1` on success,
-/// `0` on error or a non-SQLite handle.
+/// `0` on error, a non-SQLite handle, or a caught panic.
 ///
 /// # Safety
 /// `name` must be a NUL-terminated string valid for the call; `descriptor`/`adapter`
@@ -1304,23 +1763,26 @@ pub unsafe extern "C" fn elephc_pdo_create_function(
     descriptor: *mut c_void,
     adapter: *mut c_void,
 ) -> i64 {
-    let Some(name) = cstr_arg(name) else {
-        return 0;
-    };
-    let guard = conns().lock().unwrap();
-    match guard.get(&conn_id) {
-        Some(Conn::Sqlite(c)) => {
-            c.create_function(name, num_args, flags, descriptor, adapter as *const c_void)
+    ffi_guard(0, || {
+        let Some(name) = cstr_arg(name) else {
+            return 0;
+        };
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Sqlite(c)) => {
+                c.create_function(name, num_args, flags, descriptor, adapter as *const c_void)
+            }
+            _ => 0,
         }
-        _ => 0,
-    }
+    })
 }
 
 /// Registers an aggregate SQL function `name` backed by a compiled-PHP step +
 /// finalize pair (`Pdo\Sqlite::createAggregate`). `num_args` is the declared arity
 /// (-1 = variadic); each callable crosses as a (descriptor, adapter) pointer pair,
 /// produced by the prelude via `__elephc_callable_ptr` / `__elephc_pdo_adapter_addr`
-/// (kinds 2 and 3). Returns `1` on success, `0` on error or a non-SQLite handle.
+/// (kinds 2 and 3). Returns `1` on success, `0` on error, a non-SQLite handle, or a
+/// caught panic.
 ///
 /// # Safety
 /// `name` must be a NUL-terminated string valid for the call; the four pointers must
@@ -1335,237 +1797,315 @@ pub unsafe extern "C" fn elephc_pdo_create_aggregate(
     final_descriptor: *mut c_void,
     final_adapter: *mut c_void,
 ) -> i64 {
-    let Some(name) = cstr_arg(name) else {
-        return 0;
-    };
-    let guard = conns().lock().unwrap();
-    match guard.get(&conn_id) {
-        Some(Conn::Sqlite(c)) => c.create_aggregate(
-            name,
-            num_args,
-            step_descriptor,
-            step_adapter as *const c_void,
-            final_descriptor,
-            final_adapter as *const c_void,
-        ),
-        _ => 0,
-    }
+    ffi_guard(0, || {
+        let Some(name) = cstr_arg(name) else {
+            return 0;
+        };
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Sqlite(c)) => c.create_aggregate(
+                name,
+                num_args,
+                step_descriptor,
+                step_adapter as *const c_void,
+                final_descriptor,
+                final_adapter as *const c_void,
+            ),
+            _ => 0,
+        }
+    })
 }
 
-/// Returns the current row's column `i` (0-based) as an integer.
+/// Returns the current row's column `i` (0-based) as an integer. Unknown handles —
+/// and a caught panic — report `0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_int(stmt_id: i64, i: i64) -> i64 {
-    let guard = stmts().lock().unwrap();
-    match guard.get(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.column_int(i),
-        Some(Stmt::Postgres(s)) => s.column_int(i),
-        Some(Stmt::Mysql(s)) => s.column_int(i),
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let guard = lock_recover(stmts());
+        match guard.get(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.column_int(i),
+            Some(Stmt::Postgres(s)) => s.column_int(i),
+            Some(Stmt::Mysql(s)) => s.column_int(i),
+            None => 0,
+        }
+    })
 }
 
-/// Returns the current row's column `i` (0-based) as a double.
+/// Returns the current row's column `i` (0-based) as a double. Unknown handles — and
+/// a caught panic — report `0.0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_double(stmt_id: i64, i: i64) -> f64 {
-    let guard = stmts().lock().unwrap();
-    match guard.get(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.column_double(i),
-        Some(Stmt::Postgres(s)) => s.column_double(i),
-        Some(Stmt::Mysql(s)) => s.column_double(i),
-        None => 0.0,
-    }
-}
-
-/// Returns a pointer to the current row's column `i` (0-based) text.
-#[no_mangle]
-pub extern "C" fn elephc_pdo_column_text(stmt_id: i64, i: i64) -> *const c_char {
-    let text = {
-        let guard = stmts().lock().unwrap();
+    ffi_guard(0.0, || {
+        let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
-            Some(Stmt::Sqlite(s)) => s.column_text(i),
-            Some(Stmt::Postgres(s)) => s.column_text(i),
-            Some(Stmt::Mysql(s)) => s.column_text(i),
-            None => String::new(),
+            Some(Stmt::Sqlite(s)) => s.column_double(i),
+            Some(Stmt::Postgres(s)) => s.column_double(i),
+            Some(Stmt::Mysql(s)) => s.column_double(i),
+            None => 0.0,
         }
-    };
-    store_cstr(coltext_cell(), &text)
+    })
 }
 
 /// Returns the byte length of the current row's column `i` rendered as PDO text
-/// or BLOB bytes. Unlike `elephc_pdo_column_text`, this path preserves embedded
-/// NUL bytes when paired with `elephc_pdo_column_data_ptr`.
+/// or BLOB bytes. Paired with `elephc_pdo_column_data_ptr`, this is the only column
+/// read path: it is byte-exact, so embedded NUL bytes survive (v24/F-QUAL-03 deleted
+/// the NUL-stripping `elephc_pdo_column_text` that used to sit beside it). Unknown
+/// handles — and a caught panic — report `0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_data_len(stmt_id: i64, i: i64) -> i64 {
-    let guard = stmts().lock().unwrap();
-    match guard.get(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.column_data(i).len() as i64,
-        Some(Stmt::Postgres(s)) => s.column_data(i).len() as i64,
-        Some(Stmt::Mysql(s)) => s.column_data(i).len() as i64,
-        None => 0,
-    }
+    ffi_guard(0, || {
+        let guard = lock_recover(stmts());
+        match guard.get(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.column_data(i).len() as i64,
+            Some(Stmt::Postgres(s)) => s.column_data(i).len() as i64,
+            Some(Stmt::Mysql(s)) => s.column_data(i).len() as i64,
+            None => 0,
+        }
+    })
 }
 
 /// Returns a pointer to the current row's column `i` rendered as raw bytes.
-/// The pointer remains valid until the next `elephc_pdo_column_data_ptr` call.
+/// The pointer remains valid until the next `elephc_pdo_column_data_ptr` call. An
+/// empty column — and a caught panic — report a NULL pointer, which the prelude reads
+/// as the empty string (it pairs every read with `elephc_pdo_column_data_len`).
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_data_ptr(stmt_id: i64, i: i64) -> *const c_char {
-    let bytes = {
-        let guard = stmts().lock().unwrap();
-        match guard.get(&stmt_id) {
-            Some(Stmt::Sqlite(s)) => s.column_data(i),
-            Some(Stmt::Postgres(s)) => s.column_data(i),
-            Some(Stmt::Mysql(s)) => s.column_data(i),
-            None => Vec::new(),
-        }
-    };
-    store_bytes(bytes)
+    ffi_guard(std::ptr::null(), || {
+        let bytes = {
+            let guard = lock_recover(stmts());
+            match guard.get(&stmt_id) {
+                Some(Stmt::Sqlite(s)) => s.column_data(i),
+                Some(Stmt::Postgres(s)) => s.column_data(i),
+                Some(Stmt::Mysql(s)) => s.column_data(i),
+                None => Vec::new(),
+            }
+        };
+        store_bytes(bytes)
+    })
 }
 
 /// Returns one byte from the current row's column `i` rendered as raw data.
-/// Out-of-range handles, columns, and offsets return `0`.
+/// Out-of-range handles, columns, and offsets return `0` — and so does a caught panic.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_data_byte(stmt_id: i64, i: i64, offset: i64) -> i64 {
-    let Ok(offset) = usize::try_from(offset) else {
-        return 0;
-    };
-    let bytes = {
-        let guard = stmts().lock().unwrap();
-        match guard.get(&stmt_id) {
-            Some(Stmt::Sqlite(s)) => s.column_data(i),
-            Some(Stmt::Postgres(s)) => s.column_data(i),
-            Some(Stmt::Mysql(s)) => s.column_data(i),
-            None => Vec::new(),
-        }
-    };
-    bytes.get(offset).copied().unwrap_or(0) as i64
+    ffi_guard(0, || {
+        let Ok(offset) = usize::try_from(offset) else {
+            return 0;
+        };
+        let bytes = {
+            let guard = lock_recover(stmts());
+            match guard.get(&stmt_id) {
+                Some(Stmt::Sqlite(s)) => s.column_data(i),
+                Some(Stmt::Postgres(s)) => s.column_data(i),
+                Some(Stmt::Mysql(s)) => s.column_data(i),
+                None => Vec::new(),
+            }
+        };
+        bytes.get(offset).copied().unwrap_or(0) as i64
+    })
 }
 
 /// Finalizes a statement and removes it from the table. Unknown handles return
-/// `0`; success returns `1`.
+/// `0`; success returns `1`. A caught panic reports `0` — the statement may then stay
+/// registered, which leaks it but keeps the handle table consistent.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_finalize(stmt_id: i64) -> i64 {
-    match stmts().lock().unwrap().remove(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => {
-            s.finalize();
-            1
+    ffi_guard(0, || {
+        match lock_recover(stmts()).remove(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => {
+                s.finalize();
+                1
+            }
+            Some(Stmt::Postgres(_)) => 1,
+            Some(Stmt::Mysql(_)) => 1,
+            None => 0,
         }
-        Some(Stmt::Postgres(_)) => 1,
-        Some(Stmt::Mysql(_)) => 1,
-        None => 0,
-    }
+    })
 }
 
 /// Returns `1` if a SQLite statement makes no direct changes to the database file
 /// content (`sqlite3_stmt_readonly`), else `0` — including for a non-SQLite or
 /// unknown handle, where the notion does not apply. Backs
 /// `PDOStatement::getAttribute(Pdo\Sqlite::ATTR_READONLY_STATEMENT)` (P2-16) as a
-/// live read rather than a value stored at prepare time.
+/// live read rather than a value stored at prepare time. A caught panic degrades to
+/// that same `0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_stmt_readonly(stmt_id: i64) -> i64 {
-    match stmts().lock().unwrap().get(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.readonly(),
-        _ => 0,
-    }
+    ffi_guard(0, || {
+        match lock_recover(stmts()).get(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.readonly(),
+            _ => 0,
+        }
+    })
 }
 
 /// Returns the native driver code for the statement's last operation. SQLite
 /// tracks this per-connection (mirrored here from the statement's own `db`
 /// pointer); PostgreSQL/MySQL statements share their connection's bookkeeping
 /// (looked up by the statement's `conn_id`, the same way `elephc_pdo_step`
-/// dispatches into the connection to execute). Unknown handles return `-1`.
+/// dispatches into the connection to execute). Unknown handles — and a caught panic
+/// — return `-1`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_stmt_errcode(stmt_id: i64) -> i64 {
-    let sguard = stmts().lock().unwrap();
-    match sguard.get(&stmt_id) {
-        Some(Stmt::Sqlite(s)) => s.errcode(),
-        Some(Stmt::Postgres(s)) => {
-            let conn_id = s.conn_id;
-            let cguard = conns().lock().unwrap();
-            match cguard.get(&conn_id) {
-                Some(Conn::Postgres(c)) => c.errcode,
-                _ => -1,
-            }
-        }
-        Some(Stmt::Mysql(s)) => {
-            let conn_id = s.conn_id;
-            let cguard = conns().lock().unwrap();
-            match cguard.get(&conn_id) {
-                Some(Conn::Mysql(c)) => c.errcode,
-                _ => -1,
-            }
-        }
-        None => -1,
-    }
-}
-
-/// Returns a pointer to the statement's last error message (see
-/// `elephc_pdo_stmt_errcode` for how PostgreSQL/MySQL statements share their
-/// connection's bookkeeping). Empty string for an unknown handle. Valid until the
-/// next `elephc_pdo_stmt_errmsg`.
-#[no_mangle]
-pub extern "C" fn elephc_pdo_stmt_errmsg(stmt_id: i64) -> *const c_char {
-    let msg = {
-        let sguard = stmts().lock().unwrap();
+    ffi_guard(-1, || {
+        let sguard = lock_recover(stmts());
         match sguard.get(&stmt_id) {
-            Some(Stmt::Sqlite(s)) => s.errmsg(),
+            Some(Stmt::Sqlite(s)) => s.errcode(),
             Some(Stmt::Postgres(s)) => {
                 let conn_id = s.conn_id;
-                let cguard = conns().lock().unwrap();
+                let cguard = lock_recover(conns());
                 match cguard.get(&conn_id) {
-                    Some(Conn::Postgres(c)) => c.errmsg.clone(),
-                    _ => String::new(),
+                    Some(Conn::Postgres(c)) => c.errcode,
+                    _ => -1,
                 }
             }
             Some(Stmt::Mysql(s)) => {
                 let conn_id = s.conn_id;
-                let cguard = conns().lock().unwrap();
+                let cguard = lock_recover(conns());
                 match cguard.get(&conn_id) {
-                    Some(Conn::Mysql(c)) => c.errmsg.clone(),
-                    _ => String::new(),
+                    Some(Conn::Mysql(c)) => c.errcode,
+                    _ => -1,
                 }
             }
-            None => String::new(),
+            None => -1,
         }
-    };
-    store_cstr(stmt_errmsg_cell(), &msg)
+    })
+}
+
+/// Returns a pointer to the statement's last error message (see
+/// `elephc_pdo_stmt_errcode` for how PostgreSQL/MySQL statements share their
+/// connection's bookkeeping). Empty string for an unknown handle — and for a caught
+/// panic. Valid until the next `elephc_pdo_stmt_errmsg`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_stmt_errmsg(stmt_id: i64) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let msg = {
+            let sguard = lock_recover(stmts());
+            match sguard.get(&stmt_id) {
+                Some(Stmt::Sqlite(s)) => s.errmsg(),
+                Some(Stmt::Postgres(s)) => {
+                    let conn_id = s.conn_id;
+                    let cguard = lock_recover(conns());
+                    match cguard.get(&conn_id) {
+                        Some(Conn::Postgres(c)) => c.errmsg.clone(),
+                        _ => String::new(),
+                    }
+                }
+                Some(Stmt::Mysql(s)) => {
+                    let conn_id = s.conn_id;
+                    let cguard = lock_recover(conns());
+                    match cguard.get(&conn_id) {
+                        Some(Conn::Mysql(c)) => c.errmsg.clone(),
+                        _ => String::new(),
+                    }
+                }
+                None => String::new(),
+            }
+        };
+        store_cstr(stmt_errmsg_cell(), &msg)
+    })
 }
 
 /// Returns a pointer to the 5-char SQLSTATE for the statement's last operation
 /// (see `elephc_pdo_stmt_errcode` for how PostgreSQL/MySQL statements share their
 /// connection's bookkeeping). Unknown handles report `"00000"`; a statement whose
-/// connection has since closed reports `"HY000"`. Valid until the next
+/// connection has since closed reports `"HY000"`. A caught panic degrades to the
+/// unknown-handle answer, `"00000"` — the call that panicked has already reported its
+/// own failure sentinel, which is what the prelude raises on. Valid until the next
 /// `elephc_pdo_stmt_sqlstate`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_stmt_sqlstate(stmt_id: i64) -> *const c_char {
-    let state = {
-        let sguard = stmts().lock().unwrap();
-        match sguard.get(&stmt_id) {
-            Some(Stmt::Sqlite(s)) => s.sqlstate(),
-            Some(Stmt::Postgres(s)) => {
-                let conn_id = s.conn_id;
-                let cguard = conns().lock().unwrap();
-                match cguard.get(&conn_id) {
-                    Some(Conn::Postgres(c)) => c.sqlstate.clone(),
-                    _ => "HY000".to_string(),
+    ffi_guard(static_cstr(b"00000\0"), || {
+        let state = {
+            let sguard = lock_recover(stmts());
+            match sguard.get(&stmt_id) {
+                Some(Stmt::Sqlite(s)) => s.sqlstate(),
+                Some(Stmt::Postgres(s)) => {
+                    let conn_id = s.conn_id;
+                    let cguard = lock_recover(conns());
+                    match cguard.get(&conn_id) {
+                        Some(Conn::Postgres(c)) => c.sqlstate.clone(),
+                        _ => "HY000".to_string(),
+                    }
                 }
-            }
-            Some(Stmt::Mysql(s)) => {
-                let conn_id = s.conn_id;
-                let cguard = conns().lock().unwrap();
-                match cguard.get(&conn_id) {
-                    Some(Conn::Mysql(c)) => c.sqlstate.clone(),
-                    _ => "HY000".to_string(),
+                Some(Stmt::Mysql(s)) => {
+                    let conn_id = s.conn_id;
+                    let cguard = lock_recover(conns());
+                    match cguard.get(&conn_id) {
+                        Some(Conn::Mysql(c)) => c.sqlstate.clone(),
+                        _ => "HY000".to_string(),
+                    }
                 }
+                None => "00000".to_string(),
             }
-            None => "00000".to_string(),
-        }
-    };
-    store_cstr(stmt_sqlstate_cell(), &state)
+        };
+        store_cstr(stmt_sqlstate_cell(), &state)
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    //! Unit tests for the PDO bridge, plus the two `#[ignore]` live round-trips
+    //! (`pg_round_trip`, `my_round_trip`) that need a real server.
+    //!
+    //! Live-server environment variables (F-QUAL-06)
+    //! ---------------------------------------------
+    //! The live tests are split across two suites that historically read DISJOINT
+    //! variable families, so exporting one family silently left the other suite's
+    //! `#[ignore]` tests doing nothing:
+    //!
+    //! - `ELEPHC_PG_DSN`      — PostgreSQL DSN. Read by the codegen suite
+    //!   (`tests/codegen/pdo_pgsql.rs`) and, as a FALLBACK, by `pg_round_trip` here.
+    //! - `ELEPHC_MY_DSN`      — MySQL/MariaDB DSN. Read by the codegen suite
+    //!   (`tests/codegen/pdo_mysql.rs`) and, as a FALLBACK, by `my_round_trip` here.
+    //! - `ELEPHC_PG_TEST_DSN` — legacy in-crate-only name for the PostgreSQL DSN.
+    //!   Still honored, and still takes precedence over `ELEPHC_PG_DSN`.
+    //! - `ELEPHC_MY_TEST_DSN` — legacy in-crate-only name for the MySQL DSN.
+    //!   Still honored, and still takes precedence over `ELEPHC_MY_DSN`.
+    //! - `ELEPHC_PG_TLS_DSN`  — codegen-only: a `sslmode=require` PostgreSQL DSN for
+    //!   `pgsql_tls_round_trip`. Needs a TLS-serving server.
+    //! - `ELEPHC_MY_TLS_DSN` / `ELEPHC_MY_TLS_CA` — codegen-only: DSN + CA-bundle path
+    //!   for `mysql_tls_round_trip`. Needs a TLS-serving server AND a staticlib rebuilt
+    //!   with the opt-in `mysql-tls` feature.
+    //!
+    //! Because of the fallback, exporting just `ELEPHC_PG_DSN` + `ELEPHC_MY_DSN` now
+    //! drives BOTH suites:
+    //!
+    //! ```text
+    //! ELEPHC_PG_DSN='pgsql:host=localhost;port=5432;dbname=testdb;user=test;password=test' \
+    //! ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=3306;dbname=testdb;user=test;password=test' \
+    //!     cargo test -p elephc-pdo -- --ignored
+    //! ```
+    //!
+    //! - `ELEPHC_PDO_LIVE_REQUIRED` — set to `1` (as the nightly `pdo-live.yml` workflow
+    //!   does) to turn "no DSN in the environment" from a SILENT early return into a
+    //!   panic. Without it, a renamed or unexported variable makes a live test that ran
+    //!   nothing look exactly like a live test that passed — the failure mode that let
+    //!   the `CALL` row-drop regression through.
+
     use super::*;
+
+    /// Resolves a live-server DSN from the first environment variable that is set,
+    /// preferring the legacy in-crate name and falling back to the name the codegen
+    /// live suite uses (F-QUAL-06), so one set of variables runs every live test.
+    ///
+    /// Returns `None` — and the caller skips — when neither name is set, unless
+    /// `ELEPHC_PDO_LIVE_REQUIRED=1`, in which case the missing DSN is a hard panic
+    /// so a misconfigured CI job cannot report a green live run that executed nothing.
+    fn live_dsn(primary: &str, fallback: &str) -> Option<String> {
+        let dsn = std::env::var(primary)
+            .ok()
+            .or_else(|| std::env::var(fallback).ok())
+            .filter(|dsn| !dsn.trim().is_empty());
+        if dsn.is_none() && std::env::var("ELEPHC_PDO_LIVE_REQUIRED").as_deref() == Ok("1") {
+            panic!(
+                "ELEPHC_PDO_LIVE_REQUIRED=1 but neither {} nor {} is set: this live test \
+                 would have silently skipped",
+                primary, fallback
+            );
+        }
+        dsn
+    }
 
     /// Reads a `*const c_char` bridge string return into an owned `String`.
     unsafe fn read(p: *const c_char) -> String {
@@ -1589,12 +2129,38 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v22 adds
-    /// `elephc_pdo_in_transaction`, a live transaction-state read (`1`/`0`/`-1`)
-    /// backing `PDO::inTransaction()` / `beginTransaction()`'s already-active guard.
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v26 adds the
+    /// three PostgreSQL column-metadata accessors `elephc_pdo_column_table_oid`
+    /// (`PQftable`), `elephc_pdo_column_len` (`PQfsize`) and
+    /// `elephc_pdo_column_precision` (`PQfmod`), backing `getColumnMeta`'s
+    /// `pgsql:table_oid` / `len` / `precision` keys (F-PG-01, F-PG-02), and extends
+    /// `elephc_pdo_column_native_type` to `mysql:` statements so a MySQL column
+    /// reports php-src's real `type_to_name_native` name (`LONG`, `VAR_STRING`,
+    /// `NEWDECIMAL`, …) instead of the generic storage-class name (F-MY-08).
     #[test]
-    fn version_is_v22() {
-        assert_eq!(elephc_pdo_version(), 22);
+    fn version_is_v26() {
+        assert_eq!(elephc_pdo_version(), 26);
+    }
+
+    /// The two v23 metadata accessors return their neutral "not a PostgreSQL
+    /// column" answers for an unknown statement handle: an empty native type and
+    /// the invalid OID `0`. (A real `pgsql:` column's non-empty name / non-zero
+    /// OID is exercised by the live `#[ignore]` codegen tests, since a prepared
+    /// PostgreSQL statement is needed to populate the column descriptor.)
+    #[test]
+    fn column_metadata_accessors_neutral_for_unknown_stmt() {
+        let native = elephc_pdo_column_native_type(-999, 0);
+        assert!(
+            unsafe { std::ffi::CStr::from_ptr(native) }
+                .to_bytes()
+                .is_empty(),
+            "native type for an unknown statement handle must be empty",
+        );
+        assert_eq!(
+            elephc_pdo_column_type_oid(-999, 0),
+            0,
+            "type OID for an unknown statement handle must be the invalid OID 0",
+        );
     }
 
     /// `elephc_pdo_in_transaction` reads SQLite's live autocommit state through
@@ -1642,6 +2208,94 @@ mod tests {
         assert_eq!(elephc_pdo_finalize(999_999), 0);
     }
 
+    /// F-QUAL-02, half 1 (`ffi_guard`): the bridge's entry points are plain
+    /// `extern "C"`, not `extern "C-unwind"`, so on rustc ≥ 1.81 a panic escaping one
+    /// of them ABORTS the whole compiled PHP process — no catchable `PDOException`,
+    /// no stack trace, just a dead program. A panic is not hypothetical here: an
+    /// internal `unwrap`, a debug-build overflow, or an unexpected panic inside the
+    /// `postgres`/`mysql` client crates all reach the boundary. `ffi_guard` converts
+    /// any panic into the SAME "failed" answer each entry point's docblock already
+    /// promises for an unknown handle (`-1`/`0`/`"00000"`/…), which the prelude turns
+    /// into a normal error. Pinned here directly, since forcing a real panic inside a
+    /// specific extern is not reproducible from a test.
+    #[test]
+    fn ffi_guard_converts_a_panic_into_the_documented_sentinel() {
+        let minus_one = ffi_guard(-1_i64, || -> i64 {
+            panic!("deliberate panic (F-QUAL-02 test) — expected");
+        });
+        assert_eq!(minus_one, -1);
+        let zero = ffi_guard(0_i64, || -> i64 {
+            panic!("deliberate panic (F-QUAL-02 test) — expected");
+        });
+        assert_eq!(zero, 0);
+        // The happy path must still return the body's value untouched.
+        assert_eq!(ffi_guard(-1_i64, || -> i64 { 7 }), 7);
+        // The `*const c_char` entry points hand back a readable `'static` C string in
+        // the panic path rather than a dangling/NULL pointer the prelude would deref.
+        let state = ffi_guard(static_cstr(b"00000\0"), || -> *const c_char {
+            panic!("deliberate panic (F-QUAL-02 test) — expected");
+        });
+        assert_eq!(unsafe { read(state) }, "00000");
+    }
+
+    /// F-QUAL-02, half 2 (`lock_recover`): a panic caught by [`ffi_guard`] while a
+    /// handle-table lock was held leaves that `Mutex` POISONED for the life of the
+    /// process. With the old `.lock().unwrap()` at all 84 lock sites, every later PDO
+    /// call in that process — on unrelated connections, in unrelated request handlers
+    /// — would then panic on the poisoned lock, and each of those panics would abort
+    /// across the C ABI: one transient failure bricked the whole bridge. The tables
+    /// are plain maps and stay structurally valid, so `lock_recover` reclaims the
+    /// guard instead of re-panicking. This test poisons `conns()` for real (a thread
+    /// that panics while holding it) and then proves the bridge still serves: the
+    /// unknown-handle sentinels still come back, and a brand-new SQLite connection
+    /// still opens, executes, steps and closes.
+    ///
+    /// The poison is process-global and deliberately NOT undone — that is the point:
+    /// every other test in this binary keeps passing afterwards precisely because
+    /// nothing reaches a poisoned lock through `.unwrap()` any more.
+    #[test]
+    fn poisoned_handle_table_does_not_brick_the_bridge() {
+        let poisoner = std::thread::spawn(|| {
+            // `lock_recover` (not `.lock().unwrap()`) so the test is robust whether or
+            // not the table is already poisoned; the guard's drop during the unwind is
+            // what sets the poison flag either way.
+            let _guard = lock_recover(conns());
+            panic!("deliberate poison of the conns() table (F-QUAL-02 test) — expected");
+        });
+        assert!(
+            poisoner.join().is_err(),
+            "the poisoning thread was supposed to panic"
+        );
+        assert!(
+            conns().is_poisoned(),
+            "precondition: the conns() mutex must actually be poisoned",
+        );
+
+        // Every entry point that reads the poisoned table still answers, and answers
+        // with its documented sentinel rather than panicking (which would abort).
+        let probe = cs("SELECT 1");
+        assert_eq!(unsafe { elephc_pdo_exec(999_999, probe.as_ptr()) }, -1);
+        assert_eq!(unsafe { elephc_pdo_prepare(999_999, probe.as_ptr()) }, -1);
+        assert_eq!(elephc_pdo_begin(999_999), 0);
+        assert_eq!(unsafe { read(elephc_pdo_sqlstate(999_999)) }, "00000");
+
+        // …and the bridge is still fully usable on a fresh connection.
+        let dsn = cs("sqlite::memory:");
+        let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+        assert!(conn > 0, "open must still work through a poisoned conns()");
+        let ddl = cs("CREATE TABLE t (n INTEGER)");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, ddl.as_ptr()) }, 0);
+        let ins = cs("INSERT INTO t VALUES (42)");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, ins.as_ptr()) }, 1);
+        let sel = cs("SELECT n FROM t");
+        let stmt = unsafe { elephc_pdo_prepare(conn, sel.as_ptr()) };
+        assert!(stmt > 0, "prepare must still work through a poisoned conns()");
+        assert_eq!(elephc_pdo_step(stmt), 1);
+        assert_eq!(elephc_pdo_column_int(stmt, 0), 42);
+        assert_eq!(elephc_pdo_finalize(stmt), 1);
+        elephc_pdo_close(conn);
+    }
+
     /// Full in-memory SQLite round-trip: open, create, insert, prepared select
     /// with a positional bind, step, and read typed columns back.
     #[test]
@@ -1669,7 +2323,11 @@ mod tests {
         assert_eq!(elephc_pdo_column_count(stmt), 3);
         assert_eq!(elephc_pdo_column_int(stmt, 0), 1);
         assert_eq!(unsafe { read(elephc_pdo_column_name(stmt, 1)) }, "name");
-        assert_eq!(unsafe { read(elephc_pdo_column_text(stmt, 1)) }, "Alice");
+        // v24/F-QUAL-03: the NUL-stripping `elephc_pdo_column_text` is gone; a text
+        // column is read through the same byte-exact len+ptr pair the prelude uses.
+        let name_len = elephc_pdo_column_data_len(stmt, 1);
+        let name_ptr = elephc_pdo_column_data_ptr(stmt, 1);
+        assert_eq!(unsafe { read_bytes(name_ptr, name_len) }, b"Alice");
         assert_eq!(elephc_pdo_column_double(stmt, 2), 9.5);
         assert_eq!(elephc_pdo_step(stmt), 0);
 
@@ -1708,12 +2366,158 @@ mod tests {
         elephc_pdo_close(conn);
     }
 
-    /// SQLite persistent opens reuse a process-local connection by DSN and a
-    /// close call leaves that pooled connection available to the next open.
+    /// F-QUAL-01 (ABI v24), bridge side: `elephc_pdo_blob_data_ptr` is the BULK
+    /// copy-out path `blobStream()` now uses — one FFI call for the whole value,
+    /// instead of one `elephc_pdo_blob_byte` call per byte (each locking and
+    /// unlocking the handle table). Two properties are load-bearing and pinned here.
+    /// (1) It is byte-exact: the buffer is length-counted and never routed through
+    /// the NUL-stripping `store_cstr`, so `x'610062'` ("a\0b") survives whole — the
+    /// only reason the byte loop existed. (2) It returns a NULL pointer when the
+    /// buffer is EMPTY (a zero-length BLOB, `x''`), which is exactly why the prelude
+    /// guards its `ptr_read_string` call with `if ($_len > 0)`: `ptr_read_string`
+    /// runs `__rt_ptr_check_nonnull` BEFORE it ever looks at the length, so an empty
+    /// BLOB reaching it would hard-abort the process rather than yield `""`.
+    #[test]
+    fn sqlite_blob_data_ptr_is_byte_exact_and_null_when_empty() {
+        let dsn = cs("sqlite::memory:");
+        let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+        assert!(conn > 0, "open failed");
+
+        let ddl = cs("CREATE TABLE imgs (id INTEGER PRIMARY KEY, body BLOB)");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, ddl.as_ptr()) }, 0);
+        let ins = cs("INSERT INTO imgs (id, body) VALUES (1, x'610062'), (2, x'')");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, ins.as_ptr()) }, 2);
+
+        let table = cs("imgs");
+        let column = cs("body");
+        let len = unsafe {
+            elephc_pdo_blob_read(conn, table.as_ptr(), column.as_ptr(), 1, std::ptr::null())
+        };
+        assert_eq!(len, 3);
+        let ptr = elephc_pdo_blob_data_ptr();
+        assert!(!ptr.is_null(), "a non-empty BLOB must expose its buffer");
+        assert_eq!(unsafe { read_bytes(ptr, len) }, b"a\0b");
+
+        // The zero-length BLOB: a successful read of 0 bytes, and a NULL data pointer.
+        let empty = unsafe {
+            elephc_pdo_blob_read(conn, table.as_ptr(), column.as_ptr(), 2, std::ptr::null())
+        };
+        assert_eq!(empty, 0, "a zero-length BLOB reads successfully, as 0 bytes");
+        assert!(
+            elephc_pdo_blob_data_ptr().is_null(),
+            "an empty buffer must report NULL, which is what the prelude's `$_len > 0` guard is for",
+        );
+
+        // A missing row is still the -1 failure sentinel, distinct from "0 bytes".
+        let missing = unsafe {
+            elephc_pdo_blob_read(conn, table.as_ptr(), column.as_ptr(), 999, std::ptr::null())
+        };
+        assert_eq!(missing, -1);
+
+        elephc_pdo_close(conn);
+    }
+
+    /// F-SQLT-02 (ABI v24), bridge side: `Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES` was
+    /// stored and otherwise a total no-op. php-src's `pdo_sqlite_set_attribute` calls
+    /// `sqlite3_extended_result_codes(H->db, lval)`, which widens the value
+    /// `sqlite3_errcode()` reports — and which PDO surfaces as `errorInfo[1]` — from
+    /// the coarse primary code (`SQLITE_CONSTRAINT` = 19, "a constraint broke") to the
+    /// extended one naming the constraint (`SQLITE_CONSTRAINT_UNIQUE` = 2067). The
+    /// attribute is a live toggle, so turning it back off must restore the primary
+    /// code; a non-SQLite/unknown handle answers `0` (no-op), never panics.
+    #[test]
+    fn sqlite_extended_result_codes_widen_the_native_errcode() {
+        let dsn = cs("sqlite::memory:");
+        let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+        assert!(conn > 0, "open failed");
+
+        let ddl = cs("CREATE TABLE t (id INTEGER PRIMARY KEY, u TEXT UNIQUE)");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, ddl.as_ptr()) }, 0);
+        let seed = cs("INSERT INTO t (id, u) VALUES (1, 'a')");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, seed.as_ptr()) }, 1);
+
+        // Off (the SQLite default): the primary code, SQLITE_CONSTRAINT.
+        let dup2 = cs("INSERT INTO t (id, u) VALUES (2, 'a')");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, dup2.as_ptr()) }, -1);
+        assert_eq!(elephc_pdo_errcode(conn), 19);
+
+        // On: the extended code, SQLITE_CONSTRAINT_UNIQUE (19 | 8 << 8).
+        assert_eq!(elephc_pdo_set_extended_result_codes(conn, 1), 1);
+        let dup3 = cs("INSERT INTO t (id, u) VALUES (3, 'a')");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, dup3.as_ptr()) }, -1);
+        assert_eq!(elephc_pdo_errcode(conn), 2067);
+
+        // Off again: back to the primary code (it is a toggle, not a latch).
+        assert_eq!(elephc_pdo_set_extended_result_codes(conn, 0), 1);
+        let dup4 = cs("INSERT INTO t (id, u) VALUES (4, 'a')");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, dup4.as_ptr()) }, -1);
+        assert_eq!(elephc_pdo_errcode(conn), 19);
+
+        elephc_pdo_close(conn);
+
+        // A handle that is not a live SQLite connection is a no-op, not a panic.
+        assert_eq!(elephc_pdo_set_extended_result_codes(999_999, 1), 0);
+    }
+
+    /// F-QUAL-04: `SqliteConn`/`SqliteStmt` now carry `impl Drop` (sqlite3_close /
+    /// sqlite3_finalize) as a defense-in-depth net, since their safety used to rest
+    /// entirely on the two explicit `close()`/`finalize()` call sites never being
+    /// missed. The net's own risk is the mirror image — a DOUBLE free: `Drop` runs
+    /// when the handle leaves the table, right after the explicit release already ran
+    /// on the very same raw pointer, and `sqlite3_finalize`/`sqlite3_close` on an
+    /// already-destroyed handle is undefined behavior (in practice an abort or heap
+    /// corruption, not a clean error). The releases are therefore guarded by a
+    /// `released` flag, which this test drives from the outside: every normal path
+    /// releases a handle exactly ONCE, a second explicit release is a reported no-op
+    /// (`0`, "unknown handle" — it was already removed from the table), and the
+    /// process survives to answer the next call.
+    #[test]
+    fn sqlite_close_and_finalize_are_idempotent_under_the_drop_net() {
+        let dsn = cs("sqlite::memory:");
+        let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+        assert!(conn > 0, "open failed");
+
+        let sql = cs("SELECT 1");
+        let stmt = unsafe { elephc_pdo_prepare(conn, sql.as_ptr()) };
+        assert!(stmt > 0, "prepare failed");
+        assert_eq!(elephc_pdo_step(stmt), 1);
+
+        // Explicit release, then Drop on the way out of the table: exactly one free.
+        assert_eq!(elephc_pdo_finalize(stmt), 1);
+        assert_eq!(
+            elephc_pdo_finalize(stmt),
+            0,
+            "a second finalize must be an unknown-handle no-op, not a second free",
+        );
+
+        elephc_pdo_close(conn);
+        // A second close must not re-enter sqlite3_close on the freed handle.
+        elephc_pdo_close(conn);
+        assert_eq!(
+            unsafe { elephc_pdo_exec(conn, sql.as_ptr()) },
+            -1,
+            "the closed connection's handle must no longer resolve",
+        );
+    }
+
+    /// SQLite persistent opens reuse a process-local connection keyed by the
+    /// `(DSN, persistent-key)` pair — here the empty key both opens pass, i.e. the
+    /// plain boolean-persistent pool (F-CORE-16) — and a close call leaves that
+    /// pooled connection available to the next open.
     #[test]
     fn sqlite_persistent_pool_reuses_connection_after_close() {
         let dsn = cs("sqlite::memory:");
-        let first = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1, 0, std::ptr::null(), std::ptr::null()) };
+        let first = unsafe {
+            elephc_pdo_open_persistent(
+                dsn.as_ptr(),
+                1,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+            )
+        };
         assert!(first > 0, "open failed");
 
         let ddl = cs("CREATE TABLE persistent_pool (n INTEGER)");
@@ -1722,7 +2526,17 @@ mod tests {
         assert_eq!(unsafe { elephc_pdo_exec(first, ins.as_ptr()) }, 1);
         elephc_pdo_close(first);
 
-        let second = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1, 0, std::ptr::null(), std::ptr::null()) };
+        let second = unsafe {
+            elephc_pdo_open_persistent(
+                dsn.as_ptr(),
+                1,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+            )
+        };
         assert_eq!(second, first);
         let sql = cs("SELECT n FROM persistent_pool");
         let stmt = unsafe { elephc_pdo_prepare(second, sql.as_ptr()) };
@@ -1730,6 +2544,298 @@ mod tests {
         assert_eq!(elephc_pdo_step(stmt), 1);
         assert_eq!(elephc_pdo_column_int(stmt, 0), 77);
         assert_eq!(elephc_pdo_finalize(stmt), 1);
+    }
+
+    /// F-CORE-16: the persistent pool key is the `(DSN, persistent-key)` PAIR, not the
+    /// DSN alone. php-src builds its persistent hashkey from both whenever
+    /// `PDO::ATTR_PERSISTENT` was given as a non-numeric, non-empty string
+    /// (`pdo_dbh.c:389-404`) — separating two named pools onto distinct connections is
+    /// the entire point of that spelling — and elephc used to cast the option to `(bool)`
+    /// and pool by DSN alone, so two differently-named persistent pools silently SHARED
+    /// one connection.
+    ///
+    /// Driven through the C ABI exactly as the pooled-reuse test above drives it, with
+    /// `persistent_key` (the v25 trailing parameter) as the only difference between the
+    /// opens. Distinct handle IDs alone would be a weak assertion — the pool could hand
+    /// back two IDs aliasing one `sqlite3*` — so distinctness is PROVEN at the database
+    /// level: `sqlite::memory:` gives each real connection its own private in-memory
+    /// database, so the same `CREATE TABLE` must SUCCEED on both (`0` rows affected).
+    /// Were they one shared connection, the second `CREATE TABLE` would fail with "table
+    /// already exists" and `elephc_pdo_exec` would return `-1`.
+    ///
+    /// The key strings are unique to this test, so it cannot collide with the
+    /// process-global pool entries any other test in this binary registers (they all use
+    /// the empty key).
+    #[test]
+    fn sqlite_persistent_pool_key_includes_the_attr_persistent_string() {
+        let dsn = cs("sqlite::memory:");
+        let key_alpha = cs("fcore16-alpha");
+        let key_beta = cs("fcore16-beta");
+
+        let alpha = unsafe {
+            elephc_pdo_open_persistent(
+                dsn.as_ptr(),
+                1,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                key_alpha.as_ptr(),
+            )
+        };
+        assert!(alpha > 0, "open under key alpha failed");
+
+        let beta = unsafe {
+            elephc_pdo_open_persistent(
+                dsn.as_ptr(),
+                1,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                key_beta.as_ptr(),
+            )
+        };
+        assert!(beta > 0, "open under key beta failed");
+        assert_ne!(
+            alpha, beta,
+            "same DSN under DIFFERENT ATTR_PERSISTENT keys must be DISTINCT pooled \
+             connections (php-src pdo_dbh.c:389-404)",
+        );
+
+        // Same DDL on both: it can only succeed twice if these are two real, separate
+        // `sqlite::memory:` databases rather than one connection behind two handle IDs.
+        let ddl = cs("CREATE TABLE keyed_pool (n INTEGER)");
+        assert_eq!(
+            unsafe { elephc_pdo_exec(alpha, ddl.as_ptr()) },
+            0,
+            "DDL on the alpha-keyed connection failed",
+        );
+        assert_eq!(
+            unsafe { elephc_pdo_exec(beta, ddl.as_ptr()) },
+            0,
+            "the beta-keyed connection shares alpha's database — the pool key ignored the \
+             ATTR_PERSISTENT string",
+        );
+
+        // And the SAME key still pools: a second open under alpha's key reuses alpha's
+        // handle rather than dialing a fresh connection (the reuse half of the pair key).
+        let alpha_again = unsafe {
+            elephc_pdo_open_persistent(
+                dsn.as_ptr(),
+                1,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                key_alpha.as_ptr(),
+            )
+        };
+        assert_eq!(
+            alpha_again, alpha,
+            "the SAME (DSN, persistent-key) pair must reuse the pooled connection",
+        );
+    }
+
+    /// F-MY-02: `unix_socket` is only honored when the DSN names NO host, or names
+    /// exactly `localhost`. php-src's MySQL handle factory takes the socket under
+    /// precisely that condition — `if (vars[0].optval && !strcmp("localhost",
+    /// vars[0].optval))` (`mysql_driver.c:940-946`), with the DSN parser defaulting an
+    /// absent `host` to `"localhost"` — so `mysql:host=127.0.0.1;unix_socket=…` is
+    /// TCP-only in real PHP and the socket key is silently ignored. Preferring the socket
+    /// whenever it appeared (as `build_opts` did) connected such a DSN to a DIFFERENT
+    /// SERVER than php-src would: same DSN, different database.
+    ///
+    /// `127.0.0.1` is deliberately NOT `localhost` here — the comparison is php-src's
+    /// case-sensitive `strcmp`, and the MySQL client itself draws the same distinction.
+    /// Pure DSN-parsing logic: `build_opts` never dials out, so no server is needed.
+    /// (It lives in this `mod tests` rather than `my.rs`'s only because of how this
+    /// change was split across owners; its subject is `my::build_opts`.)
+    #[test]
+    fn build_opts_ignores_unix_socket_when_the_host_is_a_real_address() {
+        let (opts, _charset) = crate::my::build_opts(
+            "mysql:host=127.0.0.1;port=3307;unix_socket=/tmp/mysql.sock;dbname=testdb",
+            false,
+        )
+        .expect("build_opts rejected a valid mysql: DSN");
+        let opts: mysql::Opts = opts.into();
+        assert_eq!(
+            opts.get_socket(),
+            None,
+            "a non-localhost host must force the TCP path and drop the socket key",
+        );
+        assert_eq!(opts.get_ip_or_hostname(), "127.0.0.1");
+        assert_eq!(opts.get_tcp_port(), 3307);
+    }
+
+    /// F-MY-03: the NO_BACKSLASH_ESCAPES-aware placeholder scanner. Under that `sql_mode`
+    /// the SERVER treats `\` as an ORDINARY BYTE inside a string literal — doubling is then
+    /// the only escape — so the scanner has to agree with it about where a literal ENDS.
+    ///
+    /// `SELECT 'it\', ? FROM t` is the shape that makes the disagreement observable, and it
+    /// flips the PLACEHOLDER COUNT, not some cosmetic detail:
+    ///   * NBE **true** — the `\` is a literal byte, so the `'` right after it CLOSES the
+    ///     string. The literal is `'it\'` and the `?` that follows is a REAL placeholder:
+    ///     1 slot.
+    ///   * NBE **false** — the `\` escapes the `'`, so the literal does NOT end there; the
+    ///     scanner runs to EOF hunting a close quote and SWALLOWS the `?` as string
+    ///     content: 0 slots.
+    ///
+    /// Assuming backslash-escaping under NBE therefore yields a bound-parameter count that
+    /// disagrees with the server's real one — precisely what this flag exists to prevent.
+    /// Pure scanning logic: `translate_placeholders` never dials out, so no server is needed.
+    /// (Like the `build_opts` tests around it, its subject is `my`; it lives in this
+    /// `mod tests` only because of how this change was split across owners.)
+    #[test]
+    fn translate_placeholders_honors_no_backslash_escapes() {
+        // Rust `\\` is ONE literal backslash: the SQL really is  SELECT 'it\', ? FROM t
+        let sql = "SELECT 'it\\', ? FROM t";
+
+        let (_sql, named, order, mixed) = crate::my::translate_placeholders(sql, true);
+        assert_eq!(
+            order.len(),
+            1,
+            "under NO_BACKSLASH_ESCAPES the backslash is a literal byte, so the string \
+             closes at the following quote and the trailing ? is a real placeholder",
+        );
+        assert!(named.is_empty(), "there are no :name placeholders in this SQL");
+        assert!(!mixed, "a lone positional ? must not read as mixed named/positional");
+
+        let (_sql, _named, order, _mixed) = crate::my::translate_placeholders(sql, false);
+        assert_eq!(
+            order.len(),
+            0,
+            "with backslash-escaping the \\' does NOT close the literal, so the ? is \
+             swallowed as string content",
+        );
+    }
+
+    /// F-MY-03, the negative control: the flag must change ONLY the backslash rule. A
+    /// placeholder outside any literal, and the doubled-quote escape (`''`, an escape in
+    /// BOTH modes), behave identically whichever way the flag is set. Without this, the
+    /// test above would also pass for a scanner that simply mis-scans under one mode.
+    #[test]
+    fn translate_placeholders_is_otherwise_unchanged_by_no_backslash_escapes() {
+        // `'it''s'` is a doubled-quote escape in both modes: the literal ends at its final
+        // quote, and BOTH `?` placeholders are real.
+        let sql = "SELECT ? FROM t WHERE a = 'it''s' AND b = ?";
+        for nbe in [false, true] {
+            let (_sql, named, order, mixed) = crate::my::translate_placeholders(sql, nbe);
+            assert_eq!(
+                order.len(),
+                2,
+                "doubled-quote escaping is mode-independent (no_backslash_escapes={nbe})",
+            );
+            assert!(named.is_empty());
+            assert!(!mixed);
+        }
+    }
+
+    /// F-MY-02, the two cases where the socket DOES win: `host=localhost` (php-src's
+    /// literal `strcmp` match) and a DSN naming no host at all (php-src's parser defaults
+    /// `host` to `"localhost"`, so it takes the same arm). Without this negative control,
+    /// a `build_opts` that simply never honored `unix_socket` would pass the test above.
+    #[test]
+    fn build_opts_honors_unix_socket_for_localhost_and_for_a_hostless_dsn() {
+        let (opts, _charset) = crate::my::build_opts(
+            "mysql:host=localhost;unix_socket=/tmp/mysql.sock;dbname=testdb",
+            false,
+        )
+        .expect("build_opts rejected a valid mysql: DSN");
+        let opts: mysql::Opts = opts.into();
+        assert_eq!(
+            opts.get_socket(),
+            Some("/tmp/mysql.sock"),
+            "host=localhost must take the unix_socket path",
+        );
+
+        let (opts, _charset) =
+            crate::my::build_opts("mysql:unix_socket=/tmp/mysql.sock;dbname=testdb", false)
+                .expect("build_opts rejected a valid mysql: DSN");
+        let opts: mysql::Opts = opts.into();
+        assert_eq!(
+            opts.get_socket(),
+            Some("/tmp/mysql.sock"),
+            "a host-less DSN defaults to localhost, so it too must take the socket",
+        );
+    }
+
+    /// F-MY-06: `Pdo\Mysql::ATTR_FOUND_ROWS` ORs `CLIENT_FOUND_ROWS` into the connect
+    /// handshake's capability flags (php-src `mysql_driver.c:776-778`), which switches
+    /// what the server reports as an UPDATE's affected-row count — and so
+    /// `PDOStatement::rowCount()` — from "rows actually CHANGED" to "rows MATCHED by the
+    /// WHERE clause". It is a HANDSHAKE capability, so it can only be selected at connect
+    /// time; it was unwired entirely, leaving no way to opt into the matched-rows
+    /// semantics apps commonly rely on (the difference between `1` and `0` for an UPDATE
+    /// writing a value a row already holds).
+    ///
+    /// Asserted on the BUILT `Opts` — the capability is a bit in the options, so no
+    /// server is needed to prove it is set iff requested. The `mysql` crate ORs
+    /// `additional_capabilities` into the handshake's client flags, and its
+    /// forbidden-flag filter covers only the capabilities the connection manages itself
+    /// (`CLIENT_SSL`, `CLIENT_COMPRESS`, the MULTI_* pair, …) — never `CLIENT_FOUND_ROWS`
+    /// — so a bit present here does reach the server.
+    #[test]
+    fn build_opts_sets_client_found_rows_only_when_requested() {
+        let (opts, _charset) = crate::my::build_opts("mysql:host=localhost;dbname=testdb", true)
+            .expect("build_opts rejected a valid mysql: DSN");
+        let opts: mysql::Opts = opts.into();
+        assert!(
+            opts.get_additional_capabilities()
+                .contains(mysql::consts::CapabilityFlags::CLIENT_FOUND_ROWS),
+            "ATTR_FOUND_ROWS must OR CLIENT_FOUND_ROWS into the handshake capabilities",
+        );
+
+        let (opts, _charset) = crate::my::build_opts("mysql:host=localhost;dbname=testdb", false)
+            .expect("build_opts rejected a valid mysql: DSN");
+        let opts: mysql::Opts = opts.into();
+        assert!(
+            !opts
+                .get_additional_capabilities()
+                .contains(mysql::consts::CapabilityFlags::CLIENT_FOUND_ROWS),
+            "without ATTR_FOUND_ROWS the capability must stay off (php-src's default: an \
+             UPDATE's rowCount() reports rows CHANGED)",
+        );
+    }
+
+    /// F-CORE-02: pins the LAST-KEY-WINS property of `build_opts`'s DSN pair loop, which
+    /// is the mechanism the prelude's MySQL credential precedence is built on and which
+    /// nothing else in CI covers.
+    ///
+    /// php-src is asymmetric by driver: for `pgsql:` the DSN wins, but for `mysql:` the
+    /// CONSTRUCTOR ARGUMENTS win and the DSN's own `user=`/`password=` are only a fallback
+    /// (`mysql_driver.c:948-953`). The prelude implements that by APPENDING `;user=…` /
+    /// `;password=…` to the DSN for a `mysql:` connection (`src/pdo_prelude.rs:691-698`) —
+    /// which overrides the DSN's keys only because the loop above reassigns `user`/
+    /// `password` on every occurrence, so the trailing pair is the one that survives.
+    ///
+    /// That coupling is invisible from either side alone: rewriting the loop to take the
+    /// FIRST occurrence (`user.get_or_insert(value)`) would still pass every other test
+    /// here while silently restoring the pre-F-CORE-02 bug — `new PDO("mysql:…;user=
+    /// readonly", "admin", $pw)` connecting as `readonly`. The only other coverage is a
+    /// live `#[ignore]` test that never runs in CI, so this asserts it on the built `Opts`,
+    /// where no server is needed to prove which credentials would be sent.
+    #[test]
+    fn build_opts_lets_the_last_user_and_password_keys_win() {
+        let (opts, _charset) = crate::my::build_opts(
+            "mysql:host=localhost;dbname=testdb;user=readonly;password=weak;user=admin;\
+             password=strong",
+            false,
+        )
+        .expect("build_opts rejected a valid mysql: DSN");
+        let opts: mysql::Opts = opts.into();
+        assert_eq!(
+            opts.get_user(),
+            Some("admin"),
+            "the trailing user= key (the prelude's appended constructor argument) must win \
+             over the one already in the DSN",
+        );
+        assert_eq!(
+            opts.get_pass(),
+            Some("strong"),
+            "the trailing password= key (the prelude's appended constructor argument) must \
+             win over the one already in the DSN",
+        );
     }
 
     /// v7 SQLite coverage: a clean DDL/INSERT reports SQLSTATE `"00000"`;
@@ -1826,7 +2932,17 @@ mod tests {
 
         // A non-persistent (flag 0) open with sqlite_open_flags=0 creates the file
         // read-write, as today's default does.
-        let rw = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 0, 0, std::ptr::null(), std::ptr::null()) };
+        let rw = unsafe {
+            elephc_pdo_open_persistent(
+                dsn.as_ptr(),
+                0,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+            )
+        };
         assert!(rw > 0, "read-write open failed");
         let ddl = cs("CREATE TABLE t (n INTEGER)");
         assert_eq!(unsafe { elephc_pdo_exec(rw, ddl.as_ptr()) }, 0);
@@ -1834,7 +2950,17 @@ mod tests {
 
         // Reopening with sqlite_open_flags=1 (SQLITE_OPEN_READONLY) must reject a
         // write against the now-existing file.
-        let ro = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 0, 1, std::ptr::null(), std::ptr::null()) };
+        let ro = unsafe {
+            elephc_pdo_open_persistent(
+                dsn.as_ptr(),
+                0,
+                1,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+            )
+        };
         assert!(ro > 0, "read-only open failed");
         let ins = cs("INSERT INTO t VALUES (1)");
         assert_eq!(
@@ -1860,7 +2986,17 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         let dsn = cs(&format!("sqlite:file:{}?mode=ro", path.display()));
-        let id = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 0, 0, std::ptr::null(), std::ptr::null()) };
+        let id = unsafe {
+            elephc_pdo_open_persistent(
+                dsn.as_ptr(),
+                0,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+            )
+        };
         assert_eq!(
             id, -1,
             "mode=ro URI DSN against a nonexistent file should fail to open, not create it"
@@ -2098,6 +3234,66 @@ mod tests {
         assert!(!mixed);
     }
 
+    /// F-PARSE-01 (audit corpus #10), PostgreSQL half — the exact mirror of
+    /// `my_translate_placeholders_triple_colon_not_named`. php-src's pgsql scanner
+    /// rule is `MULTICHAR = [:]{2,}` (`pgsql_sql_parser.re:35`), and re2c matches by
+    /// maximal munch: an ODD run of colons is ONE verbatim text token, not a `::`
+    /// cast pair followed by a fresh named placeholder. Consuming colons two at a
+    /// time left the third colon of `:::c` to be re-scanned as `:c`, conjuring a
+    /// phantom named bind real PHP never emits — and with it a bind-count
+    /// disagreement between elephc and the server. Only the trailing `?` is a slot,
+    /// so the map stays empty and the statement is not "mixed".
+    #[test]
+    fn pg_translate_placeholders_triple_colon_not_named() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT a WHERE b :::c AND d = ?");
+        assert_eq!(sql, "SELECT a WHERE b :::c AND d = $1");
+        assert!(map.is_empty(), "`:::c` must not allocate a named bind slot");
+        assert!(!mixed);
+    }
+
+    /// The even-length counterpart of the greedy-run rule above (pg side). A 4-colon
+    /// run was already emitted verbatim by the old pairwise loop (two exact pairs,
+    /// nothing left over), so this pins that rewriting the `:` arm to consume the
+    /// WHOLE run did not regress the case that used to work: `::::c` still yields no
+    /// named bind and the lone `?` stays the only slot. Together with
+    /// `pg_translate_placeholders_cast_operator` (the 2-colon case) the three
+    /// lengths 2/3/4 are covered.
+    #[test]
+    fn pg_translate_placeholders_quadruple_colon_not_named() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT a WHERE b ::::c AND d = ?");
+        assert_eq!(sql, "SELECT a WHERE b ::::c AND d = $1");
+        assert!(map.is_empty(), "`::::c` must not allocate a named bind slot");
+        assert!(!mixed);
+    }
+
+    /// F-PARSE-02 (audit corpus #12): a dollar-quote TAG may contain non-ASCII
+    /// bytes. php-src's pgsql scanner spells the classes `DOLQ_START =
+    /// [A-Za-z\200-\377_]` and `DOLQ_CONT = [A-Za-z\200-\377_0-9]`
+    /// (`pgsql_sql_parser.re:32-33`), matching PostgreSQL's own lexer, so
+    /// `$café$ … $café$` is a real dollar-quoted string. Gating the tag on
+    /// `is_ascii_alphabetic()` meant the quote never opened, the body fell through
+    /// to the ordinary scanner, and the `?` INSIDE the string literal was rewritten
+    /// into a bind — corrupting the SQL text and inventing a parameter. The ASCII
+    /// contrast (`$cafe$`) is asserted alongside so the test shows the delta is the
+    /// non-ASCII tag byte and nothing else: both must preserve the body verbatim and
+    /// translate only the trailing `?` to `$1`.
+    #[test]
+    fn pg_translate_placeholders_non_ascii_dollar_quote_tag() {
+        let (sql, map, mixed) = pg::translate_placeholders("SELECT $café$ a ? b $café$, ?");
+        assert_eq!(sql, "SELECT $café$ a ? b $café$, $1");
+        assert!(
+            map.is_empty(),
+            "the `?` inside a `$café$` literal must not become a bind"
+        );
+        assert!(!mixed);
+
+        let (ascii_sql, ascii_map, ascii_mixed) =
+            pg::translate_placeholders("SELECT $cafe$ a ? b $cafe$, ?");
+        assert_eq!(ascii_sql, "SELECT $cafe$ a ? b $cafe$, $1");
+        assert!(ascii_map.is_empty());
+        assert!(!ascii_mixed);
+    }
+
     /// A `pgsql:` DSN parses into a libpq connection string.
     #[test]
     fn pg_dsn_parses() {
@@ -2106,9 +3302,52 @@ mod tests {
         assert!(s.contains("dbname='app'"), "got: {s}");
     }
 
+    /// F-PG-03 / F-CORE-10: php-src's pgsql handle factory bounds EVERY connect —
+    /// `pgsql_driver.c:1350,1373,1381` default `connect_timeout` to 30 s and always
+    /// append it to the conninfo — so a black-holed host fails in seconds rather
+    /// than hanging. elephc forwarded no timeout at all, and the pure-Rust
+    /// `postgres` client has no application-level connect bound of its own, so the
+    /// connect could hang for minutes. The default is now folded into the conninfo
+    /// whenever the caller supplied none (the prelude folds `PDO::ATTR_TIMEOUT` into
+    /// the DSN under this very same key, so both seams land on this one check).
+    #[test]
+    fn pg_dsn_defaults_connect_timeout_to_30s() {
+        let s = pg::parse_dsn("pgsql:host=localhost;dbname=app").unwrap();
+        assert!(
+            s.contains("connect_timeout='30'"),
+            "an unbounded connect must be bounded at php-src's 30 s; got: {s}"
+        );
+    }
+
+    /// The other half of F-PG-03: a `connect_timeout` the caller spelled out (in the
+    /// DSN body, or via `PDO::ATTR_TIMEOUT`, which the prelude folds into the DSN
+    /// under the same key) WINS — the 30 s default only fills a gap. This is a
+    /// deliberate, documented divergence from php-src, which overwrites the
+    /// DSN-supplied value with its own; silently ignoring an explicit timeout would
+    /// be the more surprising behavior.
+    #[test]
+    fn pg_dsn_explicit_connect_timeout_wins_over_the_default() {
+        let s = pg::parse_dsn("pgsql:host=localhost;dbname=app;connect_timeout=5").unwrap();
+        assert!(s.contains("connect_timeout='5'"), "got: {s}");
+        assert!(
+            !s.contains("connect_timeout='30'"),
+            "the default must not be appended on top of an explicit value; got: {s}"
+        );
+    }
+
+    /// F-PG-03 must not rescue a DSN that carries nothing usable: the emptiness
+    /// check runs on the caller's OWN keys, BEFORE the default timeout is folded in,
+    /// so a bare `pgsql:` is still the error it always was rather than a connection
+    /// string made non-empty by elephc's own key.
+    #[test]
+    fn pg_dsn_empty_body_still_errors_despite_the_default_timeout() {
+        assert!(pg::parse_dsn("pgsql:").is_err());
+    }
+
     /// Full PostgreSQL round-trip against a live server. Ignored by default; run
-    /// with `ELEPHC_PG_TEST_DSN` set, e.g.
-    /// `ELEPHC_PG_TEST_DSN='pgsql:host=localhost;port=55432;dbname=testdb;user=test;password=test'`.
+    /// with `ELEPHC_PG_TEST_DSN` — or, since F-QUAL-06, the codegen suite's own
+    /// `ELEPHC_PG_DSN` — set, e.g.
+    /// `ELEPHC_PG_DSN='pgsql:host=localhost;port=55432;dbname=testdb;user=test;password=test'`.
     /// Also covers the v7 additions: `elephc_pdo_bind_bool`, `elephc_pdo_bind_blob`
     /// (an embedded-NUL blob and a null-pointer→NULL bind), `elephc_pdo_sqlstate`/
     /// `elephc_pdo_stmt_sqlstate` (`"00000"` after a success, a real SQLSTATE after
@@ -2117,7 +3356,7 @@ mod tests {
     #[test]
     #[ignore]
     fn pg_round_trip() {
-        let Ok(dsn) = std::env::var("ELEPHC_PG_TEST_DSN") else {
+        let Some(dsn) = live_dsn("ELEPHC_PG_TEST_DSN", "ELEPHC_PG_DSN") else {
             return;
         };
         let dsn = cs(&dsn);
@@ -2184,7 +3423,11 @@ mod tests {
         assert_eq!(elephc_pdo_step(q), 1);
         assert_eq!(elephc_pdo_column_int(q, 0), 1);
         assert_eq!(unsafe { read(elephc_pdo_column_name(q, 1)) }, "name");
-        assert_eq!(unsafe { read(elephc_pdo_column_text(q, 1)) }, "Ada");
+        // v24/F-QUAL-03: the NUL-stripping `elephc_pdo_column_text` is gone; a text
+        // column is read through the same byte-exact len+ptr pair the prelude uses.
+        let name_len = elephc_pdo_column_data_len(q, 1);
+        let name_ptr = elephc_pdo_column_data_ptr(q, 1);
+        assert_eq!(unsafe { read_bytes(name_ptr, name_len) }, b"Ada");
         assert_eq!(elephc_pdo_column_double(q, 2), 9.5);
         assert_eq!(elephc_pdo_column_int(q, 3), 1);
         assert_eq!(elephc_pdo_column_data_len(q, 4), 3);
@@ -2230,6 +3473,7 @@ mod tests {
     fn my_translate_placeholders() {
         let (sql, map, order, mixed) = my::translate_placeholders(
             "SELECT * FROM t WHERE a = ? AND b = :b AND c = :b AND d = 'x?:y' AND e = id::text",
+            false,
         );
         assert_eq!(
             sql,
@@ -2245,7 +3489,7 @@ mod tests {
     /// placeholder is translated.
     #[test]
     fn my_translate_placeholders_line_comment() {
-        let (sql, map, order, mixed) = my::translate_placeholders("-- ?\nSELECT ?");
+        let (sql, map, order, mixed) = my::translate_placeholders("-- ?\nSELECT ?", false);
         assert_eq!(sql, "-- ?\nSELECT ?");
         assert_eq!(order, vec![1]);
         assert!(map.is_empty());
@@ -2257,7 +3501,7 @@ mod tests {
     /// php-src's `mysql_sql_parser.re` COMMENTS rule (`"--"[ \t\v\f\r]`).
     #[test]
     fn my_translate_placeholders_double_dash_not_comment() {
-        let (sql, map, order, mixed) = my::translate_placeholders("SELECT a--b, ? FROM t");
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT a--b, ? FROM t", false);
         assert_eq!(sql, "SELECT a--b, ? FROM t");
         assert_eq!(order, vec![1]);
         assert!(map.is_empty());
@@ -2269,7 +3513,7 @@ mod tests {
     /// makes the statement mixed (HY093 at prepare).
     #[test]
     fn my_translate_placeholders_double_dash_keeps_mixed() {
-        let (_sql, map, order, mixed) = my::translate_placeholders("SELECT ?--:c");
+        let (_sql, map, order, mixed) = my::translate_placeholders("SELECT ?--:c", false);
         assert_eq!(order, vec![1, 2]);
         assert_eq!(map.get("c"), Some(&2));
         assert!(mixed);
@@ -2279,7 +3523,7 @@ mod tests {
     /// placeholder is translated.
     #[test]
     fn my_translate_placeholders_hash_comment() {
-        let (sql, map, order, mixed) = my::translate_placeholders("# ?\nSELECT ?");
+        let (sql, map, order, mixed) = my::translate_placeholders("# ?\nSELECT ?", false);
         assert_eq!(sql, "# ?\nSELECT ?");
         assert_eq!(order, vec![1]);
         assert!(map.is_empty());
@@ -2290,7 +3534,7 @@ mod tests {
     /// real placeholder is translated.
     #[test]
     fn my_translate_placeholders_block_comment() {
-        let (sql, map, order, mixed) = my::translate_placeholders("/* ? */ SELECT ?");
+        let (sql, map, order, mixed) = my::translate_placeholders("/* ? */ SELECT ?", false);
         assert_eq!(sql, "/* ? */ SELECT ?");
         assert_eq!(order, vec![1]);
         assert!(map.is_empty());
@@ -2301,7 +3545,7 @@ mod tests {
     /// quote styles are string literals in MySQL's default `sql_mode`).
     #[test]
     fn my_translate_placeholders_double_quote_string() {
-        let (sql, map, order, mixed) = my::translate_placeholders("SELECT \"a?b\", ?");
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT \"a?b\", ?", false);
         assert_eq!(sql, "SELECT \"a?b\", ?");
         assert_eq!(order, vec![1]);
         assert!(map.is_empty());
@@ -2312,7 +3556,7 @@ mod tests {
     /// the string early.
     #[test]
     fn my_translate_placeholders_backslash_in_single_quote() {
-        let (sql, map, order, mixed) = my::translate_placeholders("SELECT 'a\\'b', ?");
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT 'a\\'b', ?", false);
         assert_eq!(sql, "SELECT 'a\\'b', ?");
         assert_eq!(order, vec![1]);
         assert!(map.is_empty());
@@ -2322,8 +3566,23 @@ mod tests {
     /// A backtick-quoted identifier's `?` is preserved verbatim.
     #[test]
     fn my_translate_placeholders_backtick_identifier() {
-        let (sql, map, order, mixed) = my::translate_placeholders("SELECT `we?rd`, ?");
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT `we?rd`, ?", false);
         assert_eq!(sql, "SELECT `we?rd`, ?");
+        assert_eq!(order, vec![1]);
+        assert!(map.is_empty());
+        assert!(!mixed);
+    }
+
+    /// A run of two `?` is not two positional placeholders (P1-a): MySQL has no
+    /// `?` operators to unescape the way PostgreSQL's jsonb `?`/`?|`/`?&` do, so
+    /// the run is emitted verbatim as a text token with no slot allocated —
+    /// `order` stays `[1]`, counting only the lone trailing `?`. The mirror of
+    /// the PostgreSQL `pg_translate_placeholders_jsonb_escape` coverage; the
+    /// load-bearing property both pin is "`??` allocates no bind slot".
+    #[test]
+    fn my_translate_placeholders_double_question_no_slot() {
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT a ?? b, ?", false);
+        assert_eq!(sql, "SELECT a ?? b, ?");
         assert_eq!(order, vec![1]);
         assert!(map.is_empty());
         assert!(!mixed);
@@ -2333,7 +3592,7 @@ mod tests {
     /// the name map.
     #[test]
     fn my_translate_placeholders_named_reuse() {
-        let (sql, map, order, mixed) = my::translate_placeholders("SELECT :a, :a");
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT :a, :a", false);
         assert_eq!(sql, "SELECT ?, ?");
         assert_eq!(order, vec![1, 1]);
         assert_eq!(map.get("a"), Some(&1));
@@ -2345,7 +3604,7 @@ mod tests {
     /// with `HY093` before ever asking the server to prepare it.
     #[test]
     fn my_translate_placeholders_mixed_flag() {
-        let (_, _, _, mixed) = my::translate_placeholders("SELECT ?, :a");
+        let (_, _, _, mixed) = my::translate_placeholders("SELECT ?, :a", false);
         assert!(mixed);
     }
 
@@ -2355,7 +3614,7 @@ mod tests {
     /// ever reaches the server.
     #[test]
     fn my_translate_placeholders_utf8_string_literal_preserved() {
-        let (sql, map, order, mixed) = my::translate_placeholders("SELECT 'café', ?");
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT 'café', ?", false);
         assert_eq!(sql, "SELECT 'café', ?");
         assert_eq!(order, vec![1]);
         assert!(map.is_empty());
@@ -2368,16 +3627,67 @@ mod tests {
     /// only the real trailing `?` does.
     #[test]
     fn my_translate_placeholders_colon_after_alnum_not_named() {
-        let (sql, map, order, mixed) = my::translate_placeholders("SELECT a:b, ?");
+        let (sql, map, order, mixed) = my::translate_placeholders("SELECT a:b, ?", false);
         assert_eq!(sql, "SELECT a:b, ?");
         assert_eq!(order, vec![1]);
         assert!(map.is_empty());
         assert!(!mixed);
     }
 
+    /// F-PARSE-01 (audit corpus #10): an ODD run of colons is one verbatim token,
+    /// not a `::` pair followed by a fresh named placeholder. php-src's
+    /// `MULTICHAR = [:]{2,}` rule is re2c-greedy — maximal munch swallows the whole
+    /// contiguous run — so `:::c` emits no bind at all. Consuming colons two at a
+    /// time left the third colon of the run to be re-scanned as `:c`, conjuring a
+    /// phantom named bind real PHP never emits (and, with it, a bind-count
+    /// disagreement between elephc and the server). Only the trailing `?` is a slot.
+    #[test]
+    fn my_translate_placeholders_triple_colon_not_named() {
+        let (sql, map, order, mixed) =
+            my::translate_placeholders("SELECT a WHERE b :::c AND d = ?", false);
+        assert_eq!(sql, "SELECT a WHERE b :::c AND d = ?");
+        assert_eq!(order, vec![1]);
+        assert!(map.is_empty(), "`:::c` must not allocate a named bind slot");
+        assert!(!mixed);
+    }
+
+    /// The even-length counterpart of the greedy-run rule above. A 4-colon run was
+    /// already emitted verbatim by the old pairwise loop (two exact pairs, nothing
+    /// left over), so this pins that rewriting the `:` arm to consume the WHOLE run
+    /// did not regress the case that used to work — `::::c` still yields no named
+    /// bind, and the lone `?` stays the only slot.
+    #[test]
+    fn my_translate_placeholders_quadruple_colon_not_named() {
+        let (sql, map, order, mixed) =
+            my::translate_placeholders("SELECT a WHERE b ::::c AND d = ?", false);
+        assert_eq!(sql, "SELECT a WHERE b ::::c AND d = ?");
+        assert_eq!(order, vec![1]);
+        assert!(map.is_empty(), "`::::c` must not allocate a named bind slot");
+        assert!(!mixed);
+    }
+
+    /// F-PARSE-07 precondition: both driver scanners must flag the SAME statement —
+    /// one that mixes a positional `?` with a named `:name` — as `mixed`, since that
+    /// single flag is what `PgConn::prepare()` and `MyConn::prepare()` each turn into
+    /// the identical HY093 rejection php-src raises for a mixed-parameter statement.
+    /// The finding itself (the two drivers reported DIFFERENT native codes in
+    /// `errorInfo()[1]` for that one logical error: my = 0, pg = 1) cannot be
+    /// asserted here: the native code is a field on a live `MyConn`/`PgConn`, which
+    /// only a connected server can produce. What is testable without a server — that
+    /// the two scanners agree the statement is rejectable at all — is pinned here.
+    #[test]
+    fn mixed_placeholders_flagged_by_both_scanners() {
+        let sql = "SELECT * FROM t WHERE a = ? AND b = :b";
+        let (_, _, pg_mixed) = pg::translate_placeholders(sql);
+        let (_, _, _, my_mixed) = my::translate_placeholders(sql, false);
+        assert!(pg_mixed, "the pg scanner must flag the mixed statement");
+        assert!(my_mixed, "the my scanner must flag the mixed statement");
+    }
+
     /// Full MySQL/MariaDB round-trip against a live server. Ignored by default; run
-    /// with `ELEPHC_MY_TEST_DSN` set, e.g.
-    /// `ELEPHC_MY_TEST_DSN='mysql:host=localhost;port=33060;dbname=testdb;user=test;password=test'`.
+    /// with `ELEPHC_MY_TEST_DSN` — or, since F-QUAL-06, the codegen suite's own
+    /// `ELEPHC_MY_DSN` — set, e.g.
+    /// `ELEPHC_MY_DSN='mysql:host=localhost;port=33060;dbname=testdb;user=test;password=test'`.
     /// Also covers the v7 additions: `elephc_pdo_bind_bool`, `elephc_pdo_bind_blob`
     /// (an embedded-NUL blob and a null-pointer→NULL bind), `elephc_pdo_sqlstate`/
     /// `elephc_pdo_stmt_sqlstate` (`"00000"` after a success, a real SQLSTATE after
@@ -2386,7 +3696,7 @@ mod tests {
     #[test]
     #[ignore]
     fn my_round_trip() {
-        let Ok(dsn) = std::env::var("ELEPHC_MY_TEST_DSN") else {
+        let Some(dsn) = live_dsn("ELEPHC_MY_TEST_DSN", "ELEPHC_MY_DSN") else {
             return;
         };
         let dsn = cs(&dsn);
@@ -2454,7 +3764,11 @@ mod tests {
         assert_eq!(elephc_pdo_step(q), 1);
         assert_eq!(elephc_pdo_column_int(q, 0), 1);
         assert_eq!(unsafe { read(elephc_pdo_column_name(q, 1)) }, "name");
-        assert_eq!(unsafe { read(elephc_pdo_column_text(q, 1)) }, "Ada");
+        // v24/F-QUAL-03: the NUL-stripping `elephc_pdo_column_text` is gone; a text
+        // column is read through the same byte-exact len+ptr pair the prelude uses.
+        let name_len = elephc_pdo_column_data_len(q, 1);
+        let name_ptr = elephc_pdo_column_data_ptr(q, 1);
+        assert_eq!(unsafe { read_bytes(name_ptr, name_len) }, b"Ada");
         assert_eq!(elephc_pdo_column_double(q, 2), 9.5);
         assert_eq!(elephc_pdo_column_int(q, 3), 1);
         assert_eq!(elephc_pdo_column_data_len(q, 4), 3);
