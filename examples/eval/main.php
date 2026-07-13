@@ -117,7 +117,7 @@ $rounded = eval('return round(3.14159, 2) . ":" . round(2.5);');
 $formatted_number = eval('return number_format(1234567.89, 2, ",", ".");');
 $formatted_text = eval('return sprintf("%s:%04d:%s", "item", 7, vsprintf("%.1f", [3]));');
 $runtime_constants = eval('return PHP_OS . ":" . DIRECTORY_SEPARATOR . ":" . (PHP_INT_MAX > 0 ? "int" : "bad") . ":" . (defined("PHP_EOL") ? "eol" : "bad");');
-$minmax = eval('return min(3, 1, 2) . ":" . max(1.5, 2.5) . ":" . clamp(15, 0, 10);');
+$minmax = eval('return min(3, 1, 2) . ":" . max(1.5, 2.5);');
 $random_range = eval('$r = rand(1, 3); $secure = random_int(4, 4); return (($r >= 1 && $r <= 3) ? "bounded" : "bad") . ":" . ($secure === 4 ? "secure" : "bad");');
 $circle = eval('return round(pi(), 2);');
 $extended_math = eval('return round(sin(pi() / 2), 0) . ":" . log(8, 2) . ":" . hypot(3, 4) . ":" . intdiv(7, 2);');
@@ -138,7 +138,7 @@ $trimmed = eval('return trim("  boxed  ") . ":" . ltrim("0007", "0") . ":" . cho
 $aggregates = eval('return array_sum([1, 2, 3]) . ":" . array_product([2, 3, 4]);');
 $array_map = eval('function eval_example_double($value) { return $value * 2; } function eval_example_pair($left, $right) { return $left . $right; } $mapped = array_map("eval_example_double", ["a" => 2, "b" => 3]); $pairs = array_map("eval_example_pair", ["x"], ["y"]); return $mapped["a"] . ":" . $mapped["b"] . ":" . $pairs[0];');
 $array_reduce = eval('function eval_example_sum($carry, $item) { return $carry + $item; } return array_reduce([1, 2, 3], "eval_example_sum", 10) . ":" . array_reduce([4, 5], "eval_example_sum");');
-$array_walk = eval('function eval_example_walk($value, $key) { echo "walk-" . $key . "=" . $value . "\n"; } return array_walk(["a" => 2, "b" => 3], "eval_example_walk") ? "ok" : "bad";');
+$array_walk = eval('function eval_example_walk($value, $key) { echo "walk-" . $key . "=" . $value . "\n"; } $items = ["a" => 2, "b" => 3]; return array_walk($items, "eval_example_walk") ? "ok" : "bad";');
 $array_pop_shift = eval('$items = ["first", "middle", "last"]; $popped = array_pop($items); $shifted = array_shift($items); return $popped . ":" . $shifted . ":" . count($items) . ":" . $items[0];');
 $array_push_unshift = eval('$items = ["middle"]; array_push($items, "last"); array_unshift($items, "first"); return count($items) . ":" . $items[0] . ":" . $items[2];');
 $array_splice = eval('$items = [10, 20, 30, 40]; $removed = array_splice($items, 1, 2); return count($removed) . ":" . $removed[0] . ":" . count($items) . ":" . $items[1];');
