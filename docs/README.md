@@ -5,7 +5,7 @@ sidebar:
   order: 0
 ---
 
-elephc compiles PHP to native binaries for the supported targets — currently macOS ARM64, Linux ARM64, and Linux x86_64. No interpreter, no VM, no runtime dependencies. This documentation covers everything from PHP syntax support to compiler-specific extensions and internal architecture.
+elephc compiles PHP to standalone native binaries for the supported targets — currently macOS ARM64, Linux ARM64, and Linux x86_64 — without PHP, the Zend Engine, or an external VM. Ordinary source is AOT-compiled; experimental `eval()` may embed an optional interpreter bridge when a fragment requires runtime parsing. This documentation covers everything from PHP syntax support to compiler-specific extensions and internal architecture.
 
 ## Getting Started
 
@@ -40,7 +40,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Operators](php/operators.md) — arithmetic, comparison, `instanceof`, logical, bitwise, string, assignment, ternary, null coalescing, error control
 - [Control Structures](php/control-structures.md) — if/else, while, for, foreach, switch, match, multi-level break/continue, try/catch/finally
 - [Functions](php/functions.md) — declarations, closures, arrow functions, named arguments, variadic, spread, pass-by-reference, first-class callables, static variables
-- [Eval](php/eval.md) — runtime PHP fragment evaluation, scope synchronization, dynamic declarations, supported builtins, and limitations
+- [Eval](php/eval.md) — experimental literal-AOT and runtime PHP fragment evaluation, scope synchronization, dynamic declarations, safety, supported builtins, and limitations
 - [Strings](php/strings.md) — escape sequences, interpolation, heredoc/nowdoc, 70+ built-in string functions
 - [Regex](php/regex.md) — PCRE2-backed `preg_*` functions, SPL regex iterators, and native PCRE2 build requirements
 - [Arrays](php/arrays.md) — indexed, associative, copy-on-write, 50+ built-in array functions
@@ -84,6 +84,7 @@ How elephc works under the hood — from lexing to code generation and runtime s
 - [The Code Generator](internals/the-codegen.md) — checked AST to EIR, then target assembly
 - [The EIR Design](internals/the-ir.md) — PHP-shaped intermediate representation used by codegen and `--emit-ir`
 - [The Runtime](internals/the-runtime.md) — hand-written assembly routines
+- [Eval Runtime Architecture](internals/eval-runtime.md) — literal AOT planning, scope synchronization, Magician fallback, and bridge ABI
 - [Memory Model](internals/memory-model.md) — stack frames, heap, reference counting
 - [Architecture](internals/architecture.md) — module map, calling conventions
 - [ARM64 Assembly](internals/arm64-assembly.md) — introduction to ARM64

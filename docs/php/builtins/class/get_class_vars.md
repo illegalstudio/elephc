@@ -24,10 +24,3 @@ get_class_vars() is available inside eval'd code via the magician interpreter; c
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_class_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_class_vars.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
-

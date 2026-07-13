@@ -284,4 +284,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 
 `usort()` and `uasort()` sort arrays of **objects** as well as scalars. The comparator receives each element as its object handle, so an unannotated comparator's parameters are typed from the array element automatically — `usort($items, fn($a, $b) => $a->weight <=> $b->weight)` works without writing `($a, $b)` type hints, and `usort($dates, fn($a, $b) => $a <=> $b)` over `DateTime`/`DateTimeImmutable` compares by instant. Explicit hints (`function (Item $a, Item $b)`) are equally accepted. Sorting an array of **strings** with a user comparator is not yet supported and reports a clear unsupported-feature error.
 
-**Not supported by design:** `compact()`, `extract()` require runtime variable-name tables and are listed in the roadmap's "Will not implement" section.
+**Not supported yet:** `compact()` and `extract()` need dynamic access to the
+current variable scope. Magician's materialized named scope makes that behavior
+feasible, but these functions are not wired into the compiler or interpreter
+today. Use an associative array explicitly in portable elephc code.

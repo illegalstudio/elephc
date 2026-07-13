@@ -26,13 +26,13 @@ The key difference: an interpreter is always present at runtime, translating as 
 
 ## What elephc does
 
-elephc is a compiler. It takes PHP source code and produces a native binary for the supported targets. No PHP interpreter involved. The output is a standalone executable, just like a C program compiled with `gcc`.
+elephc is a compiler. It takes PHP source code and produces a native binary for the supported targets. No external PHP interpreter is required. The output is a standalone executable, just like a C program compiled with `gcc`.
 
 ```
 hello.php → elephc → hello (native executable) → runs directly on CPU
 ```
 
-The resulting binary has no dependency on PHP and no interpreter or VM. It includes elephc's emitted helper routines and links the platform's native system libraries for OS and libc services.
+The resulting binary has no dependency on PHP, the Zend Engine, or an external VM. It includes elephc's emitted helper routines and links the platform's native system libraries for OS and libc services. Experimental `eval()` is a hybrid boundary: eligible literals are still AOT-compiled, while dynamic fragments embed the optional Magician interpreter bridge inside the executable.
 
 ## The phases of compilation
 
@@ -74,6 +74,6 @@ elephc handles the first four phases. The last two (assembler and linker) are de
 
 PHP is normally interpreted, and that's fine for web servers. So why compile it?
 
-Compiling PHP turns it into fast, standalone native binaries with no interpreter, VM, or runtime dependency — you ship a single executable. PHP is also a great language to compile: its syntax is simple enough to be tractable but rich enough to be interesting (strings, arrays, functions, control flow, type coercion), and millions of developers already know it.
+Compiling PHP turns it into fast, standalone native binaries without an external PHP interpreter or VM — you ship a single executable. PHP is also a great language to compile: its syntax is simple enough to be tractable but rich enough to be interesting (strings, arrays, functions, control flow, type coercion), and millions of developers already know it. Programs that use experimental dynamic `eval()` may carry the optional embedded Magician bridge; the rest of the program remains native code.
 
 The fact that the output is *real assembly* means you can see exactly what the CPU does for every PHP construct. Many of the internals documents use AArch64 examples because that was the original backend and remains the most explanatory path, but the same compiler pipeline now targets more than one platform/architecture pair. `echo 1 + 2` isn't magic — it's a few data moves, an add, a call to a conversion routine, and a system call. You can trace every step.

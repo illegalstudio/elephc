@@ -1,20 +1,82 @@
 ---
 title: "Eval"
-description: "Runtime PHP fragment evaluation, dynamic scope synchronization, supported EvalIR subset, and current limitations."
+description: "Experimental PHP eval support, including literal AOT lowering, dynamic interpreter fallback, scope synchronization, safety, and limitations."
 sidebar:
   order: 5
 ---
 
-`eval($code): mixed` parses and executes a PHP fragment at runtime in the
-caller-visible local scope. It is a PHP language construct, not a normal
-callable: `function_exists("eval")` and `is_callable("eval")` return `false`,
+`eval($code): mixed` evaluates a PHP fragment at the call site in the
+caller-visible local scope. Dynamic source is parsed at runtime; eligible
+string literals may be parsed and lowered ahead of time. It is a PHP language
+construct, not a normal callable: `function_exists("eval")` and
+`is_callable("eval")` return `false`,
 and first-class callable syntax for `eval` is rejected.
 
-Programs that call `eval()` link the optional `elephc_magician` bridge. Programs
-that do not use `eval()` keep the ordinary fully native runtime path and do not
-link the bridge.
+> **Experimental:** Eval support is still evolving. The supported fragment
+> surface and the boundary between AOT lowering and interpreter fallback may
+> change between releases.
+
+> **Security:** `eval()` is not a sandbox. Evaluated code can access the caller's
+> state and the host-visible filesystem, environment, process, and network
+> facilities exposed by supported builtins. Never evaluate untrusted input.
 
 The evaluated string must be a PHP fragment without an opening `<?php` tag.
+The call is statically typed as `mixed`, regardless of the execution path.
+
+## Execution modes
+
+elephc chooses the narrowest execution path it can prove safe:
+
+| Source shape | Execution path | Extra runtime state |
+|---|---|---|
+| Eligible string literal with fully static behavior | Parsed at compile time and lowered through AST -> EIR -> native code | No eval context and no Magician bridge |
+| Eligible string literal that needs only known scope reads/writes | AOT-lowered with direct locals or core eval-scope helpers | Eval scope only; no interpreter bridge |
+| Dynamic string, runtime declaration, include, reference, dynamic dispatch, or unsupported literal construct | Parsed into EvalIR and interpreted at runtime | Persistent eval context, synchronized scopes, and `elephc_magician` |
+
+The compiler makes this decision per literal call. A program may therefore use
+`eval()` without linking Magician when every call is fully handled by the AOT
+paths. A program that needs interpreter fallback links the optional static
+bridge into the standalone binary; programs without that requirement do not.
+`--with-eval` force-links the bridge for testing or indirect use, but it is not
+required to enable the language construct.
+
+The AOT and fallback paths are covered on macOS ARM64, Linux ARM64, and Linux
+x86_64. CI runs dedicated eval integration shards for every supported target.
+
+## Performance
+
+A fully native literal fragment has no runtime parsing or interpreter-dispatch
+cost and does not increase the binary with Magician. Scope-backed AOT adds only
+the materialization required for the statically known reads and writes.
+
+Interpreter fallback parses dynamic source into EvalIR. Exact source strings
+up to 64 KiB share a process-wide FIFO cache of 256 immutable parse results;
+larger fragments bypass the cache. The cache avoids repeated tokenization and
+parsing, but execution remains interpreted and scope/context state is never
+cached. Force-linking with `--with-eval` also increases binary size even if no
+call ultimately requires fallback.
+
+## Quick start
+
+```php
+<?php
+$value = 2;
+$result = eval('$value = $value + 3; return $value * 2;');
+echo $value . "|" . $result . "\n"; // 5|10
+```
+
+Compile and run it like any other program:
+
+```bash
+elephc example.php
+./example
+```
+
+See [`examples/eval/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval)
+for the broad feature showcase and
+[`examples/eval-globals/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval-globals)
+for global-scope synchronization. The implementation boundary is documented in
+[Eval Runtime Architecture](../internals/eval-runtime.md).
 
 ## Scope behavior
 
@@ -23,11 +85,13 @@ Assignments and `unset()` are reflected back into that scope, variables created
 by the fragment remain visible after `eval()`, and `return expr;` returns from
 the `eval()` call itself.
 
-`eval()` is a dynamic barrier for native code. The compiler flushes visible
-locals into a materialized eval scope before entering the bridge, then reloads
-locals that may have been read, written, created, or unset by the evaluated
-fragment. Runtime cells use elephc's boxed `Mixed` representation, so the eval
-interpreter does not introduce a second PHP value ABI.
+When a call needs the dynamic fallback, `eval()` is a runtime barrier. The
+compiler flushes visible locals into a materialized eval scope before entering
+the bridge, then reloads locals that may have been read, written, created, or
+unset by the evaluated fragment. Runtime cells use elephc's boxed `Mixed`
+representation, so the eval interpreter does not introduce a second PHP value
+ABI. Fully native literal paths skip this materialization when their reads and
+writes can be represented directly in EIR.
 
 Inside closures, `use ($x)` captures synchronize only the closure's captured
 copy. `use (&$x)` captures write through the shared source variable, so eval
@@ -914,10 +978,12 @@ labels, and eval property references when alias metadata is available.
 
 ## Current limitations
 
-Eval executes through the `elephc_magician` interpreter bridge, not through the full
-static AST -> EIR -> native codegen pipeline used for ordinary elephc source.
-Unsupported constructs and missing class names during eval object construction
-fail at runtime with an eval fatal diagnostic.
+Dynamic fragments and literal fragments outside the current AOT eligibility
+rules execute through the `elephc_magician` interpreter bridge. Eligible
+literal fragments instead use the normal AST -> EIR -> native codegen pipeline,
+either with direct caller locals or with core eval-scope helpers. Unsupported
+constructs that reach the interpreter, and missing class names during eval
+object construction, fail at runtime with an eval fatal diagnostic.
 
 The fragment subset is broad but not the full elephc language surface. Eval
 retains `ReflectionFunction` closure metadata for common
@@ -974,7 +1040,8 @@ by-reference free-function bridge shapes beyond the current
 Mixed/scalar/string/one-word heap slice remain metadata-only rather than
 invocable through eval.
 
-Because `eval()` is a dynamic barrier, the compiler must be conservative after
-an eval call. Values that cross the barrier may be widened to boxed `Mixed`
-storage internally, and optimizer/type facts from before the call cannot be
-blindly reused afterward.
+The type checker and AST optimizer conservatively treat every `eval()` call as
+a dynamic barrier: local facts are widened, constant propagation is invalidated,
+and pre-call facts cannot be blindly reused afterward. Later EIR planning may
+prove that a literal fragment can run natively and omit the runtime barrier;
+values that actually cross a dynamic barrier use boxed `Mixed` storage.

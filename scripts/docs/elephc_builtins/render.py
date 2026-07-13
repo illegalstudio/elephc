@@ -302,7 +302,7 @@ def render_user(b: dict, order: int, repo_root: Path) -> str:
     _ = repo_root  # reserved for future cross-repo links
     area_lower = b['area'].lower()
     article = "an" if area_lower[0] in "aeiou" else "a"
-    return USER_TEMPLATE.format(
+    rendered = USER_TEMPLATE.format(
         name=b["name"],
         short_description=_short_description(b).replace('"', '\\"'),
         area=b["area"],
@@ -319,6 +319,11 @@ def render_user(b: dict, order: int, repo_root: Path) -> str:
         see_also_section=_see_also_section(b),
         internals_link=_internals_link(b),
     )
+    # Empty optional sections can stack several blank lines. Preserve the
+    # established output otherwise, but collapse pathological trailing runs.
+    if rendered.endswith("\n\n\n"):
+        return rendered.rstrip() + "\n"
+    return rendered
 
 
 def render_internals(b: dict, order: int, repo_root: Path) -> str:
