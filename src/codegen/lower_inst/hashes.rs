@@ -972,6 +972,27 @@ fn materialize_hash_concrete_value_x86_64(
     Ok(())
 }
 
+/// Reports whether a successful hash lookup can materialize a value of this PHP type.
+///
+/// Mirrors the arms of [`emit_hash_get_success_aarch64`] and its x86_64 twin. Hash storage has no
+/// representation for the types this rejects, and `hash_set` has no arm for them either — so no
+/// value of such a type can be inside a hash to begin with. Callers that emit a promoted-storage
+/// read *speculatively* — an `Array(_)`-typed local may be hash-backed at runtime, so the read is
+/// emitted behind a storage-kind branch — must gate on this: for an unrepresentable element type
+/// the branch is not merely unreachable, it fails the whole compilation. `?int` (`TaggedScalar`)
+/// is the case that exposed this.
+pub(super) fn hash_get_supports_value_type(value_ty: &PhpType) -> bool {
+    matches!(
+        value_ty,
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Callable
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Mixed
+    ) || value_ty.is_refcounted()
+}
+
 /// Moves a successful AArch64 hash lookup payload into the canonical result registers.
 pub(super) fn emit_hash_get_success_aarch64(
     ctx: &mut FunctionContext<'_>,

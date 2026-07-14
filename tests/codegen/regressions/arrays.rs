@@ -1966,3 +1966,343 @@ echo $r->next(), "|", $r->next(), "|", $r->next(), "|\n";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "a.txt|b.txt||\n");
 }
+
+/// A nullable-int array element (`?int` — `TaggedScalar`) has NO hash representation: neither
+/// `hash_get` nor `hash_set` can materialize one. The storage-kind dispatch added to `ArrayGet`
+/// emits its promoted-hash branch *speculatively* (an `Array(_)` local may be hash-backed at
+/// runtime), and emitting it for such an element type does not sit unreached — it fails the whole
+/// compilation with `unsupported EIR backend feature: hash_get value PHP type TaggedScalar`.
+///
+/// This shape lives in `ir_backend_smoke_test`, a binary the codegen suite does not cover, so it
+/// went unseen until the x86_64 run. Anchor it here, in the suite that is actually run.
+#[test]
+fn test_nullable_int_array_elements_still_compile_after_kind_dispatch() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function maybe_int(int $x): ?int {
+    if ($x) {
+        return 7;
+    }
+    return null;
+}
+$a = [maybe_int(1), maybe_int(0)];
+var_dump($a[0]);
+var_dump($a[1]);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "int(7)\nNULL\n");
+}
+
+/// A loop body is lowered ONCE, against the local types that hold at loop ENTRY. An element write
+/// whose value type does not fit the array's element type re-types the local to `Array(Mixed)` and
+/// emits `Op::ArrayToMixed`, which at runtime REPLACES every element slot with a boxed Mixed cell.
+/// Every op lowered ABOVE that write in the same body was therefore compiled against the OLD, raw
+/// representation — right on iteration 1, reading a Mixed cell pointer as a raw value from
+/// iteration 2 on. It is a back-edge-only bug: straight-line code and `if` branches are correct.
+///
+/// Here the inner array's push widens `$m` (element `Array(Int)` -> `Array(Mixed)`), so from the
+/// second iteration `count($m[0])` read a boxed cell as an array header: `1 5 5 5` instead of
+/// `1 2 3 4`. The loop lowerings now pre-widen loop-carried arrays in the preheader and re-lower
+/// the body against the widened environment (`stmt::lower_loop_at_type_fixpoint`).
+#[test]
+fn test_loop_body_nested_push_widening_is_prewidened_in_preheader() {
+    let out = compile_and_run_capture(
+        r#"<?php $m = [[]]; for ($i = 0; $i < 4; $i++) { $m[0][] = $i; echo count($m[0]), " "; }
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1 2 3 4 ");
+}
+
+/// The same back-edge miscompile through a READ lowered above the widening point: `$b = $m[0]`
+/// is compiled against `Array(Array(Int))`, but the `$m[1] = "s"` below it converts `$m`'s slots to
+/// boxed Mixed cells. From iteration 2 the read handed `count()` a Mixed cell instead of the inner
+/// array, so the count drifted (`3 4 4` instead of `3 3 3`).
+#[test]
+fn test_loop_body_read_above_widening_point_sees_widened_array() {
+    let out = compile_and_run_capture(
+        r#"<?php $m = [[1,2,3]]; for ($i = 0; $i < 3; $i++) { $b = $m[0]; echo count($b), " "; $m[1] = "s"; }
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3 3 3 ");
+}
+
+/// The write-side of the same bug, and its worst outcome: `$m[0] = 9` is lowered as a raw int store
+/// into an `Array(Int)` slot, but `$m[1] = "s"` below it re-typed `$m` to `Array(Mixed)`. From
+/// iteration 2 the int store overwrote a live Mixed cell POINTER with the scalar 9, and the trailing
+/// `var_dump($m[0])` dereferenced it — SIGSEGV (exit 139), not merely a wrong value.
+#[test]
+fn test_loop_body_scalar_write_above_widening_point_does_not_segfault() {
+    let out = compile_and_run_capture(
+        r#"<?php $m = [1,2,3]; for ($i = 0; $i < 3; $i++) { $m[0] = 9; $m[1] = "s"; } var_dump($m[0]);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "int(9)\n");
+}
+
+/// The fixed point must hold for every loop lowering, not just `for`, and the preheader conversion
+/// must be idempotent: an inner loop's preheader re-runs on every outer iteration, and
+/// `__rt_array_to_mixed` re-stamps an already-Mixed array without re-boxing its slots. The zero-trip
+/// case is covered too: code after the loop is compiled against `Array(Mixed)` whether or not the
+/// body ever ran, so the array has to be converted even when the loop does not execute.
+#[test]
+fn test_loop_array_prewidening_covers_while_do_foreach_nested_and_zero_trip() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$m = [1,2,3];
+for ($i = 0; $i < 3; $i++) {
+    for ($j = 0; $j < 2; $j++) { $m[0] = $i; $m[1] = "s$j"; }
+    echo $m[0], "|", $m[1], " ";
+}
+echo "\n";
+$z = [1,2,3];
+for ($i = 0; $i < 0; $i++) { $z[1] = "s"; }
+var_dump($z[0]);
+$w = [1,2,3];
+$k = 0;
+while ($k < 3) { echo $w[0], " "; $w[0] = "x"; $k++; }
+echo "\n";
+$d = [1,2,3];
+$n = 0;
+do { echo $d[1], " "; $d[1] = "y"; $n++; } while ($n < 3);
+echo "\n";
+$f = [1,2,3];
+foreach ([0,1] as $ignored) { echo $f[0], " "; $f[0] = "z"; }
+echo "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "0|s1 1|s1 2|s1 \nint(1)\n1 x x \n2 y y \n1 z \n"
+    );
+}
+
+// --- `if` arm-exit type join: an element write widens an array on ONE arm only ---
+//
+// Every array below is built from a PARAMETER on purpose. An array built from a plain literal is
+// const-folded — `echo $m[0]` lowers to `const_i64 1` — so a literal-only fixture would pass
+// VACUOUSLY without ever exercising the widened representation. A helper returning `array` is the
+// other trap: it yields `Array(Mixed)`, which is already boxed and hides the bug too.
+
+/// A bare `if` with NO else, and a read after it. The then-arm's element write re-types `$m` to
+/// `Array(Mixed)` — which at runtime replaces every element slot with a boxed cell pointer — and
+/// that type fact used to leak straight past the arm split into the implicit else and into the
+/// code after the `if` (the tail-sinking pass copies it into every fall-through arm). On the
+/// `f(0)` call the array is still raw, so the boxed read dereferenced a raw integer: the second
+/// line of output was silently lost.
+#[test]
+fn test_if_then_arm_array_widening_does_not_leak_into_implicit_else() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function f(int $c): void {
+    $m = [$c, 2, 3];
+    if ($c > 0) { $m[1] = "s"; }
+    echo $m[0], "\n";
+}
+f(1);
+f(0);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1\n0\n");
+}
+
+/// The else arm REBUILDS the array, so no conversion placed in a dominator of the `if` could ever
+/// fix it: whatever the preheader (or the block before the `if`) converts, `$m = [...]` overwrites
+/// with a fresh, concretely-typed array. The conversion has to live on the arm's own exit edge.
+#[test]
+fn test_if_else_arm_rebuilt_array_is_converted_on_its_own_exit_edge() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function f(int $c): void {
+    $m = [$c, 2, 3];
+    if ($c > 0) { $m[1] = "s"; } else { $m = [$c + 7, $c + 8, $c + 9]; }
+    echo $m[0], "|", $m[1], "\n";
+}
+f(1);
+f(0);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1|s\n7|8\n");
+}
+
+/// The same defect through an `elseif` chain. Every arm of the chain branches to ONE merge, so the
+/// join has to be computed across all of them at once — a pairwise join per recursion level would
+/// reconcile the wrong pairs. This used to lose most of the program's output.
+#[test]
+fn test_if_elseif_chain_joins_every_arm_against_one_merge() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function g(int $c): void {
+    $m = [$c, 2, 3];
+    if ($c === 1) { $m[1] = "one"; }
+    elseif ($c === 2) { $m[1] = "two"; }
+    else { $m[1] = "other"; }
+    echo $m[0], " ", $m[1], "\n";
+}
+g(0);
+g(1);
+g(2);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0 other\n1 one\n2 two\n");
+}
+
+/// A widening `if` inside a loop body needs BOTH halves of the fix: the loop preheader converts the
+/// array once, so the read above the `if` (compiled against the widened type on every iteration)
+/// sees boxed slots; and the arm join converts the array the else arm REBUILDS, so the back edge
+/// does not carry a raw array into a header compiled for a boxed one.
+#[test]
+fn test_loop_body_if_arm_rebuilds_array_and_back_edge_stays_boxed() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function h(int $c): void {
+    $m = [$c, 2, 3];
+    for ($i = 0; $i < 3; $i++) {
+        echo $m[0], " ";
+        if ($i == 0) { $m[1] = "s"; } else { $m = [7, 8, 9]; }
+    }
+    echo "\n";
+    $w = [$c, 2, 3];
+    $k = 0;
+    while ($k < 3) {
+        echo $w[0], " ";
+        if ($k == 0) { $w[1] = "s"; } else { $w = [7, 8, 9]; }
+        $k++;
+    }
+    echo "\n";
+}
+h(1);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1 1 7 \n1 1 7 \n");
+}
+
+/// The widening arm `continue`s, so it is TERMINATED: it contributes no edge to the merge and its
+/// type fact is rolled back at the arm split. The loop's pre-widening discovery therefore cannot
+/// read the widening off the body's exit environment — it has to read the sticky record every
+/// element widening leaves behind (`LoweringContext::widened_indexed_arrays`). Without that record
+/// the preheader conversion is skipped while the body is still lowered against the widened array.
+#[test]
+fn test_loop_widening_arm_that_continues_is_still_pre_widened() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function c(int $n): void {
+    $m = [$n, 2, 3];
+    for ($i = 0; $i < 4; $i++) {
+        if ($i == 1) { $m[1] = "s"; continue; }
+        echo $m[0], " ";
+    }
+    echo "\n";
+    echo $m[1], "\n";
+}
+c(4);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "4 4 4 \ns\n");
+}
+
+/// The same, for a widening arm that `break`s out of the loop: the array is read after the loop,
+/// where it is typed `Array(Mixed)`, so it must actually have been converted on that path.
+#[test]
+fn test_loop_widening_arm_that_breaks_is_still_pre_widened() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function b(int $n): void {
+    $m = [$n, 2, 3];
+    for ($i = 0; $i < 4; $i++) {
+        if ($i == 2) { $m[1] = "s"; break; }
+        echo $m[0], " ";
+    }
+    echo "\n";
+    echo $m[0], " ", $m[1], "\n";
+}
+b(4);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "4 4 \n4 s\n");
+}
+
+/// Both arms start from an EMPTY literal, whose element type is the `Never`/`Void` placeholder, and
+/// each appends a different concrete type. The join must not let either arm silently adopt the
+/// other's element type: it widens to `Array(Mixed)` and converts both arms. Converting a
+/// zero-length array is O(1), so paying for it is cheaper than depending on what an empty literal
+/// stamps into the array header.
+#[test]
+fn test_if_arms_appending_different_types_to_an_empty_array_join_to_mixed() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function e(int $c): void {
+    $m = [];
+    if ($c > 0) { $m[] = $c; } else { $m[] = "s"; }
+    echo $m[0], "\n";
+}
+e(1);
+e(0);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1\ns\n");
+}
+
+/// KNOWN STILL BROKEN — `switch` has the same defect and the `if` arm-tail join does NOT fix it.
+/// Every case body is lowered against one shared, forward-leaking environment, and PHP fall-through
+/// gives each case TWO predecessors (its own `case` edge and the previous body's fall-through), so
+/// the reconciliation a `switch` needs is a join at each case HEAD, not one at a single merge.
+/// That is strictly bigger than the `if` fix and is deliberately left out of it.
+#[test]
+#[ignore = "switch case bodies share one env and each case head has two predecessors; needs a per-case-head join"]
+fn test_switch_case_array_widening_does_not_leak_into_later_cases() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function s(int $c): void {
+    $m = [$c, 2, 3];
+    switch ($c) {
+        case 1: $m[1] = "s"; break;
+        default: break;
+    }
+    echo $m[0], "\n";
+}
+s(1);
+s(0);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1\n0\n");
+}
+
+/// KNOWN STILL BROKEN — `try`/`catch` has the same defect and an exit-edge join cannot fix it. The
+/// handler is lowered against the try body's EXIT environment, but a handler is reachable from
+/// EVERY point inside the try, including from above the widening write. Making it correct requires
+/// pre-widening at the try's ENTRY (the same trick the loop preheader uses), not a tail join.
+#[test]
+#[ignore = "catch is lowered against the try body's exit env but is reachable from every point in the try; needs try-entry pre-widening"]
+fn test_try_body_array_widening_does_not_leak_into_the_catch_handler() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function t(int $c): void {
+    $m = [$c, 2, 3];
+    try {
+        if ($c > 0) { throw new Exception("x"); }
+        $m[1] = "s";
+    } catch (Exception $e) {
+        echo $m[0], "\n";
+    }
+    echo $m[0], "\n";
+}
+t(1);
+t(0);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1\n1\n0\n");
+}

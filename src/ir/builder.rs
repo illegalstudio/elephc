@@ -145,6 +145,32 @@ impl<'f> Builder<'f> {
         self.current
     }
 
+    /// Clones the entire function body so a speculative lowering can be undone exactly.
+    ///
+    /// A length-truncation rollback would be unsound: the function tables are append-only for
+    /// *new* entries, but lowering also MUTATES existing ones — `widen_local_storage_type`
+    /// rewrites a `LocalSlot`'s `php_type`/`ir_type` in place, and `terminate` writes a
+    /// terminator into a block that already existed. Only a wholesale clone restores both the
+    /// tables' lengths and the contents of the entries that survived.
+    pub fn snapshot_function(&self) -> Function {
+        self.func.clone()
+    }
+
+    /// Restores a function body captured by `snapshot_function`, discarding everything emitted
+    /// since. The insertion cursor is restored separately by `restore_insertion_cursor`, because
+    /// a caller may want to resume at a different block than the one that was current.
+    pub fn restore_function(&mut self, function: Function) {
+        *self.func = function;
+    }
+
+    /// Restores the insertion cursor recorded alongside a function snapshot.
+    pub fn restore_insertion_cursor(&mut self, block: Option<BlockId>) {
+        if let Some(block) = block {
+            self.assert_block_exists(block);
+        }
+        self.current = block;
+    }
+
     /// Returns true when the selected block already has a terminator.
     pub fn insertion_block_is_terminated(&self) -> bool {
         self.current

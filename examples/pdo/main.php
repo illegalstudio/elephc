@@ -42,13 +42,19 @@ class ContactRow {
     public mixed $name;
 }
 
-// FETCH_CLASS creates the requested row class and assigns columns directly.
-$classRow = $db->query("SELECT id, name FROM contacts WHERE id = 3")->fetch(PDO::FETCH_CLASS, ContactRow::class);
+// FETCH_CLASS creates the requested row class and assigns columns directly. The class is carried by
+// setFetchMode(), NOT by fetch(): fetch()'s second parameter is the cursor orientation, so passing a
+// class name to it is a TypeError in PHP.
+$classStmt = $db->query("SELECT id, name FROM contacts WHERE id = 3");
+$classStmt->setFetchMode(PDO::FETCH_CLASS, ContactRow::class);
+$classRow = $classStmt->fetch();
 echo "Class fetch: " . (($classRow instanceof ContactRow) ? "ContactRow" : "other") . " #" . $classRow->id . "\n";
 
-// FETCH_INTO fills and returns an existing object.
+// FETCH_INTO fills and returns an existing object — again selected through setFetchMode().
 $into = new ContactRow();
-$same = $db->query("SELECT id, name FROM contacts WHERE id = 2")->fetch(PDO::FETCH_INTO, $into);
+$intoStmt = $db->query("SELECT id, name FROM contacts WHERE id = 2");
+$intoStmt->setFetchMode(PDO::FETCH_INTO, $into);
+$same = $intoStmt->fetch();
 echo "Into fetch: " . (($same === $into) ? "same" : "different") . " #" . $into->id . "\n\n";
 
 // Binary values preserve embedded NUL bytes.

@@ -636,6 +636,11 @@ fn lower_array_get_aarch64(
     // representation to produce for `Void`/`Never`, so such a receiver keeps the packed-only path:
     // every read of it is a miss either way.
     let elem_is_empty = matches!(elem_ty.codegen_repr(), PhpType::Void | PhpType::Never);
+    // The promoted read is emitted speculatively, so it must be *representable* for every element
+    // type it is emitted for — an unsupported one fails the compile instead of sitting unreached.
+    // `?int` (`TaggedScalar`) has no hash representation on either side of the lookup, so an array
+    // of them can never be hash-backed and the packed-only path stays correct.
+    let can_read_promoted = !elem_is_empty && super::hashes::hash_get_supports_value_type(elem_ty);
     // Gate on the IR type, NOT the PHP type: `Op::IChecked*` — what `$i++` lowers to — reports a
     // PHP type of `Mixed` while its runtime value is a RAW INTEGER. Unboxing that as a cell pointer
     // reads garbage, and every read through an incremented loop counter silently returned nothing.
@@ -643,7 +648,7 @@ fn lower_array_get_aarch64(
         ctx.value_ir_type(index)?,
         crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)
     );
-    if !elem_is_empty {
+    if can_read_promoted {
         ctx.load_value_to_reg(array, array_reg)?;
         ctx.emitter.instruction(&format!("ldr {}, [{}, #-8]", len_reg, array_reg)); // load the storage-kind metadata word from the array header
         ctx.emitter.instruction(&format!("and {}, {}, #0xff", len_reg, len_reg)); // isolate the low byte holding the storage kind
@@ -673,7 +678,7 @@ fn lower_array_get_aarch64(
 
     // -- promoted to hash storage: read through the hash, materializing the SAME representation
     //    the packed path produces, so the op's result type is unchanged --
-    if !elem_is_empty {
+    if can_read_promoted {
         ctx.emitter.label(&promoted_label);
         super::hashes::materialize_hash_key_aarch64(ctx, index)?;
         ctx.load_value_to_reg(array, "x0")?;
@@ -759,6 +764,10 @@ fn lower_array_get_x86_64(
     // fields as elements.
     // See the AArch64 twin: an array with no element type keeps the packed-only path.
     let elem_is_empty = matches!(elem_ty.codegen_repr(), PhpType::Void | PhpType::Never);
+    // See the AArch64 twin: the promoted read is emitted speculatively, so an element type the hash
+    // path cannot materialize (`?int` — `TaggedScalar`) fails the compile rather than sitting
+    // unreached. Such an array can never be hash-backed, so the packed-only path stays correct.
+    let can_read_promoted = !elem_is_empty && super::hashes::hash_get_supports_value_type(elem_ty);
     // Gate on the IR type, NOT the PHP type: `Op::IChecked*` — what `$i++` lowers to — reports a
     // PHP type of `Mixed` while its runtime value is a RAW INTEGER. Unboxing that as a cell pointer
     // reads garbage, and every read through an incremented loop counter silently returned nothing.
@@ -766,7 +775,7 @@ fn lower_array_get_x86_64(
         ctx.value_ir_type(index)?,
         crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)
     );
-    if !elem_is_empty {
+    if can_read_promoted {
         ctx.load_value_to_reg(array, array_reg)?;
         ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} - 8]", len_reg, array_reg)); // load the storage-kind metadata word from the array header
         ctx.emitter.instruction(&format!("and {}, 0xff", len_reg));             // isolate the low byte holding the storage kind
@@ -794,7 +803,7 @@ fn lower_array_get_x86_64(
 
     // -- promoted to hash storage: read through the hash, materializing the SAME representation
     //    the packed path produces, so the op's result type is unchanged --
-    if !elem_is_empty {
+    if can_read_promoted {
         ctx.emitter.label(&promoted_label);
         super::hashes::materialize_hash_key_x86_64(ctx, index)?;
         ctx.load_value_to_reg(array, "rdi")?;

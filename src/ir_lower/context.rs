@@ -88,6 +88,80 @@ pub(crate) struct ClosureCapture {
     pub value: ValueId,
 }
 
+/// Complete rollback point for a speculative lowering.
+///
+/// A loop body must be lowered ONCE against a local-type environment the back edge cannot
+/// invalidate, so `stmt::lower_loop_at_type_fixpoint` first lowers it speculatively to discover
+/// which locals it widens, then throws that lowering away and re-lowers against the widened
+/// environment. Everything the discovery pass could have mutated is captured here; a field that
+/// is captured but not restored is a silent miscompile, so `LoweringContext::snapshot`
+/// destructures the context exhaustively to make a forgotten field a compile error.
+pub(crate) struct LoweringSnapshot {
+    function: Function,
+    insertion_block: Option<BlockId>,
+    data: DataPoolLengths,
+    local_slots: HashMap<String, LocalSlotId>,
+    local_kinds: HashMap<String, LocalKind>,
+    local_types: TypeEnv,
+    initialized_slots: HashSet<LocalSlotId>,
+    constants: HashMap<String, (ExprKind, PhpType)>,
+    loop_stack: Vec<LoopFrame>,
+    finally_stack: Vec<FinallyFrame>,
+    static_callable_locals: HashMap<String, StaticCallableBinding>,
+    fiber_start_sigs: HashMap<String, FunctionSig>,
+    ref_bound_locals: HashSet<String>,
+    ref_cell_owner_locals: HashMap<String, LocalSlotId>,
+    foreach_int_key_locals: HashSet<String>,
+    widened_indexed_arrays: HashSet<String>,
+    closure_count: usize,
+    pending_static_callable_result: Option<StaticCallableBinding>,
+    closure_counter: usize,
+    hidden_temp_counter: usize,
+}
+
+/// Interned-pool lengths captured before a speculative lowering.
+///
+/// The pools are append-only and content-addressed (`intern_string_vec` returns the index of an
+/// existing entry), so entries that predate the snapshot keep their `DataId` and a rolled-back
+/// pass re-interns to exactly the same ids. Truncating back to these lengths therefore removes
+/// precisely the entries a discarded lowering added, and nothing outside the discarded `Function`
+/// (or the discarded closure functions) can hold a `DataId` past them.
+struct DataPoolLengths {
+    strings: usize,
+    float_literals: usize,
+    global_names: usize,
+    function_names: usize,
+    class_names: usize,
+    method_names: usize,
+    property_names: usize,
+}
+
+impl DataPoolLengths {
+    /// Records the current length of every interned pool.
+    fn capture(data: &DataPool) -> Self {
+        Self {
+            strings: data.strings.len(),
+            float_literals: data.float_literals.len(),
+            global_names: data.global_names.len(),
+            function_names: data.function_names.len(),
+            class_names: data.class_names.len(),
+            method_names: data.method_names.len(),
+            property_names: data.property_names.len(),
+        }
+    }
+
+    /// Drops every pool entry interned after the snapshot.
+    fn truncate(&self, data: &mut DataPool) {
+        data.strings.truncate(self.strings);
+        data.float_literals.truncate(self.float_literals);
+        data.global_names.truncate(self.global_names);
+        data.function_names.truncate(self.function_names);
+        data.class_names.truncate(self.class_names);
+        data.method_names.truncate(self.method_names);
+        data.property_names.truncate(self.property_names);
+    }
+}
+
 /// Mutable state for one function body while it is lowered.
 pub(crate) struct LoweringContext<'m, 'f> {
     pub builder: Builder<'f>,
@@ -125,6 +199,17 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// still promoting for keys that may be strings (generic `Array(Mixed)`,
     /// `AssocArray`, `Mixed`, `Union` sources).
     foreach_int_key_locals: HashSet<String>,
+    /// Locals an already-lowered element write has widened from a concretely-typed indexed array
+    /// to `Array(Mixed)`, at ANY point in the body lowered so far.
+    ///
+    /// The record has to be sticky because the widening's only other trace — the local's current
+    /// type fact — is rolled back at every `if` arm split, and a widening arm that `continue`s or
+    /// `break`s contributes no edge to the arm join either. A loop that only widens on such a path
+    /// would then look, from its body-exit environment, as if it never widened at all, and its
+    /// preheader would skip the pre-widening the body was lowered against. Membership is only ever
+    /// used to pre-widen MORE arrays than strictly necessary, which is a pessimization (a Mixed
+    /// array is semantically identical), never a miscompile.
+    pub widened_indexed_arrays: HashSet<String>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
@@ -191,6 +276,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ref_bound_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
+            widened_indexed_arrays: HashSet::new(),
             return_type,
             return_php_type,
             by_ref_return: false,
@@ -202,6 +288,129 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             closure_counter: 0,
             hidden_temp_counter: 0,
         }
+    }
+
+    /// Captures every piece of state a speculative lowering can mutate.
+    ///
+    /// The `Self { .. }` pattern is written out field by field ON PURPOSE, with no `..` rest
+    /// pattern: a field added to `LoweringContext` later must not silently escape the rollback,
+    /// so it has to fail to compile here until someone decides how it is restored.
+    pub(crate) fn snapshot(&self) -> LoweringSnapshot {
+        let Self {
+            builder,
+            data,
+            local_slots,
+            local_kinds,
+            local_types,
+            initialized_slots,
+            // Shared, read-only lookup tables for the whole module: lowering never writes them.
+            functions: _,
+            extern_functions: _,
+            extern_globals: _,
+            callable_param_sigs: _,
+            fiber_return_sigs: _,
+            classes: _,
+            enums: _,
+            interfaces: _,
+            packed_classes: _,
+            throw_access_sites: _,
+            constants,
+            // Fixed for the whole body being lowered (set once by `ir_lower::function`).
+            top_level_env: _,
+            current_class: _,
+            loop_stack,
+            finally_stack,
+            static_callable_locals,
+            fiber_start_sigs,
+            ref_bound_locals,
+            ref_cell_owner_locals,
+            foreach_int_key_locals,
+            widened_indexed_arrays,
+            return_type: _,
+            return_php_type: _,
+            by_ref_return: _,
+            in_main: _,
+            all_global_var_names: _,
+            owner_name: _,
+            closures,
+            pending_static_callable_result,
+            closure_counter,
+            hidden_temp_counter,
+        } = self;
+        LoweringSnapshot {
+            function: builder.snapshot_function(),
+            insertion_block: builder.insertion_block(),
+            data: DataPoolLengths::capture(data),
+            local_slots: local_slots.clone(),
+            local_kinds: local_kinds.clone(),
+            local_types: local_types.clone(),
+            initialized_slots: initialized_slots.clone(),
+            constants: constants.clone(),
+            loop_stack: loop_stack.clone(),
+            finally_stack: finally_stack.clone(),
+            static_callable_locals: static_callable_locals.clone(),
+            fiber_start_sigs: fiber_start_sigs.clone(),
+            ref_bound_locals: ref_bound_locals.clone(),
+            ref_cell_owner_locals: ref_cell_owner_locals.clone(),
+            foreach_int_key_locals: foreach_int_key_locals.clone(),
+            widened_indexed_arrays: widened_indexed_arrays.clone(),
+            closure_count: closures.len(),
+            pending_static_callable_result: pending_static_callable_result.clone(),
+            closure_counter: *closure_counter,
+            hidden_temp_counter: *hidden_temp_counter,
+        }
+    }
+
+    /// Undoes every effect of a speculative lowering, back to the snapshot point.
+    ///
+    /// Closure literals are the one sink that lives OUTSIDE the function being built:
+    /// `function::lower_closure_function_with_signature` pushes each lowered closure body into
+    /// `self.closures` (and the module later drains it). Truncating that vector to its recorded
+    /// length, together with restoring `closure_counter`, means a re-lowering re-creates the same
+    /// closure functions under the same generated names instead of duplicating them.
+    pub(crate) fn restore(&mut self, snapshot: LoweringSnapshot) {
+        let LoweringSnapshot {
+            function,
+            insertion_block,
+            data,
+            local_slots,
+            local_kinds,
+            local_types,
+            initialized_slots,
+            constants,
+            loop_stack,
+            finally_stack,
+            static_callable_locals,
+            fiber_start_sigs,
+            ref_bound_locals,
+            ref_cell_owner_locals,
+            foreach_int_key_locals,
+            widened_indexed_arrays,
+            closure_count,
+            pending_static_callable_result,
+            closure_counter,
+            hidden_temp_counter,
+        } = snapshot;
+        self.builder.restore_function(function);
+        self.builder.restore_insertion_cursor(insertion_block);
+        data.truncate(self.data);
+        self.local_slots = local_slots;
+        self.local_kinds = local_kinds;
+        self.local_types = local_types;
+        self.initialized_slots = initialized_slots;
+        self.constants = constants;
+        self.loop_stack = loop_stack;
+        self.finally_stack = finally_stack;
+        self.static_callable_locals = static_callable_locals;
+        self.fiber_start_sigs = fiber_start_sigs;
+        self.ref_bound_locals = ref_bound_locals;
+        self.ref_cell_owner_locals = ref_cell_owner_locals;
+        self.foreach_int_key_locals = foreach_int_key_locals;
+        self.widened_indexed_arrays = widened_indexed_arrays;
+        self.closures.truncate(closure_count);
+        self.pending_static_callable_result = pending_static_callable_result;
+        self.closure_counter = closure_counter;
+        self.hidden_temp_counter = hidden_temp_counter;
     }
 
     /// Interns a string literal or metadata name in the module data pool.
@@ -355,6 +564,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if let Some(slot) = self.local_slots.get(name).copied() {
             self.builder.widen_local_storage_type(slot, ty.clone());
         }
+        // This is the single funnel every indexed-array element widening flows through, so it is
+        // the only place the fact can be recorded before the type env that carries it is rolled
+        // back at an `if` arm split (see `widened_indexed_arrays`).
+        if indexed_array_widens_to_mixed(self.local_types.get(name), &ty) {
+            self.widened_indexed_arrays.insert(name.to_string());
+        }
         self.local_types.insert(name.to_string(), ty);
     }
 
@@ -448,6 +663,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Captures the definitely-initialized local slots at a control-flow split.
+    ///
+    /// A local can be TYPED `Array` while its slot still holds the prologue's zero on another path,
+    /// so any lowering that would DEREFERENCE a slot's current value unconditionally — the indexed
+    /// array conversions in `stmt` — must gate on this set rather than on the type fact alone.
     pub(crate) fn initialized_slots_snapshot(&self) -> HashSet<LocalSlotId> {
         self.initialized_slots.clone()
     }
@@ -455,6 +674,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Replaces the definitely-initialized local set after branch lowering or merge analysis.
     pub(crate) fn restore_initialized_slots(&mut self, initialized_slots: HashSet<LocalSlotId>) {
         self.initialized_slots = initialized_slots;
+    }
+
+    /// Captures the flow-sensitive local-type facts at a control-flow split.
+    pub(crate) fn local_types_snapshot(&self) -> TypeEnv {
+        self.local_types.clone()
+    }
+
+    /// Restores only the flow-sensitive type facts at a branch split.
+    ///
+    /// Deliberately NOT `set_local_type`: that also widens the slot's FRAME storage
+    /// (`Builder::widen_local_storage_type`), and the storage must stay widened even when the
+    /// per-arm type fact is rolled back — the arms share one frame.
+    pub(crate) fn restore_local_types(&mut self, types: TypeEnv) {
+        self.local_types = types;
     }
 
     /// Records that a local currently aliases by-reference storage.
@@ -470,6 +703,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns true when a local is currently modeled as a by-reference alias.
     pub(crate) fn is_ref_bound_local(&self, name: &str) -> bool {
         self.ref_bound_locals.contains(name)
+    }
+
+    /// Returns true when a local's reads and writes go through program-global storage instead of
+    /// its own frame slot.
+    ///
+    /// Such a local is a boxed Mixed cell (or, for a superglobal, a hash) whatever `local_types`
+    /// says about it, so a lowering that converts a local's ARRAY REPRESENTATION in place must skip
+    /// it: the value it would load is the cell, not the array.
+    pub(crate) fn local_uses_global_storage(&self, name: &str) -> bool {
+        let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
+        self.uses_global_storage(name, kind)
     }
 
     /// Declares a fresh hidden temporary slot and returns its synthetic name.
@@ -1570,6 +1814,24 @@ fn ref_cell_needs_mixed_array_conversion(cell_ty: &PhpType, value_ty: &PhpType) 
         .is_some_and(|elem| elem == PhpType::Mixed)
         && ref_cell_array_element_type(value_ty)
             .is_some_and(|elem| !matches!(elem, PhpType::Mixed | PhpType::Never))
+}
+
+/// Returns true when a local's type transition is an indexed array being widened to boxed-Mixed
+/// element slots — the transition `Op::ArrayToMixed` implements at runtime.
+///
+/// A local with no previous type fact is not a widening: there was no concrete element
+/// representation for the earlier code to have been compiled against.
+fn indexed_array_widens_to_mixed(previous: Option<&PhpType>, next: &PhpType) -> bool {
+    let Some(previous) = previous else {
+        return false;
+    };
+    let PhpType::Array(previous_elem) = previous.codegen_repr() else {
+        return false;
+    };
+    let PhpType::Array(next_elem) = next.codegen_repr() else {
+        return false;
+    };
+    previous_elem.codegen_repr() != PhpType::Mixed && next_elem.codegen_repr() == PhpType::Mixed
 }
 
 /// Returns the element type of an array-shaped PHP type (indexed or associative), if any.

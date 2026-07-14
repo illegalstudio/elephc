@@ -28,7 +28,7 @@ use crate::parser::ast::{
     is_compound_assignment_self_read, CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
 };
 use crate::span::Span;
-use crate::types::{PhpType, ThrowAccessKind};
+use crate::types::{PhpType, ThrowAccessKind, TypeEnv};
 
 mod nested_append;
 
@@ -53,14 +53,21 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             then_body,
             else_body,
         } => lower_ifdef(ctx, symbol, then_body, else_body.as_deref(), stmt.span),
-        StmtKind::While { condition, body } => lower_while(ctx, condition, body),
-        StmtKind::DoWhile { body, condition } => lower_do_while(ctx, body, condition),
+        StmtKind::While { condition, body } => lower_while(ctx, condition, body, stmt.span),
+        StmtKind::DoWhile { body, condition } => lower_do_while(ctx, body, condition, stmt.span),
         StmtKind::For {
             init,
             condition,
             update,
             body,
-        } => lower_for(ctx, init.as_deref(), condition.as_ref(), update.as_deref(), body),
+        } => lower_for(
+            ctx,
+            init.as_deref(),
+            condition.as_ref(),
+            update.as_deref(),
+            body,
+            stmt.span,
+        ),
         StmtKind::ArrayAssign { array, index, value } => {
             lower_array_assign(ctx, array, index, value, stmt.span);
         }
@@ -79,7 +86,15 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             value_var,
             value_by_ref,
             body,
-        } => lower_foreach(ctx, array, key_var.as_deref(), value_var, *value_by_ref, body),
+        } => lower_foreach(
+            ctx,
+            array,
+            key_var.as_deref(),
+            value_var,
+            *value_by_ref,
+            body,
+            stmt.span,
+        ),
         StmtKind::Switch {
             subject,
             cases,
@@ -353,6 +368,16 @@ fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &Ex
     }
 }
 
+/// One arm of an `if` chain that has an edge into the merge block.
+struct IfArmExit {
+    /// Empty, unterminated block the arm branches into; the join fills it and terminates it.
+    tail: BlockId,
+    /// The arm's exit local-type environment.
+    types: TypeEnv,
+    /// The arm's exit definitely-initialized set — a conversion DEREFERENCES the slot.
+    initialized: HashSet<LocalSlotId>,
+}
+
 /// Lowers an `if` / `elseif` / `else` chain and terminates unreachable merge blocks explicitly.
 fn lower_if(
     ctx: &mut LoweringContext<'_, '_>,
@@ -363,8 +388,18 @@ fn lower_if(
     span: Span,
 ) {
     let merge = ctx.builder.create_named_block("if.merge", Vec::new());
-    let merge_reachable =
-        lower_if_chain(ctx, condition, then_body, elseif_clauses, else_body, merge, span);
+    let mut arms: Vec<IfArmExit> = Vec::new();
+    let merge_reachable = lower_if_chain(
+        ctx,
+        condition,
+        then_body,
+        elseif_clauses,
+        else_body,
+        merge,
+        &mut arms,
+        span,
+    );
+    finish_if_type_join(ctx, arms, merge, span);
     ctx.builder.position_at_end(merge);
     if !merge_reachable {
         ctx.builder.terminate(Terminator::Unreachable);
@@ -373,6 +408,18 @@ fn lower_if(
 }
 
 /// Recursively emits one condition node in an `if` chain and reports whether the merge is reachable.
+///
+/// `local_types` is snapshotted and restored at the arm split exactly like `initialized_slots`: an
+/// element write inside the then-arm re-types the local to `Array(Mixed)` and, at runtime, re-boxes
+/// every element slot — a fact that is TRUE ONLY ON THAT ARM. Leaking it into the else arm compiles
+/// that arm's code (and, because the tail-sinking pass copies the post-`if` statements into every
+/// fall-through arm, the code that follows the whole `if`) against a boxed representation the else
+/// path's array never got: silent corruption, not a missed optimization.
+///
+/// Every arm of the whole chain — the `elseif` recursion is threaded the SAME `merge` and the SAME
+/// `arms` — reports its exit environment through `arms`, so `finish_if_type_join` computes ONE join
+/// across all of them. A pairwise, per-recursion-level join would be structurally wrong.
+#[allow(clippy::too_many_arguments)]
 fn lower_if_chain(
     ctx: &mut LoweringContext<'_, '_>,
     condition: &Expr,
@@ -380,11 +427,13 @@ fn lower_if_chain(
     elseif_clauses: &[(Expr, Vec<Stmt>)],
     else_body: Option<&[Stmt]>,
     merge: BlockId,
+    arms: &mut Vec<IfArmExit>,
     span: Span,
 ) -> bool {
     let cond_value = lower_expr(ctx, condition);
     let cond_value = ctx.truthy(cond_value, Some(condition.span));
     let split_initialized = ctx.initialized_slots_snapshot();
+    let split_types = ctx.local_types_snapshot();
     let then_block = ctx.builder.create_named_block("if.then", Vec::new());
     let else_block = ctx.builder.create_named_block("if.else", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
@@ -397,24 +446,26 @@ fn lower_if_chain(
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    ctx.restore_local_types(split_types.clone());
     lower_block(ctx, then_body);
     let then_initialized = ctx.initialized_slots_snapshot();
     let mut merge_reachable = false;
     let then_reachable = !ctx.builder.insertion_block_is_terminated();
     if then_reachable {
         merge_reachable = true;
-        branch_to(ctx, merge);
+        record_if_arm_exit(ctx, arms);
     }
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    ctx.restore_local_types(split_types.clone());
     let else_reachable = if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
-        lower_if_chain(ctx, next_condition, next_body, rest, else_body, merge, span)
+        lower_if_chain(ctx, next_condition, next_body, rest, else_body, merge, arms, span)
     } else if let Some(else_body) = else_body {
         lower_block(ctx, else_body);
         if !ctx.builder.insertion_block_is_terminated() {
-            branch_to(ctx, merge);
+            record_if_arm_exit(ctx, arms);
             true
         } else {
             false
@@ -422,7 +473,10 @@ fn lower_if_chain(
     } else {
         lower_noop(ctx, span);
         if !ctx.builder.insertion_block_is_terminated() {
-            branch_to(ctx, merge);
+            // The implicit empty `else` is a REAL incoming edge into the merge, carrying the split
+            // environment untouched. It is precisely the arm a conversion has to go into for a bare
+            // `if` whose then-arm widened an array, so it is recorded like any other.
+            record_if_arm_exit(ctx, arms);
             true
         } else {
             false
@@ -438,6 +492,151 @@ fn lower_if_chain(
         else_reachable,
     ));
     merge_reachable
+}
+
+/// Ends a merge-reaching arm in a deferred tail block and records its exit environment.
+///
+/// The join cannot be emitted into the arm itself: once an arm is terminated, `Builder::terminate`
+/// asserts the terminator is empty and `Builder::emit_with_effects` asserts the block can still be
+/// appended to, so "go back and insert before the `br`" is unavailable. Each arm therefore branches
+/// into a fresh, EMPTY, UNTERMINATED block that `finish_if_type_join` later fills and terminates —
+/// repositioning to an earlier block is legal, block order is already non-topological.
+///
+/// An arm terminated by return/throw/break/continue has NO edge into the merge; the caller's
+/// `insertion_block_is_terminated` test gates this call, so such an arm is never recorded.
+fn record_if_arm_exit(ctx: &mut LoweringContext<'_, '_>, arms: &mut Vec<IfArmExit>) {
+    let tail = ctx.builder.create_named_block("if.arm", Vec::new());
+    ctx.builder.terminate(Terminator::Br {
+        target: tail,
+        args: Vec::new(),
+    });
+    arms.push(IfArmExit {
+        tail,
+        types: ctx.local_types_snapshot(),
+        initialized: ctx.initialized_slots_snapshot(),
+    });
+}
+
+/// Restores the merge invariant: on every incoming edge, a local's runtime representation must
+/// match the single static type recorded after the merge.
+///
+/// With zero arms the merge is unreachable and `lower_if` terminates it. With ONE arm that arm's
+/// exit environment simply IS the merge environment (there is nothing to reconcile it against), so
+/// it is adopted verbatim — which also fixes the case where the *then* arm returns and only the
+/// implicit else reaches the merge, and vice versa.
+fn finish_if_type_join(
+    ctx: &mut LoweringContext<'_, '_>,
+    arms: Vec<IfArmExit>,
+    merge: BlockId,
+    span: Span,
+) {
+    if arms.len() < 2 {
+        if let Some(arm) = arms.first() {
+            ctx.restore_local_types(arm.types.clone());
+        }
+        for arm in &arms {
+            ctx.builder.position_at_end(arm.tail);
+            ctx.builder.terminate(Terminator::Br {
+                target: merge,
+                args: Vec::new(),
+            });
+        }
+        return;
+    }
+
+    let joined = join_arm_types(ctx, &arms);
+    let saved_types = ctx.local_types_snapshot();
+    for arm in &arms {
+        // Re-establish this arm's environment so the emitted load reads the slot at the element
+        // type the arm actually left in it, and the storeback re-types it to `Array(Mixed)`.
+        ctx.restore_local_types(arm.types.clone());
+        let converts = arm_conversions(arm, &joined);
+        ctx.builder.position_at_end(arm.tail);
+        widen_indexed_arrays_to_mixed(ctx, &converts, span);
+        ctx.builder.terminate(Terminator::Br {
+            target: merge,
+            args: Vec::new(),
+        });
+    }
+    ctx.restore_local_types(saved_types);
+    for (name, ty) in joined {
+        ctx.set_local_type(&name, ty);
+    }
+}
+
+/// Computes the locals whose element representation the arms of an `if` chain DISAGREE on, and the
+/// single type the merge must record for each.
+///
+/// The only local-type dimension an arm can move on its own is an INDEXED array's element type: an
+/// element write whose value does not fit widens the local to `Array(Mixed)` and re-boxes every
+/// element slot at runtime. The checker already rejects the scalar and associative forms that could
+/// otherwise disagree across arms (`$x = 1` vs `$x = "s"`, `Array(Int)` vs `Array(Str)`
+/// reassignment), and `Op::ArrayToMixed` converts nothing but an indexed array — so a name whose
+/// arms are not ALL indexed arrays is left at the status quo (the last arm's fact) and never
+/// converted.
+///
+/// An empty-literal arm (`$m = []`, element `Never`/`Void`) is deliberately NOT folded into a
+/// concrete element type: it joins to `Array(Mixed)` like any other disagreement. Converting a
+/// zero-length array costs O(1) — `__rt_array_to_mixed` falls straight into its stamp path — and
+/// this removes any dependence on what `array_new` stamps for a zero-element literal.
+///
+/// A name is joined only when EVERY arm can actually perform the conversion. A half-converted local
+/// — boxed on one incoming edge, raw on another — is strictly worse than an unconverted one, so a
+/// name excluded in any single arm is dropped from the join entirely and left at the status quo.
+fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv {
+    let Some(first) = arms.first() else {
+        return TypeEnv::new();
+    };
+    // `local_types` is a HashMap: sort so the conversion instructions are emitted in a stable order
+    // regardless of hash seed.
+    let mut names = first.types.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+
+    let mut joined = TypeEnv::new();
+    'names: for name in names {
+        // `codegen_repr` is SHALLOW — `Array(e)` returns itself without normalizing `e` — so every
+        // element comparison has to go through `e.codegen_repr()` explicitly.
+        let mut element_reprs = Vec::with_capacity(arms.len());
+        for arm in arms {
+            let Some(arm_type) = arm.types.get(&name) else {
+                continue 'names;
+            };
+            let PhpType::Array(element) = arm_type.codegen_repr() else {
+                continue 'names;
+            };
+            element_reprs.push(element.codegen_repr());
+        }
+        if element_reprs.windows(2).all(|pair| pair[0] == pair[1]) {
+            continue;
+        }
+        if !arms
+            .iter()
+            .all(|arm| local_slot_is_convertible(ctx, &name, &arm.initialized))
+        {
+            continue;
+        }
+        joined.insert(name, PhpType::Array(Box::new(PhpType::Mixed)));
+    }
+    joined
+}
+
+/// Returns the joined locals this arm must convert on its edge into the merge, in a stable order.
+///
+/// Every name in `joined` is `Array(Mixed)` at the merge, so an arm that already left the local
+/// boxed has nothing to do; only an arm still holding concrete element slots converts.
+fn arm_conversions(arm: &IfArmExit, joined: &TypeEnv) -> Vec<String> {
+    let mut names = joined
+        .keys()
+        .filter(|name| {
+            matches!(
+                arm.types.get(name.as_str()).map(PhpType::codegen_repr),
+                Some(PhpType::Array(element)) if element.codegen_repr() != PhpType::Mixed
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    names.sort();
+    names
 }
 
 /// Merges definitely-initialized locals from the reachable branches of an `if`.
@@ -475,8 +674,166 @@ fn lower_ifdef(
     ctx.clear_static_callable_locals();
 }
 
+/// Maximum number of preheader pre-widening rounds before a loop is lowered for good.
+///
+/// The indexed-array element lattice a loop body can climb has height 2 — a concretely typed
+/// `Array(T)` widens to `Array(Mixed)` and stops — so one round normally reaches the fixed point
+/// and the second only confirms it. The cap exists so a lowering that somehow keeps discovering
+/// new widenings cannot spin: it commits the last lowering (exactly the code today's compiler
+/// emits) instead of looping forever.
+const MAX_LOOP_PREWIDEN_ROUNDS: usize = 2;
+
+/// Lowers a loop at a local-type FIXED POINT, so no instruction in the body is ever compiled
+/// against a runtime representation the back edge invalidates.
+///
+/// A loop body is lowered once, against the types that hold at loop ENTRY. But an element write
+/// whose value type does not fit the array's element type re-types the local to `Array(Mixed)` and
+/// emits `Op::ArrayToMixed`, which at runtime REPLACES every element slot with a boxed Mixed cell.
+/// Everything lowered ABOVE that write in the same body was already compiled against the old,
+/// unboxed representation — correct on iteration 1, reading cell pointers as raw scalars from
+/// iteration 2 on. (Straight-line code and `if` branches are safe: nothing re-executes the ops
+/// lowered before the widening point.)
+///
+/// So: lower the body speculatively to DISCOVER which locals it widens — the decision is a pure
+/// function of already-lowered value types, so it cannot be re-derived from the AST without
+/// duplicating (and eventually desynchronizing from) the lowering that makes it — then roll that
+/// lowering back completely, convert the discovered locals in the PREHEADER, and lower again
+/// against the widened entry environment. The pre-widened array also fixes the zero-trip case:
+/// code after the loop was already being compiled against `Array(Mixed)`, even on the path where
+/// the body never ran to convert it.
+///
+/// `lower_once` must be re-runnable: it is called up to `MAX_LOOP_PREWIDEN_ROUNDS + 1` times and
+/// every effect of a discarded call is undone by `LoweringContext::restore`.
+fn lower_loop_at_type_fixpoint(
+    ctx: &mut LoweringContext<'_, '_>,
+    span: Span,
+    lower_once: impl Fn(&mut LoweringContext<'_, '_>),
+) {
+    for _ in 0..MAX_LOOP_PREWIDEN_ROUNDS {
+        // Fast path: with no loop-carried, concretely-typed indexed array in scope there is
+        // nothing the body could widen, so skip the snapshot and the speculative lowering
+        // entirely. This is the overwhelmingly common case.
+        let candidates = prewidenable_indexed_array_locals(ctx);
+        if candidates.is_empty() {
+            break;
+        }
+        let snapshot = ctx.snapshot();
+        lower_once(ctx);
+        // Read the STICKY widening record, not the body's exit type environment, and read it
+        // BEFORE the rollback discards it. A body whose widening write sits in an `if` arm that
+        // `continue`s (or `break`s) leaves no trace in the exit environment: the arm is terminated,
+        // so it contributes no edge to the arm join and the arm split rolls its type fact back. The
+        // discovery would go blind on exactly that program, and the body — already lowered against
+        // the widened array — would run without the preheader conversion it assumes.
+        let widened = candidates
+            .into_iter()
+            .filter(|name| ctx.widened_indexed_arrays.contains(name))
+            .collect::<Vec<_>>();
+        if widened.is_empty() {
+            return;
+        }
+        ctx.restore(snapshot);
+        widen_indexed_arrays_to_mixed(ctx, &widened, span);
+    }
+    lower_once(ctx);
+}
+
+/// Returns the locals whose loop-entry type is a concretely-typed indexed array, in a
+/// deterministic order.
+///
+/// These are exactly the locals a body write can widen to `Array(Mixed)`; every other local is
+/// either already Mixed-element (nothing to convert) or not an indexed array at all. Locals bound
+/// by reference are excluded because the write path deliberately keeps their caller-visible
+/// element type (`ref_bound_mixed_indexed_array_write`), and locals that are not definitely
+/// initialized are excluded because pre-widening DEREFERENCES the slot in the preheader, which
+/// would fault on a path where the array was never assigned (`local_types` is not path-sensitive,
+/// so an `Array` fact can survive an `if` branch that did not run).
+fn prewidenable_indexed_array_locals(ctx: &LoweringContext<'_, '_>) -> Vec<String> {
+    let initialized = ctx.initialized_slots_snapshot();
+    let mut names = ctx
+        .local_types
+        .iter()
+        .filter(|(name, php_type)| {
+            local_slot_is_convertible(ctx, name, &initialized)
+                && matches!(
+                    php_type.codegen_repr(),
+                    PhpType::Array(elem) if elem.codegen_repr() != PhpType::Mixed
+                )
+        })
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    // `local_types` is a HashMap: sort so the pre-widening instructions are emitted in a stable
+    // order regardless of hash seed.
+    names.sort();
+    names
+}
+
+/// Returns true when a local's storage can be converted in place at a program point whose
+/// definitely-initialized set is `initialized`.
+///
+/// Locals bound by reference are excluded because the write path deliberately keeps their
+/// caller-visible element type (`ref_bound_mixed_indexed_array_write`), and a local that is not
+/// definitely initialized is excluded because the conversion DEREFERENCES the slot, which would
+/// fault on a path where the array was never assigned (`local_types` is not path-sensitive, so an
+/// `Array` fact can survive an `if` branch that did not run). A local backed by program-global
+/// storage is excluded because what a load of it yields is the boxed cell, not the array.
+///
+/// The initialized set is passed in rather than read from the context because the two callers need
+/// it at different points: a loop preheader converts against the CURRENT set, while an `if` arm
+/// tail converts against the set that arm left behind.
+fn local_slot_is_convertible(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    initialized: &HashSet<LocalSlotId>,
+) -> bool {
+    matches!(
+        ctx.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal),
+        LocalKind::PhpLocal | LocalKind::StaticLocal
+    ) && ctx
+        .local_slots
+        .get(name)
+        .is_some_and(|slot| initialized.contains(slot))
+        && !ctx.is_ref_bound_local(name)
+        && !ctx.local_uses_global_storage(name)
+}
+
+/// Converts indexed arrays to boxed-Mixed slots at the current insertion point.
+///
+/// This is the same conversion `finish_indexed_array_local_write` performs when an element write
+/// widens an array (`Op::ArrayToMixed` + storeback), emitted where control flow needs it instead of
+/// where the write happens. It has two callers, and both need it for the same reason — an op must
+/// never execute against a representation different from the one it was compiled for:
+///
+/// - a LOOP PREHEADER, so the body (already lowered against the widened array) is entered with the
+///   array actually boxed, on iteration 1 and on the zero-trip path alike;
+/// - an `if` ARM TAIL, so every edge into the merge agrees with the single element type the merge
+///   records for the local.
+///
+/// `__rt_array_to_mixed` re-stamps an already-Mixed array without re-boxing its slots, so a
+/// preheader nested inside an outer loop stays correct on every outer iteration.
+fn widen_indexed_arrays_to_mixed(ctx: &mut LoweringContext<'_, '_>, names: &[String], span: Span) {
+    let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    for name in names {
+        let array = ctx.load_local(name, Some(span));
+        let converted = ctx.emit_value(
+            Op::ArrayToMixed,
+            vec![array.value],
+            None,
+            mixed_array_ty.clone(),
+            Op::ArrayToMixed.default_effects(),
+            Some(span),
+        );
+        ctx.store_mutated_local(name, converted, mixed_array_ty.clone(), Some(span));
+    }
+}
+
 /// Lowers a `while` loop.
-fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt]) {
+fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt], span: Span) {
+    lower_loop_at_type_fixpoint(ctx, span, |ctx| lower_while_once(ctx, condition, body));
+}
+
+/// Emits the blocks and body of a `while` loop exactly once.
+fn lower_while_once(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt]) {
     let header = ctx.builder.create_named_block("while.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("while.body", Vec::new());
     let exit = ctx.builder.create_named_block("while.exit", Vec::new());
@@ -508,7 +865,12 @@ fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt
 }
 
 /// Lowers a `do while` loop.
-fn lower_do_while(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], condition: &Expr) {
+fn lower_do_while(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], condition: &Expr, span: Span) {
+    lower_loop_at_type_fixpoint(ctx, span, |ctx| lower_do_while_once(ctx, body, condition));
+}
+
+/// Emits the blocks and body of a `do while` loop exactly once.
+fn lower_do_while_once(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], condition: &Expr) {
     let body_block = ctx.builder.create_named_block("do.body", Vec::new());
     let cond_block = ctx.builder.create_named_block("do.cond", Vec::new());
     let exit = ctx.builder.create_named_block("do.exit", Vec::new());
@@ -540,12 +902,18 @@ fn lower_do_while(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], condition: &
 }
 
 /// Lowers a `for` loop.
+///
+/// The init statement is lowered BEFORE the fixed-point driver, so it is not part of the
+/// speculative region: `for ($a = [1, 2]; ...)` would otherwise re-establish `$a`'s concrete
+/// element type on every round and the pre-widening could never converge. Lowered here, it simply
+/// becomes part of the preheader the pre-widening is appended to.
 fn lower_for(
     ctx: &mut LoweringContext<'_, '_>,
     init: Option<&Stmt>,
     condition: Option<&Expr>,
     update: Option<&Stmt>,
     body: &[Stmt],
+    span: Span,
 ) {
     if let Some(init) = init {
         lower_stmt(ctx, init);
@@ -553,7 +921,16 @@ fn lower_for(
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
+    lower_loop_at_type_fixpoint(ctx, span, |ctx| lower_for_once(ctx, condition, update, body));
+}
 
+/// Emits the blocks, body and update of a `for` loop exactly once.
+fn lower_for_once(
+    ctx: &mut LoweringContext<'_, '_>,
+    condition: Option<&Expr>,
+    update: Option<&Stmt>,
+    body: &[Stmt],
+) {
     let header = ctx.builder.create_named_block("for.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("for.body", Vec::new());
     let update_block = ctx.builder.create_named_block("for.update", Vec::new());
@@ -1091,6 +1468,24 @@ fn coerce_typed_assign_value(
 
 /// Lowers a `foreach` loop using high-level iterator opcodes.
 fn lower_foreach(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    key_var: Option<&str>,
+    value_var: &str,
+    value_by_ref: bool,
+    body: &[Stmt],
+    span: Span,
+) {
+    lower_loop_at_type_fixpoint(ctx, span, |ctx| {
+        lower_foreach_once(ctx, array, key_var, value_var, value_by_ref, body)
+    });
+}
+
+/// Emits the iterator, blocks and body of a `foreach` loop exactly once.
+///
+/// The source expression is lowered inside the speculative region on purpose: when the iterated
+/// array is itself pre-widened, `Op::IterStart` must see the widened element type.
+fn lower_foreach_once(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
     key_var: Option<&str>,
