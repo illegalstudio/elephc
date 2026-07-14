@@ -2,7 +2,7 @@
 title: "print_r()"
 description: "Prints human-readable information about a variable."
 sidebar:
-  order: 280
+  order: 284
 ---
 
 ## print_r()
@@ -18,6 +18,11 @@ Prints human-readable information about a variable.
 - `$return` (`bool`), default `false`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/print_r.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/print_r.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

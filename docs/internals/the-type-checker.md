@@ -168,6 +168,25 @@ Built-in functions have hardcoded type signatures (see below). User-defined func
 
 Codegen receives enough signature information to evaluate named/spread arguments in PHP source order while still materializing values in ABI parameter order.
 
+### Eval barrier
+
+`eval()` is recognized as a PHP language construct rather than a registry-backed
+builtin. The checker requires exactly one argument, infers that argument for its
+normal side effects, and assigns the call the static result type `Mixed`.
+
+After an eval call, the caller-visible environment becomes dynamic: the
+fragment may overwrite or unset existing locals, introduce new locals, declare
+symbols, or mutate referenced storage. The checker therefore marks an eval
+barrier, widens known local types to `Mixed`, discards callable/capture facts,
+and permits later reads of variables and class-like symbols that may have been
+created at runtime.
+
+This rule is intentionally conservative for literal strings too. The later EIR
+planner may prove that a literal fragment can be AOT-lowered without runtime
+scope or interpreter state, but that backend decision must not hide frontend
+diagnostics or make pre-call type facts unsound. See
+[Eval Runtime Architecture](eval-runtime.md).
+
 ## Built-in function signatures
 
 **Files:** `src/types/checker/builtins/`, plus `src/types/checker/mod.rs` and `src/types/checker/inference/` for special expression forms such as `ExprKind::PtrCast`, `ExprKind::InstanceOf`, and `ExprKind::Print`

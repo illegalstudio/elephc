@@ -2,7 +2,7 @@
 title: "strtoupper()"
 description: "Converts a string to uppercase."
 sidebar:
-  order: 399
+  order: 403
 ---
 
 ## strtoupper()
@@ -17,6 +17,11 @@ Converts a string to uppercase.
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strtoupper.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strtoupper.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

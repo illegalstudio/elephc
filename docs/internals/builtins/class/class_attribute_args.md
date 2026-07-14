@@ -10,13 +10,13 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/class_attribute_args.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/class_attribute_args.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/attributes.rs`:52](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/attributes.rs#L52) (`lower_class_attribute_args`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/attributes.rs`:62](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/attributes.rs#L62) (`lower_class_attribute_args`)
 - **Function symbol**: `lower_class_attribute_args()`
 
 
 ### Lowering notes
 
-- Lowers `class_attribute_args(class, attr)` into an indexed Mixed array.
+- Lowers `class_attribute_args(class, attr)` into a Mixed PHP argument array.
 
 ## Runtime helpers
 
@@ -31,6 +31,11 @@ function class_attribute_args(string $class_name, string $attribute_name): array
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/class_attribute_args.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/class_attribute_args.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

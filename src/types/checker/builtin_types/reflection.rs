@@ -7,22 +7,29 @@
 //! - `crate::types::checker::driver::init` (alongside `inject_builtin_throwables`).
 //!
 //! Key details:
-//! - Property and method bodies are dummies or simple private-slot accessors;
-//!   runtime population is handled by codegen-only reflection constructors.
+//! - Property and method bodies are dummies, private-slot accessors, or small
+//!   fallbacks; runtime population is handled by codegen-only reflection constructors.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
+use crate::names::Name;
 use crate::parser::ast::{
-    ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr, Visibility,
+    BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, InstanceOfTarget, Stmt,
+    StmtKind, TypeExpr, Visibility,
 };
 use crate::types::traits::FlattenedClass;
 use crate::types::PhpType;
 
 use super::super::Checker;
 
-/// Injects the four built-in reflection types into `class_map` after verifying
+/// Returns a dummy source span for synthetic reflection AST nodes.
+fn dummy() -> crate::span::Span {
+    crate::span::Span::dummy()
+}
+
+/// Injects the built-in reflection types into `class_map` after verifying
 /// none are already declared. Each type is a dummy shell; runtime population
 /// happens in codegen. Returns an error if any reflection name is already in use.
 pub(crate) fn inject_builtin_reflection(
@@ -33,11 +40,18 @@ pub(crate) fn inject_builtin_reflection(
     for builtin_name in [
         "ReflectionAttribute",
         "ReflectionClass",
+        "ReflectionObject",
+        "ReflectionEnum",
+        "ReflectionFunction",
         "ReflectionMethod",
         "ReflectionProperty",
-        "ReflectionFunction",
         "ReflectionParameter",
         "ReflectionNamedType",
+        "ReflectionUnionType",
+        "ReflectionIntersectionType",
+        "ReflectionClassConstant",
+        "ReflectionEnumUnitCase",
+        "ReflectionEnumBackedCase",
     ] {
         let builtin_key = php_symbol_key(builtin_name);
         if interface_map
@@ -48,7 +62,10 @@ pub(crate) fn inject_builtin_reflection(
         {
             return Err(CompileError::new(
                 crate::span::Span::dummy(),
-                &format!("Cannot redeclare built-in reflection type: {}", builtin_name),
+                &format!(
+                    "Cannot redeclare built-in reflection type: {}",
+                    builtin_name
+                ),
             ));
         }
     }
@@ -57,38 +74,78 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionAttribute".to_string(),
         FlattenedClass {
             name: "ReflectionAttribute".to_string(),
+            span: dummy(),
             extends: None,
             implements: Vec::new(),
             is_abstract: false,
             is_final: true,
             is_readonly_class: false,
             properties: vec![
-                builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
-                builtin_property("__args", Visibility::Private, Some(array_type()), empty_array()),
-                builtin_property("__factory", Visibility::Private, Some(TypeExpr::Int), int_lit(0)),
+                builtin_property(
+                    "__name",
+                    Visibility::Private,
+                    Some(TypeExpr::Str),
+                    empty_string(),
+                ),
+                builtin_property(
+                    "__args",
+                    Visibility::Private,
+                    Some(array_type()),
+                    empty_array(),
+                ),
+                builtin_property(
+                    "__factory",
+                    Visibility::Private,
+                    Some(TypeExpr::Int),
+                    int_lit(0),
+                ),
+                builtin_property(
+                    "__target",
+                    Visibility::Private,
+                    Some(TypeExpr::Int),
+                    int_lit(0),
+                ),
+                builtin_property(
+                    "__is_repeated",
+                    Visibility::Private,
+                    Some(TypeExpr::Bool),
+                    false_bool(),
+                ),
             ],
             methods: vec![
                 builtin_reflection_attribute_constructor_method(),
                 builtin_reflection_attribute_get_name_method(),
                 builtin_reflection_attribute_get_arguments_method(),
                 builtin_reflection_attribute_new_instance_method(),
+                builtin_reflection_class_int_method("getTarget", "__target"),
+                builtin_reflection_class_bool_method("isRepeated", "__is_repeated"),
             ],
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
+    class_map.insert("ReflectionClass".to_string(), builtin_reflection_class());
     class_map.insert(
-        "ReflectionClass".to_string(),
-        builtin_reflection_class(),
+        "ReflectionObject".to_string(),
+        builtin_reflection_object_class(),
     );
+    class_map.insert("ReflectionEnum".to_string(), builtin_reflection_enum_class());
+    class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
     class_map.insert(
         "ReflectionMethod".to_string(),
         builtin_reflection_owner_class(
             "ReflectionMethod",
+            true,
             vec![
                 ("class_name", Some(TypeExpr::Str), None, false),
-                ("method_name", Some(TypeExpr::Str), None, false),
+                (
+                    "method_name",
+                    Some(TypeExpr::Nullable(Box::new(TypeExpr::Str))),
+                    null_expr(),
+                    false,
+                ),
             ],
         ),
     );
@@ -96,21 +153,43 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionProperty".to_string(),
         builtin_reflection_owner_class(
             "ReflectionProperty",
+            true,
             vec![
                 ("class_name", Some(TypeExpr::Str), None, false),
                 ("property_name", Some(TypeExpr::Str), None, false),
             ],
         ),
     );
-    class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
     class_map.insert(
         "ReflectionParameter".to_string(),
         builtin_reflection_parameter(),
     );
+    class_map.insert("ReflectionNamedType".to_string(), builtin_reflection_named_type());
     class_map.insert(
-        "ReflectionNamedType".to_string(),
-        builtin_reflection_named_type(),
+        "ReflectionUnionType".to_string(),
+        builtin_reflection_union_type(),
     );
+    class_map.insert(
+        "ReflectionIntersectionType".to_string(),
+        builtin_reflection_intersection_type(),
+    );
+    for class_name in [
+        "ReflectionClassConstant",
+        "ReflectionEnumUnitCase",
+        "ReflectionEnumBackedCase",
+    ] {
+        class_map.insert(
+            class_name.to_string(),
+            builtin_reflection_owner_class(
+                class_name,
+                true,
+                vec![
+                    ("class_name", Some(TypeExpr::Str), None, false),
+                    ("constant_name", Some(TypeExpr::Str), None, false),
+                ],
+            ),
+        );
+    }
 
     Ok(())
 }
@@ -134,6 +213,7 @@ fn builtin_property(
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default,
         span: crate::span::Span::dummy(),
         attributes: Vec::new(),
@@ -152,6 +232,22 @@ fn empty_string() -> Option<Expr> {
 fn empty_array() -> Option<Expr> {
     Some(Expr::new(
         ExprKind::ArrayLiteral(Vec::new()),
+        crate::span::Span::dummy(),
+    ))
+}
+
+/// Returns a `BoolLiteral(false)` expression.
+fn false_bool() -> Option<Expr> {
+    Some(Expr::new(
+        ExprKind::BoolLiteral(false),
+        crate::span::Span::dummy(),
+    ))
+}
+
+/// Returns a `BoolLiteral(true)` expression.
+fn true_bool() -> Option<Expr> {
+    Some(Expr::new(
+        ExprKind::BoolLiteral(true),
         crate::span::Span::dummy(),
     ))
 }
@@ -177,9 +273,74 @@ fn bool_lit(value: bool) -> Option<Expr> {
     ))
 }
 
+/// Returns a `null` expression for nullable synthetic property defaults.
+fn null_expr() -> Option<Expr> {
+    Some(Expr::new(ExprKind::Null, crate::span::Span::dummy()))
+}
+
 /// Returns a `TypeExpr` for the unqualified name `array`.
 fn array_type() -> TypeExpr {
     TypeExpr::Named(crate::names::Name::unqualified("array"))
+}
+
+/// Returns a `TypeExpr` for an indexed array of strings.
+fn string_array_type() -> TypeExpr {
+    TypeExpr::Array(Box::new(TypeExpr::Str))
+}
+
+/// Returns a `TypeExpr` for an indexed array of objects with the given class name.
+fn object_array_type(class_name: &str) -> TypeExpr {
+    TypeExpr::Array(Box::new(TypeExpr::Named(Name::unqualified(class_name))))
+}
+
+/// Returns `array<string, ReflectionClass>` for name-keyed reflection maps.
+fn reflection_class_object_map_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Object("ReflectionClass".to_string())),
+    }
+}
+
+/// Returns `array<string, string>` for trait-alias reflection maps.
+fn reflection_string_map_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Str),
+    }
+}
+
+/// Returns `array<string, mixed>` for static-property value reflection maps.
+fn reflection_static_properties_map_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Mixed),
+    }
+}
+
+/// Returns `array<int|string, mixed>` for ReflectionAttribute argument maps.
+fn reflection_attribute_args_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    }
+}
+
+/// Returns `array<string, ReflectionMethod>` for property-hook reflection maps.
+fn reflection_property_hook_map_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Object("ReflectionMethod".to_string())),
+    }
+}
+
+/// Returns a nullable object type expression for one synthetic reflection class.
+fn nullable_object_type(class_name: &str) -> TypeExpr {
+    TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(class_name))))
+}
+
+/// Returns a `TypeExpr` for PHP's generic `object` type.
+fn object_type() -> TypeExpr {
+    TypeExpr::Named(Name::unqualified("object"))
 }
 
 /// Returns a `TypeExpr` for the unqualified name `mixed`.
@@ -187,8 +348,23 @@ fn mixed_type() -> TypeExpr {
     TypeExpr::Named(crate::names::Name::unqualified("mixed"))
 }
 
+/// Returns a `TypeExpr` for PHP's builtin boolean type.
+fn bool_type() -> TypeExpr {
+    TypeExpr::Bool
+}
+
+/// Returns a `TypeExpr` for Reflection APIs whose PHP return is `string|false`.
+fn string_or_bool_type() -> TypeExpr {
+    TypeExpr::Union(vec![TypeExpr::Str, TypeExpr::Bool])
+}
+
 /// Returns a private parameterless `__construct` method for `ReflectionAttribute`.
 fn builtin_reflection_attribute_constructor_method() -> ClassMethod {
+    builtin_reflection_private_constructor_method()
+}
+
+/// Returns a private parameterless `__construct` for internally materialized reflection objects.
+fn builtin_reflection_private_constructor_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
         name: "__construct".to_string(),
@@ -198,7 +374,9 @@ fn builtin_reflection_attribute_constructor_method() -> ClassMethod {
         is_final: false,
         has_body: true,
         params: Vec::new(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: None,
         by_ref_return: false,
@@ -220,7 +398,9 @@ fn builtin_reflection_attribute_get_name_method() -> ClassMethod {
         is_final: false,
         has_body: true,
         params: Vec::new(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Str),
         by_ref_return: false,
@@ -251,7 +431,9 @@ fn builtin_reflection_attribute_get_arguments_method() -> ClassMethod {
         is_final: false,
         has_body: true,
         params: Vec::new(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Named(crate::names::Name::unqualified("array"))),
         by_ref_return: false,
@@ -282,7 +464,268 @@ fn builtin_reflection_attribute_new_instance_method() -> ClassMethod {
         is_final: false,
         has_body: true,
         params: Vec::new(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public variadic `ReflectionClass::newInstance()` method.
+///
+/// Direct calls are lowered specially so their source arguments become
+/// constructor arguments for the reflected class. The no-argument body keeps
+/// indirect calls and metadata emission coherent when no argument forwarding is
+/// required.
+fn builtin_reflection_class_new_instance_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "newInstance".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: Some("args".to_string()),
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(object_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::NewDynamic {
+                    name_expr: Box::new(Expr::new(
+                        ExprKind::PropertyAccess {
+                            object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                            property: "__name".to_string(),
+                        },
+                        dummy_span,
+                    )),
+                    args: Vec::new(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public variadic `ReflectionMethod::invoke()` method shell.
+///
+/// Direct AOT calls are lowered specially so the first argument becomes the
+/// invocation receiver and the remaining source arguments are normalized
+/// against the reflected method's own signature.
+fn builtin_reflection_method_invoke_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "invoke".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(mixed_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: Some("args".to_string()),
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionMethod::invokeArgs()` method shell.
+///
+/// Direct AOT calls are lowered specially so the provided argument array becomes
+/// the reflected method's source argument list.
+fn builtin_reflection_method_invoke_args_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "invokeArgs".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            ("object".to_string(), Some(mixed_type()), None, false),
+            ("args".to_string(), Some(array_type()), None, false),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public static `ReflectionMethod::createFromMethodName()` method shell.
+fn builtin_reflection_method_create_from_method_name_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "createFromMethodName".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("method".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("ReflectionMethod"))),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::NewObject {
+                    class_name: Name::unqualified("ReflectionMethod"),
+                    args: vec![
+                        Expr::new(ExprKind::StringLiteral(String::new()), dummy_span),
+                        Expr::new(ExprKind::StringLiteral(String::new()), dummy_span),
+                    ],
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `setAccessible(bool $accessible)` no-op method shell.
+fn builtin_reflection_set_accessible_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "setAccessible".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("accessible".to_string(), Some(bool_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
+        body: Vec::new(),
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public variadic `ReflectionFunction::invoke()` method shell.
+///
+/// Direct generated/AOT calls are lowered specially so the variadic source
+/// arguments are normalized against the reflected function's own signature.
+fn builtin_reflection_function_invoke_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "invoke".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: Some("args".to_string()),
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionFunction::invokeArgs()` method shell.
+///
+/// Direct generated/AOT calls are lowered specially so the provided argument
+/// array becomes the reflected function's source argument list.
+fn builtin_reflection_function_invoke_args_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "invokeArgs".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("args".to_string(), Some(array_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass::newInstanceArgs()` method.
+///
+/// Direct calls are lowered specially so the provided argument array becomes
+/// constructor arguments for the reflected class. The placeholder body keeps
+/// the synthetic class metadata coherent for non-special paths.
+fn builtin_reflection_class_new_instance_args_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "newInstanceArgs".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        // `iterable` rather than bare `array`: the checker resolves `array`
+        // to a string-keyed map, which would reject indexed argument lists;
+        // Iterable accepts both array shapes.
+        params: vec![(
+            "args".to_string(),
+            Some(TypeExpr::Iterable),
+            empty_array(),
+            false,
+        )],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(mixed_type()),
         by_ref_return: false,
@@ -312,7 +755,9 @@ fn builtin_reflection_slot_getter(
         is_final: false,
         has_body: true,
         params: Vec::new(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(return_type),
         by_ref_return: false,
@@ -343,8 +788,10 @@ fn builtin_reflection_function_constructor_method() -> ClassMethod {
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        params: vec![("function".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: None,
         by_ref_return: false,
@@ -354,45 +801,23 @@ fn builtin_reflection_function_constructor_method() -> ClassMethod {
     }
 }
 
-/// Builds the `ReflectionFunction` shell with private name/short-name and
-/// parameter-count slots plus public accessors. The slots are populated at
-/// codegen from the reflected function's signature.
+/// Builds the `ReflectionFunction` shell with private name/short-name,
+/// attribute, and parameter slots. Codegen populates these from the reflected
+/// function's signature and attribute metadata.
 fn builtin_reflection_function() -> FlattenedClass {
-    FlattenedClass {
-        name: "ReflectionFunction".to_string(),
-        extends: None,
-        implements: Vec::new(),
-        is_abstract: false,
-        is_final: true,
-        is_readonly_class: false,
-        properties: vec![
-            builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
-            builtin_property("__short", Visibility::Private, Some(TypeExpr::Str), empty_string()),
-            builtin_property("__num_params", Visibility::Private, Some(TypeExpr::Int), int_lit(0)),
-            builtin_property(
-                "__num_required",
-                Visibility::Private,
-                Some(TypeExpr::Int),
-                int_lit(0),
-            ),
-            builtin_property("__params", Visibility::Private, Some(array_type()), empty_array()),
-        ],
-        methods: vec![
-            builtin_reflection_function_constructor_method(),
-            builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str),
-            builtin_reflection_slot_getter("getShortName", "__short", TypeExpr::Str),
-            builtin_reflection_slot_getter("getNumberOfParameters", "__num_params", TypeExpr::Int),
-            builtin_reflection_slot_getter(
-                "getNumberOfRequiredParameters",
-                "__num_required",
-                TypeExpr::Int,
-            ),
-            builtin_reflection_slot_getter("getParameters", "__params", array_type()),
-        ],
-        attributes: Vec::new(),
-        constants: Vec::new(),
-        used_traits: Vec::new(),
+    let mut class = builtin_reflection_owner_class(
+        "ReflectionFunction",
+        true,
+        vec![("function", Some(TypeExpr::Str), None, false)],
+    );
+    if let Some(constructor) = class
+        .methods
+        .iter_mut()
+        .find(|method| method.name == "__construct")
+    {
+        *constructor = builtin_reflection_function_constructor_method();
     }
+    class
 }
 
 /// Builds the `ReflectionParameter` shell with private name/position/optional/
@@ -401,6 +826,7 @@ fn builtin_reflection_function() -> FlattenedClass {
 fn builtin_reflection_parameter() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionParameter".to_string(),
+        span: dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -408,6 +834,7 @@ fn builtin_reflection_parameter() -> FlattenedClass {
         is_readonly_class: false,
         properties: vec![
             builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
             builtin_property("__position", Visibility::Private, Some(TypeExpr::Int), int_lit(0)),
             builtin_property(
                 "__optional",
@@ -421,20 +848,441 @@ fn builtin_reflection_parameter() -> FlattenedClass {
                 Some(TypeExpr::Bool),
                 bool_lit(false),
             ),
+            builtin_property(
+                "__is_passed_by_reference",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+            builtin_property(
+                "__is_promoted",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
             builtin_property("__has_type", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
+            builtin_property(
+                "__allows_null",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(true),
+            ),
+            builtin_property(
+                "__is_array_type",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+            builtin_property(
+                "__is_callable_type",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
             builtin_property("__type", Visibility::Private, Some(mixed_type()), null_lit()),
+            builtin_property("__class", Visibility::Private, Some(mixed_type()), null_lit()),
+            builtin_property(
+                "__has_default_value",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+            builtin_property(
+                "__is_default_value_constant",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+            builtin_property(
+                "__default_value_constant_name",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__default_value",
+                Visibility::Private,
+                Some(mixed_type()),
+                null_lit(),
+            ),
+            builtin_property(
+                "__default_value_object_class",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__declaring_class",
+                Visibility::Private,
+                Some(mixed_type()),
+                null_lit(),
+            ),
+            builtin_property(
+                "__declaring_function",
+                Visibility::Private,
+                Some(mixed_type()),
+                null_lit(),
+            ),
         ],
         methods: vec![
+            builtin_reflection_owner_constructor_method(vec![
+                ("function", Some(mixed_type()), None, false),
+                ("param", Some(mixed_type()), None, false),
+            ]),
             builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str),
             builtin_reflection_slot_getter("getPosition", "__position", TypeExpr::Int),
             builtin_reflection_slot_getter("isOptional", "__optional", TypeExpr::Bool),
             builtin_reflection_slot_getter("isVariadic", "__variadic", TypeExpr::Bool),
+            builtin_reflection_slot_getter(
+                "isPassedByReference",
+                "__is_passed_by_reference",
+                TypeExpr::Bool,
+            ),
+            builtin_reflection_parameter_can_be_passed_by_value_method(),
+            builtin_reflection_slot_getter("isPromoted", "__is_promoted", TypeExpr::Bool),
             builtin_reflection_slot_getter("hasType", "__has_type", TypeExpr::Bool),
+            builtin_reflection_slot_getter("allowsNull", "__allows_null", TypeExpr::Bool),
+            builtin_reflection_slot_getter("isArray", "__is_array_type", TypeExpr::Bool),
+            builtin_reflection_slot_getter("isCallable", "__is_callable_type", TypeExpr::Bool),
             builtin_reflection_slot_getter("getType", "__type", mixed_type()),
+            builtin_reflection_slot_getter("getClass", "__class", mixed_type()),
+            builtin_reflection_slot_getter("__toString", "__name", TypeExpr::Str),
+            builtin_reflection_owner_get_attributes_method(),
+            builtin_reflection_slot_getter(
+                "isDefaultValueAvailable",
+                "__has_default_value",
+                TypeExpr::Bool,
+            ),
+            builtin_reflection_parameter_is_default_value_constant_method(),
+            builtin_reflection_parameter_get_default_value_constant_name_method(),
+            builtin_reflection_parameter_get_default_value_method(),
+            builtin_reflection_slot_getter("getDeclaringClass", "__declaring_class", mixed_type()),
+            builtin_reflection_slot_getter(
+                "getDeclaringFunction",
+                "__declaring_function",
+                mixed_type(),
+            ),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
+    }
+}
+
+/// Builds `ReflectionParameter::getDefaultValue()` over the retained default slot.
+fn builtin_reflection_parameter_get_default_value_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let object_default_body = reflection_parameter_get_default_object_body(dummy_span);
+    ClassMethod {
+        name: "getDefaultValue".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![
+            reflection_parameter_throw_if_default_missing(dummy_span),
+            Stmt::new(
+                StmtKind::If {
+                    condition: binary_expr(
+                        reflection_this_property("__default_value_object_class", dummy_span),
+                        BinOp::NotEq,
+                        string_lit("", dummy_span),
+                        dummy_span,
+                    ),
+                    then_body: object_default_body,
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(reflection_this_property(
+                    "__default_value",
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds the object-default branch for `ReflectionParameter::getDefaultValue()`.
+fn reflection_parameter_get_default_object_body(span: crate::span::Span) -> Vec<Stmt> {
+    let arg_count_var = "__default_value_arg_count";
+    let mut body = vec![
+        Stmt::new(
+            StmtKind::If {
+                condition: binary_expr(
+                    reflection_this_property("__default_value", span),
+                    BinOp::StrictEq,
+                    null_value(span),
+                    span,
+                ),
+                then_body: vec![reflection_parameter_return_dynamic_default_object(
+                    Vec::new(),
+                    span,
+                )],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            span,
+        ),
+        Stmt::new(
+            StmtKind::Assign {
+                name: arg_count_var.to_string(),
+                value: function_call(
+                    "count",
+                    vec![reflection_this_property("__default_value", span)],
+                    span,
+                ),
+            },
+            span,
+        ),
+    ];
+    for arg_count in 1..=8 {
+        body.push(reflection_parameter_default_object_arg_count_branch(
+            arg_count,
+            arg_count_var,
+            span,
+        ));
+    }
+    body.push(throw_new_reflection_exception(
+        string_lit("Internal error: Failed to retrieve the default value", span),
+        span,
+    ));
+    body
+}
+
+/// Builds one constructor-argument-count branch for object defaults.
+fn reflection_parameter_default_object_arg_count_branch(
+    arg_count: usize,
+    arg_count_var: &str,
+    span: crate::span::Span,
+) -> Stmt {
+    let args = (0..arg_count)
+        .map(|index| reflection_parameter_default_object_arg(index, span))
+        .collect();
+    Stmt::new(
+        StmtKind::If {
+            condition: binary_expr(
+                variable_expr(arg_count_var, span),
+                BinOp::StrictEq,
+                Expr::new(ExprKind::IntLiteral(arg_count as i64), span),
+                span,
+            ),
+            then_body: vec![reflection_parameter_return_dynamic_default_object(args, span)],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Builds a return statement that constructs the retained object default class.
+fn reflection_parameter_return_dynamic_default_object(
+    args: Vec<Expr>,
+    span: crate::span::Span,
+) -> Stmt {
+    Stmt::new(
+        StmtKind::Return(Some(Expr::new(
+            ExprKind::NewDynamic {
+                name_expr: Box::new(reflection_this_property(
+                    "__default_value_object_class",
+                    span,
+                )),
+                args,
+            },
+            span,
+        ))),
+        span,
+    )
+}
+
+/// Builds `$this->__default_value[$index]` for retained object-default args.
+fn reflection_parameter_default_object_arg(index: usize, span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(reflection_this_property("__default_value", span)),
+            index: Box::new(Expr::new(ExprKind::IntLiteral(index as i64), span)),
+        },
+        span,
+    )
+}
+
+/// Returns a public `ReflectionClass::newInstanceWithoutConstructor()` method.
+///
+/// Eval dispatch supplies the real constructorless allocation. The body remains
+/// a conservative placeholder so the built-in class metadata exposes the PHP
+/// method without forcing ordinary method lowering to construct a class.
+fn builtin_reflection_class_new_instance_without_constructor_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "newInstanceWithoutConstructor".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `ReflectionParameter::isDefaultValueConstant()` over retained default metadata.
+fn builtin_reflection_parameter_is_default_value_constant_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "isDefaultValueConstant".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![
+            reflection_parameter_throw_if_default_missing(dummy_span),
+            Stmt::new(
+                StmtKind::Return(Some(reflection_this_property(
+                    "__is_default_value_constant",
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `ReflectionParameter::getDefaultValueConstantName()` over retained default metadata.
+fn builtin_reflection_parameter_get_default_value_constant_name_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "getDefaultValueConstantName".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![
+            reflection_parameter_throw_if_default_missing(dummy_span),
+            Stmt::new(
+                StmtKind::If {
+                    condition: Expr::new(
+                        ExprKind::Not(Box::new(reflection_this_property(
+                            "__is_default_value_constant",
+                            dummy_span,
+                        ))),
+                        dummy_span,
+                    ),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(reflection_this_property(
+                    "__default_value_constant_name",
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds the PHP-compatible default-metadata guard shared by ReflectionParameter methods.
+fn reflection_parameter_throw_if_default_missing(span: crate::span::Span) -> Stmt {
+    Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(
+                ExprKind::Not(Box::new(reflection_this_property(
+                    "__has_default_value",
+                    span,
+                ))),
+                span,
+            ),
+            then_body: vec![throw_new_reflection_exception(
+                string_lit("Internal error: Failed to retrieve the default value", span),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Builds `ReflectionParameter::canBePassedByValue()` from the retained by-ref flag.
+fn builtin_reflection_parameter_can_be_passed_by_value_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "canBePassedByValue".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::Not(Box::new(reflection_this_property(
+                    "__is_passed_by_reference",
+                    dummy_span,
+                ))),
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
     }
 }
 
@@ -444,6 +1292,7 @@ fn builtin_reflection_parameter() -> FlattenedClass {
 fn builtin_reflection_named_type() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionNamedType".to_string(),
+        span: dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -451,6 +1300,7 @@ fn builtin_reflection_named_type() -> FlattenedClass {
         is_readonly_class: false,
         properties: vec![
             builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
             builtin_property(
                 "__allows_null",
                 Visibility::Private,
@@ -458,72 +1308,771 @@ fn builtin_reflection_named_type() -> FlattenedClass {
                 bool_lit(false),
             ),
             builtin_property(
-                "__builtin",
+                "__is_builtin",
                 Visibility::Private,
                 Some(TypeExpr::Bool),
                 bool_lit(false),
             ),
         ],
         methods: vec![
+            builtin_reflection_private_constructor_method(),
             builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str),
+            builtin_reflection_named_type_to_string_method(),
             builtin_reflection_slot_getter("allowsNull", "__allows_null", TypeExpr::Bool),
-            builtin_reflection_slot_getter("isBuiltin", "__builtin", TypeExpr::Bool),
+            builtin_reflection_slot_getter("isBuiltin", "__is_builtin", TypeExpr::Bool),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
     }
 }
 
-/// Builds the `ReflectionClass` shell with a private resolved-name slot,
-/// private attribute array slot, public constructor, `getName()`, and
-/// `getAttributes()`.
-fn builtin_reflection_class() -> FlattenedClass {
+/// Builds the `ReflectionUnionType` shell returned for supported union hints.
+fn builtin_reflection_union_type() -> FlattenedClass {
     FlattenedClass {
-        name: "ReflectionClass".to_string(),
+        name: "ReflectionUnionType".to_string(),
+        span: dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
         is_final: true,
         is_readonly_class: false,
         properties: vec![
-            builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
             builtin_property(
-                "__attrs",
+                "__types",
                 Visibility::Private,
-                Some(array_type()),
+                Some(object_array_type("ReflectionNamedType")),
                 empty_array(),
+            ),
+            builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
+            builtin_property(
+                "__allows_null",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+            builtin_property(
+                "__is_builtin",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
             ),
         ],
         methods: vec![
-            builtin_reflection_owner_constructor_method(vec![(
-                "class_name",
-                Some(TypeExpr::Str),
-                None,
-                false,
-            )]),
-            builtin_reflection_class_get_name_method(),
-            builtin_reflection_owner_get_attributes_method(),
+            builtin_reflection_private_constructor_method(),
+            builtin_reflection_class_array_method(
+                "getTypes",
+                "__types",
+                object_array_type("ReflectionNamedType"),
+            ),
+            builtin_reflection_composite_type_string_method("__toString", "|", true),
+            builtin_reflection_composite_type_string_method("getName", "|", true),
+            builtin_reflection_class_bool_method("allowsNull", "__allows_null"),
+            builtin_reflection_class_bool_method("isBuiltin", "__is_builtin"),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
     }
 }
 
-/// Returns a public `ReflectionClass::getName()` method that returns the
-/// resolved reflected class name from the private `__name` slot.
-fn builtin_reflection_class_get_name_method() -> ClassMethod {
+/// Builds the `ReflectionIntersectionType` shell returned for supported intersection hints.
+fn builtin_reflection_intersection_type() -> FlattenedClass {
+    FlattenedClass {
+        name: "ReflectionIntersectionType".to_string(),
+        span: dummy(),
+        extends: None,
+        implements: Vec::new(),
+        is_abstract: false,
+        is_final: true,
+        is_readonly_class: false,
+        properties: vec![
+            builtin_property(
+                "__types",
+                Visibility::Private,
+                Some(object_array_type("ReflectionNamedType")),
+                empty_array(),
+            ),
+            builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
+            builtin_property(
+                "__allows_null",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+            builtin_property(
+                "__is_builtin",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+        ],
+        methods: vec![
+            builtin_reflection_private_constructor_method(),
+            builtin_reflection_class_array_method(
+                "getTypes",
+                "__types",
+                object_array_type("ReflectionNamedType"),
+            ),
+            builtin_reflection_composite_type_string_method("__toString", "&", false),
+            builtin_reflection_composite_type_string_method("getName", "&", false),
+            builtin_reflection_class_bool_method("allowsNull", "__allows_null"),
+            builtin_reflection_class_bool_method("isBuiltin", "__is_builtin"),
+        ],
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
+    }
+}
+
+/// Builds `ReflectionNamedType::__toString()` from retained name/nullability slots.
+fn builtin_reflection_named_type_to_string_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
+    let name = reflection_this_property("__name", dummy_span);
+    let nullable_named_type = binary_expr(
+        reflection_this_property("__allows_null", dummy_span),
+        BinOp::And,
+        binary_expr(
+            name.clone(),
+            BinOp::StrictNotEq,
+            string_lit("mixed", dummy_span),
+            dummy_span,
+        ),
+        dummy_span,
+    );
     ClassMethod {
-        name: "getName".to_string(),
+        name: "__toString".to_string(),
         visibility: Visibility::Public,
         is_static: false,
         is_abstract: false,
         is_final: false,
         has_body: true,
         params: Vec::new(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Str),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: nullable_named_type,
+                    then_body: vec![Stmt::new(
+                        StmtKind::Return(Some(concat_expr(
+                            string_lit("?", dummy_span),
+                            name.clone(),
+                            dummy_span,
+                        ))),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(Some(name)), dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds a string-rendering method for `ReflectionUnionType` and `ReflectionIntersectionType`.
+fn builtin_reflection_composite_type_string_method(
+    method_name: &str,
+    separator: &'static str,
+    append_null: bool,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let mut body = vec![
+        Stmt::new(
+            StmtKind::TypedAssign {
+                type_expr: TypeExpr::Str,
+                name: "result".to_string(),
+                value: string_lit("", dummy_span),
+            },
+            dummy_span,
+        ),
+        Stmt::new(
+            StmtKind::Foreach {
+                array: reflection_this_property("__types", dummy_span),
+                key_var: None,
+                value_var: "type".to_string(),
+                value_by_ref: false,
+                body: reflection_composite_type_append_body(
+                    method_call_expr(
+                        variable_expr("type", dummy_span),
+                        "getName",
+                        Vec::new(),
+                        dummy_span,
+                    ),
+                    separator,
+                    dummy_span,
+                ),
+            },
+            dummy_span,
+        ),
+    ];
+    if append_null {
+        body.push(Stmt::new(
+            StmtKind::If {
+                condition: reflection_this_property("__allows_null", dummy_span),
+                then_body: reflection_composite_type_append_body(
+                    string_lit("null", dummy_span),
+                    separator,
+                    dummy_span,
+                ),
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            dummy_span,
+        ));
+    }
+    body.push(Stmt::new(
+        StmtKind::Return(Some(variable_expr("result", dummy_span))),
+        dummy_span,
+    ));
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Str),
+        by_ref_return: false,
+        body,
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds the statements that append one rendered type segment to `$result`.
+fn reflection_composite_type_append_body(
+    value: Expr,
+    separator: &'static str,
+    span: crate::span::Span,
+) -> Vec<Stmt> {
+    vec![
+        Stmt::new(
+            StmtKind::If {
+                condition: binary_expr(
+                    variable_expr("result", span),
+                    BinOp::StrictNotEq,
+                    string_lit("", span),
+                    span,
+                ),
+                then_body: vec![Stmt::new(
+                    StmtKind::Assign {
+                        name: "result".to_string(),
+                        value: concat_expr(
+                            variable_expr("result", span),
+                            string_lit(separator, span),
+                            span,
+                        ),
+                    },
+                    span,
+                )],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            span,
+        ),
+        Stmt::new(
+            StmtKind::Assign {
+                name: "result".to_string(),
+                value: concat_expr(variable_expr("result", span), value, span),
+            },
+            span,
+        ),
+    ]
+}
+
+/// Builds the `ReflectionClass` shell with retained eval metadata accessors.
+fn builtin_reflection_class() -> FlattenedClass {
+    FlattenedClass {
+        name: "ReflectionClass".to_string(),
+        span: dummy(),
+        extends: None,
+        implements: Vec::new(),
+        is_abstract: false,
+        is_final: false,
+        is_readonly_class: false,
+        properties: vec![
+            builtin_property(
+                "__name",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__string",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__attrs",
+                Visibility::Private,
+                Some(array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__is_final",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_abstract",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_interface",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_trait",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_enum",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_readonly",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_anonymous",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_instantiable",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_cloneable",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_iterable",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_internal",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_user_defined",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__modifiers",
+                Visibility::Private,
+                Some(TypeExpr::Int),
+                int_lit(0),
+            ),
+            builtin_property(
+                "__short_name",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__namespace_name",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__in_namespace",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__interface_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__interfaces",
+                Visibility::Private,
+                Some(object_array_type("ReflectionClass")),
+                empty_array(),
+            ),
+            builtin_property(
+                "__trait_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__traits",
+                Visibility::Private,
+                Some(object_array_type("ReflectionClass")),
+                empty_array(),
+            ),
+            builtin_property(
+                "__trait_aliases",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__parent_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__method_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__property_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__constant_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__constants",
+                Visibility::Private,
+                Some(mixed_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__default_properties",
+                Visibility::Private,
+                Some(mixed_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__static_properties",
+                Visibility::Private,
+                Some(mixed_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__reflection_constants",
+                Visibility::Private,
+                Some(object_array_type("ReflectionClassConstant")),
+                empty_array(),
+            ),
+            builtin_property(
+                "__methods",
+                Visibility::Private,
+                Some(object_array_type("ReflectionMethod")),
+                empty_array(),
+            ),
+            builtin_property(
+                "__constructor",
+                Visibility::Private,
+                Some(nullable_object_type("ReflectionMethod")),
+                null_expr(),
+            ),
+            builtin_property(
+                "__parent_class",
+                Visibility::Private,
+                Some(mixed_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__properties",
+                Visibility::Private,
+                Some(object_array_type("ReflectionProperty")),
+                empty_array(),
+            ),
+        ],
+        methods: vec![
+            builtin_reflection_owner_constructor_method(vec![(
+                "class_name",
+                Some(mixed_type()),
+                None,
+                false,
+            )]),
+            builtin_reflection_class_string_method("getName", "__name"),
+            builtin_reflection_class_string_method("__toString", "__string"),
+            builtin_reflection_constant_false_union_method("getDocComment"),
+            builtin_reflection_constant_false_union_method("getExtensionName"),
+            builtin_reflection_constant_null_mixed_method("getExtension"),
+            builtin_reflection_class_string_method("getShortName", "__short_name"),
+            builtin_reflection_class_string_method("getNamespaceName", "__namespace_name"),
+            builtin_reflection_class_bool_method("inNamespace", "__in_namespace"),
+            builtin_reflection_class_array_method(
+                "getInterfaceNames",
+                "__interface_names",
+                string_array_type(),
+            ),
+            builtin_reflection_class_array_method(
+                "getInterfaces",
+                "__interfaces",
+                object_array_type("ReflectionClass"),
+            ),
+            builtin_reflection_class_array_method(
+                "getTraitNames",
+                "__trait_names",
+                string_array_type(),
+            ),
+            builtin_reflection_class_array_method(
+                "getTraits",
+                "__traits",
+                object_array_type("ReflectionClass"),
+            ),
+            builtin_reflection_class_array_method(
+                "getTraitAliases",
+                "__trait_aliases",
+                string_array_type(),
+            ),
+            builtin_reflection_class_bool_method("isFinal", "__is_final"),
+            builtin_reflection_class_bool_method("isAbstract", "__is_abstract"),
+            builtin_reflection_class_bool_method("isInterface", "__is_interface"),
+            builtin_reflection_class_bool_method("isTrait", "__is_trait"),
+            builtin_reflection_class_bool_method("isEnum", "__is_enum"),
+            builtin_reflection_class_bool_method("isReadOnly", "__is_readonly"),
+            builtin_reflection_class_bool_method("isAnonymous", "__is_anonymous"),
+            builtin_reflection_class_bool_method("isInstantiable", "__is_instantiable"),
+            builtin_reflection_class_bool_method("isCloneable", "__is_cloneable"),
+            builtin_reflection_class_bool_method("isIterable", "__is_iterable"),
+            builtin_reflection_class_bool_method("isIterateable", "__is_iterable"),
+            builtin_reflection_class_bool_method("isInternal", "__is_internal"),
+            builtin_reflection_class_bool_method("isUserDefined", "__is_user_defined"),
+            builtin_reflection_class_int_method("getModifiers", "__modifiers"),
+            builtin_reflection_class_has_name_method("hasMethod", "__method_names", true),
+            builtin_reflection_class_has_name_method("hasProperty", "__property_names", false),
+            builtin_reflection_class_has_name_method("hasConstant", "__constant_names", false),
+            builtin_reflection_class_get_constant_method(),
+            builtin_reflection_class_mixed_method("getConstants", "__constants"),
+            builtin_reflection_class_mixed_method("getDefaultProperties", "__default_properties"),
+            builtin_reflection_class_mixed_method("getStaticProperties", "__static_properties"),
+            builtin_reflection_class_get_static_property_value_method(),
+            builtin_reflection_class_set_static_property_value_method(),
+            builtin_reflection_class_array_method(
+                "getReflectionConstants",
+                "__reflection_constants",
+                object_array_type("ReflectionClassConstant"),
+            ),
+            builtin_reflection_class_get_reflection_constant_method(),
+            builtin_reflection_class_implements_interface_method(),
+            builtin_reflection_class_is_subclass_of_method(),
+            builtin_reflection_class_is_instance_method(),
+            builtin_reflection_class_get_member_method(
+                "getMethod",
+                "__methods",
+                "ReflectionMethod",
+                true,
+            ),
+            builtin_reflection_class_nullable_object_method(
+                "getConstructor",
+                "__constructor",
+                "ReflectionMethod",
+            ),
+            builtin_reflection_class_mixed_method("getParentClass", "__parent_class"),
+            builtin_reflection_class_filtered_array_method(
+                "getMethods",
+                "__methods",
+                object_array_type("ReflectionMethod"),
+            ),
+            builtin_reflection_class_filtered_array_method(
+                "getProperties",
+                "__properties",
+                object_array_type("ReflectionProperty"),
+            ),
+            builtin_reflection_class_get_member_method(
+                "getProperty",
+                "__properties",
+                "ReflectionProperty",
+                false,
+            ),
+            builtin_reflection_class_new_instance_method(),
+            builtin_reflection_class_new_instance_args_method(),
+            builtin_reflection_class_new_instance_without_constructor_method(),
+            builtin_reflection_owner_get_attributes_method(),
+        ],
+        attributes: Vec::new(),
+        constants: reflection_class_constants(),
+        used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
+    }
+}
+
+/// Builds the synthetic `ReflectionObject` class with ReflectionClass metadata slots.
+fn builtin_reflection_object_class() -> FlattenedClass {
+    let mut class = builtin_reflection_class();
+    class.name = "ReflectionObject".to_string();
+    class.extends = Some("ReflectionClass".to_string());
+    class.properties.push(builtin_property(
+        "__object",
+        Visibility::Private,
+        Some(mixed_type()),
+        null_expr(),
+    ));
+    if let Some(constructor) = class
+        .methods
+        .iter_mut()
+        .find(|method| method.name == "__construct")
+    {
+        *constructor = builtin_reflection_owner_constructor_method(vec![(
+            "object",
+            Some(object_type()),
+            None,
+            false,
+        )]);
+    }
+    class
+}
+
+/// Builds the synthetic `ReflectionEnum` class with flattened ReflectionClass members.
+fn builtin_reflection_enum_class() -> FlattenedClass {
+    let mut class = builtin_reflection_class();
+    class.name = "ReflectionEnum".to_string();
+    class
+        .methods
+        .retain(|method| reflection_enum_inherited_method_is_supported(&method.name));
+    class.properties.extend([
+        builtin_property(
+            "__case_names",
+            Visibility::Private,
+            Some(string_array_type()),
+            empty_array(),
+        ),
+        builtin_property(
+            "__cases",
+            Visibility::Private,
+            Some(array_type()),
+            empty_array(),
+        ),
+        builtin_property(
+            "__is_backed",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ),
+        builtin_property(
+            "__backing_type",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ),
+    ]);
+    class.methods.extend([
+        builtin_reflection_class_bool_method("isBacked", "__is_backed"),
+        builtin_reflection_class_mixed_method("getBackingType", "__backing_type"),
+    ]);
+    class
+}
+
+/// Returns whether a flattened ReflectionClass method is safe on ReflectionEnum.
+fn reflection_enum_inherited_method_is_supported(method_name: &str) -> bool {
+    matches!(
+        method_name.to_ascii_lowercase().as_str(),
+        "__construct"
+            | "__tostring"
+            | "getname"
+            | "getshortname"
+            | "getnamespacename"
+            | "innamespace"
+            | "isfinal"
+            | "isabstract"
+            | "isinterface"
+            | "istrait"
+            | "isenum"
+            | "isreadonly"
+            | "isanonymous"
+            | "isinstantiable"
+            | "iscloneable"
+            | "isiterable"
+            | "isiterateable"
+            | "isinternal"
+            | "isuserdefined"
+            | "getmodifiers"
+            | "getattributes"
+            | "getdoccomment"
+            | "getextensionname"
+            | "getextension"
+            | "getfilename"
+            | "getstartline"
+            | "getendline"
+    )
+}
+
+/// Returns the public modifier constants exposed by PHP's `ReflectionClass`.
+fn reflection_class_constants() -> Vec<ClassConst> {
+    vec![
+        builtin_class_const("IS_IMPLICIT_ABSTRACT", 16),
+        builtin_class_const("IS_FINAL", 32),
+        builtin_class_const("IS_EXPLICIT_ABSTRACT", 64),
+        builtin_class_const("IS_READONLY", 65_536),
+    ]
+}
+
+/// Builds a public integer class constant for a synthetic reflection type.
+fn builtin_class_const(name: &str, value: i64) -> ClassConst {
+    ClassConst {
+        name: name.to_string(),
+        visibility: Visibility::Public,
+        is_final: false,
+        value: Expr::new(ExprKind::IntLiteral(value), crate::span::Span::dummy()),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass` string method backed by one private slot.
+fn builtin_reflection_class_string_method(method_name: &str, property: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Str),
         by_ref_return: false,
@@ -531,7 +2080,7 @@ fn builtin_reflection_class_get_name_method() -> ClassMethod {
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
                     object: Box::new(Expr::new(ExprKind::This, dummy_span)),
-                    property: "__name".to_string(),
+                    property: property.to_string(),
                 },
                 dummy_span,
             ))),
@@ -542,34 +2091,2579 @@ fn builtin_reflection_class_get_name_method() -> ClassMethod {
     }
 }
 
-/// Builds a `FlattenedClass` for `ReflectionMethod` or `ReflectionProperty`
+/// Returns a public `ReflectionClass` integer method backed by one private slot.
+fn builtin_reflection_class_int_method(method_name: &str, property: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Int),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: property.to_string(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass` membership probe backed by a private string array.
+fn builtin_reflection_class_has_name_method(
+    method_name: &str,
+    property: &str,
+    case_insensitive: bool,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let name_arg = Expr::new(ExprKind::Variable("name".to_string()), dummy_span);
+    let needle = if case_insensitive {
+        Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified("strtolower"),
+                args: vec![name_arg],
+            },
+            dummy_span,
+        )
+    } else {
+        name_arg
+    };
+    let haystack = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+            property: property.to_string(),
+        },
+        dummy_span,
+    );
+    let contains = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("in_array"),
+            args: vec![needle, haystack],
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Int),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(Some(contains)), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionClass::getConstant()` backed by the private constant-value map.
+fn builtin_reflection_class_get_constant_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let name_arg = Expr::new(ExprKind::Variable("name".to_string()), dummy_span);
+    let value = Expr::new(ExprKind::Variable("value".to_string()), dummy_span);
+    let value_read = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(reflection_this_property("__constants", dummy_span)),
+            index: Box::new(name_arg),
+        },
+        dummy_span,
+    );
+    let value_is_present = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(value.clone()),
+            op: BinOp::StrictNotEq,
+            right: Box::new(Expr::new(ExprKind::Null, dummy_span)),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "getConstant".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "value".to_string(),
+                    value: value_read,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::If {
+                    condition: value_is_present,
+                    then_body: vec![Stmt::new(StmtKind::Return(Some(value)), dummy_span)],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(Expr::new(ExprKind::BoolLiteral(false), dummy_span))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionClass::getStaticPropertyValue()` backed by the static-property map.
+fn builtin_reflection_class_get_static_property_value_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let name = variable_expr("name", dummy_span);
+    let default = variable_expr("default", dummy_span);
+    let value_read = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(reflection_this_property("__static_properties", dummy_span)),
+            index: Box::new(name.clone()),
+        },
+        dummy_span,
+    );
+    let key_exists = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("array_key_exists"),
+            args: vec![
+                name,
+                reflection_this_property("__static_properties", dummy_span),
+            ],
+        },
+        dummy_span,
+    );
+    let value_or_default = Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(key_exists),
+            then_expr: Box::new(value_read),
+            else_expr: Box::new(default),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "getStaticPropertyValue".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            ("name".to_string(), Some(TypeExpr::Str), None, false),
+            (
+                "default".to_string(),
+                Some(mixed_type()),
+                null_expr(),
+                false,
+            ),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(value_or_default)),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns the public `ReflectionClass::setStaticPropertyValue()` signature.
+fn builtin_reflection_class_set_static_property_value_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "setStaticPropertyValue".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            ("name".to_string(), Some(TypeExpr::Str), None, false),
+            ("value".to_string(), Some(mixed_type()), None, false),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
+        body: Vec::new(),
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionClass::getReflectionConstant()` backed by reflected constant objects.
+fn builtin_reflection_class_get_reflection_constant_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let name = variable_expr("name", dummy_span);
+    let member = variable_expr("member", dummy_span);
+    let exists = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(method_call_expr(
+                member.clone(),
+                "getName",
+                Vec::new(),
+                dummy_span,
+            )),
+            op: BinOp::StrictEq,
+            right: Box::new(name.clone()),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "getReflectionConstant".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: reflection_this_property("__reflection_constants", dummy_span),
+                    key_var: None,
+                    value_var: "member".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: exists,
+                            then_body: vec![Stmt::new(StmtKind::Return(Some(member)), dummy_span)],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(false_bool()), dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionClass::implementsInterface()` backed by interface-name metadata.
+fn builtin_reflection_class_implements_interface_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let interface_var = Expr::new(ExprKind::Variable("interface".to_string()), dummy_span);
+    let candidate_var = Expr::new(ExprKind::Variable("interfaceName".to_string()), dummy_span);
+    let missing_interface_check = Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(
+                ExprKind::Not(Box::new(function_call(
+                    "interface_exists",
+                    vec![interface_var.clone()],
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+            then_body: vec![
+                throw_if_class_like_exists(
+                    "class_exists",
+                    interface_var.clone(),
+                    concat_expr(
+                        interface_var.clone(),
+                        string_lit(" is not an interface", dummy_span),
+                        dummy_span,
+                    ),
+                    dummy_span,
+                ),
+                throw_if_class_like_exists(
+                    "trait_exists",
+                    interface_var.clone(),
+                    concat_expr(
+                        interface_var.clone(),
+                        string_lit(" is not an interface", dummy_span),
+                        dummy_span,
+                    ),
+                    dummy_span,
+                ),
+                throw_if_class_like_exists(
+                    "enum_exists",
+                    interface_var.clone(),
+                    concat_expr(
+                        interface_var.clone(),
+                        string_lit(" is not an interface", dummy_span),
+                        dummy_span,
+                    ),
+                    dummy_span,
+                ),
+                throw_new_reflection_exception(
+                    concat_expr(
+                        concat_expr(
+                            string_lit("Interface \"", dummy_span),
+                            interface_var.clone(),
+                            dummy_span,
+                        ),
+                        string_lit("\" does not exist", dummy_span),
+                        dummy_span,
+                    ),
+                    dummy_span,
+                ),
+            ],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        dummy_span,
+    );
+    let lowered_interface = strtolower_call(interface_var.clone(), dummy_span);
+    let lowered_candidate = strtolower_call(candidate_var, dummy_span);
+    let candidate_matches = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(lowered_candidate),
+            op: BinOp::Eq,
+            right: Box::new(lowered_interface.clone()),
+        },
+        dummy_span,
+    );
+    let reflected_name_matches = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(strtolower_call(
+                reflection_this_property("__name", dummy_span),
+                dummy_span,
+            )),
+            op: BinOp::Eq,
+            right: Box::new(lowered_interface),
+        },
+        dummy_span,
+    );
+    let interface_self_matches = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(reflection_this_property("__is_interface", dummy_span)),
+            op: BinOp::And,
+            right: Box::new(reflected_name_matches),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "implementsInterface".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("interface".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![
+            missing_interface_check,
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: reflection_this_property("__interface_names", dummy_span),
+                    key_var: None,
+                    value_var: "interfaceName".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: candidate_matches,
+                            then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::If {
+                    condition: interface_self_matches,
+                    then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(false_bool()), dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionClass::isSubclassOf()` backed by parent and interface metadata.
+fn builtin_reflection_class_is_subclass_of_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let class_var = variable_expr("class", dummy_span);
+    let target_var = variable_expr("target", dummy_span);
+    let parent_name_var = variable_expr("parentName", dummy_span);
+    let interface_name_var = variable_expr("interfaceName", dummy_span);
+    let target_missing = binary_expr(
+        binary_expr(
+            Expr::new(
+                ExprKind::Not(Box::new(function_call(
+                    "class_exists",
+                    vec![class_var.clone()],
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+            BinOp::And,
+            Expr::new(
+                ExprKind::Not(Box::new(function_call(
+                    "interface_exists",
+                    vec![class_var.clone()],
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+            dummy_span,
+        ),
+        BinOp::And,
+        binary_expr(
+            Expr::new(
+                ExprKind::Not(Box::new(function_call(
+                    "trait_exists",
+                    vec![class_var.clone()],
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+            BinOp::And,
+            Expr::new(
+                ExprKind::Not(Box::new(function_call(
+                    "enum_exists",
+                    vec![class_var.clone()],
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+            dummy_span,
+        ),
+        dummy_span,
+    );
+    let missing_target_check = Stmt::new(
+        StmtKind::If {
+            condition: target_missing,
+            then_body: vec![throw_new_reflection_exception(
+                concat_expr(
+                    concat_expr(
+                        string_lit("Class \"", dummy_span),
+                        class_var.clone(),
+                        dummy_span,
+                    ),
+                    string_lit("\" does not exist", dummy_span),
+                    dummy_span,
+                ),
+                dummy_span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        dummy_span,
+    );
+    let parent_matches = binary_expr(
+        strtolower_call(parent_name_var, dummy_span),
+        BinOp::Eq,
+        target_var.clone(),
+        dummy_span,
+    );
+    let interface_matches = binary_expr(
+        strtolower_call(interface_name_var, dummy_span),
+        BinOp::Eq,
+        target_var.clone(),
+        dummy_span,
+    );
+    ClassMethod {
+        name: "isSubclassOf".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("class".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![
+            missing_target_check,
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "target".to_string(),
+                    value: strtolower_call(class_var, dummy_span),
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: reflection_this_property("__parent_names", dummy_span),
+                    key_var: None,
+                    value_var: "parentName".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: parent_matches,
+                            then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: reflection_this_property("__interface_names", dummy_span),
+                    key_var: None,
+                    value_var: "interfaceName".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: interface_matches,
+                            then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(false_bool()), dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionClass::isInstance()` backed by PHP's class relation predicate.
+fn builtin_reflection_class_is_instance_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "isInstance".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(object_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::InstanceOf {
+                    value: Box::new(variable_expr("object", dummy_span)),
+                    target: InstanceOfTarget::Expr(Box::new(reflection_this_property(
+                        "__name", dummy_span,
+                    ))),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `if (<predicate>($interface)) throw new ReflectionException($message);`.
+fn throw_if_class_like_exists(
+    predicate_name: &str,
+    interface_var: Expr,
+    message: Expr,
+    span: crate::span::Span,
+) -> Stmt {
+    Stmt::new(
+        StmtKind::If {
+            condition: function_call(predicate_name, vec![interface_var], span),
+            then_body: vec![throw_new_reflection_exception(message, span)],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Builds a normal function call expression for synthetic Reflection method bodies.
+fn function_call(name: &str, args: Vec<Expr>, span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified(name),
+            args,
+        },
+        span,
+    )
+}
+
+/// Builds a binary expression with the given operator and operands.
+fn binary_expr(left: Expr, op: BinOp, right: Expr, span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(left),
+            op,
+            right: Box::new(right),
+        },
+        span,
+    )
+}
+
+/// Builds a PHP string literal expression for synthetic method bodies.
+fn string_lit(value: &str, span: crate::span::Span) -> Expr {
+    Expr::new(ExprKind::StringLiteral(value.to_string()), span)
+}
+
+/// Builds a PHP string concatenation expression.
+fn concat_expr(left: Expr, right: Expr, span: crate::span::Span) -> Expr {
+    binary_expr(left, BinOp::Concat, right, span)
+}
+
+/// Builds `throw new ReflectionException($message)`.
+fn throw_new_reflection_exception(message: Expr, span: crate::span::Span) -> Stmt {
+    Stmt::new(
+        StmtKind::Throw(Expr::new(
+            ExprKind::NewObject {
+                class_name: Name::unqualified("ReflectionException"),
+                args: vec![message],
+            },
+            span,
+        )),
+        span,
+    )
+}
+
+/// Builds a `null` expression for synthetic Reflection method bodies.
+fn null_value(span: crate::span::Span) -> Expr {
+    Expr::new(ExprKind::Null, span)
+}
+
+/// Builds `$this->{$property}` for synthetic ReflectionClass method bodies.
+fn reflection_this_property(property: &str, span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(Expr::new(ExprKind::This, span)),
+            property: property.to_string(),
+        },
+        span,
+    )
+}
+
+/// Builds a `strtolower()` call around an expression for case-insensitive class names.
+fn strtolower_call(expr: Expr, span: crate::span::Span) -> Expr {
+    function_call("strtolower", vec![expr], span)
+}
+
+/// Builds a variable expression for synthetic Reflection method bodies.
+fn variable_expr(name: &str, span: crate::span::Span) -> Expr {
+    Expr::new(ExprKind::Variable(name.to_string()), span)
+}
+
+/// Builds a method call expression for synthetic Reflection method bodies.
+fn method_call_expr(object: Expr, method: &str, args: Vec<Expr>, span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::MethodCall {
+            object: Box::new(object),
+            method: method.to_string(),
+            args,
+        },
+        span,
+    )
+}
+
+/// Returns a public `ReflectionClass` array method backed by one private slot.
+fn builtin_reflection_class_array_method(
+    method_name: &str,
+    property: &str,
+    return_type: TypeExpr,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(return_type.clone()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: property.to_string(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass` array method with an optional modifier filter.
+fn builtin_reflection_class_filtered_array_method(
+    method_name: &str,
+    property: &str,
+    return_type: TypeExpr,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let filter = variable_expr("filter", dummy_span);
+    let member = variable_expr("member", dummy_span);
+    let source = reflection_this_property(property, dummy_span);
+    let filter_is_null = binary_expr(
+        filter.clone(),
+        BinOp::StrictEq,
+        Expr::new(ExprKind::Null, dummy_span),
+        dummy_span,
+    );
+    let filter_is_zero = binary_expr(
+        filter.clone(),
+        BinOp::StrictEq,
+        Expr::new(ExprKind::IntLiteral(0), dummy_span),
+        dummy_span,
+    );
+    let empty_result = Expr::new(ExprKind::ArrayLiteral(Vec::new()), dummy_span);
+    let modifier_match = binary_expr(
+        binary_expr(
+            method_call_expr(member.clone(), "getModifiers", Vec::new(), dummy_span),
+            BinOp::BitAnd,
+            filter,
+            dummy_span,
+        ),
+        BinOp::StrictNotEq,
+        Expr::new(ExprKind::IntLiteral(0), dummy_span),
+        dummy_span,
+    );
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![(
+            "filter".to_string(),
+            Some(TypeExpr::Nullable(Box::new(TypeExpr::Int))),
+            null_expr(),
+            false,
+        )],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(return_type.clone()),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: filter_is_null,
+                    then_body: vec![Stmt::new(
+                        StmtKind::Return(Some(source.clone())),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::If {
+                    condition: filter_is_zero,
+                    then_body: vec![Stmt::new(
+                        StmtKind::Return(Some(empty_result.clone())),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::TypedAssign {
+                    type_expr: return_type.clone(),
+                    name: "result".to_string(),
+                    value: empty_result,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: source,
+                    key_var: None,
+                    value_var: "member".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: modifier_match,
+                            then_body: vec![Stmt::new(
+                                StmtKind::ArrayPush {
+                                    array: "result".to_string(),
+                                    value: member,
+                                },
+                                dummy_span,
+                            )],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(variable_expr("result", dummy_span))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass::getMethod()` or `getProperty()` lookup method.
+fn builtin_reflection_class_get_member_method(
+    method_name: &str,
+    property: &str,
+    return_class: &str,
+    case_insensitive: bool,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let name = variable_expr("name", dummy_span);
+    let member = variable_expr("member", dummy_span);
+    let member_name = method_call_expr(member.clone(), "getName", Vec::new(), dummy_span);
+    let left = if case_insensitive {
+        strtolower_call(member_name, dummy_span)
+    } else {
+        member_name
+    };
+    let right = if case_insensitive {
+        strtolower_call(name.clone(), dummy_span)
+    } else {
+        name.clone()
+    };
+    let exists = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(left),
+            op: if case_insensitive {
+                BinOp::Eq
+            } else {
+                BinOp::StrictEq
+            },
+            right: Box::new(right),
+        },
+        dummy_span,
+    );
+    let message = if return_class == "ReflectionMethod" {
+        concat_expr(
+            concat_expr(
+                concat_expr(
+                    reflection_this_property("__name", dummy_span),
+                    string_lit("::", dummy_span),
+                    dummy_span,
+                ),
+                name.clone(),
+                dummy_span,
+            ),
+            string_lit("() does not exist", dummy_span),
+            dummy_span,
+        )
+    } else {
+        concat_expr(
+            concat_expr(
+                concat_expr(
+                    reflection_this_property("__name", dummy_span),
+                    string_lit("::$", dummy_span),
+                    dummy_span,
+                ),
+                name.clone(),
+                dummy_span,
+            ),
+            string_lit(" does not exist", dummy_span),
+            dummy_span,
+        )
+    };
+    let message = concat_expr(
+        string_lit(
+            if return_class == "ReflectionMethod" {
+                "Method "
+            } else {
+                "Property "
+            },
+            dummy_span,
+        ),
+        message,
+        dummy_span,
+    );
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified(return_class))),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: reflection_this_property(property, dummy_span),
+                    key_var: None,
+                    value_var: "member".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: exists,
+                            then_body: vec![Stmt::new(StmtKind::Return(Some(member)), dummy_span)],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            throw_new_reflection_exception(message, dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public nullable object `ReflectionClass` method backed by one private slot.
+fn builtin_reflection_class_nullable_object_method(
+    method_name: &str,
+    property: &str,
+    class_name: &str,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(nullable_object_type(class_name)),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: property.to_string(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public object-valued `ReflectionClass` method backed by one private slot.
+fn builtin_reflection_class_object_method(
+    method_name: &str,
+    property: &str,
+    class_name: &str,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified(class_name))),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: property.to_string(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public mixed `ReflectionClass` method backed by one private slot.
+fn builtin_reflection_class_mixed_method(method_name: &str, property: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: property.to_string(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass` boolean method backed by one private slot.
+fn builtin_reflection_class_bool_method(method_name: &str, property: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: property.to_string(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionMethod::getPrototype()` backed by a retained prototype reflector.
+fn builtin_reflection_method_get_prototype_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "getPrototype".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("ReflectionMethod"))),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: Expr::new(
+                        ExprKind::Not(Box::new(reflection_this_property(
+                            "__has_prototype",
+                            dummy_span,
+                        ))),
+                        dummy_span,
+                    ),
+                    then_body: vec![throw_new_reflection_exception(
+                        string_lit("Method does not have a prototype", dummy_span),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(reflection_this_property(
+                    "__prototype",
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionProperty::isDefault()` backed by the dynamic-property slot.
+fn builtin_reflection_property_is_default_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "isDefault".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::Not(Box::new(reflection_this_property(
+                    "__is_dynamic",
+                    dummy_span,
+                ))),
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public Reflection method that always reports PHP `false` as `string|false`.
+fn builtin_reflection_constant_false_union_method(method_name: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(string_or_bool_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(false_bool()), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public Reflection predicate that always reports PHP `false`.
+fn builtin_reflection_constant_false_bool_method(method_name: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(false_bool()), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public Reflection method that always reports an empty array.
+fn builtin_reflection_constant_empty_array_method(method_name: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(array_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(empty_array()), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public Reflection method that always reports PHP `null` as mixed.
+fn builtin_reflection_constant_null_mixed_method(method_name: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(null_expr()), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a `ReflectionMethod` predicate derived from its case-insensitive method name.
+fn builtin_reflection_method_name_predicate_method(
+    method_name: &str,
+    expected_name: &str,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let lower_name = strtolower_call(reflection_this_property("__name", dummy_span), dummy_span);
+    let comparison = binary_expr(
+        lower_name,
+        BinOp::StrictEq,
+        string_lit(expected_name, dummy_span),
+        dummy_span,
+    );
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(Some(comparison)), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionProperty::hasType()` backed by a nullable private `__type` slot.
+fn builtin_reflection_property_has_type_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "hasType".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(Expr::new(
+                        ExprKind::PropertyAccess {
+                            object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                            property: "__type".to_string(),
+                        },
+                        dummy_span,
+                    )),
+                    op: BinOp::StrictNotEq,
+                    right: Box::new(Expr::new(ExprKind::Null, dummy_span)),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public ReflectionProperty predicate over one `__modifiers` bit.
+fn builtin_reflection_property_modifier_mask_method(method_name: &str, mask: i64) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let masked_modifiers = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(reflection_this_property("__modifiers", dummy_span)),
+            op: BinOp::BitAnd,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(mask), dummy_span)),
+        },
+        dummy_span,
+    );
+    let comparison = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(masked_modifiers),
+            op: BinOp::StrictNotEq,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(0), dummy_span)),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(Some(comparison)), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionProperty::hasHook()` backed by the retained hook method map.
+fn builtin_reflection_property_has_hook_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let hook_kind = reflection_property_hook_type_value(dummy_span);
+    let has_hook = function_call(
+        "array_key_exists",
+        vec![
+            hook_kind,
+            reflection_this_property("__hooks", dummy_span),
+        ],
+        dummy_span,
+    );
+    ClassMethod {
+        name: "hasHook".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("type".to_string(), Some(mixed_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(Some(has_hook)), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionProperty::getHook()` backed by the retained hook method map.
+fn builtin_reflection_property_get_hook_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let hook_kind = reflection_property_hook_type_value(dummy_span);
+    let hooks = reflection_this_property("__hooks", dummy_span);
+    let hook_method = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(hooks.clone()),
+            index: Box::new(hook_kind.clone()),
+        },
+        dummy_span,
+    );
+    let has_hook = function_call("array_key_exists", vec![hook_kind, hooks], dummy_span);
+    ClassMethod {
+        name: "getHook".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("type".to_string(), Some(mixed_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(nullable_object_type("ReflectionMethod")),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: has_hook,
+                    then_body: vec![Stmt::new(
+                        StmtKind::Return(Some(hook_method)),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(null_value(dummy_span))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `$type->value` for `PropertyHookType` arguments accepted by hook APIs.
+fn reflection_property_hook_type_value(span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(variable_expr("type", span)),
+            property: "value".to_string(),
+        },
+        span,
+    )
+}
+
+/// Returns `ReflectionProperty::getValue()` for dynamic public instance reflectors.
+fn builtin_reflection_property_get_value_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let object = variable_expr("object", dummy_span);
+    ClassMethod {
+        name: "getValue".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(mixed_type()), null_expr(), false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![
+            reflection_property_static_get_value_return(dummy_span),
+            reflection_property_object_required_guard("getValue", dummy_span),
+            Stmt::new(
+                StmtKind::Return(Some(reflection_dynamic_object_property(object, dummy_span))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionProperty::setValue()` for dynamic public instance reflectors.
+fn builtin_reflection_property_set_value_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let object = variable_expr("object", dummy_span);
+    let value = variable_expr("value", dummy_span);
+    ClassMethod {
+        name: "setValue".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            ("object".to_string(), Some(mixed_type()), None, false),
+            ("value".to_string(), Some(mixed_type()), None, false),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
+        body: vec![
+            reflection_property_static_value_guard("setValue", dummy_span),
+            reflection_property_object_required_guard("setValue", dummy_span),
+            Stmt::new(
+                StmtKind::ExprStmt(Expr::new(
+                    ExprKind::Assignment {
+                        target: Box::new(reflection_dynamic_object_property(object, dummy_span)),
+                        value: Box::new(value),
+                        result_target: None,
+                        prelude: Vec::new(),
+                        conditional_value_temp: None,
+                    },
+                    dummy_span,
+                )),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionProperty::isInitialized()` for supported materialized reflectors.
+fn builtin_reflection_property_is_initialized_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let static_return = reflection_property_static_is_initialized_return(dummy_span);
+    let dynamic_return = Stmt::new(
+        StmtKind::If {
+            condition: reflection_this_property("__is_dynamic", dummy_span),
+            then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        dummy_span,
+    );
+    let defaulted_return = Stmt::new(
+        StmtKind::If {
+            condition: reflection_this_property("__has_default_value", dummy_span),
+            then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "isInitialized".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(mixed_type()), null_expr(), false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![
+            static_return,
+            reflection_property_object_required_guard("isInitialized", dummy_span),
+            dynamic_return,
+            defaulted_return,
+            throw_new_reflection_exception(
+                string_lit(
+                    "ReflectionProperty::isInitialized() for typed properties without defaults requires an inline known property",
+                    dummy_span,
+                ),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a static-property `getValue()` branch backed by the declaring ReflectionClass snapshot.
+fn reflection_property_static_get_value_return(span: crate::span::Span) -> Stmt {
+    Stmt::new(
+        StmtKind::If {
+            condition: reflection_this_property("__is_static", span),
+            then_body: vec![Stmt::new(
+                StmtKind::Return(Some(method_call_expr(
+                    reflection_this_property("__declaring_class", span),
+                    "getStaticPropertyValue",
+                    vec![reflection_this_property("__name", span)],
+                    span,
+                ))),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Returns a static-property `isInitialized()` branch backed by materialized static values.
+fn reflection_property_static_is_initialized_return(span: crate::span::Span) -> Stmt {
+    Stmt::new(
+        StmtKind::If {
+            condition: reflection_this_property("__is_static", span),
+            then_body: vec![Stmt::new(
+                StmtKind::Return(Some(function_call(
+                    "array_key_exists",
+                    vec![
+                        reflection_this_property("__name", span),
+                        method_call_expr(
+                            reflection_this_property("__declaring_class", span),
+                            "getStaticProperties",
+                            Vec::new(),
+                            span,
+                        ),
+                    ],
+                    span,
+                ))),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Builds a guard for static property value access that still needs inline lowering.
+fn reflection_property_static_value_guard(method: &str, span: crate::span::Span) -> Stmt {
+    Stmt::new(
+        StmtKind::If {
+            condition: reflection_this_property("__is_static", span),
+            then_body: vec![throw_new_reflection_exception(
+                string_lit(
+                    &format!(
+                        "ReflectionProperty::{}() for static properties requires an inline known static property",
+                        method
+                    ),
+                    span,
+                ),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Builds a guard requiring an object argument for instance property value access.
+fn reflection_property_object_required_guard(method: &str, span: crate::span::Span) -> Stmt {
+    Stmt::new(
+        StmtKind::If {
+            condition: binary_expr(
+                variable_expr("object", span),
+                BinOp::StrictEq,
+                null_value(span),
+                span,
+            ),
+            then_body: vec![throw_new_reflection_exception(
+                string_lit(
+                    &format!(
+                        "ReflectionProperty::{}() requires an object for instance properties",
+                        method
+                    ),
+                    span,
+                ),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Builds `$object->{$this->__name}` for ReflectionProperty value access.
+fn reflection_dynamic_object_property(object: Expr, span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::DynamicPropertyAccess {
+            object: Box::new(object),
+            property: Box::new(reflection_this_property("__name", span)),
+        },
+        span,
+    )
+}
+
+/// Returns `ReflectionProperty::isLazy()` for the non-lazy property model elephc supports.
+fn builtin_reflection_property_is_lazy_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "isLazy".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(object_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(false_bool()), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionProperty::skipLazyInitialization()` as a no-op for non-lazy properties.
+fn builtin_reflection_property_skip_lazy_initialization_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let static_modifier = binary_expr(
+        binary_expr(
+            reflection_this_property("__modifiers", dummy_span),
+            BinOp::BitAnd,
+            Expr::new(ExprKind::IntLiteral(16), dummy_span),
+            dummy_span,
+        ),
+        BinOp::StrictNotEq,
+        Expr::new(ExprKind::IntLiteral(0), dummy_span),
+        dummy_span,
+    );
+    ClassMethod {
+        name: "skipLazyInitialization".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(object_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: static_modifier,
+                    then_body: vec![throw_new_reflection_exception(
+                        string_lit(
+                            "Can not use skipLazyInitialization on static property",
+                            dummy_span,
+                        ),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::If {
+                    condition: reflection_this_property("__is_virtual", dummy_span),
+                    then_body: vec![throw_new_reflection_exception(
+                        string_lit(
+                            "Can not use skipLazyInitialization on virtual property",
+                            dummy_span,
+                        ),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds a `FlattenedClass` for simple reflection owner classes
 /// with a private `__attrs` array property and two methods: `__construct`
 /// (public, accepting the supplied params) and `getAttributes` (public,
 /// returning the `__attrs` array).
 fn builtin_reflection_owner_class(
     name: &str,
+    has_name: bool,
     constructor_params: Vec<(&str, Option<TypeExpr>, Option<Expr>, bool)>,
 ) -> FlattenedClass {
+    let mut properties = Vec::new();
+    let mut methods = vec![builtin_reflection_owner_constructor_method(
+        constructor_params,
+    )];
+    if has_name {
+        properties.push(builtin_property(
+            "__name",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        methods.push(builtin_reflection_class_string_method("getName", "__name"));
+    }
+    if reflection_owner_has_doc_comment_method(name) {
+        methods.push(builtin_reflection_constant_false_union_method(
+            "getDocComment",
+        ));
+    }
+    if reflection_owner_has_extension_methods(name) {
+        methods.push(builtin_reflection_constant_false_union_method(
+            "getExtensionName",
+        ));
+        methods.push(builtin_reflection_constant_null_mixed_method(
+            "getExtension",
+        ));
+    }
+    add_reflection_function_method_origin_methods(name, &mut properties, &mut methods);
+    add_reflection_member_flag_methods(name, &mut properties, &mut methods);
+    if matches!(
+        name,
+        "ReflectionMethod"
+            | "ReflectionProperty"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
+    ) {
+        properties.push(builtin_property(
+            "__declaring_class",
+            Visibility::Private,
+            Some(mixed_type()),
+            false_bool(),
+        ));
+        methods.push(builtin_reflection_class_object_method(
+            "getDeclaringClass",
+            "__declaring_class",
+            "ReflectionClass",
+        ));
+    }
+    if matches!(
+        name,
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
+        properties.push(builtin_property(
+            "__string",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        methods.push(builtin_reflection_class_string_method(
+            "__toString",
+            "__string",
+        ));
+        methods.push(builtin_reflection_constant_false_bool_method(
+            "isDeprecated",
+        ));
+        methods.push(builtin_reflection_constant_false_bool_method("hasType"));
+        methods.push(builtin_reflection_constant_null_mixed_method("getType"));
+    }
+    if matches!(name, "ReflectionFunction" | "ReflectionMethod") {
+        properties.push(builtin_property(
+            "__string",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        properties.push(builtin_property(
+            "__parameters",
+            Visibility::Private,
+            Some(object_array_type("ReflectionParameter")),
+            empty_array(),
+        ));
+        properties.push(builtin_property(
+            "__is_deprecated",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__is_generator",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__type",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        properties.push(builtin_property(
+            "__has_return_type",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__required_parameter_count",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
+        methods.push(builtin_reflection_class_array_method(
+            "getParameters",
+            "__parameters",
+            object_array_type("ReflectionParameter"),
+        ));
+        methods.push(builtin_reflection_parameter_count_method());
+        methods.push(builtin_reflection_class_int_method(
+            "getNumberOfRequiredParameters",
+            "__required_parameter_count",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "hasReturnType",
+            "__has_return_type",
+        ));
+        methods.push(builtin_reflection_class_mixed_method("getReturnType", "__type"));
+        methods.push(builtin_reflection_constant_false_bool_method("isClosure"));
+        methods.push(builtin_reflection_class_bool_method(
+            "isDeprecated",
+            "__is_deprecated",
+        ));
+        methods.push(builtin_reflection_constant_false_bool_method(
+            "returnsReference",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isGenerator",
+            "__is_generator",
+        ));
+        methods.push(builtin_reflection_constant_false_bool_method(
+            "hasTentativeReturnType",
+        ));
+        methods.push(builtin_reflection_constant_null_mixed_method(
+            "getTentativeReturnType",
+        ));
+        methods.push(builtin_reflection_function_method_is_variadic_method());
+        methods.push(builtin_reflection_class_string_method(
+            "__toString",
+            "__string",
+        ));
+    }
+    if name == "ReflectionMethod" {
+        properties.push(builtin_property(
+            "__has_prototype",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__prototype",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "hasPrototype",
+            "__has_prototype",
+        ));
+        methods.push(builtin_reflection_method_get_prototype_method());
+        methods.push(builtin_reflection_method_invoke_method());
+        methods.push(builtin_reflection_method_invoke_args_method());
+        methods.push(builtin_reflection_method_create_from_method_name_method());
+        methods.push(builtin_reflection_set_accessible_method());
+    }
+    if name == "ReflectionFunction" {
+        methods.push(builtin_reflection_function_invoke_method());
+        methods.push(builtin_reflection_function_invoke_args_method());
+        methods.push(builtin_reflection_constant_empty_array_method(
+            "getClosureUsedVariables",
+        ));
+        methods.push(builtin_reflection_constant_false_bool_method(
+            "isDisabled",
+        ));
+    }
+    if name == "ReflectionProperty" {
+        methods.push(builtin_reflection_set_accessible_method());
+    }
+    properties.push(builtin_property(
+        "__attrs",
+        Visibility::Private,
+        Some(array_type()),
+        empty_array(),
+    ));
+    methods.push(builtin_reflection_owner_get_attributes_method());
     FlattenedClass {
         name: name.to_string(),
+        span: dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
         is_final: true,
         is_readonly_class: false,
-        properties: vec![builtin_property(
-            "__attrs",
+        properties,
+        methods,
+        attributes: Vec::new(),
+        constants: reflection_owner_constants(name),
+        used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
+    }
+}
+
+/// Returns true when PHP exposes `getDocComment()` on this synthetic reflection owner.
+fn reflection_owner_has_doc_comment_method(class_name: &str) -> bool {
+    matches!(
+        class_name,
+        "ReflectionFunction"
+            | "ReflectionMethod"
+            | "ReflectionProperty"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
+    )
+}
+
+/// Returns true when PHP exposes extension-origin APIs on this reflection owner.
+fn reflection_owner_has_extension_methods(class_name: &str) -> bool {
+    matches!(class_name, "ReflectionFunction" | "ReflectionMethod")
+}
+
+/// Returns public class constants exposed by a synthetic reflection owner.
+fn reflection_owner_constants(class_name: &str) -> Vec<ClassConst> {
+    if class_name == "ReflectionMethod" {
+        return vec![
+            builtin_class_const("IS_PUBLIC", 1),
+            builtin_class_const("IS_PROTECTED", 2),
+            builtin_class_const("IS_PRIVATE", 4),
+            builtin_class_const("IS_STATIC", 16),
+            builtin_class_const("IS_FINAL", 32),
+            builtin_class_const("IS_ABSTRACT", 64),
+        ];
+    }
+    if class_name == "ReflectionProperty" {
+        return vec![
+            builtin_class_const("IS_STATIC", 16),
+            builtin_class_const("IS_READONLY", 128),
+            builtin_class_const("IS_PUBLIC", 1),
+            builtin_class_const("IS_PROTECTED", 2),
+            builtin_class_const("IS_PRIVATE", 4),
+            builtin_class_const("IS_ABSTRACT", 64),
+            builtin_class_const("IS_PROTECTED_SET", 2048),
+            builtin_class_const("IS_PRIVATE_SET", 4096),
+            builtin_class_const("IS_VIRTUAL", 512),
+            builtin_class_const("IS_FINAL", 32),
+        ];
+    }
+    if matches!(
+        class_name,
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
+        return vec![
+            builtin_class_const("IS_PUBLIC", 1),
+            builtin_class_const("IS_PROTECTED", 2),
+            builtin_class_const("IS_PRIVATE", 4),
+            builtin_class_const("IS_FINAL", 32),
+        ];
+    }
+    Vec::new()
+}
+
+/// Builds `getNumberOfParameters()` over the retained parameter array.
+fn builtin_reflection_parameter_count_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "getNumberOfParameters".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Int),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::unqualified("count"),
+                    args: vec![Expr::new(
+                        ExprKind::PropertyAccess {
+                            object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                            property: "__parameters".to_string(),
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `ReflectionFunctionAbstract::isVariadic()` from the retained parameter list.
+fn builtin_reflection_function_method_is_variadic_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let parameters = variable_expr("parameters", dummy_span);
+    let count = variable_expr("count", dummy_span);
+    let last_index = binary_expr(
+        count.clone(),
+        BinOp::Sub,
+        Expr::new(ExprKind::IntLiteral(1), dummy_span),
+        dummy_span,
+    );
+    let last_parameter = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(parameters.clone()),
+            index: Box::new(last_index),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "isVariadic".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "parameters".to_string(),
+                    value: reflection_this_property("__parameters", dummy_span),
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "count".to_string(),
+                    value: function_call("count", vec![parameters], dummy_span),
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::If {
+                    condition: binary_expr(
+                        count.clone(),
+                        BinOp::StrictEq,
+                        Expr::new(ExprKind::IntLiteral(0), dummy_span),
+                        dummy_span,
+                    ),
+                    then_body: vec![Stmt::new(StmtKind::Return(false_bool()), dummy_span)],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(method_call_expr(
+                    last_parameter,
+                    "isVariadic",
+                    Vec::new(),
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Adds namespace/name-origin accessors shared by ReflectionFunction and ReflectionMethod.
+fn add_reflection_function_method_origin_methods(
+    class_name: &str,
+    properties: &mut Vec<ClassProperty>,
+    methods: &mut Vec<ClassMethod>,
+) {
+    if !matches!(class_name, "ReflectionFunction" | "ReflectionMethod") {
+        return;
+    }
+    properties.push(builtin_property(
+        "__short_name",
+        Visibility::Private,
+        Some(TypeExpr::Str),
+        empty_string(),
+    ));
+    properties.push(builtin_property(
+        "__namespace_name",
+        Visibility::Private,
+        Some(TypeExpr::Str),
+        empty_string(),
+    ));
+    properties.push(builtin_property(
+        "__in_namespace",
+        Visibility::Private,
+        Some(bool_type()),
+        false_bool(),
+    ));
+    properties.push(builtin_property(
+        "__is_internal",
+        Visibility::Private,
+        Some(bool_type()),
+        false_bool(),
+    ));
+    properties.push(builtin_property(
+        "__is_user_defined",
+        Visibility::Private,
+        Some(bool_type()),
+        false_bool(),
+    ));
+    methods.push(builtin_reflection_class_string_method(
+        "getShortName",
+        "__short_name",
+    ));
+    methods.push(builtin_reflection_class_string_method(
+        "getNamespaceName",
+        "__namespace_name",
+    ));
+    methods.push(builtin_reflection_class_bool_method(
+        "inNamespace",
+        "__in_namespace",
+    ));
+    methods.push(builtin_reflection_class_bool_method(
+        "isInternal",
+        "__is_internal",
+    ));
+    methods.push(builtin_reflection_class_bool_method(
+        "isUserDefined",
+        "__is_user_defined",
+    ));
+}
+
+/// Adds member visibility/staticity predicates for method and property reflection owners.
+fn add_reflection_member_flag_methods(
+    class_name: &str,
+    properties: &mut Vec<ClassProperty>,
+    methods: &mut Vec<ClassMethod>,
+) {
+    let visibility_flags = [
+        ("__is_public", "isPublic"),
+        ("__is_protected", "isProtected"),
+        ("__is_private", "isPrivate"),
+    ];
+    if matches!(
+        class_name,
+        "ReflectionMethod"
+            | "ReflectionProperty"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
+    ) {
+        for (property, method) in visibility_flags {
+            properties.push(builtin_property(
+                property,
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ));
+            methods.push(builtin_reflection_class_bool_method(method, property));
+        }
+    }
+    if matches!(class_name, "ReflectionMethod" | "ReflectionProperty") {
+        properties.push(builtin_property(
+            "__is_static",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isStatic",
+            "__is_static",
+        ));
+    }
+    if class_name == "ReflectionMethod" {
+        properties.push(builtin_property(
+            "__modifiers",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
+        methods.push(builtin_reflection_class_int_method(
+            "getModifiers",
+            "__modifiers",
+        ));
+        methods.push(builtin_reflection_method_name_predicate_method(
+            "isConstructor",
+            "__construct",
+        ));
+        methods.push(builtin_reflection_method_name_predicate_method(
+            "isDestructor",
+            "__destruct",
+        ));
+    }
+    if class_name == "ReflectionProperty" {
+        properties.push(builtin_property(
+            "__type",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        properties.push(builtin_property(
+            "__settable_type",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        properties.push(builtin_property(
+            "__has_default_value",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__is_promoted",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__is_virtual",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__is_dynamic",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__has_hooks",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__hooks",
             Visibility::Private,
             Some(array_type()),
             empty_array(),
-        )],
-        methods: vec![
-            builtin_reflection_owner_constructor_method(constructor_params),
-            builtin_reflection_owner_get_attributes_method(),
-        ],
-        attributes: Vec::new(),
-        constants: Vec::new(),
-        used_traits: Vec::new(),
+        ));
+        properties.push(builtin_property(
+            "__default_value",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        properties.push(builtin_property(
+            "__modifiers",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
+        methods.push(builtin_reflection_class_int_method(
+            "getModifiers",
+            "__modifiers",
+        ));
+        methods.push(builtin_reflection_property_has_type_method());
+        methods.push(builtin_reflection_class_mixed_method("getType", "__type"));
+        methods.push(builtin_reflection_class_mixed_method(
+            "getSettableType",
+            "__settable_type",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "hasDefaultValue",
+            "__has_default_value",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isPromoted",
+            "__is_promoted",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isVirtual",
+            "__is_virtual",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isDynamic",
+            "__is_dynamic",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "hasHooks",
+            "__has_hooks",
+        ));
+        methods.push(builtin_reflection_class_array_method(
+            "getHooks",
+            "__hooks",
+            array_type(),
+        ));
+        methods.push(builtin_reflection_property_has_hook_method());
+        methods.push(builtin_reflection_property_get_hook_method());
+        properties.push(builtin_property(
+            "__string",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        methods.push(builtin_reflection_class_string_method(
+            "__toString",
+            "__string",
+        ));
+        methods.push(builtin_reflection_property_is_lazy_method());
+        methods.push(builtin_reflection_property_skip_lazy_initialization_method());
+        methods.push(builtin_reflection_property_get_value_method());
+        methods.push(builtin_reflection_property_set_value_method());
+        methods.push(builtin_reflection_property_is_initialized_method());
+        methods.push(builtin_reflection_property_modifier_mask_method(
+            "isProtectedSet",
+            2048,
+        ));
+        methods.push(builtin_reflection_property_modifier_mask_method(
+            "isPrivateSet",
+            4096,
+        ));
+        methods.push(builtin_reflection_property_is_default_method());
+        methods.push(builtin_reflection_class_mixed_method(
+            "getDefaultValue",
+            "__default_value",
+        ));
+        for (property, method) in [("__is_final", "isFinal"), ("__is_abstract", "isAbstract")] {
+            properties.push(builtin_property(
+                property,
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ));
+            methods.push(builtin_reflection_class_bool_method(method, property));
+        }
+        properties.push(builtin_property(
+            "__is_readonly",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isReadOnly",
+            "__is_readonly",
+        ));
+    }
+    if class_name == "ReflectionClassConstant" {
+        properties.push(builtin_property(
+            "__value",
+            Visibility::Private,
+            Some(mixed_type()),
+            Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
+        ));
+        methods.push(builtin_reflection_class_mixed_method("getValue", "__value"));
+    }
+    if matches!(
+        class_name,
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
+        properties.push(builtin_property(
+            "__is_enum_case",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isEnumCase",
+            "__is_enum_case",
+        ));
+        properties.push(builtin_property(
+            "__is_final",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isFinal",
+            "__is_final",
+        ));
+        properties.push(builtin_property(
+            "__modifiers",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
+        methods.push(builtin_reflection_class_int_method(
+            "getModifiers",
+            "__modifiers",
+        ));
+    }
+    if matches!(
+        class_name,
+        "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
+        properties.push(builtin_property(
+            "__enum",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        methods.push(builtin_reflection_class_mixed_method("getEnum", "__enum"));
+        properties.push(builtin_property(
+            "__value",
+            Visibility::Private,
+            Some(mixed_type()),
+            Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
+        ));
+        methods.push(builtin_reflection_class_mixed_method("getValue", "__value"));
+    }
+    if class_name == "ReflectionEnumBackedCase" {
+        properties.push(builtin_property(
+            "__backing_value",
+            Visibility::Private,
+            Some(mixed_type()),
+            Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
+        ));
+        methods.push(builtin_reflection_class_mixed_method(
+            "getBackingValue",
+            "__backing_value",
+        ));
+    }
+    if class_name == "ReflectionMethod" {
+        for (property, method) in [("__is_final", "isFinal"), ("__is_abstract", "isAbstract")] {
+            properties.push(builtin_property(
+                property,
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ));
+            methods.push(builtin_reflection_class_bool_method(method, property));
+        }
     }
 }
 
@@ -590,7 +4684,9 @@ fn builtin_reflection_owner_constructor_method(
             .into_iter()
             .map(|(name, ty, default, by_ref)| (name.to_string(), ty, default, by_ref))
             .collect(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: None,
         by_ref_return: false,
@@ -612,7 +4708,9 @@ fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
         is_final: false,
         has_body: true,
         params: Vec::new(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(array_type()),
         by_ref_return: false,
@@ -631,14 +4729,29 @@ fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
     }
 }
 
+/// Marks a synthesized variadic method signature as callable with no variadic arguments.
+fn make_reflection_variadic_optional(sig: &mut crate::types::FunctionSig) {
+    if sig.variadic.is_some() {
+        if let Some(default) = sig.defaults.last_mut() {
+            *default = empty_array();
+        }
+    }
+}
+
 /// Overrides the return types on the synthesized reflection class methods inside
 /// `checker` to match PHP's actual signatures:
 /// - `__construct` → `void`
 /// - `getName` / `getArguments` → `string` / `array`
 /// - `newInstance` → `mixed`
+/// - `getTarget` / `isRepeated` → `int` / `bool`
 /// - `getAttributes` → `array<ReflectionAttribute>`
 pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
     if let Some(class_info) = checker.classes.get_mut("ReflectionAttribute") {
+        for (name, ty) in &mut class_info.properties {
+            if name == "__args" {
+                *ty = reflection_attribute_args_type();
+            }
+        }
         if let Some(sig) = class_info.methods.get_mut("__construct") {
             sig.return_type = PhpType::Void;
         }
@@ -646,31 +4759,495 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             sig.return_type = PhpType::Str;
         }
         if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getArguments")) {
-            // Attribute arguments can be keyed (named arguments / associative
-            // arrays), so the result is an associative array of mixed values.
-            sig.return_type = PhpType::AssocArray {
-                key: Box::new(PhpType::Mixed),
-                value: Box::new(PhpType::Mixed),
-            };
+            sig.return_type = reflection_attribute_args_type();
         }
         if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("newInstance")) {
             sig.return_type = PhpType::Mixed;
         }
+        if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getTarget")) {
+            sig.return_type = PhpType::Int;
+        }
+        if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("isRepeated")) {
+            sig.return_type = PhpType::Bool;
+        }
     }
-    for class_name in ["ReflectionClass", "ReflectionMethod", "ReflectionProperty"] {
+    for class_name in [
+        "ReflectionClass",
+        "ReflectionObject",
+        "ReflectionFunction",
+        "ReflectionMethod",
+        "ReflectionProperty",
+        "ReflectionParameter",
+        "ReflectionNamedType",
+        "ReflectionUnionType",
+        "ReflectionIntersectionType",
+        "ReflectionClassConstant",
+        "ReflectionEnumUnitCase",
+        "ReflectionEnumBackedCase",
+    ] {
         if let Some(class_info) = checker.classes.get_mut(class_name) {
             if let Some(sig) = class_info.methods.get_mut("__construct") {
                 sig.return_type = PhpType::Void;
             }
-            if class_name == "ReflectionClass" {
+            if matches!(
+                class_name,
+                "ReflectionClass"
+                    | "ReflectionObject"
+                    | "ReflectionFunction"
+                    | "ReflectionMethod"
+                    | "ReflectionProperty"
+                    | "ReflectionParameter"
+                    | "ReflectionNamedType"
+                    | "ReflectionUnionType"
+                    | "ReflectionIntersectionType"
+                    | "ReflectionClassConstant"
+                    | "ReflectionEnumUnitCase"
+                    | "ReflectionEnumBackedCase"
+            ) {
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getName")) {
                     sig.return_type = PhpType::Str;
                 }
             }
+            if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getDocComment")) {
+                sig.return_type = PhpType::Union(vec![PhpType::Str, PhpType::Bool]);
+            }
+            if let Some(sig) = class_info
+                .methods
+                .get_mut(&php_symbol_key("getExtensionName"))
+            {
+                sig.return_type = PhpType::Union(vec![PhpType::Str, PhpType::Bool]);
+            }
+            if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getExtension")) {
+                sig.return_type = PhpType::Mixed;
+            }
+            if matches!(
+                class_name,
+                "ReflectionMethod"
+                    | "ReflectionProperty"
+                    | "ReflectionClassConstant"
+                    | "ReflectionEnumUnitCase"
+                    | "ReflectionEnumBackedCase"
+            ) {
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("getDeclaringClass"))
+                {
+                    sig.return_type = PhpType::Object("ReflectionClass".to_string());
+                }
+            }
+            if matches!(class_name, "ReflectionClass" | "ReflectionObject") {
+                for (property_name, property_type) in &mut class_info.properties {
+                    match property_name.as_str() {
+                        "__interfaces" | "__traits" => {
+                            *property_type = reflection_class_object_map_type();
+                        }
+                        "__trait_aliases" => {
+                            *property_type = reflection_string_map_type();
+                        }
+                        "__static_properties" => {
+                            *property_type = reflection_static_properties_map_type();
+                        }
+                        _ => {}
+                    }
+                }
+                for method_name in [
+                    "isfinal",
+                    "isabstract",
+                    "isinterface",
+                    "istrait",
+                    "isenum",
+                    "isreadonly",
+                    "isanonymous",
+                    "isinstantiable",
+                    "iscloneable",
+                    "isiterable",
+                    "isiterateable",
+                    "isinternal",
+                    "isuserdefined",
+                    "hasmethod",
+                    "hasproperty",
+                    "implementsinterface",
+                    "issubclassof",
+                    "isinstance",
+                ] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
+                }
+                for method_name in ["getinterfacenames", "gettraitnames"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Array(Box::new(PhpType::Str));
+                    }
+                }
+                for method_name in ["getinterfaces", "gettraits"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = reflection_class_object_map_type();
+                    }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getTraitAliases")) {
+                    sig.return_type = reflection_string_map_type();
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getMethods")) {
+                    sig.return_type =
+                        PhpType::Array(Box::new(PhpType::Object("ReflectionMethod".to_string())));
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getMethod")) {
+                    sig.return_type = PhpType::Object("ReflectionMethod".to_string());
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("getReflectionConstants"))
+                {
+                    sig.return_type = PhpType::Array(Box::new(PhpType::Object(
+                        "ReflectionClassConstant".to_string(),
+                    )));
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("getReflectionConstant"))
+                {
+                    sig.return_type = PhpType::Mixed;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getProperties")) {
+                    sig.return_type =
+                        PhpType::Array(Box::new(PhpType::Object("ReflectionProperty".to_string())));
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getProperty")) {
+                    sig.return_type = PhpType::Object("ReflectionProperty".to_string());
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("getStaticProperties"))
+                {
+                    sig.return_type = reflection_static_properties_map_type();
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("getConstructor"))
+                {
+                    sig.return_type = PhpType::Union(vec![
+                        PhpType::Object("ReflectionMethod".to_string()),
+                        PhpType::Void,
+                    ]);
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("getParentClass"))
+                {
+                    sig.return_type = PhpType::Mixed;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
+                    sig.return_type = PhpType::Int;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("newInstance")) {
+                    sig.return_type = PhpType::Object(String::new());
+                    sig.variadic = Some("args".to_string());
+                    let variadic_default = Some(Expr::new(
+                        ExprKind::ArrayLiteral(Vec::new()),
+                        crate::span::Span::dummy(),
+                    ));
+                    if let Some(index) = sig.params.iter().position(|(name, _)| name == "args") {
+                        while sig.defaults.len() <= index {
+                            sig.defaults.push(None);
+                        }
+                        sig.defaults[index] = variadic_default;
+                    } else {
+                        sig.params
+                            .push(("args".to_string(), PhpType::Array(Box::new(PhpType::Mixed))));
+                        sig.param_type_exprs.push(None);
+                        sig.defaults.push(variadic_default);
+                        sig.ref_params.push(false);
+                        sig.declared_params.push(false);
+                    }
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("newInstanceArgs"))
+                {
+                    sig.return_type = PhpType::Mixed;
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("newInstanceWithoutConstructor"))
+                {
+                    sig.return_type = PhpType::Mixed;
+                }
+            }
+            if matches!(
+                class_name,
+                "ReflectionClass" | "ReflectionObject" | "ReflectionEnum"
+            ) {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
+                }
+            }
+            if matches!(class_name, "ReflectionMethod" | "ReflectionProperty") {
+                for method_name in ["isstatic", "ispublic", "isprotected", "isprivate"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("setAccessible")) {
+                    sig.return_type = PhpType::Void;
+                }
+            }
+            if matches!(class_name, "ReflectionFunction" | "ReflectionMethod") {
+                for method_name in ["getShortName", "getNamespaceName"] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Str;
+                    }
+                }
+                for method_name in [
+                    "inNamespace",
+                    "isInternal",
+                    "isUserDefined",
+                    "hasReturnType",
+                    "isVariadic",
+                    "isClosure",
+                    "isDeprecated",
+                    "returnsReference",
+                    "isGenerator",
+                    "hasTentativeReturnType",
+                ] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Bool;
+                    }
+                }
+                for method_name in ["getReturnType", "getTentativeReturnType"] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Mixed;
+                    }
+                }
+            }
+            if class_name == "ReflectionProperty" {
+                for (property_name, property_type) in &mut class_info.properties {
+                    if property_name == "__hooks" {
+                        *property_type = reflection_property_hook_map_type();
+                    }
+                }
+                for method_name in [
+                    "isfinal",
+                    "isabstract",
+                    "isreadonly",
+                    "isdefault",
+                    "ispromoted",
+                    "isvirtual",
+                    "isdynamic",
+                    "hashooks",
+                    "isinitialized",
+                    "isprotectedset",
+                    "isprivateset",
+                ] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("hasDefaultValue"))
+                {
+                    sig.return_type = PhpType::Bool;
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("getDefaultValue"))
+                {
+                    sig.return_type = PhpType::Mixed;
+                }
+                for method_name in ["getType", "getSettableType"] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Mixed;
+                    }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getHooks")) {
+                    sig.return_type = reflection_property_hook_map_type();
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("hasHook")) {
+                    sig.params = vec![(
+                        "type".to_string(),
+                        PhpType::Object("PropertyHookType".to_string()),
+                    )];
+                    sig.param_type_exprs =
+                        vec![Some(TypeExpr::Named(Name::unqualified("PropertyHookType")))];
+                    sig.defaults = vec![None];
+                    sig.ref_params = vec![false];
+                    sig.declared_params = vec![true];
+                    sig.return_type = PhpType::Bool;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getHook")) {
+                    sig.params = vec![(
+                        "type".to_string(),
+                        PhpType::Object("PropertyHookType".to_string()),
+                    )];
+                    sig.param_type_exprs =
+                        vec![Some(TypeExpr::Named(Name::unqualified("PropertyHookType")))];
+                    sig.defaults = vec![None];
+                    sig.ref_params = vec![false];
+                    sig.declared_params = vec![true];
+                    sig.return_type = PhpType::Union(vec![
+                        PhpType::Object("ReflectionMethod".to_string()),
+                        PhpType::Void,
+                    ]);
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
+                    sig.return_type = PhpType::Int;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
+                }
+            }
+            if class_name == "ReflectionMethod" {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
+                }
+                for method_name in [
+                    "isfinal",
+                    "isabstract",
+                    "isconstructor",
+                    "isdestructor",
+                    "hasPrototype",
+                ] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getPrototype")) {
+                    sig.return_type = PhpType::Object("ReflectionMethod".to_string());
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
+                    sig.return_type = PhpType::Int;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("invoke")) {
+                    sig.return_type = PhpType::Mixed;
+                    sig.variadic = Some("args".to_string());
+                    make_reflection_variadic_optional(sig);
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("invokeArgs")) {
+                    // Keep the shell's (object, args) parameters: ReflectionMethod::invokeArgs
+                    // takes the receiver first, and replacing the params with a
+                    // lone args array breaks invoke dispatch.
+                    sig.return_type = PhpType::Mixed;
+                }
+                if let Some(sig) =
+                    class_info.methods.get_mut(&php_symbol_key("createFromMethodName"))
+                {
+                    sig.params = vec![("method".to_string(), PhpType::Str)];
+                    sig.param_type_exprs = vec![Some(TypeExpr::Str)];
+                    sig.defaults = vec![None];
+                    sig.ref_params = vec![false];
+                    sig.declared_params = vec![true];
+                    sig.return_type = PhpType::Object("ReflectionMethod".to_string());
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getParameters")) {
+                    sig.return_type = PhpType::Array(Box::new(PhpType::Object(
+                        "ReflectionParameter".to_string(),
+                    )));
+                }
+                for method_name in ["getNumberOfParameters", "getNumberOfRequiredParameters"] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Int;
+                    }
+                }
+            }
+            if class_name == "ReflectionFunction" {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("invoke")) {
+                    sig.return_type = PhpType::Mixed;
+                    sig.variadic = Some("args".to_string());
+                    make_reflection_variadic_optional(sig);
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("invokeArgs")) {
+                    sig.return_type = PhpType::Mixed;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getParameters")) {
+                    sig.return_type = PhpType::Array(Box::new(PhpType::Object(
+                        "ReflectionParameter".to_string(),
+                    )));
+                }
+                for method_name in ["getNumberOfParameters", "getNumberOfRequiredParameters"] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Int;
+                    }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("isDisabled")) {
+                    sig.return_type = PhpType::Bool;
+                }
+            }
+            if class_name == "ReflectionParameter" {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getPosition")) {
+                    sig.return_type = PhpType::Int;
+                }
+                for method_name in [
+                    "isoptional",
+                    "isvariadic",
+                    "ispassedbyreference",
+                    "canbepassedbyvalue",
+                    "ispromoted",
+                    "hastype",
+                    "allowsnull",
+                    "isarray",
+                    "iscallable",
+                    "isdefaultvalueavailable",
+                    "isdefaultvalueconstant",
+                ] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
+                }
+                for method_name in ["getType", "getDefaultValue", "getDefaultValueConstantName"] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Mixed;
+                    }
+                }
+            }
+            if class_name == "ReflectionNamedType" {
+                for method_name in ["allowsnull", "isbuiltin"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
+                }
+            }
+            if class_name == "ReflectionUnionType" {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getTypes")) {
+                    sig.return_type = PhpType::Array(Box::new(PhpType::Object(
+                        "ReflectionNamedType".to_string(),
+                    )));
+                }
+                for method_name in ["allowsnull", "isbuiltin"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
+                }
+            }
+            if class_name == "ReflectionIntersectionType" {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getTypes")) {
+                    sig.return_type = PhpType::Array(Box::new(PhpType::Object(
+                        "ReflectionNamedType".to_string(),
+                    )));
+                }
+                for method_name in ["allowsnull", "isbuiltin"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
+                }
+            }
             if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getAttributes")) {
-                sig.return_type = PhpType::Array(Box::new(PhpType::Object(
-                    "ReflectionAttribute".to_string(),
-                )));
+                sig.return_type =
+                    PhpType::Array(Box::new(PhpType::Object("ReflectionAttribute".to_string())));
             }
         }
     }
@@ -686,9 +5263,11 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
     }
     if let Some(class_info) = checker.classes.get_mut("ReflectionParameter") {
         if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getType")) {
-            // ?ReflectionNamedType — null for untyped parameters.
+            // ReflectionNamedType|ReflectionUnionType|ReflectionIntersectionType|null.
             sig.return_type = PhpType::Union(vec![
                 PhpType::Object("ReflectionNamedType".to_string()),
+                PhpType::Object("ReflectionUnionType".to_string()),
+                PhpType::Object("ReflectionIntersectionType".to_string()),
                 PhpType::Void,
             ]);
         }

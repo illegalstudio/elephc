@@ -2,7 +2,7 @@
 title: "ptr_offset() — internals"
 description: "Compiler internals for ptr_offset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 289
+  order: 293
 ---
 
 ## `ptr_offset()` — internals
@@ -31,6 +31,11 @@ function ptr_offset(pointer $pointer, int $offset): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_offset.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_offset.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

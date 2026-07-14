@@ -18,6 +18,11 @@ Pick one or more random keys out of an array.
 
 **Returns**: `int`
 
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_rand.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_rand.rs)).
+
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 

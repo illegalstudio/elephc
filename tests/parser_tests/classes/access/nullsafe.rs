@@ -65,6 +65,28 @@ fn test_parse_nullsafe_method_call() {
     }
 }
 
+/// Parses `<?php $obj?->$method(1);` and verifies that the AST preserves
+/// the dynamic method expression as a nullsafe dynamic method call.
+#[test]
+fn test_parse_nullsafe_dynamic_method_call() {
+    let stmts = parse_source("<?php $obj?->$method(1);");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::NullsafeDynamicMethodCall {
+                object,
+                method,
+                args,
+            } => {
+                assert!(matches!(object.kind, ExprKind::Variable(ref name) if name == "obj"));
+                assert!(matches!(method.kind, ExprKind::Variable(ref name) if name == "method"));
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("Expected NullsafeDynamicMethodCall, got {:?}", other),
+        },
+        other => panic!("Expected ExprStmt, got {:?}", other),
+    }
+}
+
 /// Parses `<?php echo $user?->profile?->name;` and verifies that chained nullsafe
 /// access produces a nested `NullsafePropertyAccess` AST structure: outer accesses
 /// "name", inner accesses "profile" on variable "$user".

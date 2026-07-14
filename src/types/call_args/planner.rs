@@ -13,7 +13,6 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::FunctionSig;
 
-#[cfg(test)]
 use super::matching::regular_param_count;
 use super::matching::{NamedParamMatch, NamedParamTracker};
 use super::plan::{
@@ -28,7 +27,6 @@ use super::static_spread::{expand_static_assoc_spread_args_with_origins, Expande
 /// - `trim_trailing_defaults`: when `true`, elide trailing default-only slots from the plan.
 /// - `allow_unknown_named_variadic`: when `true`, unknown named args are allowed and routed
 ///   to the variadic parameter if the signature is variadic.
-#[cfg(test)]
 pub(crate) fn plan_call_args(
     sig: &FunctionSig,
     args: &[Expr],
@@ -50,7 +48,6 @@ pub(crate) fn plan_call_args(
 /// supplied `regular_param_count` rather than inferring it from the signature.
 /// Use this when the caller knows the visible parameter count (e.g., internal
 /// signatures with hidden implementation parameters).
-#[cfg(test)]
 pub(crate) fn plan_call_args_with_regular_param_count(
     sig: &FunctionSig,
     args: &[Expr],

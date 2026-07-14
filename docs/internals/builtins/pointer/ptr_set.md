@@ -2,7 +2,7 @@
 title: "ptr_set() — internals"
 description: "Compiler internals for ptr_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 294
+  order: 298
 ---
 
 ## `ptr_set()` — internals
@@ -31,6 +31,11 @@ function ptr_set(pointer $pointer, mixed $value): void
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_set.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_set.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -2,7 +2,7 @@
 title: "zval_unpack() — internals"
 description: "Compiler internals for zval_unpack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 303
+  order: 307
 ---
 
 ## `zval_unpack()` — internals
@@ -34,6 +34,10 @@ function zval_unpack(pointer $zval): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

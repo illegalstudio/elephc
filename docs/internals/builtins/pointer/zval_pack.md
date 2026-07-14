@@ -2,7 +2,7 @@
 title: "zval_pack() — internals"
 description: "Compiler internals for zval_pack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 301
+  order: 305
 ---
 
 ## `zval_pack()` — internals
@@ -41,6 +41,10 @@ function zval_pack(mixed $value): pointer
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

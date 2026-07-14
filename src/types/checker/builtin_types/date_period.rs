@@ -180,7 +180,9 @@ fn method_vis(
         is_final: false,
         has_body: true,
         params,
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type,
         by_ref_return: false,
@@ -213,6 +215,7 @@ fn int_property(name: &str) -> ClassProperty {
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default: Some(int_lit(0)),
         span: dummy(),
         attributes: Vec::new(),
@@ -232,6 +235,7 @@ fn bool_property(name: &str) -> ClassProperty {
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default: Some(Expr::new(ExprKind::BoolLiteral(false), dummy())),
         span: dummy(),
         attributes: Vec::new(),
@@ -612,7 +616,9 @@ fn date_period_create_from_iso8601_string() -> ClassMethod {
             param("specification", Some(TypeExpr::Str), None),
             param("options", Some(TypeExpr::Int), Some(int_lit(0))),
         ],
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         // PHP 8.3+: returns a `DatePeriod` or throws (never `false`).
         return_type: Some(TypeExpr::Named(Name::unqualified("DatePeriod"))),
@@ -671,6 +677,7 @@ pub(crate) fn inject_builtin_date_period(class_map: &mut HashMap<String, Flatten
         "DatePeriod".to_string(),
         FlattenedClass {
             name: "DatePeriod".to_string(),
+            span: dummy(),
             extends: None,
             implements: vec!["Iterator".to_string(), "Traversable".to_string()],
             is_abstract: false,
@@ -684,6 +691,7 @@ pub(crate) fn inject_builtin_date_period(class_map: &mut HashMap<String, Flatten
                 class_const("INCLUDE_END_DATE", 2),
             ],
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 }

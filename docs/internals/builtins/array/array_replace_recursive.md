@@ -34,6 +34,10 @@ function array_replace_recursive(array $array, array $replacements): mixed
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
 ## Cross-references
 
 - [User reference for `array_replace_recursive()`](../../../php/builtins/array/array_replace_recursive.md)

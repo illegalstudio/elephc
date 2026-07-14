@@ -34,6 +34,11 @@ function array_filter(array $array, callable $callback = null, int $mode = 0): a
 
 - **Arity**: takes 1–3 arguments (2 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_filter.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_filter.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `array_filter()`](../../../php/builtins/array/array_filter.md)

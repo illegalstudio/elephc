@@ -2,7 +2,7 @@
 title: "dirname() — internals"
 description: "Compiler internals for dirname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 105
+  order: 109
 ---
 
 ## `dirname()` — internals
@@ -33,6 +33,11 @@ function dirname(string $path, int $levels = 1): string
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/dirname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/dirname.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

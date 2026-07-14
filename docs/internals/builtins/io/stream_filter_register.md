@@ -2,7 +2,7 @@
 title: "stream_filter_register() — internals"
 description: "Compiler internals for stream_filter_register(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 199
+  order: 203
 ---
 
 ## `stream_filter_register()` — internals
@@ -32,6 +32,11 @@ function stream_filter_register(string $filter_name, string $class): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_register.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_register.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -2,7 +2,7 @@
 title: "stream_socket_sendto() — internals"
 description: "Compiler internals for stream_socket_sendto(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 222
+  order: 226
 ---
 
 ## `stream_socket_sendto()` — internals
@@ -31,6 +31,11 @@ function stream_socket_sendto(resource $socket, string $data, int $flags = 0, st
 ## What the type checker enforces
 
 - **Arity**: takes 2–4 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_sendto.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_sendto.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

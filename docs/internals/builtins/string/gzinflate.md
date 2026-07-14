@@ -2,7 +2,7 @@
 title: "gzinflate() — internals"
 description: "Compiler internals for gzinflate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 350
+  order: 354
 ---
 
 ## `gzinflate()` — internals
@@ -31,6 +31,11 @@ function gzinflate(string $data, int $max_length = 0): mixed
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/gzinflate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/gzinflate.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

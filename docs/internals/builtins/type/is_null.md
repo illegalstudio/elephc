@@ -2,7 +2,7 @@
 title: "is_null() — internals"
 description: "Compiler internals for is_null(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 426
+  order: 430
 ---
 
 ## `is_null()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_null.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_null.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:994](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L994) (`lower_is_null_builtin`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1593](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1593) (`lower_is_null_builtin`)
 - **Function symbol**: `lower_is_null_builtin()`
 
 
@@ -31,6 +31,11 @@ function is_null(mixed $value): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/is_null.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_null.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

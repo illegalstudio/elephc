@@ -37,6 +37,12 @@ function array_intersect(array $array, ...$arrays): array
 - **Arity**: takes exactly 1 argument.
 - **Variadic**: collects excess arguments into `$arrays`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_intersect.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_intersect.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+- **Variadic**: collects excess arguments into `$arrays`.
+
 ## Cross-references
 
 - [User reference for `array_intersect()`](../../../php/builtins/array/array_intersect.md)

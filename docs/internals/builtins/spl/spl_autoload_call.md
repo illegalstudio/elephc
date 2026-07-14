@@ -2,7 +2,7 @@
 title: "spl_autoload_call() — internals"
 description: "Compiler internals for spl_autoload_call(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 325
+  order: 329
 ---
 
 ## `spl_autoload_call()` — internals
@@ -31,6 +31,11 @@ function spl_autoload_call(string $class): void
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_call.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_call.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

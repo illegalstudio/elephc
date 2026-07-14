@@ -2,7 +2,7 @@
 title: "stream_context_set_option()"
 description: "Sets an option on the specified context."
 sidebar:
-  order: 196
+  order: 200
 ---
 
 ## stream_context_set_option()
@@ -20,6 +20,11 @@ Sets an option on the specified context.
 - `$value` (`mixed`), default `null`, optional
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_set_option.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_set_option.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -255,6 +255,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             ..
         } => PhpType::Bool,
         ExprKind::FunctionCall { name, args } => match name.as_str() {
+            "eval" => PhpType::Mixed,
             "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim" | "str_repeat"
             | "strrev" | "chr" | "str_replace" | "str_ireplace" | "ucfirst" | "lcfirst"
             | "ucwords" | "str_pad" | "implode" | "sprintf" | "vsprintf" | "nl2br" | "wordwrap" | "md5"
@@ -508,6 +509,25 @@ fn merge_array_literal_element_type_syntactic(existing: PhpType, next: PhpType) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::names::Name;
+    use crate::span::Span;
+
+    /// Verifies syntactic type inference treats eval as a runtime Mixed value.
+    #[test]
+    fn test_syntactic_eval_return_type_is_mixed() {
+        let expr = Expr {
+            kind: ExprKind::FunctionCall {
+                name: Name::unqualified("eval"),
+                args: vec![Expr {
+                    kind: ExprKind::StringLiteral("return 1;".to_string()),
+                    span: Span::dummy(),
+                }],
+            },
+            span: Span::dummy(),
+        };
+
+        assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
+    }
 
     /// Verifies syntactic indexed plus assoc array union type.
     #[test]

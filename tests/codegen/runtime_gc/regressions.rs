@@ -1266,6 +1266,38 @@ echo $hits;
     );
 }
 
+/// Regression test for issue #516: a chained subscript read (`$a[$t][1]`) on a
+/// nested indexed array materializes the inner array as an owned +1 temporary
+/// (the inner `array_get` increfs refcounted elements), and nothing ever
+/// released it, leaking the inner array's blocks on every evaluation. The
+/// consuming (outer) index read must release the intermediate once its result
+/// is extracted. Regression: heap must be clean at exit and output unchanged.
+#[test]
+fn test_regression_516_chained_subscript_read_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function make(int $n): array {
+    $a = [];
+    for ($i = 0; $i < $n; $i++) { $a[] = ['kw', 'word' . $i]; }
+    return $a;
+}
+$a = make(50);
+$n = count($a);
+$out = 0;
+for ($t = 0; $t < $n; $t++) { $x = (string) $a[$t][1]; $out = $out + strlen($x); }
+echo 'out=' . $out;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    // 10 five-char values (word0..word9) + 40 six-char values (word10..word49).
+    assert_eq!(out.stdout, "out=290");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for issue #525 (multiple reads): each chained read on the
 /// same `?array` receiver creates its own nullable-access hidden temp, and every
 /// temp's reference must be released independently — using the receiver twice
@@ -1293,6 +1325,105 @@ echo $hits;
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "50");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #516 (three-level chain): every intermediate of a
+/// deeper chained subscript read (`$a[$i][$j][$k]`) is an owned container
+/// temporary and each must be released by its consuming read. Also guards
+/// against over-eager releases: each intermediate stays alive through its
+/// parent container's reference, so the extracted leaf string must stay valid.
+/// Building the triple-nested structure has a small pre-existing constant leak
+/// (2 blocks, unrelated to reads), so this asserts via GC counters that the
+/// alloc/free gap stays constant instead of growing with read iterations.
+#[test]
+fn test_regression_516_three_level_chained_read_does_not_leak() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 3; $i++) {
+    $mid = [];
+    for ($j = 0; $j < 3; $j++) { $mid[] = ['leaf', 'val' . $i . $j]; }
+    $a[] = $mid;
+}
+$out = 0;
+for ($r = 0; $r < 40; $r++) {
+    for ($i = 0; $i < 3; $i++) {
+        for ($j = 0; $j < 3; $j++) {
+            $x = (string) $a[$i][$j][1];
+            $out = $out + strlen($x);
+        }
+    }
+}
+echo 'out=' . $out;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "out=1800");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    // Before the fix the leaked +1 references pinned every distinct mid/leaf
+    // container past process cleanup (gap of 32 blocks on this fixture); after
+    // the fix only the 2-block build residue may remain.
+    assert!(
+        allocs >= frees && allocs - frees < 10,
+        "chained three-level reads must release their intermediates: allocs={} frees={}",
+        allocs,
+        frees
+    );
+}
+
+/// Regression test for issue #516 (string-keyed nesting): a chained
+/// associative read (`$m['x']['y']`) goes through `hash_get`, whose refcounted
+/// results also carry a +1 caller reference. The chained consumer must release
+/// the intermediate hash exactly like the indexed-array path. Regression: heap
+/// must be clean at exit after repeated evaluation.
+#[test]
+fn test_regression_516_chained_string_keyed_read_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$m = ['x' => ['y' => 'deep', 'z' => 'other'], 'w' => ['y' => 'second']];
+for ($i = 0; $i < 200; $i++) {
+    $v = (string) $m['x']['y'];
+}
+echo $m['x']['y'];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "deep");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #516: a typed string extracted from a chained
+/// read must remain valid when a later call argument releases the parent array.
+#[test]
+fn test_regression_516_chained_string_survives_parent_release() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function replace_parent(array &$value): string {
+    $value = [];
+    return str_repeat('Z', 128);
+}
+function emit_pair(string $left, string $right): void {
+    echo $left;
+    echo $right;
+}
+$a = [[str_repeat('L', 128)]];
+emit_pair($a[0][0], replace_parent($a));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        format!("{}{}", "L".repeat(128), "Z".repeat(128))
+    );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",

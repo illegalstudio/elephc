@@ -167,9 +167,14 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::BufferGet => buffers::lower_buffer_get(ctx, &inst),
         Op::BufferSet => buffers::lower_buffer_set(ctx, &inst),
         Op::ObjectNew => objects::lower_object_new(ctx, &inst),
+        Op::ObjectCloneShallow => objects::lower_object_clone_shallow(ctx, &inst),
         Op::DynamicObjectNew => objects::lower_dynamic_object_new(ctx, &inst),
         Op::DynamicObjectNewMixed => objects::lower_dynamic_object_new_mixed(ctx, &inst),
+        Op::DynamicObjectNewWithoutConstructorMixed => {
+            objects::lower_dynamic_object_new_without_constructor_mixed(ctx, &inst)
+        }
         Op::PropGet => objects::lower_prop_get(ctx, &inst),
+        Op::PropInitialized => objects::lower_prop_initialized(ctx, &inst),
         Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
         Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
         Op::BindRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
@@ -185,6 +190,15 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
         Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
         Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
+        Op::LoadReflectionStaticProperty => {
+            static_properties::lower_load_reflection_static_property(ctx, &inst)
+        }
+        Op::ReflectionStaticPropertyInitialized => {
+            static_properties::lower_reflection_static_property_initialized(ctx, &inst)
+        }
+        Op::StoreReflectionStaticProperty => {
+            static_properties::lower_store_reflection_static_property(ctx, &inst)
+        }
         Op::Call => lower_direct_call(ctx, &inst),
         Op::ClosureCall => callables::lower_closure_call(ctx, &inst),
         Op::ExprCall => callables::lower_expr_call(ctx, &inst),
@@ -193,10 +207,21 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::MethodCall => lower_method_call(ctx, &inst),
         Op::NullsafeMethodCall => lower_nullsafe_method_call(ctx, &inst),
         Op::StaticMethodCall => lower_static_method_call(ctx, &inst),
+        Op::EvalStaticMethodCall => lower_eval_static_method_call(ctx, &inst),
         Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, &inst),
         Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, &inst),
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
+        Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),
+        Op::EvalScopeGet => builtins::lower_eval_scope_get(ctx, &inst),
+        Op::EvalScopeSet => builtins::lower_eval_scope_set(ctx, &inst),
+        Op::EvalFunctionCall => builtins::lower_eval_function_call(ctx, &inst),
+        Op::EvalFunctionCallArray => builtins::lower_eval_function_call_array(ctx, &inst),
+        Op::EvalObjectNew => builtins::lower_eval_object_new(ctx, &inst),
+        Op::EvalFunctionExists => builtins::lower_eval_function_exists(ctx, &inst),
+        Op::EvalClassExists => builtins::lower_eval_class_exists(ctx, &inst),
+        Op::EvalConstantExists => builtins::lower_eval_constant_exists(ctx, &inst),
+        Op::EvalConstantFetch => builtins::lower_eval_constant_fetch(ctx, &inst),
         Op::ClosureCapture => lower_closure_capture(ctx, &inst),
         Op::ClosureNew => lower_closure_new(ctx, &inst),
         Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
@@ -606,6 +631,8 @@ fn function_signature_from_eir_with_param_count(
             .take(param_count)
             .map(|param| (param.name.clone(), param.php_type.clone()))
             .collect(),
+        param_type_exprs: vec![None; param_count],
+        param_attributes: Vec::new(),
         defaults: function
             .params
             .iter()
@@ -645,12 +672,29 @@ fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
     if signature.params.iter().any(|(name, _)| name == &variadic) {
         return;
     }
+    let variadic_index = signature.params.len();
+    let variadic_type_expr = if signature.param_type_exprs.len() > variadic_index {
+        signature.param_type_exprs.remove(variadic_index)
+    } else {
+        None
+    };
+    let variadic_ref = if signature.ref_params.len() > variadic_index {
+        signature.ref_params.remove(variadic_index)
+    } else {
+        false
+    };
+    let variadic_declared = if signature.declared_params.len() > variadic_index {
+        signature.declared_params.remove(variadic_index)
+    } else {
+        false
+    };
     signature
         .params
         .push((variadic, PhpType::Array(Box::new(PhpType::Mixed))));
     signature.defaults.push(None);
-    signature.ref_params.push(false);
-    signature.declared_params.push(false);
+    signature.ref_params.push(variadic_ref);
+    signature.declared_params.push(variadic_declared);
+    signature.param_type_exprs.push(variadic_type_expr);
 }
 
 /// Lowers a concrete include-loaded function variant activation marker.
@@ -1765,17 +1809,6 @@ fn first_class_callable_descriptor(
             method_name,
         ));
     }
-    if let Some(callee) = ctx.callable_function_by_name(target) {
-        return Ok(Some(FirstClassCallableDescriptor {
-            entry_label: function_symbol(&callee.name),
-            kind: callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
-            sig: Some(function_signature_from_eir(callee)),
-            invocation: callable_descriptor::CallableDescriptorInvocation::named(
-                callable_descriptor::CallableDescriptorShape::Function,
-                callee.name.clone(),
-            ),
-        }));
-    }
     if ctx.has_extern_function(target) {
         return Ok(Some(FirstClassCallableDescriptor {
             entry_label: ctx.emitter.target.extern_symbol(target),
@@ -1789,6 +1822,17 @@ fn first_class_callable_descriptor(
     }
     if let Some(descriptor) = first_class_builtin_descriptor(ctx, target)? {
         return Ok(Some(descriptor));
+    }
+    if let Some(callee) = ctx.callable_function_by_name(target) {
+        return Ok(Some(FirstClassCallableDescriptor {
+            entry_label: function_symbol(&callee.name),
+            kind: callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
+            sig: Some(function_signature_from_eir(callee)),
+            invocation: callable_descriptor::CallableDescriptorInvocation::named(
+                callable_descriptor::CallableDescriptorShape::Function,
+                callee.name.clone(),
+            ),
+        }));
     }
     Ok(None)
 }
@@ -1903,6 +1947,15 @@ fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
             return Ok(());
         }
         emit_object_tostring_call(ctx, value, normalized)?;
+        return store_if_result(ctx, inst);
+    }
+    if inst.result_php_type.codegen_repr() == PhpType::Iterable
+        && matches!(
+            source_ty,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Iterable
+        )
+    {
+        ctx.load_value_to_result(value)?;
         return store_if_result(ctx, inst);
     }
     if inst.result_php_type.codegen_repr() == PhpType::TaggedScalar {
@@ -2870,11 +2923,15 @@ fn lower_mixed_method_call(
 ) -> Result<()> {
     let candidates = mixed_method_candidates(ctx, method_name, inst.operands.len())?;
     if candidates.is_empty() {
+        if builtins::has_eval_context(ctx) {
+            return builtins::lower_eval_method_call(ctx, inst, object, method_name);
+        }
         emit_method_call_on_null_fatal(ctx, method_name);
         return Ok(());
     }
 
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let non_object_label = ctx.next_label("mixed_method_non_object");
     let no_match_label = ctx.next_label("mixed_method_no_match");
     let done_label = ctx.next_label("mixed_method_done");
     let match_labels = candidates
@@ -2889,7 +2946,7 @@ fn lower_mixed_method_call(
 
     ctx.load_value_to_result(object)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &no_match_label);
+    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &non_object_label);
     emit_mixed_method_class_dispatch(
         ctx,
         receiver_reg,
@@ -2905,6 +2962,14 @@ fn lower_mixed_method_call(
     }
 
     ctx.emitter.label(&no_match_label);
+    if builtins::has_eval_context(ctx) {
+        builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        emit_method_call_on_null_fatal(ctx, method_name);
+    }
+
+    ctx.emitter.label(&non_object_label);
     emit_method_call_on_null_fatal(ctx, method_name);
 
     ctx.emitter.label(&done_label);
@@ -3712,11 +3777,12 @@ fn lower_throwable_standard_method(
     store_if_result(ctx, inst)
 }
 
-/// Loads `Throwable::getMessage()` from payload offsets 8/16 into string result registers.
+/// Loads `Throwable::getMessage()` from payload offsets 8/16 and returns a caller-owned string copy.
 fn lower_throwable_get_message(ctx: &mut FunctionContext<'_>, object_reg: &str) -> Result<PhpType> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, ptr_reg, object_reg, 8);
     abi::emit_load_from_address(ctx.emitter, len_reg, object_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     Ok(PhpType::Str)
 }
 
@@ -4517,13 +4583,20 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         );
     }
     let late_bound_static = is_late_bound_static_receiver(receiver_label);
-    let receiver_info = ctx
-        .module
-        .class_infos
-        .get(receiver.as_str())
-        .ok_or_else(|| {
-            CodegenIrError::unsupported(format!("static method call on unknown class {}", receiver))
-        })?;
+    let Some(receiver_info) = ctx.module.class_infos.get(receiver.as_str()) else {
+        if builtins::has_eval_context(ctx) {
+            return builtins::lower_eval_static_method_call(
+                ctx,
+                inst,
+                receiver.as_str(),
+                method_name,
+            );
+        }
+        return Err(CodegenIrError::unsupported(format!(
+            "static method call on unknown class {}",
+            receiver
+        )));
+    };
     let method_key = php_symbol_key(method_name);
     let impl_class = receiver_info
         .static_method_impl_classes
@@ -4570,6 +4643,22 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     } else {
         None
     };
+    let eval_done_label = if late_bound_static && ctx.module.required_runtime_features.eval_bridge {
+        let no_override_label = ctx.next_label("eval_late_static_no_override");
+        let done_label = ctx.next_label("eval_late_static_done");
+        builtins::lower_eval_native_frame_static_method_call(
+            ctx,
+            inst,
+            receiver.as_str(),
+            method_name,
+            &no_override_label,
+            &done_label,
+        )?;
+        ctx.emitter.label(&no_override_label);
+        Some(done_label)
+    } else {
+        None
+    };
     let call_args = materialize_static_method_call_args_with_refs(
         ctx,
         &called_class_id,
@@ -4596,7 +4685,19 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
         ctx.store_result_value(result)?;
     }
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
+    if let Some(done_label) = eval_done_label {
+        ctx.emitter.label(&done_label);
+    }
+    Ok(())
+}
+
+/// Lowers a direct static-method call against a class declared by a previous eval fragment.
+fn lower_eval_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let target = method_name_data(ctx, inst)?.to_string();
+    let (receiver_label, method_name) = parse_static_method_target(&target)?;
+    let receiver = resolve_static_method_receiver(ctx, receiver_label)?;
+    builtins::lower_eval_static_method_call(ctx, inst, receiver.as_str(), method_name)
 }
 
 /// Lowers `self::method()` or `parent::method()` when it targets an instance method.
@@ -5460,6 +5561,17 @@ fn emit_loaded_indexed_array_to_mixed(ctx: &mut FunctionContext<'_>, source_elem
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
 }
 
+/// Converts the currently loaded associative-array argument into boxed Mixed values.
+fn emit_loaded_assoc_array_to_mixed(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {}
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax"); // pass the loaded associative-array argument to the Mixed conversion helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+}
+
 /// Loads method call arguments for lexical `self::`/`parent::` instance calls using local `this`.
 fn materialize_method_call_args_with_receiver_local_and_refs(
     ctx: &mut FunctionContext<'_>,
@@ -6016,10 +6128,7 @@ pub(super) fn direct_call_stack_pad_bytes(
     ctx: &FunctionContext<'_>,
     overflow_bytes: usize,
 ) -> usize {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 if overflow_bytes > 0 => 16,
-        _ => 0,
-    }
+    abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes)
 }
 
 /// Lowers a signed integer comparison into a boolean result value.
@@ -6579,9 +6688,9 @@ fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     let data = expect_global_name(inst)?;
     let name = ctx.global_name_data(data)?;
     let symbol = ir_global_symbol(name);
-    let result = inst.result.ok_or_else(|| {
-        CodegenIrError::invalid_module("load_global missing result value")
-    })?;
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("load_global missing result value"))?;
     let ty = ctx.value_php_type(result)?;
     ctx.data
         .add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
@@ -6789,8 +6898,12 @@ fn lower_invoker_ref_arg(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 /// Lowers PHP echo output for a previously computed SSA value.
 fn lower_echo_value(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    if let PhpType::Object(class_name) = ctx.value_php_type(value)?.codegen_repr() {
-        return lower_object_echo_value(ctx, value, &class_name);
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Object(class_name) => return lower_object_echo_value(ctx, value, &class_name),
+        PhpType::Mixed | PhpType::Union(_) => {
+            return conversions::emit_mixed_string_context_stdout(ctx, value);
+        }
+        _ => {}
     }
     let ty = ctx.load_value_to_result(value)?;
     let raw_ty = ctx.raw_value_php_type(value)?;

@@ -15,8 +15,8 @@ use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
-use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
+use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -91,11 +91,15 @@ impl Checker {
             callable_captures: HashMap::new(),
             callable_array_targets: HashMap::new(),
             first_class_callable_targets: HashMap::new(),
+            reflection_class_targets: HashMap::new(),
             interfaces: HashMap::new(),
             classes: HashMap::new(),
             declared_classes: HashSet::new(),
             enums: HashMap::new(),
             declared_interfaces: HashSet::new(),
+            declared_traits: HashSet::new(),
+            declared_trait_methods: HashMap::new(),
+            declared_trait_constants: HashMap::new(),
             current_class: None,
             current_method: None,
             current_method_is_static: false,
@@ -111,6 +115,7 @@ impl Checker {
             active_globals: HashSet::new(),
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
+            eval_barrier_active: false,
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
             warnings: Vec::new(),

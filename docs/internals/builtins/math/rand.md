@@ -2,7 +2,7 @@
 title: "rand() — internals"
 description: "Compiler internals for rand(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 263
+  order: 267
 ---
 
 ## `rand()` — internals
@@ -32,6 +32,11 @@ function rand(int $min, int $max): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/rand.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/rand.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

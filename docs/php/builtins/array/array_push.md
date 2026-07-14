@@ -19,6 +19,11 @@ Pushes one or more elements onto the end of array.
 
 **Returns**: `void`
 
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_push.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_push.rs)).
+
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 

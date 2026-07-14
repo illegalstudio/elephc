@@ -9,10 +9,9 @@
 //! Key details:
 //! - Dummy AST members carry type contracts only; runtime behavior is implemented elsewhere.
 
-use crate::names::{Name, php_symbol_key};
+use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
-    ClassMethod, ClassProperty, Expr, ExprKind, PropertyHooks, Stmt, StmtKind, TypeExpr,
-    Visibility,
+    ClassMethod, ClassProperty, Expr, ExprKind, PropertyHooks, Stmt, StmtKind, TypeExpr, Visibility,
 };
 use crate::types::PhpType;
 
@@ -32,6 +31,7 @@ pub(super) fn builtin_exception_message_property() -> ClassProperty {
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default: Some(Expr::new(
             ExprKind::StringLiteral(String::new()),
             crate::span::Span::dummy(),
@@ -71,7 +71,9 @@ pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
                 false,
             ),
         ],
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: None,
         by_ref_return: false,
@@ -118,6 +120,7 @@ pub(super) fn builtin_exception_code_property() -> ClassProperty {
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default: Some(Expr::new(
             ExprKind::IntLiteral(0),
             crate::span::Span::dummy(),
@@ -188,7 +191,10 @@ pub(super) fn builtin_exception_get_trace_method() -> ClassMethod {
     concrete_throwable_method(
         "getTrace",
         array_type(),
-        Expr::new(ExprKind::ArrayLiteral(Vec::new()), crate::span::Span::dummy()),
+        Expr::new(
+            ExprKind::ArrayLiteral(Vec::new()),
+            crate::span::Span::dummy(),
+        ),
     )
 }
 
@@ -256,7 +262,9 @@ fn concrete_throwable_method(name: &str, return_type: TypeExpr, value: Expr) -> 
         is_final: false,
         has_body: true,
         params: Vec::new(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(return_type),
         by_ref_return: false,
@@ -279,7 +287,9 @@ fn abstract_throwable_method(name: &str, return_type: TypeExpr) -> ClassMethod {
         is_final: false,
         has_body: false,
         params: Vec::new(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(return_type),
         by_ref_return: false,
@@ -301,12 +311,17 @@ fn nullable_throwable_type() -> TypeExpr {
 
 /// Patches the checker metadata for the Throwable interface and all builtin exception classes.
 /// Updates return types for getter methods and the `__construct` parameter types for Error, TypeError,
-/// ValueError, Exception, RuntimeException, JsonException, and FiberError.
+/// ValueError, Exception, RuntimeException, ReflectionException, JsonException, and FiberError.
 pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
-    let nullable_throwable =
-        checker.normalize_union_type(vec![PhpType::Object("Throwable".to_string()), PhpType::Void]);
+    let nullable_throwable = checker.normalize_union_type(vec![
+        PhpType::Object("Throwable".to_string()),
+        PhpType::Void,
+    ]);
     if let Some(interface_info) = checker.interfaces.get_mut("Throwable") {
-        if let Some(sig) = interface_info.methods.get_mut(&php_symbol_key("getMessage")) {
+        if let Some(sig) = interface_info
+            .methods
+            .get_mut(&php_symbol_key("getMessage"))
+        {
             sig.return_type = PhpType::Str;
         }
         if let Some(sig) = interface_info.methods.get_mut(&php_symbol_key("getCode")) {
@@ -327,10 +342,16 @@ pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
         {
             sig.return_type = PhpType::Str;
         }
-        if let Some(sig) = interface_info.methods.get_mut(&php_symbol_key("getPrevious")) {
+        if let Some(sig) = interface_info
+            .methods
+            .get_mut(&php_symbol_key("getPrevious"))
+        {
             sig.return_type = nullable_throwable.clone();
         }
-        if let Some(sig) = interface_info.methods.get_mut(&php_symbol_key("__toString")) {
+        if let Some(sig) = interface_info
+            .methods
+            .get_mut(&php_symbol_key("__toString"))
+        {
             sig.return_type = PhpType::Str;
         }
     }
@@ -341,6 +362,7 @@ pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
         "ArithmeticError",
         "Exception",
         "RuntimeException",
+        "ReflectionException",
         "JsonException",
         "FiberError",
     ] {

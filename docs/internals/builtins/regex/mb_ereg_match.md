@@ -2,7 +2,7 @@
 title: "mb_ereg_match() — internals"
 description: "Compiler internals for mb_ereg_match(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 315
+  order: 319
 ---
 
 ## `mb_ereg_match()` — internals
@@ -34,6 +34,11 @@ function mb_ereg_match(string $pattern, string $subject, string $options = null)
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/mb_ereg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/mb_ereg_match.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

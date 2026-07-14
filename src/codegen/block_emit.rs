@@ -801,11 +801,11 @@ fn is_main(function: &Function) -> bool {
 
 /// Emits global singleton objects for enum cases used by EIR user code.
 fn emit_enum_singleton_initializers(ctx: &mut FunctionContext<'_>) {
-    let allowed_class_names = super::runtime_referenced_class_names(ctx.module);
+    let allowed_enum_names = super::runtime_referenced_enum_singleton_names(ctx.module);
     let mut sorted_enums = ctx.module.enum_infos.iter().collect::<Vec<_>>();
     sorted_enums.sort_by_key(|(name, _)| name.as_str());
     for (enum_name, enum_info) in sorted_enums {
-        if !allowed_class_names.contains(enum_name) {
+        if !allowed_enum_names.contains(enum_name) {
             continue;
         }
         let Some(class_info) = ctx.module.class_infos.get(enum_name) else {

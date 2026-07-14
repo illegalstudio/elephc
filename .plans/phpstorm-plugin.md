@@ -1,45 +1,54 @@
-# JetBrains Plugin per elephc
+# JetBrains Plugin for elephc
 
 ## Context
 
-elephc compila PHP a binari nativi ARM64 ed estende PHP con due famiglie di sintassi non-standard:
-1. **`extern`** — dichiarazioni FFI (funzioni, classi, globali, blocchi raggruppati con nome libreria)
-2. **`ptr` / `ptr<T>`** — tipo puntatore opaco, funzioni built-in (`ptr()`, `ptr_cast<T>()`, `ptr_null()`, ecc.)
+elephc compiles PHP to native ARM64 binaries and extends PHP with two families
+of non-standard syntax:
 
-PhpStorm non riconosce queste estensioni e segna errori ovunque. Serve un plugin che le integri senza perdere il supporto PHP nativo.
+1. **`extern`**: FFI declarations for functions, classes, globals, and named
+   library blocks.
+2. **`ptr` / `ptr<T>`**: opaque pointer types and builtins such as `ptr()`,
+   `ptr_cast<T>()`, `ptr_null()`, and related helpers.
 
-## Approccio architetturale: PHP Plugin Extension
+PhpStorm does not recognize these extensions and reports errors throughout
+elephc code. The plugin should integrate the extensions without losing native
+PHP support.
 
-**Non** un linguaggio custom, **non** language injection. Il plugin **estende** il plugin PHP esistente con:
-- Stub file per le funzioni built-in → elimina errori "undefined function"
-- `HighlightInfoFilter` → sopprime errori di parsing su `extern` e `ptr_cast<T>()`
-- Completion contributor → autocompletamento per keyword e tipi custom
-- File-based index → indicizza le dichiarazioni `extern` nel progetto
-- Type provider → risolve tipi di ritorno per `ptr_cast<T>()`
+## Architectural Approach: PHP Plugin Extension
 
-### Perché non altre strade
+Do **not** implement a custom language or language injection. The plugin should
+extend the existing PHP plugin with:
 
-| Approccio | Problema |
+- stub files for builtins, removing "undefined function" errors;
+- `HighlightInfoFilter`, suppressing parse errors for `extern` and
+  `ptr_cast<T>()`;
+- completion contributor for custom keywords and types;
+- file-based index for project `extern` declarations;
+- type provider for `ptr_cast<T>()` return types.
+
+### Why Not Other Paths
+
+| Approach | Problem |
 |---|---|
-| Linguaggio custom | Perde tutta l'intelligenza PHP — elephc è 95% PHP standard |
-| Language injection | È per linguaggi embedded (SQL in stringhe), non estensioni sintattiche |
-| File type `.elephc` | Gli utenti scrivono `.php`, cambiare estensione rompe l'ecosistema |
+| Custom language | Loses all PHP intelligence; elephc is 95% standard PHP. |
+| Language injection | Intended for embedded languages such as SQL in strings, not syntax extensions. |
+| `.elephc` file type | Users write `.php`; changing extensions breaks the ecosystem. |
 
-## Struttura del plugin
+## Plugin Structure
 
-```
+```text
 elephc-intellij-plugin/
 ├── build.gradle.kts
 ├── src/main/resources/
 │   ├── META-INF/plugin.xml
-│   └── stubs/_elephc_stubs.php        # stub functions + ptr class
+│   └── stubs/_elephc_stubs.php
 └── src/main/kotlin/com/illegalstudio/elephc/
-    ├── stubs/ElephcStubLibraryProvider.kt    # registra gli stub
-    ├── suppress/ElephcHighlightFilter.kt     # sopprime errori extern/ptr_cast
+    ├── stubs/ElephcStubLibraryProvider.kt
+    ├── suppress/ElephcHighlightFilter.kt
     ├── completion/ElephcCompletionContributor.kt
-    ├── index/ElephcExternIndex.kt            # indicizza extern declarations
-    ├── types/ElephcTypeProvider.kt           # tipi per ptr_cast<T>()
-    ├── run/ElephcRunConfiguration.kt         # compile & run
+    ├── index/ElephcExternIndex.kt
+    ├── types/ElephcTypeProvider.kt
+    ├── run/ElephcRunConfiguration.kt
     └── settings/ElephcSettingsConfigurable.kt
 ```
 
@@ -70,15 +79,15 @@ elephc-intellij-plugin/
 </idea-plugin>
 ```
 
-## Componenti in dettaglio
+## Components
 
-### 1. Stub Library (risolve ~80% dei problemi)
+### 1. Stub Library
 
-File `_elephc_stubs.php` bundled nel plugin con dichiarazioni per tutte le funzioni `ptr_*`:
+Bundle `_elephc_stubs.php` with declarations for all `ptr_*` functions:
 
 ```php
 <?php
-// elephc compiler intrinsics — stub for IDE support only
+// elephc compiler intrinsics - IDE support only
 
 /** @return int Raw pointer address of $var */
 function ptr(mixed &$var): int { return 0; }
@@ -97,89 +106,113 @@ function ptr_sizeof(string $type): int { return 0; }
 class ptr {}
 ```
 
-Registrato via `PhpAdditionalLibraryRootsProvider` — PhpStorm lo indicizza automaticamente.
+Register it through `PhpAdditionalLibraryRootsProvider` so PhpStorm indexes it
+automatically.
 
-Riferimento per le firme: `src/types/checker/builtins/pointers.rs` e `src/types/checker/builtins/catalog.rs` (contengono tipi, catalogo e validazione per ogni `ptr_*` built-in).
+Signature references:
 
-### 2. HighlightInfoFilter (soppressione errori)
+- `src/types/checker/builtins/pointers.rs`;
+- `src/types/checker/builtins/catalog.rs`.
 
-Implementa `com.intellij.daemon.impl.HighlightInfoFilter`. Sopprime highlight di errore quando:
+These files contain types, catalog entries, and validation for each `ptr_*`
+builtin.
 
-1. **Righe `extern`** — qualsiasi riga che inizia con `extern` (function, class, global, blocco con stringa)
-2. **`ptr_cast<T>(...)`** — PHP parsa `ptr_cast < T > (...)` come due confronti; il filtro riconosce il pattern via regex `ptr_cast\s*<\s*\w+\s*>\s*\(` e sopprime
-3. **`ptr<T>` in type hints** — le angle brackets nei type hint causano errori; sopprimere quando il contesto è `ptr<\w+>`
+### 2. HighlightInfoFilter
 
-Questo è il componente più critico — senza, l'IDE è inutilizzabile su codice elephc.
+Implement `com.intellij.daemon.impl.HighlightInfoFilter`. Suppress error
+highlights when:
+
+1. A line starts with `extern` for functions, classes, globals, or named
+   library blocks.
+2. `ptr_cast<T>(...)` is parsed by PHP as comparisons. Recognize the pattern
+   with `ptr_cast\s*<\s*\w+\s*>\s*\(`.
+3. `ptr<T>` appears in type hints and angle brackets cause syntax errors.
+
+This is the most critical component. Without it, the IDE is unusable on elephc
+code.
 
 ### 3. Extern Declaration Index
 
-`FileBasedIndexExtension` che scansiona `.php` per dichiarazioni extern. Non può usare il PSI di PHP (che non parsa `extern`), quindi usa un mini-parser a regex:
+Implement a `FileBasedIndexExtension` that scans `.php` files for `extern`
+declarations. PHP PSI cannot be used because it does not parse `extern`, so use
+a small regex parser:
 
-- `extern\s+function\s+(\w+)\s*\(([^)]*)\)\s*:\s*(\w+)` → funzione singola
-- `extern\s+"([^"]+)"\s*\{` → inizio blocco con nome libreria
-- `extern\s+class\s+(\w+)\s*\{` → classe extern
-- `extern\s+global\s+(\w+)\s+\$(\w+)` → globale extern
+- `extern\s+function\s+(\w+)\s*\(([^)]*)\)\s*:\s*(\w+)` for one function;
+- `extern\s+"([^"]+)"\s*\{` for a library block start;
+- `extern\s+class\s+(\w+)\s*\{` for an extern class;
+- `extern\s+global\s+(\w+)\s+\$(\w+)` for an extern global.
 
-L'indice alimenta completion e navigation.
+The index feeds completion and navigation.
 
-Riferimento per la sintassi esatta: `src/parser/stmt/ffi.rs`.
+Exact syntax reference: `src/parser/stmt/ffi.rs`.
 
 ### 4. Completion Contributor
 
-- Dopo `ext` → suggerisce `extern`
-- Dopo `extern` → suggerisce `function`, `class`, `global`, `"` (per nome libreria)
-- In posizione type hint → suggerisce `ptr`, `ptr<NomeClasse>` (classi dall'indice extern)
-- Dopo `ptr_cast<` → suggerisce nomi di classi extern
+- After `ext`, suggest `extern`.
+- After `extern`, suggest `function`, `class`, `global`, and `"` for a library
+  name.
+- In type-hint position, suggest `ptr` and `ptr<ClassName>` using classes from
+  the extern index.
+- After `ptr_cast<`, suggest extern class names.
 
-### 5. Type Provider (fase 2)
+### 5. Type Provider
 
-`PhpTypeProvider4` che risolve il tipo di ritorno di `ptr_cast<T>()`. Esamina il testo raw intorno all'espressione (il PSI è rotto dalle angle brackets) e restituisce `ptr` come tipo.
+Implement `PhpTypeProvider4` to resolve the return type of `ptr_cast<T>()`.
+Because angle brackets break PHP PSI, inspect raw text around the expression and
+return `ptr` as the type.
 
-## Piano di implementazione a fasi
+## Implementation Phases
 
-### MVP — elimina il rumore
+### MVP: Remove Noise
 
-1. Setup progetto Gradle con dipendenza `com.jetbrains.php`
-2. Creare e bundlare `_elephc_stubs.php`
-3. Implementare `ElephcStubLibraryProvider`
-4. Implementare `ElephcHighlightFilter`
-5. Testare con `examples/ffi/main.php` e altri esempi del progetto
+1. Set up the Gradle project with a `com.jetbrains.php` dependency.
+2. Create and bundle `_elephc_stubs.php`.
+3. Implement `ElephcStubLibraryProvider`.
+4. Implement `ElephcHighlightFilter`.
+5. Test against `examples/ffi/main.php` and other project examples.
 
-### Fase 2 — intelligenza
+### Phase 2: Intelligence
 
-6. `ElephcExternIndex` per indicizzare dichiarazioni extern
-7. `ElephcCompletionContributor` per keyword e tipi
-8. Reference resolution: Ctrl+click su chiamata extern → dichiarazione
-9. `ElephcTypeProvider` per `ptr_cast<T>()`
+6. Implement `ElephcExternIndex` for extern declaration indexing.
+7. Implement `ElephcCompletionContributor` for keywords and types.
+8. Add reference resolution: Ctrl-click on extern calls should navigate to the
+   declaration.
+9. Implement `ElephcTypeProvider` for `ptr_cast<T>()`.
 
-### Fase 3 — developer experience
+### Phase 3: Developer Experience
 
-10. Run configuration (compile + esegui binario)
-11. Parsing errori elephc con link cliccabili (line:col)
-12. Gutter icons su dichiarazioni extern
-13. Settings page per path del binario elephc
+10. Add a run configuration that compiles and runs the binary.
+11. Parse elephc errors into clickable `line:col` links.
+12. Add gutter icons on extern declarations.
+13. Add a settings page for the elephc binary path.
 
-## Sfide principali
+## Main Challenges
 
-| Sfida | Impatto | Mitigazione |
+| Challenge | Impact | Mitigation |
 |---|---|---|
-| PHP PSI non parsa `extern` | Nessun PSI strutturato per dichiarazioni extern | Mini-parser custom a regex nel FileBasedIndex |
-| `ptr_cast<T>()` rompe il parser PHP | PHP interpreta `<`/`>` come confronti | HighlightFilter + text-level regex per riconoscere il pattern |
-| `ptr<T>` nei type hint | Angle brackets non valide in type position | Soppressione errori + stub class `ptr` per il caso semplice |
-| API PHP plugin instabili | Possibili breaking changes tra versioni PhpStorm | Dichiarare range `since-build`/`until-build` stretto, usare solo API stabili |
+| PHP PSI does not parse `extern`. | No structured PSI for extern declarations. | Custom regex parser in the file-based index. |
+| `ptr_cast<T>()` breaks the PHP parser. | PHP interprets `<` and `>` as comparisons. | Highlight filter plus text-level regex recognition. |
+| `ptr<T>` in type hints. | Angle brackets are invalid in type position. | Error suppression plus stub class `ptr` for the simple case. |
+| PHP plugin APIs can be unstable. | PhpStorm versions may break the plugin. | Declare a narrow `since-build`/`until-build` range and use stable APIs only. |
 
-## File di riferimento nel codebase elephc
+## elephc Codebase References
 
-- `src/parser/ast/stmt.rs`, `src/parser/ast/expr.rs`, `src/parser/ast/ffi.rs` — definiscono i nodi AST custom (ExternFunctionDecl, PtrCast, CType, ecc.)
-- `src/parser/stmt/ffi.rs` — parsing delle dichiarazioni extern
-- `src/parser/expr/prefix_complex.rs` — parsing di `ptr_cast<T>()`
-- `src/types/checker/builtins/pointers.rs` e `src/types/checker/builtins/catalog.rs` — firme, catalogo e validazione dei built-in `ptr_*`
-- `examples/ffi/main.php` — esempio canonico con tutta la sintassi extern
+- `src/parser/ast/stmt.rs`, `src/parser/ast/expr.rs`,
+  `src/parser/ast/ffi.rs`: custom AST nodes such as `ExternFunctionDecl`,
+  `PtrCast`, and `CType`.
+- `src/parser/stmt/ffi.rs`: extern declaration parsing.
+- `src/parser/expr/prefix_complex.rs`: `ptr_cast<T>()` parsing.
+- `src/types/checker/builtins/pointers.rs` and
+  `src/types/checker/builtins/catalog.rs`: signatures, catalog entries, and
+  validation for `ptr_*` builtins.
+- `examples/ffi/main.php`: canonical example that exercises extern syntax.
 
-## Verifica
+## Verification
 
-1. Aprire il progetto elephc in PhpStorm con il plugin installato
-2. Verificare che `examples/ffi/main.php` non mostri errori rossi su `extern` e `ptr_cast`
-3. Verificare che `ptr_null()`, `ptr_get()`, ecc. abbiano autocompletamento e documentazione
-4. Ctrl+click su una chiamata extern → dovrebbe navigare alla dichiarazione
-5. Compilare ed eseguire un esempio dalla run configuration
+1. Open the elephc project in PhpStorm with the plugin installed.
+2. Verify that `examples/ffi/main.php` has no red errors on `extern` and
+   `ptr_cast`.
+3. Verify that `ptr_null()`, `ptr_get()`, and related helpers get completion and
+   documentation.
+4. Ctrl-click an extern call and verify navigation to its declaration.
+5. Compile and run an example from the run configuration.

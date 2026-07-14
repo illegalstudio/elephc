@@ -287,6 +287,7 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         | ExprKind::Throw(expr)
         | ExprKind::ErrorSuppress(expr)
         | ExprKind::Print(expr)
+        | ExprKind::Clone(expr)
         | ExprKind::Spread(expr)
         | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. } => collect_required_class_names_in_expr(expr, names),
@@ -421,6 +422,17 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         }
         ExprKind::NullsafeMethodCall { object, args, .. } => {
             collect_required_class_names_in_expr(object, names);
+            for arg in args {
+                collect_required_class_names_in_expr(arg, names);
+            }
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            collect_required_class_names_in_expr(object, names);
+            collect_required_class_names_in_expr(method, names);
             for arg in args {
                 collect_required_class_names_in_expr(arg, names);
             }

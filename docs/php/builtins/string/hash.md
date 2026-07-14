@@ -2,7 +2,7 @@
 title: "hash()"
 description: "Generates a hash value using the given algorithm."
 sidebar:
-  order: 352
+  order: 356
 ---
 
 ## hash()
@@ -19,6 +19,11 @@ Generates a hash value using the given algorithm.
 - `$binary` (`bool`), default `false`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

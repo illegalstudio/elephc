@@ -2,7 +2,7 @@
 title: "substr_replace() — internals"
 description: "Compiler internals for substr_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 401
+  order: 405
 ---
 
 ## `substr_replace()` — internals
@@ -33,6 +33,11 @@ function substr_replace(string $string, string $replace, int $offset, int $lengt
 ## What the type checker enforces
 
 - **Arity**: takes 3–4 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/substr_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/substr_replace.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

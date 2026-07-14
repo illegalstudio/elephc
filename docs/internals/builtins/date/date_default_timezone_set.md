@@ -2,7 +2,7 @@
 title: "date_default_timezone_set() — internals"
 description: "Compiler internals for date_default_timezone_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 88
+  order: 92
 ---
 
 ## `date_default_timezone_set()` — internals
@@ -38,6 +38,11 @@ function date_default_timezone_set(string $timezoneId): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_set.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_set.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

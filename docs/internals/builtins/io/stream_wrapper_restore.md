@@ -2,7 +2,7 @@
 title: "stream_wrapper_restore() — internals"
 description: "Compiler internals for stream_wrapper_restore(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 227
+  order: 231
 ---
 
 ## `stream_wrapper_restore()` — internals
@@ -31,6 +31,11 @@ function stream_wrapper_restore(string $protocol): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_restore.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_restore.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -2,7 +2,7 @@
 title: "file_get_contents() — internals"
 description: "Compiler internals for file_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 162
+  order: 166
 ---
 
 ## `file_get_contents()` — internals
@@ -33,6 +33,11 @@ function file_get_contents(string $filename): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/file_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file_get_contents.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

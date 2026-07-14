@@ -18,12 +18,25 @@ use crate::ir_lower::context::{
     StaticCallableBinding,
 };
 use crate::ir_lower::effects_lookup;
-use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr};
+use crate::names::php_symbol_key;
+use crate::parser::ast::{
+    AttributeGroup, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr,
+};
 use crate::span::Span;
-use crate::types::{CheckResult, ClassInfo, FunctionSig, PackedClassInfo, PhpType, TypeEnv};
+use crate::types::{
+    collect_attribute_args, collect_attribute_names, CheckResult, ClassInfo, FunctionSig,
+    PackedClassInfo, PhpType, TypeEnv,
+};
 
 /// AST parameter tuple shape used by function, method, and closure declarations.
-type AstParams = [(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)];
+type AstParams = [(
+    String,
+    Option<TypeExpr>,
+    Option<crate::parser::ast::Expr>,
+    bool,
+)];
+
+const EVAL_AOT_SCOPE_PARAM: &str = "__eir_eval_scope";
 
 const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 
@@ -69,6 +82,8 @@ pub(crate) fn lower_main(
         None,
         true,
         all_global_var_names,
+        module.source_path.clone(),
+        None,
     );
     add_closures(module, closures);
     module.add_function(function);
@@ -125,10 +140,7 @@ fn collect_global_var_names_in_body(
                 collect_global_var_names_in_body(body, names);
             }
             crate::parser::ast::StmtKind::For {
-                init,
-                update,
-                body,
-                ..
+                init, update, body, ..
             } => {
                 if let Some(init) = init {
                     collect_global_var_names_in_body(std::slice::from_ref(init.as_ref()), names);
@@ -176,6 +188,7 @@ pub(crate) fn lower_user_function(
     name: &str,
     params: &AstParams,
     return_type: Option<&TypeExpr>,
+    attributes: &[AttributeGroup],
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
@@ -184,18 +197,14 @@ pub(crate) fn lower_user_function(
 ) {
     let fallback = signature_from_ast(params, return_type);
     let signature = check_result.functions.get(name).unwrap_or(&fallback);
-    let eir_signature = eir_signature_with_php_param_contracts(
-        name,
-        signature,
-        &check_result.callable_param_sigs,
-    );
+    let eir_signature =
+        eir_signature_with_php_param_contracts(name, signature, &check_result.callable_param_sigs);
     // A generator's compiled body is a coroutine that returns the value passed
     // to `return` (Mixed, read back via `Generator::getReturn()`), not the
     // `Generator` object itself. The public signature stays `Generator` for
     // callers; only the EIR body return type becomes Mixed so `return $x`
     // lowers to a plain boxed Mixed return instead of a Generator coercion.
-    let body_return_type =
-        generator_body_return_type(body, &eir_signature.return_type);
+    let body_return_type = generator_body_return_type(body, &eir_signature.return_type);
     let mut function = Function::new(
         name.to_string(),
         return_ir_type(&body_return_type),
@@ -205,6 +214,16 @@ pub(crate) fn lower_user_function(
     function.flags.by_ref_return = signature.by_ref_return;
     function.source_signature = Some(source_signature(name, &eir_signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
+    function.attribute_names = check_result
+        .function_attribute_names
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| collect_attribute_names(attributes));
+    function.attribute_args = check_result
+        .function_attribute_args
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| collect_attribute_args(attributes));
     attach_generator_source_if_needed(&mut function, body, eir_signature.params.len());
     let closures = lower_body_into_function(
         &mut function,
@@ -229,6 +248,8 @@ pub(crate) fn lower_user_function(
         None,
         false,
         std::collections::HashSet::new(),
+        module.source_path.clone(),
+        None,
     );
     add_closures(module, closures);
     module.add_function(function);
@@ -248,11 +269,12 @@ pub(crate) fn lower_class_method(
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let fallback = signature_from_ast(params, return_type);
-    let signature = check_result
-        .classes
+    let signature = module
+        .class_infos
         .get(class_name)
         .and_then(|class| method_signature(class, method_name, is_static))
-        .unwrap_or(&fallback);
+        .cloned()
+        .unwrap_or(fallback);
     let name = format!("{}::{}", class_name, method_name);
     // Generator methods lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
@@ -268,9 +290,9 @@ pub(crate) fn lower_class_method(
         by_ref_return: signature.by_ref_return,
         ..FunctionFlags::default()
     };
-    function.source_signature = Some(source_signature(&name, signature));
-    function.signature = Some(eir_runtime_metadata_signature(signature));
-    let mut env = env_from_signature(signature);
+    function.source_signature = Some(source_signature(&name, &signature));
+    function.signature = Some(eir_runtime_metadata_signature(&signature));
+    let mut env = env_from_signature(&signature);
     let mut body_params = signature.params.clone();
     if is_static {
         let hidden_called_class = (CALLED_CLASS_ID_PARAM.to_string(), PhpType::Int);
@@ -295,7 +317,7 @@ pub(crate) fn lower_class_method(
         env.insert("this".to_string(), this_type.clone());
         body_params.insert(0, ("this".to_string(), this_type));
     }
-    function.params.extend(function_params(signature));
+    function.params.extend(function_params(&signature));
     attach_generator_source_if_needed(&mut function, body, body_params.len());
     let closures = lower_body_into_function(
         &mut function,
@@ -320,9 +342,192 @@ pub(crate) fn lower_class_method(
         None,
         false,
         std::collections::HashSet::new(),
+        module.source_path.clone(),
+        None,
     );
     add_closures(module, closures);
     module.class_methods.push(function);
+}
+
+/// Lowers one no-scope literal eval fragment as an internal EIR function.
+pub(crate) fn lower_eval_aot_function(
+    name: &str,
+    body: &[Stmt],
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+) {
+    let return_type = PhpType::Mixed;
+    let signature = FunctionSig {
+        params: Vec::new(),
+        param_type_exprs: Vec::new(),
+        param_attributes: Vec::new(),
+        defaults: Vec::new(),
+        return_type: return_type.clone(),
+        declared_return: false,
+        by_ref_return: false,
+        ref_params: Vec::new(),
+        declared_params: Vec::new(),
+        variadic: None,
+        deprecation: None,
+    };
+    let mut function = Function::new(
+        name.to_string(),
+        return_ir_type(&return_type),
+        return_type.clone(),
+    );
+    function.source_signature = Some(source_signature(name, &signature));
+    function.signature = Some(eir_runtime_metadata_signature(&signature));
+    let closures = lower_body_into_function(
+        &mut function,
+        &mut module.data,
+        body,
+        TypeEnv::new(),
+        check_result.global_env.clone(),
+        &check_result.functions,
+        &check_result.extern_functions,
+        &check_result.extern_globals,
+        &check_result.callable_param_sigs,
+        fiber_return_sigs,
+        &check_result.classes,
+        &check_result.enums,
+        &check_result.interfaces,
+        &check_result.packed_classes,
+        &check_result.throw_access_sites,
+        constants,
+        None,
+        return_type,
+        &[],
+        None,
+        false,
+        collect_global_var_names(body),
+        module.source_path.clone(),
+        None,
+    );
+    add_closures(module, closures);
+    module.add_function(function);
+}
+
+/// Lowers one literal eval fragment as an internal EIR function that reads eval scope.
+pub(crate) fn lower_eval_aot_scope_read_function(
+    name: &str,
+    body: &[Stmt],
+    scope_reads: &std::collections::BTreeSet<String>,
+    scope_direct_writes: &std::collections::BTreeSet<String>,
+    scope_flush_writes: &std::collections::BTreeSet<String>,
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+) {
+    let return_type = PhpType::Mixed;
+    let use_read_params =
+        !scope_reads.is_empty() && scope_direct_writes.is_empty() && scope_flush_writes.is_empty();
+    let params = if use_read_params {
+        scope_reads
+            .iter()
+            .map(|name| (name.clone(), PhpType::Mixed))
+            .collect::<Vec<_>>()
+    } else {
+        vec![(EVAL_AOT_SCOPE_PARAM.to_string(), PhpType::Int)]
+    };
+    let signature = FunctionSig {
+        params,
+        param_type_exprs: Vec::new(),
+        param_attributes: Vec::new(),
+        defaults: Vec::new(),
+        return_type: return_type.clone(),
+        declared_return: false,
+        by_ref_return: false,
+        ref_params: vec![
+            false;
+            if use_read_params {
+                scope_reads.len()
+            } else {
+                1
+            }
+        ],
+        declared_params: vec![
+            false;
+            if use_read_params {
+                scope_reads.len()
+            } else {
+                1
+            }
+        ],
+        variadic: None,
+        deprecation: None,
+    };
+    let mut function = Function::new(
+        name.to_string(),
+        return_ir_type(&return_type),
+        return_type.clone(),
+    );
+    function.params = function_params(&signature);
+    function.source_signature = Some(source_signature(name, &signature));
+    function.signature = Some(eir_runtime_metadata_signature(&signature));
+    let mut env = TypeEnv::new();
+    for (param_name, param_type) in &signature.params {
+        env.insert(param_name.clone(), param_type.clone());
+    }
+    let eval_scope_reads = (!use_read_params).then(|| {
+        (
+            EVAL_AOT_SCOPE_PARAM.to_string(),
+            scope_reads.iter().cloned().collect(),
+            scope_direct_writes.iter().cloned().collect(),
+            scope_flush_writes.clone(),
+        )
+    });
+    let closures = lower_body_into_function(
+        &mut function,
+        &mut module.data,
+        body,
+        env,
+        check_result.global_env.clone(),
+        &check_result.functions,
+        &check_result.extern_functions,
+        &check_result.extern_globals,
+        &check_result.callable_param_sigs,
+        fiber_return_sigs,
+        &check_result.classes,
+        &check_result.enums,
+        &check_result.interfaces,
+        &check_result.packed_classes,
+        &check_result.throw_access_sites,
+        constants,
+        None,
+        return_type,
+        &signature.params,
+        None,
+        false,
+        collect_global_var_names(body),
+        module.source_path.clone(),
+        eval_scope_reads,
+    );
+    add_closures(module, closures);
+    module.add_function(function);
+}
+
+/// Builds fallback method signature metadata from parsed class-like method syntax.
+pub(crate) fn method_signature_from_ast(method: &ClassMethod) -> FunctionSig {
+    let mut signature = signature_from_ast_with_variadic(
+        &method.params,
+        method.return_type.as_ref(),
+        method.variadic.as_deref(),
+        method.variadic_by_ref,
+    );
+    if !method.variadic_by_ref {
+        if let Some(variadic_type) = &method.variadic_type {
+            if let Some((_, php_type)) = signature.params.last_mut() {
+                *php_type = type_expr_to_php_type(variadic_type);
+            }
+            if let Some(declared) = signature.declared_params.last_mut() {
+                *declared = true;
+            }
+        }
+    }
+    signature
 }
 
 /// Lowers a synthetic `_class_propinit_<id>` function for dynamic by-name allocation.
@@ -351,6 +556,8 @@ pub(crate) fn lower_property_init_thunk(
     });
     let sig = FunctionSig {
         params: vec![("this".to_string(), this_type.clone())],
+        param_type_exprs: vec![None],
+        param_attributes: Vec::new(),
         defaults: vec![None],
         return_type: PhpType::Void,
         declared_return: false,
@@ -388,6 +595,8 @@ pub(crate) fn lower_property_init_thunk(
         None,
         false,
         std::collections::HashSet::new(),
+        module.source_path.clone(),
+        None,
     );
     add_closures(module, closures);
     module.add_function(function);
@@ -432,13 +641,22 @@ pub(crate) fn lower_closure_function(
     name: &str,
     params: &AstParams,
     variadic: Option<&str>,
+    variadic_by_ref: bool,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
 ) -> FunctionSig {
-    let mut signature = closure_signature_from_ast(params, variadic, return_type, body, captures, parent.classes);
+    let mut signature = closure_signature_from_ast(
+        params,
+        variadic,
+        variadic_by_ref,
+        return_type,
+        body,
+        captures,
+        parent.classes,
+    );
     signature.by_ref_return = by_ref_return;
     lower_closure_function_with_signature(
         parent,
@@ -456,6 +674,7 @@ pub(crate) fn lower_closure_function_with_context(
     name: &str,
     params: &AstParams,
     variadic: Option<&str>,
+    variadic_by_ref: bool,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
@@ -463,7 +682,15 @@ pub(crate) fn lower_closure_function_with_context(
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
 ) -> FunctionSig {
-    let mut signature = closure_signature_from_ast(params, variadic, return_type, body, captures, parent.classes);
+    let mut signature = closure_signature_from_ast(
+        params,
+        variadic,
+        variadic_by_ref,
+        return_type,
+        body,
+        captures,
+        parent.classes,
+    );
     signature.by_ref_return = by_ref_return;
     for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
         if type_ann.is_none() {
@@ -513,16 +740,15 @@ fn lower_closure_function_with_signature(
     attach_generator_source_if_needed(&mut function, body, signature.params.len());
     let env = env_with_closure_captures(&signature, captures);
     let lowered_params = params_with_closure_captures(&signature, captures);
-    let recursive_binding =
-        self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
-            local_name: local_name.to_string(),
-            closure_name: name.to_string(),
-            signature: signature.clone(),
-            capture_names: captures
-                .iter()
-                .map(|(capture_name, _, _)| capture_name.clone())
-                .collect(),
-        });
+    let recursive_binding = self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
+        local_name: local_name.to_string(),
+        closure_name: name.to_string(),
+        signature: signature.clone(),
+        capture_names: captures
+            .iter()
+            .map(|(capture_name, _, _)| capture_name.clone())
+            .collect(),
+    });
     let closures = lower_body_into_function(
         &mut function,
         parent.data,
@@ -546,6 +772,8 @@ fn lower_closure_function_with_signature(
         recursive_binding,
         false,
         collect_global_var_names(body),
+        parent.source_path().map(str::to_string),
+        None,
     );
     parent.extend_closures(std::iter::once(function).chain(closures));
     signature
@@ -575,6 +803,13 @@ fn lower_body_into_function(
     recursive_closure_binding: Option<RecursiveClosureBinding>,
     in_main: bool,
     all_global_var_names: std::collections::HashSet<String>,
+    source_path: Option<String>,
+    eval_scope_reads: Option<(
+        String,
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+        std::collections::BTreeSet<String>,
+    )>,
 ) -> Vec<Function> {
     let owner_name = function.name.clone();
     let function_by_ref_return = function.flags.by_ref_return;
@@ -608,8 +843,12 @@ fn lower_body_into_function(
         return_php_type,
         in_main,
         all_global_var_names,
+        source_path,
     );
     ctx.by_ref_return = function_by_ref_return;
+    if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
+        ctx.enable_eval_scope_access(scope_param, read_names, write_names, flush_names);
+    }
     for (index, (name, php_type)) in params.iter().enumerate() {
         ctx.declare_local(name, php_type.clone());
         ctx.mark_local_initialized(name);
@@ -702,17 +941,20 @@ fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>) {
         return;
     }
     if matches!(ctx.return_php_type, PhpType::Never) {
-        let message =
-            ctx.intern_string("Fatal error: A never-returning function must not implicitly return\n");
+        let message = ctx
+            .intern_string("Fatal error: A never-returning function must not implicitly return\n");
         ctx.builder.terminate(Terminator::Fatal { message });
         return;
     }
     if ctx.return_type == IrType::Void {
+        ctx.emit_eval_scope_finalizer(None);
         ctx.builder.terminate(Terminator::Return { value: None });
         return;
     }
+    ctx.emit_eval_scope_finalizer(None);
     let value = emit_default_return_value(ctx);
-    ctx.builder.terminate(Terminator::Return { value: Some(value) });
+    ctx.builder
+        .terminate(Terminator::Return { value: Some(value) });
 }
 
 /// Emits a placeholder value compatible with the function return storage type.
@@ -832,7 +1074,7 @@ fn function_params(signature: &FunctionSig) -> Vec<FunctionParam> {
 }
 
 /// Returns an EIR ABI signature that keeps dynamic untyped PHP parameters boxed.
-fn eir_signature_with_php_param_contracts(
+pub(crate) fn eir_signature_with_php_param_contracts(
     owner_name: &str,
     signature: &FunctionSig,
     callable_param_sigs: &std::collections::HashMap<(String, String), FunctionSig>,
@@ -840,11 +1082,21 @@ fn eir_signature_with_php_param_contracts(
     let mut eir_signature = signature.clone();
     let mut has_dynamic_untyped_param = false;
     for (index, (name, php_type)) in eir_signature.params.iter_mut().enumerate() {
-        let declared = signature.declared_params.get(index).copied().unwrap_or(false);
+        let declared = signature
+            .declared_params
+            .get(index)
+            .copied()
+            .unwrap_or(false);
         let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
         let variadic = signature.variadic.as_deref() == Some(name.as_str());
         if !declared && !by_ref && !variadic {
-            if preserve_untyped_eir_param_contract(owner_name, name, php_type, callable_param_sigs) {
+            if preserve_untyped_eir_param_contract(
+                owner_name,
+                index,
+                name,
+                php_type,
+                callable_param_sigs,
+            ) {
                 continue;
             }
             *php_type = PhpType::Mixed;
@@ -873,12 +1125,51 @@ fn eir_runtime_metadata_signature(signature: &FunctionSig) -> FunctionSig {
 /// Returns true when an inferred untyped parameter has an EIR-safe concrete ABI contract.
 fn preserve_untyped_eir_param_contract(
     owner_name: &str,
+    param_index: usize,
     param_name: &str,
     php_type: &PhpType,
     callable_param_sigs: &std::collections::HashMap<(String, String), FunctionSig>,
 ) -> bool {
-    matches!(php_type.codegen_repr(), PhpType::Callable)
+    magic_method_param_keeps_eir_contract(owner_name, param_index, php_type)
+        || matches!(php_type.codegen_repr(), PhpType::Callable)
         || callable_param_sigs.contains_key(&(owner_name.to_string(), param_name.to_string()))
+}
+
+/// Returns whether a checker-patched magic-method parameter must keep its real ABI type.
+fn magic_method_param_keeps_eir_contract(
+    owner_name: &str,
+    param_index: usize,
+    php_type: &PhpType,
+) -> bool {
+    let Some((_, method_name)) = owner_name.rsplit_once("::") else {
+        return false;
+    };
+    let method_key = php_symbol_key(method_name);
+    match method_key.as_str() {
+        "__get" | "__isset" | "__unset" => {
+            param_index == 0 && matches!(php_type.codegen_repr(), PhpType::Str)
+        }
+        "__set" => {
+            param_index == 0 && matches!(php_type.codegen_repr(), PhpType::Str)
+        }
+        "__call" | "__callstatic" => {
+            // The $args array keeps its contract only once call sites have
+            // specialized the element type. The checker seeds it as
+            // Array<Never>; eval-only magic calls never specialize it, and a
+            // Never element would lower every $args[N] read to an empty
+            // constant, so those fall back to the boxed Mixed widening.
+            (param_index == 0 && matches!(php_type.codegen_repr(), PhpType::Str))
+                || (param_index == 1
+                    && matches!(php_type.codegen_repr(), PhpType::Array(_))
+                    // Check the raw element type: codegen_repr normalizes the
+                    // Never seed to Void and would hide it.
+                    && !matches!(
+                        php_type,
+                        PhpType::Array(elem) if matches!(elem.as_ref(), PhpType::Never)
+                    ))
+        }
+        _ => false,
+    }
 }
 
 /// Widens inferred container return elements that may be built from dynamic params.
@@ -950,19 +1241,21 @@ fn params_with_closure_captures(
 
 /// Builds a fallback function signature from AST syntax when checker metadata is unavailable.
 fn signature_from_ast(params: &AstParams, return_type: Option<&TypeExpr>) -> FunctionSig {
-    signature_from_ast_with_variadic(params, return_type, None)
+    signature_from_ast_with_variadic(params, return_type, None, false)
 }
 
 /// Builds an EIR closure signature and infers fallthrough-only closures as `void`.
 fn closure_signature_from_ast(
     params: &AstParams,
     variadic: Option<&str>,
+    variadic_by_ref: bool,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
 ) -> FunctionSig {
-    let mut signature = signature_from_ast_with_variadic(params, return_type, variadic);
+    let mut signature =
+        signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
     if crate::types::checker::yield_validation::body_contains_yield(body) {
         signature.return_type = PhpType::Object("Generator".to_string());
         return signature;
@@ -1091,10 +1384,7 @@ fn stmt_contains_value_return(stmt: &Stmt) -> bool {
         | StmtKind::IncludeOnceGuard { body, .. }
         | StmtKind::Synthetic(body) => body_contains_value_return(body),
         StmtKind::For {
-            init,
-            update,
-            body,
-            ..
+            init, update, body, ..
         } => {
             init.as_ref()
                 .is_some_and(|stmt| stmt_contains_value_return(stmt.as_ref()))
@@ -1133,6 +1423,7 @@ fn signature_from_ast_with_variadic(
     params: &AstParams,
     return_type: Option<&TypeExpr>,
     variadic: Option<&str>,
+    variadic_by_ref: bool,
 ) -> FunctionSig {
     let mut signature = FunctionSig {
         params: params
@@ -1140,11 +1431,21 @@ fn signature_from_ast_with_variadic(
             .map(|(name, ty, _, _)| {
                 (
                     name.clone(),
-                    ty.as_ref().map(type_expr_to_php_type).unwrap_or(PhpType::Mixed),
+                    ty.as_ref()
+                        .map(type_expr_to_php_type)
+                        .unwrap_or(PhpType::Mixed),
                 )
             })
             .collect(),
-        defaults: params.iter().map(|(_, _, default, _)| default.clone()).collect(),
+        param_type_exprs: params
+            .iter()
+            .map(|(_, type_ann, _, _)| type_ann.clone())
+            .collect(),
+        param_attributes: Vec::new(),
+        defaults: params
+            .iter()
+            .map(|(_, _, default, _)| default.clone())
+            .collect(),
         return_type: return_type
             .map(type_expr_to_php_type)
             .unwrap_or(PhpType::Mixed),
@@ -1155,12 +1456,12 @@ fn signature_from_ast_with_variadic(
         variadic: variadic.map(str::to_string),
         deprecation: None,
     };
-    append_variadic_param_slot(&mut signature);
+    append_variadic_param_slot(&mut signature, variadic_by_ref);
     signature
 }
 
 /// Adds the variadic `array<mixed>` parameter slot omitted from parsed parameter tuples.
-fn append_variadic_param_slot(signature: &mut FunctionSig) {
+fn append_variadic_param_slot(signature: &mut FunctionSig, variadic_by_ref: bool) {
     let Some(variadic) = signature.variadic.clone() else {
         return;
     };
@@ -1170,8 +1471,9 @@ fn append_variadic_param_slot(signature: &mut FunctionSig) {
     signature
         .params
         .push((variadic, PhpType::Array(Box::new(PhpType::Mixed))));
+    signature.param_type_exprs.push(None);
     signature.defaults.push(None);
-    signature.ref_params.push(false);
+    signature.ref_params.push(variadic_by_ref);
     signature.declared_params.push(false);
 }
 

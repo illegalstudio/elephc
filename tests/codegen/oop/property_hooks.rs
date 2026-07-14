@@ -115,6 +115,45 @@ fn test_backed_property_set_normalizes() {
     assert_eq!(out, "[Ada]");
 }
 
+/// Verifies a short `set => expr;` hook stores the expression result into the property's raw
+/// backing slot.
+#[test]
+fn test_short_set_hook_normalizes_backing_slot() {
+    let out = compile_and_run(
+        "<?php
+        class Name {
+            public string $value {
+                get => $this->value;
+                set => trim($value);
+            }
+        }
+        $n = new Name();
+        $n->value = \"  Ada  \";
+        echo \"[\", $n->value, \"]\";
+        ",
+    );
+    assert_eq!(out, "[Ada]");
+}
+
+/// Verifies a short set hook honors a custom parameter name.
+#[test]
+fn test_short_set_hook_custom_parameter_name() {
+    let out = compile_and_run(
+        "<?php
+        class Label {
+            public string $text {
+                get => $this->text;
+                set(string $raw) => strtoupper($raw);
+            }
+        }
+        $l = new Label();
+        $l->text = \"hi\";
+        echo $l->text;
+        ",
+    );
+    assert_eq!(out, "HI");
+}
+
 /// Verifies a custom set-hook parameter name (`set(string $v)`) is honored in the body.
 #[test]
 fn test_set_hook_custom_parameter_name() {

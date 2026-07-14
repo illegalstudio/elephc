@@ -2,7 +2,7 @@
 title: "basename() — internals"
 description: "Compiler internals for basename(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 98
+  order: 102
 ---
 
 ## `basename()` — internals
@@ -31,6 +31,11 @@ function basename(string $path, string $suffix = ''): string
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/basename.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/basename.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

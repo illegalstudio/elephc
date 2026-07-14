@@ -2,7 +2,7 @@
 title: "htmlentities() — internals"
 description: "Compiler internals for htmlentities(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 362
+  order: 366
 ---
 
 ## `htmlentities()` — internals
@@ -39,6 +39,11 @@ function htmlentities(string $string, int $flags = 11, string $encoding = 'UTF-8
 ## What the type checker enforces
 
 - **Arity**: takes 1–3 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/htmlentities.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/htmlentities.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

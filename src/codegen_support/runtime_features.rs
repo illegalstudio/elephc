@@ -14,6 +14,8 @@
 //! - The dynamic builtin dispatcher (descriptor invoker) emits per-builtin
 //!   wrappers — including md5/sha1/hash — that reference the `elephc_crypto`
 //!   staticlib, so its detection forces that crate to link.
+//! - `eval()` keeps the dynamic bridge feature separate from scope-only helpers
+//!   so AOT fragments can shed bridge-only runtime/link dependencies incrementally.
 
 use std::collections::HashMap;
 
@@ -33,6 +35,12 @@ pub struct RuntimeFeatures {
     /// True when codegen can emit the runtime callable dispatcher (descriptor
     /// invoker) that builds per-builtin wrappers referencing `elephc_crypto`.
     pub descriptor_invoker: bool,
+    /// True when codegen can call the optional eval interpreter bridge staticlib.
+    pub eval_bridge: bool,
+    /// True when codegen can use materialized eval-scope helper symbols without
+    /// the interpreter bridge. Scope-only helpers are emitted by the core runtime
+    /// when the dynamic eval bridge is not otherwise required.
+    pub eval_scope: bool,
     /// True when compiling a `--web` program. Selects the output-capture variant
     /// of `__rt_stdout_write`, which checks the `_elephc_web_capture` flag and may
     /// tail-call `elephc_web_write` (a symbol only linked into `--web` binaries).
@@ -47,6 +55,8 @@ impl RuntimeFeatures {
             regex: false,
             phar_archive: false,
             descriptor_invoker: false,
+            eval_bridge: false,
+            eval_scope: false,
             web: false,
         }
     }
@@ -58,6 +68,8 @@ impl RuntimeFeatures {
             regex: true,
             phar_archive: true,
             descriptor_invoker: true,
+            eval_bridge: true,
+            eval_scope: true,
             web: true,
         }
     }
@@ -81,8 +93,8 @@ pub fn runtime_features_for_program_and_classes(
 pub fn required_libraries_for_runtime_features(features: RuntimeFeatures) -> Vec<String> {
     let mut libs = Vec::new();
     if features.regex {
-        libs.push("pcre2-posix".to_string());
-        libs.push("pcre2-8".to_string());
+        push_required_library(&mut libs, "pcre2-posix");
+        push_required_library(&mut libs, "pcre2-8");
     }
     if features.phar_archive {
         libs.push("elephc_phar".to_string());
@@ -94,7 +106,21 @@ pub fn required_libraries_for_runtime_features(features: RuntimeFeatures) -> Vec
         // reference `elephc_crypto_hash`; force the crate to link on all targets.
         libs.push("elephc_crypto".to_string());
     }
+    if features.eval_bridge {
+        // Eval code can call preg_* from dynamically parsed source, so PCRE2 is
+        // required even when no static preg call appears in the AOT AST.
+        push_required_library(&mut libs, "pcre2-posix");
+        push_required_library(&mut libs, "pcre2-8");
+        push_required_library(&mut libs, "elephc_magician");
+    }
     libs
+}
+
+/// Appends a required link library once while preserving feature order.
+fn push_required_library(libs: &mut Vec<String>, library: &str) {
+    if !libs.iter().any(|existing| existing == library) {
+        libs.push(library.to_string());
+    }
 }
 
 /// Builds the optional runtime feature set, using class metadata when codegen has it.
@@ -170,7 +196,9 @@ fn emitted_classes_include_phar_archive_helpers(
     classes: &HashMap<String, ClassInfo>,
 ) -> bool {
     if program_has_dynamic_instanceof(program) {
-        return classes.keys().any(|name| is_phar_archive_helper_class_name(name));
+        return classes
+            .keys()
+            .any(|name| is_phar_archive_helper_class_name(name));
     }
     super::collect_emitted_class_names(program, classes)
         .iter()
@@ -231,9 +259,9 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         } => {
             expr_has_regex_call(condition)
                 || body_has_regex_call(then_body)
-                || elseif_clauses
-                    .iter()
-                    .any(|(condition, body)| expr_has_regex_call(condition) || body_has_regex_call(body))
+                || elseif_clauses.iter().any(|(condition, body)| {
+                    expr_has_regex_call(condition) || body_has_regex_call(body)
+                })
                 || else_body.as_deref().is_some_and(body_has_regex_call)
         }
         StmtKind::IfDef {
@@ -241,8 +269,7 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
             else_body,
             ..
         } => {
-            body_has_regex_call(then_body)
-                || else_body.as_deref().is_some_and(body_has_regex_call)
+            body_has_regex_call(then_body) || else_body.as_deref().is_some_and(body_has_regex_call)
         }
         StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
             expr_has_regex_call(condition) || body_has_regex_call(body)
@@ -278,9 +305,9 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::FunctionDecl { body, .. } => body_has_regex_call(body),
         StmtKind::ClassDecl { methods, .. }
         | StmtKind::TraitDecl { methods, .. }
-        | StmtKind::InterfaceDecl { methods, .. } => {
-            methods.iter().any(|method| body_has_regex_call(&method.body))
-        }
+        | StmtKind::InterfaceDecl { methods, .. } => methods
+            .iter()
+            .any(|method| body_has_regex_call(&method.body)),
         StmtKind::Try {
             try_body,
             catches,
@@ -313,9 +340,9 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
     match &expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
-        ExprKind::IncludeValue { .. } => unreachable!(
-            "ExprKind::IncludeValue must be expanded by the resolver"
-        ),
+        ExprKind::IncludeValue { .. } => {
+            unreachable!("ExprKind::IncludeValue must be expanded by the resolver")
+        }
         ExprKind::FunctionCall { name, args } => {
             is_regex_builtin_name(name.as_str())
                 || regex_callback_dispatch_call(name.as_str(), args)
@@ -337,6 +364,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)
+        | ExprKind::Clone(expr)
         | ExprKind::ErrorSuppress(expr)
         | ExprKind::Print(expr)
         | ExprKind::Spread(expr)
@@ -418,6 +446,15 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_has_regex_call(object) || args.iter().any(expr_has_regex_call)
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_has_regex_call(object)
+                || expr_has_regex_call(method)
+                || args.iter().any(expr_has_regex_call)
+        }
         ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => {
             expr_has_regex_call(object)
         }
@@ -477,7 +514,10 @@ fn expr_is_regex_callback_string(expr: &Expr) -> bool {
 /// Returns true when a static receiver expression can contain a regex call.
 fn static_receiver_has_regex_call(receiver: &StaticReceiver) -> bool {
     match receiver {
-        StaticReceiver::Named(_) | StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => false,
+        StaticReceiver::Named(_)
+        | StaticReceiver::Self_
+        | StaticReceiver::Static
+        | StaticReceiver::Parent => false,
     }
 }
 
@@ -544,7 +584,9 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
                 || elseif_clauses.iter().any(|(condition, body)| {
                     expr_needs_descriptor_invoker(condition) || body_needs_descriptor_invoker(body)
                 })
-                || else_body.as_deref().is_some_and(body_needs_descriptor_invoker)
+                || else_body
+                    .as_deref()
+                    .is_some_and(body_needs_descriptor_invoker)
         }
         StmtKind::IfDef {
             then_body,
@@ -552,7 +594,9 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
             ..
         } => {
             body_needs_descriptor_invoker(then_body)
-                || else_body.as_deref().is_some_and(body_needs_descriptor_invoker)
+                || else_body
+                    .as_deref()
+                    .is_some_and(body_needs_descriptor_invoker)
         }
         StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
             expr_needs_descriptor_invoker(condition) || body_needs_descriptor_invoker(body)
@@ -564,7 +608,9 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
             body,
         } => {
             init.as_deref().is_some_and(stmt_needs_descriptor_invoker)
-                || condition.as_ref().is_some_and(expr_needs_descriptor_invoker)
+                || condition
+                    .as_ref()
+                    .is_some_and(expr_needs_descriptor_invoker)
                 || update.as_deref().is_some_and(stmt_needs_descriptor_invoker)
                 || body_needs_descriptor_invoker(body)
         }
@@ -581,7 +627,9 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
                     patterns.iter().any(expr_needs_descriptor_invoker)
                         || body_needs_descriptor_invoker(body)
                 })
-                || default.as_deref().is_some_and(body_needs_descriptor_invoker)
+                || default
+                    .as_deref()
+                    .is_some_and(body_needs_descriptor_invoker)
         }
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. }
@@ -631,9 +679,9 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
     match &expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
-        ExprKind::IncludeValue { .. } => unreachable!(
-            "ExprKind::IncludeValue must be expanded by the resolver"
-        ),
+        ExprKind::IncludeValue { .. } => {
+            unreachable!("ExprKind::IncludeValue must be expanded by the resolver")
+        }
         // A direct dynamic call on an arbitrary callee (e.g. `$callback(...)`) lowers
         // through runtime callable dispatch when the callee resolves to a string name.
         ExprKind::ExprCall { callee, args } => {
@@ -648,6 +696,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)
+        | ExprKind::Clone(expr)
         | ExprKind::ErrorSuppress(expr)
         | ExprKind::Print(expr)
         | ExprKind::Spread(expr)
@@ -675,11 +724,9 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
                     .is_some_and(expr_needs_descriptor_invoker)
         }
         ExprKind::ArrayLiteral(items) => items.iter().any(expr_needs_descriptor_invoker),
-        ExprKind::ArrayLiteralAssoc(items) => items
-            .iter()
-            .any(|(key, value)| {
-                expr_needs_descriptor_invoker(key) || expr_needs_descriptor_invoker(value)
-            }),
+        ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
+            expr_needs_descriptor_invoker(key) || expr_needs_descriptor_invoker(value)
+        }),
         ExprKind::Match {
             subject,
             arms,
@@ -690,7 +737,9 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
                     patterns.iter().any(expr_needs_descriptor_invoker)
                         || expr_needs_descriptor_invoker(value)
                 })
-                || default.as_deref().is_some_and(expr_needs_descriptor_invoker)
+                || default
+                    .as_deref()
+                    .is_some_and(expr_needs_descriptor_invoker)
         }
         ExprKind::ArrayAccess { array, index } => {
             expr_needs_descriptor_invoker(array) || expr_needs_descriptor_invoker(index)
@@ -712,7 +761,10 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         | ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_needs_descriptor_invoker),
         ExprKind::NewDynamicObject {
             class_name, args, ..
-        } => expr_needs_descriptor_invoker(class_name) || args.iter().any(expr_needs_descriptor_invoker),
+        } => {
+            expr_needs_descriptor_invoker(class_name)
+                || args.iter().any(expr_needs_descriptor_invoker)
+        }
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => expr_needs_descriptor_invoker(object),
         ExprKind::DynamicPropertyAccess { object, property }
@@ -722,6 +774,15 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_needs_descriptor_invoker(object) || args.iter().any(expr_needs_descriptor_invoker)
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_needs_descriptor_invoker(object)
+                || expr_needs_descriptor_invoker(method)
+                || args.iter().any(expr_needs_descriptor_invoker)
         }
         ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => {
             expr_needs_descriptor_invoker(object)
@@ -778,7 +839,9 @@ fn expr_is_descriptor_invoker_trigger(expr: &Expr) -> bool {
         // string literals — as runtime dispatch, so this uses the broader predicate.
         ExprKind::NewObject { class_name, args } => {
             is_fiber_class_name(class_name.as_str())
-                && args.first().is_some_and(fiber_callback_may_be_runtime_dispatch)
+                && args
+                    .first()
+                    .is_some_and(fiber_callback_may_be_runtime_dispatch)
         }
         _ => false,
     }
@@ -870,7 +933,10 @@ mod tests {
     /// Verifies ordinary programs do not require the optional regex runtime helpers.
     #[test]
     fn test_runtime_features_omit_regex_for_plain_program() {
-        assert_eq!(features_for("<?php echo \"plain\";"), RuntimeFeatures::none());
+        assert_eq!(
+            features_for("<?php echo \"plain\";"),
+            RuntimeFeatures::none()
+        );
         assert_eq!(
             checked_features_for("<?php echo \"plain\";"),
             RuntimeFeatures::none()
@@ -882,7 +948,10 @@ mod tests {
     fn test_runtime_features_include_regex_for_preg_call() {
         assert_eq!(
             features_for("<?php echo preg_match(\"/a/\", \"cat\");"),
-            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() }
+            RuntimeFeatures {
+                regex: true,
+                ..RuntimeFeatures::none()
+            }
         );
     }
 
@@ -899,16 +968,48 @@ mod tests {
         assert!(required_libraries_for_runtime_features(RuntimeFeatures::none()).is_empty());
     }
 
+    /// Verifies eval runtime features request PCRE2 plus the magician bridge staticlib for final linking.
+    #[test]
+    fn test_eval_runtime_features_require_elephc_magician_library() {
+        assert_eq!(
+            required_libraries_for_runtime_features(RuntimeFeatures {
+                eval_bridge: true,
+                ..RuntimeFeatures::none()
+            }),
+            vec![
+                "pcre2-posix".to_string(),
+                "pcre2-8".to_string(),
+                "elephc_magician".to_string()
+            ]
+        );
+    }
+
+    /// Verifies eval scope-only support no longer pulls the dynamic eval bridge libraries.
+    #[test]
+    fn test_eval_scope_runtime_features_omit_bridge_libraries() {
+        assert!(required_libraries_for_runtime_features(RuntimeFeatures {
+            eval_scope: true,
+            ..RuntimeFeatures::none()
+        })
+        .is_empty());
+    }
+
     /// Verifies literal callback dispatch to preg builtins enables regex helpers.
     #[test]
     fn test_runtime_features_include_regex_for_call_user_func_literal() {
         assert_eq!(
             features_for("<?php echo call_user_func(\"preg_match\", \"/a/\", \"cat\");"),
-            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() }
+            RuntimeFeatures {
+                regex: true,
+                ..RuntimeFeatures::none()
+            }
         );
         assert_eq!(
             features_for("<?php echo call_user_func_array(\"preg_split\", [\"/,/\", \"a,b\"]);"),
-            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() }
+            RuntimeFeatures {
+                regex: true,
+                ..RuntimeFeatures::none()
+            }
         );
     }
 
@@ -917,7 +1018,10 @@ mod tests {
     fn test_runtime_features_include_regex_for_first_class_callable() {
         assert_eq!(
             features_for("<?php $cb = preg_replace_callback(...);"),
-            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() }
+            RuntimeFeatures {
+                regex: true,
+                ..RuntimeFeatures::none()
+            }
         );
     }
 
@@ -926,7 +1030,10 @@ mod tests {
     fn test_runtime_features_include_regex_for_dynamic_instanceof() {
         assert_eq!(
             features_for("<?php echo $value instanceof $className;"),
-            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() }
+            RuntimeFeatures {
+                regex: true,
+                ..RuntimeFeatures::none()
+            }
         );
     }
 
@@ -934,10 +1041,11 @@ mod tests {
     #[test]
     fn test_runtime_features_include_regex_for_regex_iterator() {
         assert_eq!(
-            features_for(
-                "<?php $it = new RegexIterator(new ArrayIterator([\"a\"]), \"/a/\");"
-            ),
-            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() }
+            features_for("<?php $it = new RegexIterator(new ArrayIterator([\"a\"]), \"/a/\");"),
+            RuntimeFeatures {
+                regex: true,
+                ..RuntimeFeatures::none()
+            }
         );
     }
 
@@ -983,35 +1091,31 @@ mod tests {
     /// Verifies a direct dynamic string call requests the dispatcher.
     #[test]
     fn test_runtime_features_include_descriptor_invoker_for_direct_dynamic_call() {
-        assert!(
-            features_for("<?php $cb = \"strlen\"; echo $cb(\"hi\");").descriptor_invoker
-        );
+        assert!(features_for("<?php $cb = \"strlen\"; echo $cb(\"hi\");").descriptor_invoker);
     }
 
     /// Verifies `new Fiber($cb)` with a dynamic callable requests the dispatcher.
     #[test]
     fn test_runtime_features_include_descriptor_invoker_for_fiber_dynamic_callable() {
-        assert!(
-            features_for("<?php $cb = \"job\"; $f = new Fiber($cb);").descriptor_invoker
-        );
+        assert!(features_for("<?php $cb = \"job\"; $f = new Fiber($cb);").descriptor_invoker);
     }
 
     /// Verifies `iterator_apply()` with a dynamic callback requests the dispatcher.
     #[test]
     fn test_runtime_features_include_descriptor_invoker_for_iterator_apply() {
-        assert!(features_for(
-            "<?php $cb = \"cb\"; iterator_apply(new ArrayIterator([1]), $cb);"
-        )
-        .descriptor_invoker);
+        assert!(
+            features_for("<?php $cb = \"cb\"; iterator_apply(new ArrayIterator([1]), $cb);")
+                .descriptor_invoker
+        );
     }
 
     /// Verifies `preg_replace_callback()` with a runtime string callback requests the dispatcher.
     #[test]
     fn test_runtime_features_include_descriptor_invoker_for_preg_replace_callback_runtime_string() {
-        assert!(features_for(
-            "<?php $cb = \"cb\"; echo preg_replace_callback(\"/a/\", $cb, \"a\");"
-        )
-        .descriptor_invoker);
+        assert!(
+            features_for("<?php $cb = \"cb\"; echo preg_replace_callback(\"/a/\", $cb, \"a\");")
+                .descriptor_invoker
+        );
     }
 
     /// Verifies the dynamic dispatcher feature requests the crypto staticlib for linking.
@@ -1021,12 +1125,16 @@ mod tests {
             regex: false,
             phar_archive: false,
             descriptor_invoker: true,
+            eval_bridge: false,
+            eval_scope: false,
             web: false,
         })
         .iter()
         .any(|lib| lib == "elephc_crypto"));
-        assert!(!required_libraries_for_runtime_features(RuntimeFeatures::none())
-            .iter()
-            .any(|lib| lib == "elephc_crypto"));
+        assert!(
+            !required_libraries_for_runtime_features(RuntimeFeatures::none())
+                .iter()
+                .any(|lib| lib == "elephc_crypto")
+        );
     }
 }

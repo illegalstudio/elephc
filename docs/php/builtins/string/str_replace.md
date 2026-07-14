@@ -2,7 +2,7 @@
 title: "str_replace()"
 description: "Replaces all occurrences of a search string with a replacement string."
 sidebar:
-  order: 387
+  order: 391
 ---
 
 ## str_replace()
@@ -20,6 +20,11 @@ Replaces all occurrences of a search string with a replacement string.
 - `$count` (`int`), default `null`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/str_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_replace.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

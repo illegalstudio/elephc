@@ -2,7 +2,7 @@
 title: "fgetc() — internals"
 description: "Compiler internals for fgetc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 158
+  order: 162
 ---
 
 ## `fgetc()` — internals
@@ -33,6 +33,11 @@ function fgetc(resource $stream): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fgetc.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fgetc.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

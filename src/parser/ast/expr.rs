@@ -99,6 +99,8 @@ pub enum ExprKind {
     Closure {
         params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         variadic: Option<String>,
+        /// Whether the variadic parameter was declared by reference (`&...$args`).
+        variadic_by_ref: bool,
         /// Declared element type hint on the variadic parameter (`int ...$xs`), if any.
         variadic_type: Option<TypeExpr>,
         return_type: Option<TypeExpr>,
@@ -156,6 +158,7 @@ pub enum ExprKind {
         required_parent: Name,
         args: Vec<Expr>,
     },
+    Clone(Box<Expr>),
     PropertyAccess {
         object: Box<Expr>,
         property: String,
@@ -184,6 +187,11 @@ pub enum ExprKind {
     NullsafeMethodCall {
         object: Box<Expr>,
         method: String,
+        args: Vec<Expr>,
+    },
+    NullsafeDynamicMethodCall {
+        object: Box<Expr>,
+        method: Box<Expr>,
         args: Vec<Expr>,
     },
     StaticMethodCall {

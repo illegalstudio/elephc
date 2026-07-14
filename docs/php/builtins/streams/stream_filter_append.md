@@ -2,7 +2,7 @@
 title: "stream_filter_append()"
 description: "Attaches a filter to a stream."
 sidebar:
-  order: 337
+  order: 341
 ---
 
 ## stream_filter_append()
@@ -20,6 +20,11 @@ Attaches a filter to a stream.
 - `$params` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_append.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_append.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -2,7 +2,7 @@
 title: "urlencode()"
 description: "URL-encodes a string using application/x-www-form-urlencoded rules."
 sidebar:
-  order: 406
+  order: 410
 ---
 
 ## urlencode()
@@ -17,6 +17,11 @@ URL-encodes a string using application/x-www-form-urlencoded rules.
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/urlencode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/urlencode.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

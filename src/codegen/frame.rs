@@ -162,10 +162,14 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
         ctx.emitter.comment("enable heap debug flag");
         abi::emit_enable_heap_debug_flag(ctx.emitter);
     }
-    store_argc_local_if_present(ctx);
-    store_argv_local_if_present(ctx);
     zero_initialize_main_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
+    zero_initialize_eval_context_locals(ctx);
+    zero_initialize_eval_scope_locals(ctx);
+    store_argc_global_if_needed(ctx);
+    store_argv_global_if_needed(ctx);
+    store_argc_local_if_present(ctx);
+    store_argv_local_if_present(ctx);
 }
 
 /// Emits a callable function prologue using an already-resolved entry label.
@@ -205,6 +209,8 @@ pub(super) fn emit_function_prologue_with_label(
     }
     zero_initialize_function_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
+    zero_initialize_eval_context_locals(ctx);
+    zero_initialize_eval_scope_locals(ctx);
     Ok(())
 }
 
@@ -285,6 +291,9 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
             continue;
         }
         let symbol = ir_global_symbol(&name);
+        if !ctx.data.has_comm(&symbol) {
+            continue;
+        }
         ctx.emitter.comment(&format!("epilogue cleanup global ${}", name));
         emit_static_symbol_value_cleanup(ctx, &symbol, &ty);
         abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
@@ -339,18 +348,27 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     emit_callee_saved_saves(ctx);
     zero_initialize_main_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
+    zero_initialize_eval_context_locals(ctx);
+    zero_initialize_eval_scope_locals(ctx);
 }
 
 /// Emits the `--web` top-level handler epilogue and returns to the bridge.
 ///
 /// Like `emit_main_epilogue` it runs the per-request main local cleanup (so
 /// owned refcounted top-level locals are released each request) and restores the
-/// frame, but it `ret`s instead of exiting and skips the process-end gc-stats and
-/// heap-debug diagnostics, which are wrong to report per request.
+/// frame, but it `ret`s instead of exiting. Requested gc-stats are emitted after
+/// cleanup for every request; process-end heap-debug diagnostics remain skipped.
 pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
     emit_main_local_epilogue_cleanup(ctx);
+    // Under `--web` the handler returns to the bridge server loop instead of
+    // exiting, so the exit-based main epilogue (where `--gc-stats` normally
+    // prints) is never reached. Emitting the counters here, once per request,
+    // is the only way to observe them in server mode.
+    if ctx.gc_stats {
+        emit_gc_stats(ctx);
+    }
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
@@ -419,6 +437,8 @@ fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
             _ => {}
         }
     }
+    emit_eval_scope_epilogue_cleanup(ctx);
+    emit_eval_context_epilogue_cleanup(ctx);
 }
 
 /// Returns main local slots that receive owned refcounted values through `StoreLocal`.
@@ -441,7 +461,9 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
                 .as_deref()
                 .is_none_or(|name| !param_names.contains(name))
         })
-        .filter(|local| local_slot_has_store(ctx.function, local.id))
+        .filter(|local| {
+            local_slot_has_store(ctx.function, local.id) || function_has_eval_scope(ctx.function)
+        })
         .filter_map(|local| {
             let ty = local.php_type.codegen_repr();
             if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {
@@ -523,6 +545,117 @@ fn ref_cell_owner_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId,
         .collect::<Vec<_>>();
     locals.sort_by_key(|(_, _, _, offset)| *offset);
     locals
+}
+
+/// Zero-initializes persistent eval scope handles before the first eval call can allocate one.
+fn zero_initialize_eval_scope_locals(ctx: &mut FunctionContext<'_>) {
+    for (_, offset) in eval_scope_locals(ctx) {
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    }
+}
+
+/// Zero-initializes persistent eval context handles before the first eval call can allocate one.
+fn zero_initialize_eval_context_locals(ctx: &mut FunctionContext<'_>) {
+    for (_, offset) in eval_context_locals(ctx) {
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    }
+}
+
+/// Releases persistent eval scopes allocated for this frame.
+fn emit_eval_scope_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    for (name, offset) in eval_scope_locals(ctx) {
+        ctx.emitter.comment(&format!("epilogue cleanup {}", name));
+        emit_eval_scope_cleanup(ctx, offset);
+    }
+}
+
+/// Releases persistent eval contexts allocated for this frame.
+fn emit_eval_context_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    for (name, offset) in eval_context_locals(ctx) {
+        ctx.emitter.comment(&format!("epilogue cleanup {}", name));
+        emit_eval_context_cleanup(ctx, offset);
+    }
+}
+
+/// Frees one persistent eval scope handle when it was allocated.
+fn emit_eval_scope_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let done = ctx.next_label("eval_scope_cleanup_done");
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if arg_reg != result_reg {
+        ctx.emitter
+            .instruction(&format!("mov {}, {}", arg_reg, result_reg)); // pass the persistent eval scope handle to the free helper
+    }
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_free");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    ctx.emitter.label(&done);
+}
+
+/// Frees one persistent eval context handle when it was allocated.
+fn emit_eval_context_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let done = ctx.next_label("eval_context_cleanup_done");
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if arg_reg != result_reg {
+        ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg));   // pass the persistent eval context handle to the free helper
+    }
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_free");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    ctx.emitter.label(&done);
+}
+
+/// Returns hidden eval scope slots and their frame offsets.
+fn eval_scope_locals(ctx: &FunctionContext<'_>) -> Vec<(String, usize)> {
+    let mut locals = ctx
+        .function
+        .locals
+        .iter()
+        .filter(|local| matches!(local.kind, LocalKind::EvalScope | LocalKind::EvalGlobalScope))
+        .filter_map(|local| {
+            let offset = ctx.local_offset(local.id).ok()?;
+            let name = local
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("slot{}", local.id.as_raw()));
+            Some((name, offset))
+        })
+        .collect::<Vec<_>>();
+    locals.sort_by_key(|(_, offset)| *offset);
+    locals
+}
+
+/// Returns hidden eval context slots and their frame offsets.
+fn eval_context_locals(ctx: &FunctionContext<'_>) -> Vec<(String, usize)> {
+    let mut locals = ctx
+        .function
+        .locals
+        .iter()
+        .filter(|local| local.kind == LocalKind::EvalContext)
+        .filter_map(|local| {
+            let offset = ctx.local_offset(local.id).ok()?;
+            let name = local
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("slot{}", local.id.as_raw()));
+            Some((name, offset))
+        })
+        .collect::<Vec<_>>();
+    locals.sort_by_key(|(_, offset)| *offset);
+    locals
+}
+
+/// Returns true when the function owns a persistent eval scope local.
+fn function_has_eval_scope(function: &Function) -> bool {
+    function
+        .locals
+        .iter()
+        .any(|local| matches!(local.kind, LocalKind::EvalScope | LocalKind::EvalGlobalScope))
 }
 
 /// Returns true when a local slot is written by an explicit EIR `StoreLocal`.
@@ -645,7 +778,13 @@ fn emit_function_local_epilogue_cleanup(
 ) {
     let cleanup_locals = function_cleanup_locals(ctx, skip_return_slot);
     let ref_cell_owners = ref_cell_owner_locals(ctx);
-    if cleanup_locals.is_empty() && ref_cell_owners.is_empty() {
+    let eval_scopes = eval_scope_locals(ctx);
+    let eval_contexts = eval_context_locals(ctx);
+    if cleanup_locals.is_empty()
+        && ref_cell_owners.is_empty()
+        && eval_scopes.is_empty()
+        && eval_contexts.is_empty()
+    {
         return;
     }
     let return_ty = ctx.function.return_php_type.codegen_repr();
@@ -662,6 +801,14 @@ fn emit_function_local_epilogue_cleanup(
             other if other.is_refcounted() => emit_main_refcounted_cleanup(ctx, offset, &other),
             _ => {}
         }
+    }
+    for (name, offset) in eval_scopes {
+        ctx.emitter.comment(&format!("epilogue cleanup {}", name));
+        emit_eval_scope_cleanup(ctx, offset);
+    }
+    for (name, offset) in eval_contexts {
+        ctx.emitter.comment(&format!("epilogue cleanup {}", name));
+        emit_eval_context_cleanup(ctx, offset);
     }
     if preserves_return {
         pop_return_value(ctx, &return_ty);
@@ -696,7 +843,9 @@ fn function_cleanup_locals(
                 .is_none_or(|name| !param_names.contains(name))
         })
         .filter(|local| Some(local.id) != skip_return_slot)
-        .filter(|local| local_slot_has_store(ctx.function, local.id))
+        .filter(|local| {
+            local_slot_has_store(ctx.function, local.id) || function_has_eval_scope(ctx.function)
+        })
         .filter_map(|local| {
             let ty = local.php_type.codegen_repr();
             if !cleanup_tracked_codegen_type(&ty) {
@@ -958,40 +1107,86 @@ fn align_to_16(bytes: usize) -> usize {
 
 /// Stores the OS argument count into `$argc` when the EIR main function has that local.
 fn store_argc_local_if_present(ctx: &mut FunctionContext<'_>) {
-    let Some(argc_slot) = ctx
+    let Some((argc_slot, argc_ty)) = ctx
         .function
         .locals
         .iter()
         .find(|local| local.name.as_deref() == Some("argc"))
-        .map(|local| local.id)
+        .map(|local| (local.id, local.php_type.codegen_repr()))
     else {
         return;
     };
     let Ok(offset) = ctx.local_offset(argc_slot) else {
         return;
     };
-    abi::store_at_offset(
-        ctx.emitter,
-        abi::process_argc_reg(ctx.emitter.target),
-        offset,
-    );
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_global_argc", 0);
+    if matches!(argc_ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    }
+    abi::store_at_offset(ctx.emitter, result_reg, offset);
 }
 
 /// Builds and stores the PHP `$argv` array when the EIR main function has that local.
 fn store_argv_local_if_present(ctx: &mut FunctionContext<'_>) {
-    let Some(argv_slot) = ctx
+    let Some((argv_slot, argv_ty)) = ctx
         .function
         .locals
         .iter()
         .find(|local| local.name.as_deref() == Some("argv"))
-        .map(|local| local.id)
+        .map(|local| (local.id, local.php_type.codegen_repr()))
     else {
         return;
     };
     let Ok(offset) = ctx.local_offset(argv_slot) else {
         return;
     };
+    let array_ty = argv_array_type();
     ctx.emitter.comment("build $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
-    abi::emit_store(ctx.emitter, &PhpType::Array(Box::new(PhpType::Str)), offset);
+    if matches!(argv_ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_box_current_value_as_mixed(ctx.emitter, &array_ty);
+    }
+    abi::emit_store(ctx.emitter, &argv_ty, offset);
+}
+
+/// Initializes program-global `$argc` storage for eval or static `global $argc`.
+fn store_argc_global_if_needed(ctx: &mut FunctionContext<'_>) {
+    if !superglobal_storage_needed(ctx, "argc") {
+        return;
+    }
+    let symbol = ir_global_symbol("argc");
+    ctx.data.add_comm(symbol.clone(), PhpType::Int.stack_size().max(8));
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_global_argc", 0);
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Int, false);
+}
+
+/// Initializes program-global `$argv` storage for eval or static `global $argv`.
+fn store_argv_global_if_needed(ctx: &mut FunctionContext<'_>) {
+    if !superglobal_storage_needed(ctx, "argv") {
+        return;
+    }
+    let symbol = ir_global_symbol("argv");
+    let array_ty = argv_array_type();
+    ctx.data.add_comm(symbol.clone(), array_ty.stack_size().max(8));
+    ctx.emitter.comment("build global $argv array from OS argv");
+    abi::emit_call_label(ctx.emitter, "__rt_build_argv");
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &array_ty, false);
+}
+
+/// Returns true when a process superglobal needs program-global storage.
+fn superglobal_storage_needed(ctx: &FunctionContext<'_>, name: &str) -> bool {
+    ctx.module.required_runtime_features.eval_bridge
+        || ctx
+            .module
+            .data
+            .global_names
+            .iter()
+            .any(|candidate| candidate == name)
+}
+
+/// Returns the PHP storage type for `$argv`.
+fn argv_array_type() -> PhpType {
+    PhpType::Array(Box::new(PhpType::Str))
 }

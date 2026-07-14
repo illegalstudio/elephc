@@ -19,6 +19,33 @@ use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 
 use super::instanceof::{escaped_ascii, escaped_bytes};
 
+const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
+const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
+const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
+const EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK: u64 = 0x00ff_ffff;
+const EVAL_REFLECTION_CLASS_SOURCE_START_SHIFT: u64 = 16;
+const EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT: u64 = 40;
+const EVAL_REFLECTION_PROPERTY_FLAG_STATIC: u64 = 1;
+const EVAL_REFLECTION_PROPERTY_FLAG_PUBLIC: u64 = 2;
+const EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED: u64 = 4;
+const EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE: u64 = 8;
+const EVAL_REFLECTION_PROPERTY_FLAG_FINAL: u64 = 16;
+const EVAL_REFLECTION_PROPERTY_FLAG_ABSTRACT: u64 = 32;
+const EVAL_REFLECTION_PROPERTY_FLAG_READONLY: u64 = 64;
+const EVAL_REFLECTION_PROPERTY_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
+const EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED: u64 = 512;
+const EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED_SET: u64 = 2048;
+const EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE_SET: u64 = 4096;
+const EVAL_REFLECTION_METHOD_FLAG_STATIC: u64 = 1;
+const EVAL_REFLECTION_METHOD_FLAG_PUBLIC: u64 = 2;
+const EVAL_REFLECTION_METHOD_FLAG_PROTECTED: u64 = 4;
+const EVAL_REFLECTION_METHOD_FLAG_PRIVATE: u64 = 8;
+const EVAL_REFLECTION_METHOD_FLAG_FINAL: u64 = 16;
+const EVAL_REFLECTION_METHOD_FLAG_ABSTRACT: u64 = 32;
+const EVAL_REFLECTION_METHOD_SOURCE_LINE_MASK: u64 = 0x00ff_ffff;
+const EVAL_REFLECTION_METHOD_SOURCE_START_SHIFT: u64 = 16;
+const EVAL_REFLECTION_METHOD_SOURCE_END_SHIFT: u64 = 40;
+
 /// Emit the user-dependent data section — globals, statics, class metadata.
 /// This changes per program and cannot be cached.
 pub(crate) fn emit_runtime_data_user(
@@ -27,9 +54,15 @@ pub(crate) fn emit_runtime_data_user(
     functions: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     interfaces: &HashMap<String, InterfaceInfo>,
+    interface_names: &[String],
+    trait_names: &[String],
+    declared_trait_uses: &HashMap<String, Vec<String>>,
+    declared_trait_source_lines: &HashMap<String, u32>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
     allowed_class_names: Option<&HashSet<String>>,
+    emit_eval_reflection_metadata: bool,
+    source_path: Option<&str>,
 ) -> String {
     let mut out = String::new();
 
@@ -76,14 +109,14 @@ pub(crate) fn emit_runtime_data_user(
 
     let mut sorted_enum_names: Vec<&String> = enums.keys().collect();
     sorted_enum_names.sort();
-    for enum_name in sorted_enum_names {
-        let Some(enum_info) = enums.get(enum_name) else {
+    for enum_name in &sorted_enum_names {
+        let Some(enum_info) = enums.get(*enum_name) else {
             continue;
         };
         for case in &enum_info.cases {
             out.push_str(&format!(
                 ".comm {}, 8, 3\n",
-                enum_case_symbol(enum_name, &case.name)
+                enum_case_symbol(*enum_name, &case.name)
             ));
         }
     }
@@ -119,6 +152,28 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".p2align 3\n");
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
     emit_class_name_lookup_data(&mut out, max_class_id, &class_name_by_id);
+    emit_name_lookup_data(
+        &mut out,
+        "_interface_names_count",
+        "_interface_names",
+        "_interface_name",
+        interface_names,
+    );
+    emit_name_lookup_data(
+        &mut out,
+        "_trait_names_count",
+        "_trait_names",
+        "_trait_name",
+        trait_names,
+    );
+    let enum_names: Vec<String> = sorted_enum_names.iter().map(|name| (*name).clone()).collect();
+    emit_name_lookup_data(
+        &mut out,
+        "_enum_names_count",
+        "_enum_names",
+        "_enum_name",
+        &enum_names,
+    );
 
     // Per-program class id of the built-in `Fiber` class. The fiber runtime
     // checks this against the receiver's class_id in __rt_object_free_deep so
@@ -225,6 +280,33 @@ pub(crate) fn emit_runtime_data_user(
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "-1".to_string());
             out.push_str(&format!("    .quad {}\n", parent_id));
+        }
+    }
+
+    out.push_str(".globl _class_object_payload_sizes\n_class_object_payload_sizes:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let payload_size =
+                match (class_info_by_id.get(&class_id), class_name_by_id.get(&class_id)) {
+                    (Some(class_info), Some(class_name)) => {
+                        class_object_payload_size(class_name, class_info)
+                    }
+                    _ => 0,
+                };
+            out.push_str(&format!("    .quad {}\n", payload_size));
+        }
+    }
+
+    out.push_str(".globl _class_object_dynamic_prop_flags\n_class_object_dynamic_prop_flags:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let flag = match (class_info_by_id.get(&class_id), class_name_by_id.get(&class_id)) {
+                (Some(class_info), Some(class_name)) => {
+                    u8::from(class_uses_dynamic_property_tail(class_name, class_info))
+                }
+                _ => 0,
+            };
+            out.push_str(&format!("    .quad {}\n", flag));
         }
     }
 
@@ -427,8 +509,35 @@ pub(crate) fn emit_runtime_data_user(
     }
     out.push_str(".p2align 3\n");
     emit_static_callable_method_data(&mut out, &sorted_classes);
+    if emit_eval_reflection_metadata {
+        out.push_str(".p2align 3\n");
+        emit_eval_reflection_source_file_data(&mut out, source_path);
+    }
     out.push_str(".p2align 3\n");
     emit_classes_by_name_table(&mut out, &sorted_classes);
+    if emit_eval_reflection_metadata {
+        out.push_str(".p2align 3\n");
+        emit_eval_reflection_method_lookup_data(&mut out, &sorted_classes, &sorted_interfaces);
+        out.push_str(".p2align 3\n");
+        emit_eval_reflection_property_lookup_data(&mut out, &sorted_classes);
+        out.push_str(".p2align 3\n");
+        emit_eval_reflection_class_lookup_data(
+            &mut out,
+            &sorted_classes,
+            &sorted_interfaces,
+            declared_trait_source_lines,
+        );
+        out.push_str(".p2align 3\n");
+        emit_eval_reflection_class_interface_lookup_data(&mut out, &sorted_classes, interfaces);
+        out.push_str(".p2align 3\n");
+        emit_eval_reflection_class_trait_lookup_data(
+            &mut out,
+            &sorted_classes,
+            declared_trait_uses,
+        );
+        out.push_str(".p2align 3\n");
+        emit_eval_reflection_class_trait_alias_lookup_data(&mut out, &sorted_classes);
+    }
 
     // -- class-level PHP 8 attribute metadata table --
     // Per-class layout: count followed by (name_ptr, name_len) pairs.
@@ -635,6 +744,11 @@ pub(crate) fn emit_runtime_data_user(
             .properties
             .iter()
             .enumerate()
+            .filter(|(prop_index, (name, _))| {
+                class_info
+                    .visible_property_index(name)
+                    .is_some_and(|visible_index| visible_index == *prop_index)
+            })
             .filter(|(_, (name, _))| {
                 class_info
                     .property_visibilities
@@ -674,7 +788,7 @@ pub(crate) fn emit_runtime_data_user(
         }
         out.push_str(&format!("    .quad {}\n", public_props.len()));
         for (prop_index, (prop_name, prop_ty)) in &public_props {
-            let tag = if class_info.reference_properties.contains(prop_name) {
+            let tag = if class_info.property_slot_is_reference(*prop_index, prop_name) {
                 0
             } else {
                 match prop_ty {
@@ -718,7 +832,7 @@ pub(crate) fn emit_runtime_data_user(
                     out.push_str(", ");
                 }
                 let prop_name = &class_info.properties[i].0;
-                let tag = if class_info.reference_properties.contains(prop_name) {
+                let tag = if class_info.property_slot_is_reference(i, prop_name) {
                     0
                 } else {
                     match prop_ty {
@@ -880,6 +994,903 @@ fn emit_class_name_lookup_data(
     out.push_str("    .p2align 3\n");
 }
 
+/// Emits a compact `(name_ptr, name_len)` table for runtime class-like name probes.
+fn emit_name_lookup_data(
+    out: &mut String,
+    count_symbol: &str,
+    table_symbol: &str,
+    label_prefix: &str,
+    names: &[String],
+) {
+    let mut sorted_names: Vec<&String> = names.iter().collect();
+    sorted_names.sort();
+    for (idx, name) in sorted_names.iter().enumerate() {
+        out.push_str(&format!(
+            ".globl {0}_{1}\n{0}_{1}:\n    .ascii \"{2}\"\n",
+            label_prefix,
+            idx,
+            escaped_ascii(name)
+        ));
+    }
+    out.push_str(".p2align 3\n");
+    out.push_str(&format!(".globl {0}\n{0}:\n", count_symbol));
+    out.push_str(&format!("    .quad {}\n", sorted_names.len()));
+    out.push_str(&format!(".globl {0}\n{0}:\n", table_symbol));
+    for (idx, name) in sorted_names.iter().enumerate() {
+        out.push_str(&format!("    .quad {}_{}\n", label_prefix, idx));
+        out.push_str(&format!("    .quad {}\n", name.len()));
+    }
+}
+
+/// Emits the source filename used by eval Reflection source-location hooks.
+fn emit_eval_reflection_source_file_data(out: &mut String, source_path: Option<&str>) {
+    let source_path = source_path.unwrap_or("");
+    out.push_str(".globl _eval_reflection_source_file\n_eval_reflection_source_file:\n");
+    out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(source_path)));
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _eval_reflection_source_file_len\n_eval_reflection_source_file_len:\n");
+    out.push_str(&format!("    .quad {}\n", source_path.len()));
+}
+
+/// Emits AOT method flag rows consumed by eval ReflectionMethod metadata probes.
+fn emit_eval_reflection_method_lookup_data(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+    sorted_interfaces: &[(&String, &InterfaceInfo)],
+) {
+    let mut entries = Vec::new();
+    let class_infos = sorted_classes
+        .iter()
+        .map(|(name, info)| (name.as_str(), *info))
+        .collect::<HashMap<_, _>>();
+    let mut index = 0usize;
+    for (class_name, class_info) in sorted_classes {
+        let mut methods = class_info.methods.keys().collect::<Vec<_>>();
+        methods.sort();
+        for method_name in methods {
+            let declaring_class = eval_reflection_instance_method_declaring_class(
+                class_name,
+                class_info,
+                method_name,
+            );
+            let declaring_info = class_infos.get(declaring_class).copied().unwrap_or(class_info);
+            let flags = eval_reflection_method_flags_with_source_lines(
+                eval_reflection_instance_method_flags(class_info, method_name),
+                declaring_info,
+                method_name,
+                false,
+            );
+            push_eval_reflection_method_lookup_row(
+                out,
+                &mut entries,
+                &mut index,
+                class_name,
+                method_name,
+                flags,
+                declaring_class,
+            );
+        }
+
+        let mut static_methods = class_info.static_methods.keys().collect::<Vec<_>>();
+        static_methods.sort();
+        for method_name in static_methods {
+            let declaring_class =
+                eval_reflection_static_method_declaring_class(class_name, class_info, method_name);
+            let declaring_info = class_infos.get(declaring_class).copied().unwrap_or(class_info);
+            let flags = eval_reflection_method_flags_with_source_lines(
+                eval_reflection_static_method_flags(class_info, method_name),
+                declaring_info,
+                method_name,
+                true,
+            );
+            push_eval_reflection_method_lookup_row(
+                out,
+                &mut entries,
+                &mut index,
+                class_name,
+                method_name,
+                flags,
+                declaring_class,
+            );
+        }
+    }
+
+    for (interface_name, interface_info) in sorted_interfaces {
+        let mut methods = interface_info.methods.keys().collect::<Vec<_>>();
+        methods.sort();
+        for method_name in methods {
+            let declaring_interface = eval_reflection_interface_method_declaring_interface(
+                interface_name,
+                interface_info,
+                method_name,
+            );
+            push_eval_reflection_method_lookup_row(
+                out,
+                &mut entries,
+                &mut index,
+                interface_name,
+                method_name,
+                eval_reflection_interface_method_flags(false),
+                declaring_interface,
+            );
+        }
+
+        let mut static_methods = interface_info.static_methods.keys().collect::<Vec<_>>();
+        static_methods.sort();
+        for method_name in static_methods {
+            let declaring_interface = eval_reflection_interface_static_method_declaring_interface(
+                interface_name,
+                interface_info,
+                method_name,
+            );
+            push_eval_reflection_method_lookup_row(
+                out,
+                &mut entries,
+                &mut index,
+                interface_name,
+                method_name,
+                eval_reflection_interface_method_flags(true),
+                declaring_interface,
+            );
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _eval_reflection_method_count\n_eval_reflection_method_count:\n");
+    out.push_str(&format!("    .quad {}\n", entries.len()));
+    out.push_str(".globl _eval_reflection_methods\n_eval_reflection_methods:\n");
+    for (class_label, class_len, method_label, method_len, flags, declaring_label, declaring_len) in
+        entries
+    {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", method_label));
+        out.push_str(&format!("    .quad {}\n", method_len));
+        out.push_str(&format!("    .quad {}\n", flags));
+        out.push_str(&format!("    .quad {}\n", declaring_label));
+        out.push_str(&format!("    .quad {}\n", declaring_len));
+    }
+}
+
+/// Adds one eval ReflectionMethod lookup row and its backing string labels.
+fn push_eval_reflection_method_lookup_row(
+    out: &mut String,
+    entries: &mut Vec<(String, usize, String, usize, u64, String, usize)>,
+    index: &mut usize,
+    class_name: &str,
+    method_name: &str,
+    flags: u64,
+    declaring_class: &str,
+) {
+    let class_label = format!("_eval_reflection_method_class_{}", *index);
+    let method_label = format!("_eval_reflection_method_name_{}", *index);
+    let declaring_label = format!("_eval_reflection_method_declaring_class_{}", *index);
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        class_label,
+        escaped_ascii(class_name)
+    ));
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        method_label,
+        escaped_ascii(method_name)
+    ));
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        declaring_label,
+        escaped_ascii(declaring_class)
+    ));
+    entries.push((
+        class_label,
+        class_name.len(),
+        method_label,
+        method_name.len(),
+        flags,
+        declaring_label,
+        declaring_class.len(),
+    ));
+    *index += 1;
+}
+
+/// Adds source start/end line bits to an AOT ReflectionMethod flag word when available.
+fn eval_reflection_method_flags_with_source_lines(
+    flags: u64,
+    class_info: &ClassInfo,
+    method_name: &str,
+    is_static: bool,
+) -> u64 {
+    let Some(method) = class_info
+        .method_decls
+        .iter()
+        .find(|method| method.is_static == is_static && php_symbol_key(&method.name) == method_name)
+    else {
+        return flags;
+    };
+    let start_line = u64::from(method.span.line);
+    if start_line == 0 || start_line > EVAL_REFLECTION_METHOD_SOURCE_LINE_MASK {
+        return flags;
+    }
+    flags
+        | (start_line << EVAL_REFLECTION_METHOD_SOURCE_START_SHIFT)
+        | (start_line << EVAL_REFLECTION_METHOD_SOURCE_END_SHIFT)
+}
+
+/// Returns the class name that declares one visible instance method.
+fn eval_reflection_instance_method_declaring_class<'a>(
+    reflected_class: &'a str,
+    class_info: &'a ClassInfo,
+    method_name: &str,
+) -> &'a str {
+    class_info
+        .method_impl_classes
+        .get(method_name)
+        .or_else(|| class_info.method_declaring_classes.get(method_name))
+        .map(String::as_str)
+        .unwrap_or(reflected_class)
+}
+
+/// Returns the class name that declares one visible static method.
+fn eval_reflection_static_method_declaring_class<'a>(
+    reflected_class: &'a str,
+    class_info: &'a ClassInfo,
+    method_name: &str,
+) -> &'a str {
+    class_info
+        .static_method_impl_classes
+        .get(method_name)
+        .or_else(|| class_info.static_method_declaring_classes.get(method_name))
+        .map(String::as_str)
+        .unwrap_or(reflected_class)
+}
+
+/// Returns the interface name that declares one visible instance method.
+fn eval_reflection_interface_method_declaring_interface<'a>(
+    reflected_interface: &'a str,
+    interface_info: &'a InterfaceInfo,
+    method_name: &str,
+) -> &'a str {
+    interface_info
+        .method_declaring_interfaces
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(reflected_interface)
+}
+
+/// Returns the interface name that declares one visible static method.
+fn eval_reflection_interface_static_method_declaring_interface<'a>(
+    reflected_interface: &'a str,
+    interface_info: &'a InterfaceInfo,
+    method_name: &str,
+) -> &'a str {
+    interface_info
+        .static_method_declaring_interfaces
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(reflected_interface)
+}
+
+/// Returns eval ReflectionMethod bitflags for one instance method entry.
+fn eval_reflection_instance_method_flags(class_info: &ClassInfo, method_name: &str) -> u64 {
+    let visibility = class_info
+        .method_visibilities
+        .get(method_name)
+        .unwrap_or(&Visibility::Public);
+    let mut flags = eval_reflection_method_visibility_flags(visibility);
+    if class_info.final_methods.contains(method_name) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_FINAL;
+    }
+    if !class_info.method_impl_classes.contains_key(method_name) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
+    }
+    flags
+}
+
+/// Returns eval ReflectionMethod bitflags for one static method entry.
+fn eval_reflection_static_method_flags(class_info: &ClassInfo, method_name: &str) -> u64 {
+    let visibility = class_info
+        .static_method_visibilities
+        .get(method_name)
+        .unwrap_or(&Visibility::Public);
+    let mut flags =
+        EVAL_REFLECTION_METHOD_FLAG_STATIC | eval_reflection_method_visibility_flags(visibility);
+    if class_info.final_static_methods.contains(method_name) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_FINAL;
+    }
+    if !class_info.static_method_impl_classes.contains_key(method_name) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
+    }
+    flags
+}
+
+/// Returns eval ReflectionMethod bitflags for one interface method entry.
+fn eval_reflection_interface_method_flags(is_static: bool) -> u64 {
+    let mut flags = EVAL_REFLECTION_METHOD_FLAG_PUBLIC | EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
+    if is_static {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_STATIC;
+    }
+    flags
+}
+
+/// Converts method visibility metadata into eval ReflectionMethod flag bits.
+fn eval_reflection_method_visibility_flags(visibility: &Visibility) -> u64 {
+    match visibility {
+        Visibility::Public => EVAL_REFLECTION_METHOD_FLAG_PUBLIC,
+        Visibility::Protected => EVAL_REFLECTION_METHOD_FLAG_PROTECTED,
+        Visibility::Private => EVAL_REFLECTION_METHOD_FLAG_PRIVATE,
+    }
+}
+
+/// Emits AOT property flag rows consumed by eval ReflectionProperty metadata probes.
+fn emit_eval_reflection_property_lookup_data(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+) {
+    let mut entries = Vec::new();
+    let mut index = 0usize;
+    for (class_name, class_info) in sorted_classes {
+        for (slot, (property_name, _)) in class_info.properties.iter().enumerate() {
+            let flags = eval_reflection_instance_property_flags(class_info, slot, property_name);
+            let class_label = format!("_eval_reflection_property_class_{}", index);
+            let property_label = format!("_eval_reflection_property_name_{}", index);
+            let declaring_class = eval_reflection_instance_property_declaring_class(
+                class_name,
+                class_info,
+                property_name,
+            );
+            let declaring_label = format!("_eval_reflection_property_declaring_class_{}", index);
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                class_label,
+                escaped_ascii(class_name)
+            ));
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                property_label,
+                escaped_ascii(property_name)
+            ));
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                declaring_label,
+                escaped_ascii(declaring_class)
+            ));
+            entries.push((
+                class_label,
+                class_name.len(),
+                property_label,
+                property_name.len(),
+                flags,
+                declaring_label,
+                declaring_class.len(),
+            ));
+            index += 1;
+        }
+        for (slot, (property_name, _)) in class_info.static_properties.iter().enumerate() {
+            let flags = eval_reflection_static_property_flags(class_info, slot, property_name);
+            let class_label = format!("_eval_reflection_property_class_{}", index);
+            let property_label = format!("_eval_reflection_property_name_{}", index);
+            let declaring_class = eval_reflection_static_property_declaring_class(
+                class_name,
+                class_info,
+                property_name,
+            );
+            let declaring_label = format!("_eval_reflection_property_declaring_class_{}", index);
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                class_label,
+                escaped_ascii(class_name)
+            ));
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                property_label,
+                escaped_ascii(property_name)
+            ));
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                declaring_label,
+                escaped_ascii(declaring_class)
+            ));
+            entries.push((
+                class_label,
+                class_name.len(),
+                property_label,
+                property_name.len(),
+                flags,
+                declaring_label,
+                declaring_class.len(),
+            ));
+            index += 1;
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _eval_reflection_property_count\n_eval_reflection_property_count:\n");
+    out.push_str(&format!("    .quad {}\n", entries.len()));
+    out.push_str(".globl _eval_reflection_properties\n_eval_reflection_properties:\n");
+    for (class_label, class_len, property_label, property_len, flags, declaring_label, declaring_len) in
+        entries
+    {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", property_label));
+        out.push_str(&format!("    .quad {}\n", property_len));
+        out.push_str(&format!("    .quad {}\n", flags));
+        out.push_str(&format!("    .quad {}\n", declaring_label));
+        out.push_str(&format!("    .quad {}\n", declaring_len));
+    }
+}
+
+/// Returns the class name that declares one visible instance property.
+fn eval_reflection_instance_property_declaring_class<'a>(
+    reflected_class: &'a str,
+    class_info: &'a ClassInfo,
+    property_name: &str,
+) -> &'a str {
+    class_info
+        .property_declaring_classes
+        .get(property_name)
+        .map(String::as_str)
+        .unwrap_or(reflected_class)
+}
+
+/// Returns the class name that declares one visible static property.
+fn eval_reflection_static_property_declaring_class<'a>(
+    reflected_class: &'a str,
+    class_info: &'a ClassInfo,
+    property_name: &str,
+) -> &'a str {
+    class_info
+        .static_property_declaring_classes
+        .get(property_name)
+        .map(String::as_str)
+        .unwrap_or(reflected_class)
+}
+
+/// Emits AOT class flag rows consumed by eval ReflectionClass metadata probes.
+fn emit_eval_reflection_class_lookup_data(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+    sorted_interfaces: &[(&String, &InterfaceInfo)],
+    declared_trait_source_lines: &HashMap<String, u32>,
+) {
+    let mut entries = Vec::new();
+    let mut index = 0usize;
+    for (class_name, class_info) in sorted_classes {
+        let flags = eval_reflection_class_flags(class_info);
+        if flags == 0 {
+            continue;
+        }
+        let class_label = format!("_eval_reflection_class_name_{}", index);
+        out.push_str(&format!(
+            ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+            class_label,
+            escaped_ascii(class_name)
+        ));
+        entries.push((class_label, class_name.len(), flags));
+        index += 1;
+    }
+    for (interface_name, interface_info) in sorted_interfaces {
+        let flags = eval_reflection_interface_flags(interface_info);
+        if flags == 0 {
+            continue;
+        }
+        let class_label = format!("_eval_reflection_class_name_{}", index);
+        out.push_str(&format!(
+            ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+            class_label,
+            escaped_ascii(interface_name)
+        ));
+        entries.push((class_label, interface_name.len(), flags));
+        index += 1;
+    }
+    let mut sorted_trait_lines = declared_trait_source_lines.iter().collect::<Vec<_>>();
+    sorted_trait_lines
+        .sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
+    for (trait_name, line) in sorted_trait_lines {
+        let flags = eval_reflection_trait_flags(*line);
+        if flags == 0 {
+            continue;
+        }
+        let class_label = format!("_eval_reflection_class_name_{}", index);
+        out.push_str(&format!(
+            ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+            class_label,
+            escaped_ascii(trait_name)
+        ));
+        entries.push((class_label, trait_name.len(), flags));
+        index += 1;
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _eval_reflection_class_count\n_eval_reflection_class_count:\n");
+    out.push_str(&format!("    .quad {}\n", entries.len()));
+    out.push_str(".globl _eval_reflection_classes\n_eval_reflection_classes:\n");
+    for (class_label, class_len, flags) in entries {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", flags));
+    }
+}
+
+/// Returns eval ReflectionClass flag bits retained for one generated/AOT class.
+fn eval_reflection_class_flags(class_info: &ClassInfo) -> u64 {
+    let mut flags = 0;
+    if class_info.is_final {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_FINAL;
+    }
+    if class_info.is_abstract {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_ABSTRACT;
+    }
+    if class_info.is_readonly_class {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_READONLY;
+    }
+    flags |= eval_reflection_source_line_flags(class_info.declaration_span.line);
+    flags
+}
+
+/// Returns eval ReflectionClass source-location bits retained for one generated/AOT interface.
+fn eval_reflection_interface_flags(interface_info: &InterfaceInfo) -> u64 {
+    eval_reflection_source_line_flags(interface_info.declaration_span.line)
+}
+
+/// Returns eval ReflectionClass source-location bits retained for one generated/AOT trait.
+fn eval_reflection_trait_flags(line: u32) -> u64 {
+    eval_reflection_source_line_flags(line)
+}
+
+/// Encodes declaration line metadata into high ReflectionClass flag bits.
+fn eval_reflection_source_line_flags(line: u32) -> u64 {
+    let start_line = u64::from(line);
+    if start_line == 0 || start_line > EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK {
+        return 0;
+    }
+    (start_line << EVAL_REFLECTION_CLASS_SOURCE_START_SHIFT)
+        | (start_line << EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT)
+}
+
+/// Emits class-like/interface-name rows consumed by eval ReflectionClass metadata probes.
+fn emit_eval_reflection_class_interface_lookup_data(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+    interfaces: &HashMap<String, InterfaceInfo>,
+) {
+    let mut entries = Vec::new();
+    let mut index = 0usize;
+    for (class_name, class_info) in sorted_classes {
+        for interface_name in &class_info.interfaces {
+            push_eval_reflection_class_interface_row(
+                out,
+                &mut entries,
+                &mut index,
+                class_name,
+                interface_name,
+            );
+        }
+    }
+
+    let mut sorted_interfaces: Vec<&String> = interfaces.keys().collect();
+    sorted_interfaces.sort();
+    for interface_name in sorted_interfaces {
+        for parent_name in eval_reflection_interface_parent_names(interface_name, interfaces) {
+            push_eval_reflection_class_interface_row(
+                out,
+                &mut entries,
+                &mut index,
+                interface_name,
+                &parent_name,
+            );
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(
+        ".globl _eval_reflection_class_interface_count\n_eval_reflection_class_interface_count:\n",
+    );
+    out.push_str(&format!("    .quad {}\n", entries.len()));
+    out.push_str(".globl _eval_reflection_class_interfaces\n_eval_reflection_class_interfaces:\n");
+    for (class_label, class_len, interface_label, interface_len) in entries {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", interface_label));
+        out.push_str(&format!("    .quad {}\n", interface_len));
+    }
+}
+
+/// Adds one class-like/interface-name row and its backing string labels.
+fn push_eval_reflection_class_interface_row(
+    out: &mut String,
+    entries: &mut Vec<(String, usize, String, usize)>,
+    index: &mut usize,
+    class_name: &str,
+    interface_name: &str,
+) {
+    let class_label = format!("_eval_reflection_class_interface_class_{}", *index);
+    let interface_label = format!("_eval_reflection_class_interface_name_{}", *index);
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        class_label,
+        escaped_ascii(class_name)
+    ));
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        interface_label,
+        escaped_ascii(interface_name)
+    ));
+    entries.push((
+        class_label,
+        class_name.len(),
+        interface_label,
+        interface_name.len(),
+    ));
+    *index += 1;
+}
+
+/// Emits class-like/trait-name rows consumed by eval `class_uses()` metadata probes.
+fn emit_eval_reflection_class_trait_lookup_data(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+    declared_trait_uses: &HashMap<String, Vec<String>>,
+) {
+    let mut entries = Vec::new();
+    let mut index = 0usize;
+    for (class_name, class_info) in sorted_classes {
+        for trait_name in &class_info.used_traits {
+            push_eval_reflection_class_trait_row(
+                out,
+                &mut entries,
+                &mut index,
+                class_name,
+                trait_name,
+            );
+        }
+    }
+
+    let mut sorted_traits: Vec<&String> = declared_trait_uses.keys().collect();
+    sorted_traits.sort();
+    for trait_name in sorted_traits {
+        if let Some(used_traits) = declared_trait_uses.get(trait_name) {
+            for used_trait in used_traits {
+                push_eval_reflection_class_trait_row(
+                    out,
+                    &mut entries,
+                    &mut index,
+                    trait_name,
+                    used_trait,
+                );
+            }
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _eval_reflection_class_trait_count\n_eval_reflection_class_trait_count:\n");
+    out.push_str(&format!("    .quad {}\n", entries.len()));
+    out.push_str(".globl _eval_reflection_class_traits\n_eval_reflection_class_traits:\n");
+    for (class_label, class_len, trait_label, trait_len) in entries {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", trait_label));
+        out.push_str(&format!("    .quad {}\n", trait_len));
+    }
+}
+
+/// Adds one class-like/trait-name row and its backing string labels.
+fn push_eval_reflection_class_trait_row(
+    out: &mut String,
+    entries: &mut Vec<(String, usize, String, usize)>,
+    index: &mut usize,
+    class_name: &str,
+    trait_name: &str,
+) {
+    let class_label = format!("_eval_reflection_class_trait_class_{}", *index);
+    let trait_label = format!("_eval_reflection_class_trait_name_{}", *index);
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        class_label,
+        escaped_ascii(class_name)
+    ));
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        trait_label,
+        escaped_ascii(trait_name)
+    ));
+    entries.push((class_label, class_name.len(), trait_label, trait_name.len()));
+    *index += 1;
+}
+
+/// Emits class/alias and class/source rows consumed by eval `getTraitAliases()`.
+fn emit_eval_reflection_class_trait_alias_lookup_data(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+) {
+    let mut alias_entries = Vec::new();
+    let mut source_entries = Vec::new();
+    let mut index = 0usize;
+    for (class_name, class_info) in sorted_classes {
+        for (alias, source) in &class_info.trait_aliases {
+            push_eval_reflection_class_trait_alias_row(
+                out,
+                &mut alias_entries,
+                &mut source_entries,
+                &mut index,
+                class_name,
+                alias,
+                source,
+            );
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(
+        ".globl _eval_reflection_class_trait_alias_count\n_eval_reflection_class_trait_alias_count:\n",
+    );
+    out.push_str(&format!("    .quad {}\n", alias_entries.len()));
+    out.push_str(".globl _eval_reflection_class_trait_aliases\n_eval_reflection_class_trait_aliases:\n");
+    for (class_label, class_len, alias_label, alias_len) in alias_entries {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", alias_label));
+        out.push_str(&format!("    .quad {}\n", alias_len));
+    }
+    out.push_str(
+        ".globl _eval_reflection_class_trait_alias_sources\n_eval_reflection_class_trait_alias_sources:\n",
+    );
+    for (class_label, class_len, source_label, source_len) in source_entries {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", source_label));
+        out.push_str(&format!("    .quad {}\n", source_len));
+    }
+}
+
+/// Adds one class/trait-alias row and its backing string labels.
+fn push_eval_reflection_class_trait_alias_row(
+    out: &mut String,
+    alias_entries: &mut Vec<(String, usize, String, usize)>,
+    source_entries: &mut Vec<(String, usize, String, usize)>,
+    index: &mut usize,
+    class_name: &str,
+    alias: &str,
+    source: &str,
+) {
+    let class_label = format!("_eval_reflection_class_trait_alias_class_{}", *index);
+    let alias_label = format!("_eval_reflection_class_trait_alias_name_{}", *index);
+    let source_label = format!("_eval_reflection_class_trait_alias_source_{}", *index);
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        class_label,
+        escaped_ascii(class_name)
+    ));
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        alias_label,
+        escaped_ascii(alias)
+    ));
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        source_label,
+        escaped_ascii(source)
+    ));
+    alias_entries.push((class_label.clone(), class_name.len(), alias_label, alias.len()));
+    source_entries.push((class_label, class_name.len(), source_label, source.len()));
+    *index += 1;
+}
+
+/// Returns direct and inherited parent interface names for one generated interface.
+fn eval_reflection_interface_parent_names(
+    interface_name: &str,
+    interfaces: &HashMap<String, InterfaceInfo>,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    collect_eval_reflection_interface_parent_names(interface_name, interfaces, &mut names);
+    names
+}
+
+/// Recursively appends interface parents without duplicating case-insensitive names.
+fn collect_eval_reflection_interface_parent_names(
+    interface_name: &str,
+    interfaces: &HashMap<String, InterfaceInfo>,
+    names: &mut Vec<String>,
+) {
+    let Some((_, interface_info)) = eval_reflection_interface_entry(interface_name, interfaces)
+    else {
+        return;
+    };
+    for parent in &interface_info.parents {
+        let parent_name = eval_reflection_interface_entry(parent, interfaces)
+            .map(|(name, _)| name.to_string())
+            .unwrap_or_else(|| parent.clone());
+        if names
+            .iter()
+            .any(|name| php_symbol_key(name) == php_symbol_key(&parent_name))
+        {
+            continue;
+        }
+        names.push(parent_name.clone());
+        collect_eval_reflection_interface_parent_names(&parent_name, interfaces, names);
+    }
+}
+
+/// Returns the canonical generated interface entry for a possibly case-varied name.
+fn eval_reflection_interface_entry<'a>(
+    interface_name: &str,
+    interfaces: &'a HashMap<String, InterfaceInfo>,
+) -> Option<(&'a str, &'a InterfaceInfo)> {
+    if let Some((name, info)) = interfaces.get_key_value(interface_name) {
+        return Some((name.as_str(), info));
+    }
+    interfaces
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(interface_name))
+        .map(|(name, info)| (name.as_str(), info))
+}
+
+/// Returns eval ReflectionProperty bitflags for one instance property slot.
+fn eval_reflection_instance_property_flags(
+    class_info: &ClassInfo,
+    slot: usize,
+    property_name: &str,
+) -> u64 {
+    let visibility = class_info
+        .property_visibilities
+        .get(property_name)
+        .unwrap_or(&Visibility::Public);
+    let mut flags = eval_reflection_visibility_flags(visibility);
+    if class_info.final_properties.contains(property_name) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_FINAL;
+    }
+    if class_info.abstract_properties.contains(property_name) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_ABSTRACT;
+    }
+    if class_info.readonly_properties.contains(property_name) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_READONLY;
+    }
+    if class_info.promoted_properties.contains(property_name) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED;
+    }
+    match class_info.property_set_visibilities.get(property_name) {
+        Some(Visibility::Protected) => flags |= EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED_SET,
+        Some(Visibility::Private) => flags |= EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE_SET,
+        Some(Visibility::Public) | None => {}
+    }
+    if class_info.defaults.get(slot).is_some_and(Option::is_some) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_HAS_DEFAULT_VALUE;
+    }
+    flags
+}
+
+/// Returns eval ReflectionProperty bitflags for one static property slot.
+fn eval_reflection_static_property_flags(
+    class_info: &ClassInfo,
+    slot: usize,
+    property_name: &str,
+) -> u64 {
+    let visibility = class_info
+        .static_property_visibilities
+        .get(property_name)
+        .unwrap_or(&Visibility::Public);
+    let mut flags =
+        EVAL_REFLECTION_PROPERTY_FLAG_STATIC | eval_reflection_visibility_flags(visibility);
+    if class_info.final_static_properties.contains(property_name) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_FINAL;
+    }
+    if class_info
+        .static_defaults
+        .get(slot)
+        .is_some_and(Option::is_some)
+    {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_HAS_DEFAULT_VALUE;
+    }
+    flags
+}
+
+/// Converts a property visibility into eval ReflectionProperty bitflags.
+fn eval_reflection_visibility_flags(visibility: &Visibility) -> u64 {
+    match visibility {
+        Visibility::Public => EVAL_REFLECTION_PROPERTY_FLAG_PUBLIC,
+        Visibility::Protected => EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED,
+        Visibility::Private => EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE,
+    }
+}
+
 /// Emits the callable-function name table and pointer table for user-defined functions.
 /// Each function name is emitted as an ASCII label; the pointer table references
 /// either the active variant symbol for polymorphic functions or zero.
@@ -945,13 +1956,7 @@ fn emit_classes_by_name_table(
     out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
     out.push_str(".globl _classes_by_name\n_classes_by_name:\n");
     for (class_name, class_info) in sorted_classes {
-        let num_props = class_info.properties.len();
-        let dyn_props_slot = if class_info.allow_dynamic_properties {
-            8
-        } else {
-            0
-        };
-        let obj_size = 8 + num_props * 16 + dyn_props_slot;
+        let obj_size = class_object_payload_size(class_name, class_info);
         out.push_str(&format!(
             "    .quad _class_by_name_str_{}\n",
             class_info.class_id
@@ -960,6 +1965,21 @@ fn emit_classes_by_name_table(
         out.push_str(&format!("    .quad {}\n", class_info.class_id));
         out.push_str(&format!("    .quad {}\n", obj_size));
     }
+}
+
+/// Returns the PHP object payload bytes required by one class layout.
+fn class_object_payload_size(class_name: &str, class_info: &ClassInfo) -> usize {
+    let dyn_props_slot = if class_uses_dynamic_property_tail(class_name, class_info) {
+        8
+    } else {
+        0
+    };
+    8 + class_info.properties.len() * 16 + dyn_props_slot
+}
+
+/// Returns whether this class layout stores a dynamic-property hash tail.
+fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) -> bool {
+    class_name == "stdClass" || class_info.allow_dynamic_properties
 }
 
 /// The number of fixed-slot stream-wrapper methods recorded per class in
@@ -993,6 +2013,18 @@ pub(crate) const USER_WRAPPER_VTABLE_SLOTS: usize = 23;
 /// to invoke. Adding the flag inline in the vtable lets the dispatcher
 /// branch with a single load + cmp.
 pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 5;
+
+/// Returns true when a method key belongs to the fixed-ABI stream-wrapper
+/// vtable surface dispatched by the runtime with raw arguments.
+pub(crate) fn is_user_wrapper_contract_method(method_key: &str) -> bool {
+    USER_WRAPPER_METHOD_NAMES.contains(&method_key)
+}
+
+/// Returns true when a method key belongs to the fixed-ABI user-filter
+/// vtable surface dispatched by the runtime with raw arguments.
+pub(crate) fn is_user_filter_contract_method(method_key: &str) -> bool {
+    USER_FILTER_METHOD_NAMES.contains(&method_key)
+}
 
 const USER_FILTER_METHOD_NAMES: [&str; 3] = [
     "filter",
@@ -1331,19 +2363,25 @@ mod tests {
 
         ClassInfo {
             class_id,
+            declaration_span: crate::span::Span::dummy(),
             parent: None,
             is_abstract: false,
             is_final: false,
             is_readonly_class: false,
             allow_dynamic_properties: false,
             constants: HashMap::new(),
+            constant_visibilities: HashMap::new(),
+            final_constants: HashSet::new(),
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
             method_attribute_names: HashMap::new(),
             method_attribute_args: HashMap::new(),
             property_attribute_names: HashMap::new(),
             property_attribute_args: HashMap::new(),
+            constant_attribute_names: HashMap::new(),
+            constant_attribute_args: HashMap::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
             properties: Vec::new(),
             property_offsets: HashMap::new(),
             property_declaring_classes: HashMap::new(),
@@ -1351,10 +2389,13 @@ mod tests {
             property_visibilities: HashMap::new(),
             property_set_visibilities: HashMap::new(),
             declared_properties: HashSet::new(),
+            property_declared_slots: Vec::new(),
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
             reference_properties: HashSet::new(),
             owned_reference_properties: HashSet::new(),
+            promoted_properties: HashSet::new(),
+            property_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
             static_properties: Vec::new(),
@@ -1407,9 +2448,15 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
             &classes,
             &HashMap::new(),
             Some(&allowed_class_names),
+            false,
+            None,
         );
 
         assert!(asm.contains("_class_vtable_1"));
@@ -1432,8 +2479,14 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
             &classes,
             &HashMap::new(),
+            None,
+            false,
             None,
         );
 

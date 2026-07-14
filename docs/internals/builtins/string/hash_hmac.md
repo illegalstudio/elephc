@@ -2,7 +2,7 @@
 title: "hash_hmac() — internals"
 description: "Compiler internals for hash_hmac(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 357
+  order: 361
 ---
 
 ## `hash_hmac()` — internals
@@ -33,6 +33,11 @@ function hash_hmac(string $algo, string $data, string $key, bool $binary = false
 ## What the type checker enforces
 
 - **Arity**: takes 3–4 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_hmac.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_hmac.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

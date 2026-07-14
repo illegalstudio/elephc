@@ -2,7 +2,7 @@
 title: "is_infinite() — internals"
 description: "Compiler internals for is_infinite(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 252
+  order: 256
 ---
 
 ## `is_infinite()` — internals
@@ -31,6 +31,11 @@ function is_infinite(float $num): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/is_infinite.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_infinite.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

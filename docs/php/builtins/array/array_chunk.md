@@ -19,6 +19,11 @@ Splits an array into chunks of the given size.
 
 **Returns**: `array`
 
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_chunk.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_chunk.rs)).
+
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 

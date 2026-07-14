@@ -2,7 +2,7 @@
 title: "ptr_read16() — internals"
 description: "Compiler internals for ptr_read16(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 290
+  order: 294
 ---
 
 ## `ptr_read16()` — internals
@@ -32,6 +32,11 @@ function ptr_read16(pointer $pointer): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_read16.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_read16.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

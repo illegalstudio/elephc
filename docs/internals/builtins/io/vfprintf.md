@@ -2,7 +2,7 @@
 title: "vfprintf() — internals"
 description: "Compiler internals for vfprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 229
+  order: 233
 ---
 
 ## `vfprintf()` — internals
@@ -33,6 +33,11 @@ function vfprintf(resource $stream, string $format, array $values): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 3 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/vfprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/vfprintf.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -15,8 +15,9 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Program, Stmt, StmtKind};
 use crate::types::{
+    callable_wrapper_sig,
     traits::{flatten_classes, FlattenedClass},
-    TypeEnv,
+    FunctionSig, PhpType, TypeEnv,
 };
 
 use super::builtin_types::{
@@ -27,9 +28,7 @@ use super::builtin_types::{
     patch_magic_method_signatures, InterfaceDeclInfo,
 };
 use super::builtin_enums::inject_builtin_enums;
-use super::builtin_interfaces::{
-    apply_implicit_stringable_interfaces, inject_builtin_interfaces,
-};
+use super::builtin_interfaces::{apply_implicit_stringable_interfaces, inject_builtin_interfaces};
 use super::builtin_iterators::{inject_builtin_iterators, patch_builtin_generator_signatures};
 use super::builtin_json::{inject_builtin_json_interfaces, patch_builtin_json_signatures};
 use super::builtin_spl_classes::{
@@ -77,20 +76,17 @@ pub(super) fn check_types_impl(
 
     checker.collect_function_decls(program, &mut errors);
 
-    let (mut flattened_classes, flatten_errors) = flatten_classes(program);
+    let (mut flattened_classes, mut flattened_enums, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
     // Resolve the relative class types `self`/`static`/`parent` in every member type annotation
     // now that inheritance and trait flattening have settled the concrete enclosing class. This
     // single pass feeds the schema signatures, the body-check pass, and codegen (which all read
     // the flattened method/property declarations), so no later stage sees a symbolic `self`.
     substitute_relative_class_types_in_flattened(&mut flattened_classes);
-    let declared_traits: HashSet<String> = program
-        .iter()
-        .filter_map(|stmt| match &stmt.kind {
-            StmtKind::TraitDecl { name, .. } => Some(name.clone()),
-            _ => None,
-        })
-        .collect();
+    substitute_relative_class_types_in_flattened_enums(&mut flattened_enums);
+    let declared_traits = collect_declared_trait_names(program);
+    let declared_trait_methods = collect_declared_trait_methods(program);
+    let declared_trait_constants = collect_declared_trait_constants(program);
     let mut seen_classes = HashSet::new();
     let mut class_map = HashMap::new();
     for class in &flattened_classes {
@@ -181,13 +177,15 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_user_filter(&mut class_map) {
         errors.extend(error.flatten());
     }
-    if let Err(error) =
-        inject_builtin_reflection(&interface_map, &mut class_map, &declared_traits)
+    if let Err(error) = inject_builtin_reflection(&interface_map, &mut class_map, &declared_traits)
     {
         errors.extend(error.flatten());
     }
     checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
+    checker.declared_traits = declared_traits.clone();
+    checker.declared_trait_methods = declared_trait_methods;
+    checker.declared_trait_constants = declared_trait_constants;
     // Enum names must resolve as types in member positions (property and
     // promoted-constructor-param types), which are checked during the class
     // schema pass — before the enum-processing phase populates `enums`. Pre-
@@ -239,15 +237,30 @@ pub(super) fn check_types_impl(
             implements,
             methods,
             constants,
+            ..
         } = &stmt.kind
         {
+            let enum_methods = flattened_enums
+                .get(name)
+                .map(|flattened| flattened.methods.as_slice())
+                .unwrap_or(methods.as_slice());
+            let enum_used_traits = flattened_enums
+                .get(name)
+                .map(|flattened| flattened.used_traits.as_slice())
+                .unwrap_or(&[]);
+            let enum_trait_aliases = flattened_enums
+                .get(name)
+                .map(|flattened| flattened.trait_aliases.as_slice())
+                .unwrap_or(&[]);
             if let Err(error) = build_enum_info(
                 name,
                 backing_type.as_ref(),
                 cases,
                 implements,
-                methods,
+                enum_methods,
                 constants,
+                enum_used_traits,
+                enum_trait_aliases,
                 stmt.span,
                 &mut checker,
                 &mut next_class_id,
@@ -284,7 +297,7 @@ pub(super) fn check_types_impl(
     // the enum schema pass), so they would otherwise skip body checking entirely. Flatten them
     // into method-checkable units here — their signatures already live in `checker.classes`.
     let mut methods_to_check = flattened_classes.clone();
-    methods_to_check.extend(flatten_enum_methods(program));
+    methods_to_check.extend(flatten_enum_methods(program, &flattened_enums));
     checker.type_check_methods_until_stable(&methods_to_check, &global_env, &mut errors)?;
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
@@ -310,19 +323,161 @@ pub(super) fn check_types_impl(
     Ok((checker, final_global_env))
 }
 
-/// Resolves the relative class types `self`/`static`/`parent` to concrete class names across
-/// every flattened class's method parameter, method return, and property type annotations.
+/// Collects source-declared trait names recursively, including namespace blocks.
+fn collect_declared_trait_names(program: &Program) -> HashSet<String> {
+    let mut names = HashSet::new();
+    collect_declared_trait_names_into(program, &mut names);
+    names
+}
+
+/// Pushes recursive source-declared trait names into `names`.
+fn collect_declared_trait_names_into(program: &Program, names: &mut HashSet<String>) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl { name, .. } => {
+                names.insert(name.clone());
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                collect_declared_trait_names_into(body, names);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Collects source-declared trait method signatures recursively, including namespace blocks.
+fn collect_declared_trait_methods(
+    program: &Program,
+) -> HashMap<String, HashMap<String, FunctionSig>> {
+    let mut methods = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl {
+                name,
+                methods: trait_methods,
+                ..
+            } => {
+                methods.insert(
+                    name.clone(),
+                    trait_methods
+                        .iter()
+                        .map(|method| {
+                            (
+                                php_symbol_key(&method.name),
+                                trait_method_reflection_sig(method),
+                            )
+                        })
+                        .collect(),
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                methods.extend(collect_declared_trait_methods(body));
+            }
+            _ => {}
+        }
+    }
+    methods
+}
+
+/// Collects source-declared trait constant names recursively, including namespace blocks.
+fn collect_declared_trait_constants(program: &Program) -> HashMap<String, HashSet<String>> {
+    let mut constants = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl {
+                name,
+                constants: trait_constants,
+                ..
+            } => {
+                constants.insert(
+                    name.clone(),
+                    trait_constants
+                        .iter()
+                        .map(|constant| constant.name.clone())
+                        .collect(),
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                constants.extend(collect_declared_trait_constants(body));
+            }
+            _ => {}
+        }
+    }
+    constants
+}
+
+/// Builds the reflection-visible signature for a direct trait method.
 ///
-/// `self`/`static` resolve to the flattened class itself and `parent` to its `extends` target.
-/// Because trait methods are already merged into the using class at this point, a trait method's
-/// `self` correctly resolves to the using class rather than the trait. Annotations with no
-/// relative type are left untouched.
+/// Trait direct reflection only needs parameter names, defaults, by-reference
+/// flags, variadic shape, and declared-type presence; class-relative type names
+/// are resolved when the trait is flattened into a concrete class.
+fn trait_method_reflection_sig(method: &ClassMethod) -> FunctionSig {
+    let params = method
+        .params
+        .iter()
+        .map(|(name, type_ann, _, _)| {
+            (
+                name.clone(),
+                if type_ann.is_some() {
+                    PhpType::Mixed
+                } else {
+                    PhpType::Int
+                },
+            )
+        })
+        .collect();
+    let defaults = method
+        .params
+        .iter()
+        .map(|(_, _, default, _)| default.clone())
+        .collect();
+    let mut ref_params: Vec<bool> = method
+        .params
+        .iter()
+        .map(|(_, _, _, by_ref)| *by_ref)
+        .collect();
+    if method.variadic.is_some() {
+        ref_params.push(method.variadic_by_ref);
+    }
+    callable_wrapper_sig(&FunctionSig {
+        params,
+        param_type_exprs: method
+            .params
+            .iter()
+            .map(|(_, type_ann, _, _)| type_ann.clone())
+            .chain(method.variadic.iter().map(|_| method.variadic_type.clone()))
+            .collect(),
+        param_attributes: method.param_attributes.clone(),
+        defaults,
+        return_type: PhpType::Mixed,
+        declared_return: method.return_type.is_some(),
+        by_ref_return: method.by_ref_return,
+        ref_params,
+        declared_params: method
+            .params
+            .iter()
+            .map(|(_, type_ann, _, _)| type_ann.is_some())
+            .chain(
+                method
+                    .variadic
+                    .iter()
+                    .map(|_| method.variadic_type.is_some()),
+            )
+            .collect(),
+        variadic: method.variadic.clone(),
+        deprecation: None,
+    })
+}
+
 /// Builds method-checkable `FlattenedClass` units for every `enum` in the program so their method
 /// bodies go through the same validation as class methods. Enum signatures are already registered
 /// in `checker.classes` by the enum schema pass; these units only carry the names and method
 /// bodies the method-check pass needs. The relative types `self`/`static` resolve to the enum
 /// itself (enums have no parent).
-fn flatten_enum_methods(program: &[Stmt]) -> Vec<FlattenedClass> {
+fn flatten_enum_methods(
+    program: &[Stmt],
+    flattened_enums: &HashMap<String, FlattenedClass>,
+) -> Vec<FlattenedClass> {
     let mut units = Vec::new();
     for stmt in program {
         if let StmtKind::EnumDecl {
@@ -333,10 +488,18 @@ fn flatten_enum_methods(program: &[Stmt]) -> Vec<FlattenedClass> {
             ..
         } = &stmt.kind
         {
+            if let Some(flattened) = flattened_enums.get(name) {
+                units.push(flattened.clone());
+                continue;
+            }
             let mut flattened = FlattenedClass {
                 name: name.clone(),
+                span: stmt.span,
                 extends: None,
-                implements: implements.iter().map(|name| name.as_str().to_string()).collect(),
+                implements: implements
+                    .iter()
+                    .map(|name| name.as_str().to_string())
+                    .collect(),
                 is_abstract: false,
                 is_final: true,
                 is_readonly_class: false,
@@ -345,6 +508,7 @@ fn flatten_enum_methods(program: &[Stmt]) -> Vec<FlattenedClass> {
                 attributes: stmt.attributes.clone(),
                 constants: constants.clone(),
                 used_traits: Vec::new(),
+                trait_aliases: Vec::new(),
             };
             substitute_relative_class_types_in_methods(&mut flattened.methods, name, None);
             units.push(flattened);
@@ -353,7 +517,13 @@ fn flatten_enum_methods(program: &[Stmt]) -> Vec<FlattenedClass> {
     units
 }
 
-/// Rewrites `self`/`static`/`parent` annotations across flattened class metadata.
+/// Resolves the relative class types `self`/`static`/`parent` to concrete class names across
+/// every flattened class's method parameter, method return, and property type annotations.
+///
+/// `self`/`static` resolve to the flattened class itself and `parent` to its `extends` target.
+/// Because trait methods are already merged into the using class at this point, a trait method's
+/// `self` correctly resolves to the using class rather than the trait. Annotations with no
+/// relative type are left untouched.
 fn substitute_relative_class_types_in_flattened(classes: &mut [FlattenedClass]) {
     for class in classes.iter_mut() {
         let self_class = class.name.clone();
@@ -368,11 +538,18 @@ fn substitute_relative_class_types_in_flattened(classes: &mut [FlattenedClass]) 
     }
 }
 
+/// Resolves relative class types inside flattened enum methods.
+fn substitute_relative_class_types_in_flattened_enums(enums: &mut HashMap<String, FlattenedClass>) {
+    for enum_unit in enums.values_mut() {
+        let self_class = enum_unit.name.clone();
+        substitute_relative_class_types_in_methods(&mut enum_unit.methods, &self_class, None);
+    }
+}
+
 /// Rewrites `self`/`static`/`parent` type annotations on a slice of methods by delegating to
-/// `ClassMethod::substitute_relative_class_types`. Used for:
-/// - user classes (after trait/inheritance flattening)
-/// - interfaces
-/// - enums (to prepare method bodies for checking)
+/// `ClassMethod::substitute_relative_class_types`.
+///
+/// Used for user classes after trait/inheritance flattening, interfaces, and enums.
 fn substitute_relative_class_types_in_methods(
     methods: &mut [ClassMethod],
     self_class: &str,

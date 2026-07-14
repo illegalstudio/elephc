@@ -351,6 +351,8 @@ fn extern_decl_signature(decl: &crate::ir::ExternDecl) -> FunctionSig {
             .iter()
             .map(|param| (param.name.clone(), param.php_type.clone()))
             .collect(),
+        param_type_exprs: vec![None; decl.params.len()],
+        param_attributes: vec![Vec::new(); decl.params.len()],
         defaults: vec![None; decl.params.len()],
         return_type: decl.return_php_type.clone(),
         declared_return: true,
@@ -680,7 +682,12 @@ fn lower_runtime_mixed_callable_array_descriptor_invoke(
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
-    emit_runtime_callable_array_no_match_abort(ctx);
+    if super::builtins::has_eval_context(ctx) {
+        super::builtins::lower_eval_callable_call_array(ctx, inst, callable, arg_mixed)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        emit_runtime_callable_array_no_match_abort(ctx);
+    }
 
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);

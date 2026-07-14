@@ -2,7 +2,7 @@
 title: "str_ends_with() — internals"
 description: "Compiler internals for str_ends_with(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 383
+  order: 387
 ---
 
 ## `str_ends_with()` — internals
@@ -32,6 +32,11 @@ function str_ends_with(string $haystack, string $needle): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/str_ends_with.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_ends_with.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

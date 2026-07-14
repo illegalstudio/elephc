@@ -254,6 +254,13 @@ Key invariants:
   checker-resident (`numeric`/`arrays` `check_builtin`), not in the registry.
 - Add codegen + error tests (include a case-insensitive or namespaced call for
   PHP-visible builtins); keep the parity gates in `src/builtins/parity_tests.rs` green.
+- Before opening a PR that adds, removes, or changes PHP-visible builtins, run the
+  `update-builtin-docs` skill or the equivalent CI sequence:
+  `cargo build --example gen_builtins`,
+  `python3 scripts/docs/extract_builtins.py --render --force`,
+  `python3 scripts/docs/audit_builtins.py`, and
+  `python3 scripts/docs/elephc_builtins/validate_site_compat.py`. Commit the
+  generated docs and registry.
 
 ### Adding a new EIR optimization pass
 
@@ -502,7 +509,7 @@ sidebar:
 
 **Documentation must be kept up to date.** When adding a new feature:
 
-1. **PHP syntax feature** (operator, built-in, statement, etc.) → update the relevant page in `docs/php/`. Add the function signature, parameters, return type, and a short example.
+1. **PHP syntax feature** (operator, built-in, statement, etc.) → update the relevant page in `docs/php/`. Add the function signature, parameters, return type, and a short example. For builtins, prefer the generated-docs path: run the `update-builtin-docs` skill before opening a PR, or run the manual builtins docs sequence above. Commit updates under `docs/php/builtins*`, `docs/internals/builtins/`, and `scripts/docs/builtin_registry.json`.
 2. **Compiler extension** (pointer, buffer, extern, ifdef) → update the relevant page in `docs/beyond-php/`.
 3. **Compiler internals change** (pipeline, type checker, optimizer, codegen, runtime, ABI, memory model) → update the relevant page in `docs/internals/`.
 4. **Compilation flow or CLI change** (new/changed flag, env var, pipeline phase, target, output mode) → update the relevant page in `docs/compiling/`, keeping `docs/compiling/cli-reference.md` authoritative and in sync with `src/cli.rs`. Mirror user-facing flag examples in `README.md`.

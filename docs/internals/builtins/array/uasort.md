@@ -34,6 +34,12 @@ function uasort(array $array, callable $callback): bool
 - **Arity**: takes exactly 2 arguments.
 - **By-reference parameters**: `$array`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/uasort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/uasort.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
+- **By-reference parameters**: `$array`.
+
 ## Cross-references
 
 - [User reference for `uasort()`](../../../php/builtins/array/uasort.md)

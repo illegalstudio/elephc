@@ -2,7 +2,7 @@
 title: "file_put_contents() — internals"
 description: "Compiler internals for file_put_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 163
+  order: 167
 ---
 
 ## `file_put_contents()` — internals
@@ -33,6 +33,11 @@ function file_put_contents(string $filename, string $data): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/file_put_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file_put_contents.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

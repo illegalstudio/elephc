@@ -2,7 +2,7 @@
 title: "define()"
 description: "Defines a named constant at runtime."
 sidebar:
-  order: 272
+  order: 276
 ---
 
 ## define()
@@ -18,6 +18,11 @@ Defines a named constant at runtime.
 - `$value` (`mixed`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/define.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/define.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

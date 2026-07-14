@@ -2,7 +2,7 @@
 title: "htmlspecialchars() — internals"
 description: "Compiler internals for htmlspecialchars(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 363
+  order: 367
 ---
 
 ## `htmlspecialchars()` — internals
@@ -39,6 +39,11 @@ function htmlspecialchars(string $string, int $flags = 11, string $encoding = 'U
 ## What the type checker enforces
 
 - **Arity**: takes 1–3 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/htmlspecialchars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/htmlspecialchars.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

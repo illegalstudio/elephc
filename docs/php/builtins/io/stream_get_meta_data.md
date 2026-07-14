@@ -2,7 +2,7 @@
 title: "stream_get_meta_data()"
 description: "Retrieves metadata from streams/file pointers."
 sidebar:
-  order: 204
+  order: 208
 ---
 
 ## stream_get_meta_data()
@@ -17,6 +17,11 @@ Retrieves metadata from streams/file pointers.
 - `$stream` (`resource`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_meta_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_meta_data.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

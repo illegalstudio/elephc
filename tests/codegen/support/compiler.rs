@@ -111,7 +111,8 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let ir_module = lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result);
+    let ir_module =
+        lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result, &synthetic_main);
     let exported_functions = HashMap::new();
     // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
     // the linear-scan allocator (default) and the stack fallback.
@@ -144,8 +145,14 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
 pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
     program: &elephc::parser::ast::Program,
     check_result: &elephc::types::CheckResult,
+    source_path: &Path,
 ) -> elephc::ir::Module {
-    let mut module = elephc::ir_lower::lower_program(program, check_result, target())
+    let mut module = elephc::ir_lower::lower_program_with_source_path(
+        program,
+        check_result,
+        target(),
+        source_path,
+    )
         .expect("AST-to-EIR lowering failed for codegen fixture");
     if ir_opt_enabled_for_codegen_fixture() {
         elephc::ir_passes::optimize_module(&mut module);

@@ -2,7 +2,7 @@
 title: "copy() — internals"
 description: "Compiler internals for copy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 104
+  order: 108
 ---
 
 ## `copy()` — internals
@@ -35,6 +35,11 @@ function copy(string $from, string $to): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/copy.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/copy.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

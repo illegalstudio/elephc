@@ -2,7 +2,7 @@
 title: "ptr_is_null()"
 description: "Returns true if the pointer is null."
 sidebar:
-  order: 287
+  order: 291
 ---
 
 ## ptr_is_null()
@@ -17,6 +17,11 @@ Returns true if the pointer is null.
 - `$pointer` (`pointer`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_is_null.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_is_null.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

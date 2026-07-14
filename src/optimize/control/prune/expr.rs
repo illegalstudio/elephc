@@ -42,6 +42,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         ExprKind::Not(inner) => ExprKind::Not(Box::new(prune_expr(*inner))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(prune_expr(*inner))),
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(prune_expr(*inner))),
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(prune_expr(*inner))),
         ExprKind::ErrorSuppress(inner) => ExprKind::ErrorSuppress(Box::new(prune_expr(*inner))),
         ExprKind::Print(inner) => ExprKind::Print(Box::new(prune_expr(*inner))),
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
@@ -123,6 +124,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -134,6 +136,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         } => ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body: prune_block(body),
@@ -217,6 +220,15 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         } => ExprKind::NullsafeMethodCall {
             object: Box::new(prune_expr(*object)),
             method,
+            args: args.into_iter().map(prune_expr).collect(),
+        },
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeDynamicMethodCall {
+            object: Box::new(prune_expr(*object)),
+            method: Box::new(prune_expr(*method)),
             args: args.into_iter().map(prune_expr).collect(),
         },
         ExprKind::StaticMethodCall {

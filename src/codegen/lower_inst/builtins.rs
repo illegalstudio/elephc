@@ -9,16 +9,21 @@
 //! - Runtime conversions reuse existing target-aware helpers instead of duplicating parsing logic.
 //! - Selected Mixed predicates inspect the boxed runtime tag through shared predicate lowering.
 
+use std::collections::BTreeSet;
+
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::names::{define_seen_symbol, ir_global_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
 use crate::types::checker::builtins::is_php_visible_builtin_function;
-use crate::types::PhpType;
+use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
-use super::{expect_data, expect_operand, load_value_to_first_int_arg, predicates, store_if_result};
+use super::{
+    conversions, expect_data, expect_operand, load_value_to_first_int_arg, predicates,
+    store_if_result,
+};
 use crate::codegen::{CodegenIrError, Result};
 
 pub(crate) mod attributes;
@@ -27,6 +32,7 @@ mod buffers;
 pub(crate) mod class_relations;
 pub(crate) mod ctype;
 pub(crate) mod debug;
+mod eval;
 pub(crate) mod io;
 mod isset;
 pub(crate) mod is_numeric;
@@ -57,9 +63,17 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
     }
     match key.as_str() {
         "closure_bind" => lower_closure_bind(ctx, inst),
+        "eval" => eval::lower_eval(ctx, inst),
         "buffer_len" => buffers::lower_buffer_len(ctx, inst),
         "buffer_free" => buffers::lower_buffer_free(ctx, inst),
-
+        "strval" => lower_strval(ctx, inst),
+        "method_exists" | "property_exists" => lower_member_exists(ctx, inst, key.as_str()),
+        "is_integer" | "is_long" => {
+            lower_static_type_predicate(ctx, inst, key.as_str(), PhpType::Int)
+        }
+        "is_double" | "is_real" => {
+            lower_static_type_predicate(ctx, inst, key.as_str(), PhpType::Float)
+        }
         "empty" => lower_empty(ctx, inst),
         "unset" => types::lower_unset_builtin(ctx, inst),
         "isset" => isset::lower_isset(ctx, inst),
@@ -76,6 +90,282 @@ pub(super) fn lower_array_isset(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// Lowers an EIR native associative-array `isset($hash[$key])` probe.
 pub(super) fn lower_hash_isset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     isset::lower_hash_isset(ctx, inst)
+}
+
+/// Lowers a statically-known eval fragment through the current bridge fallback path.
+pub(super) fn lower_eval_literal_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval(ctx, inst)
+}
+
+/// Lowers a direct EIR eval-scope lookup by static variable name.
+pub(super) fn lower_eval_scope_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_scope_get(ctx, inst)
+}
+
+/// Lowers a direct EIR eval-scope write by static variable name.
+pub(super) fn lower_eval_scope_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_scope_set(ctx, inst)
+}
+
+/// Lowers a native call to a zero-argument function declared through `eval()`.
+pub(super) fn lower_eval_function_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_function_call(ctx, inst)
+}
+
+/// Lowers a post-eval function call whose arguments are packed in an array/hash container.
+pub(super) fn lower_eval_function_call_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_function_call_array(ctx, inst)
+}
+
+/// Lowers post-eval object construction for classes declared by eval fragments.
+pub(super) fn lower_eval_object_new(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_object_new(ctx, inst)
+}
+
+/// Lowers fallback construction of a runtime class name through eval dynamic metadata.
+pub(super) fn lower_eval_object_new_dynamic_fallback(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    miss_label: &str,
+) -> Result<()> {
+    eval::lower_eval_object_new_dynamic_fallback(ctx, inst, miss_label)
+}
+
+/// Lowers a post-eval method call that may target an eval-created object.
+pub(super) fn lower_eval_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+) -> Result<()> {
+    eval::lower_eval_method_call(ctx, inst, object, method_name)
+}
+
+/// Lowers a post-eval static method call to an eval-declared class.
+pub(super) fn lower_eval_static_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    method_name: &str,
+) -> Result<()> {
+    eval::lower_eval_static_method_call(ctx, inst, class_name, method_name)
+}
+
+/// Lowers a late-static AOT-frame static method call through an active eval override.
+pub(super) fn lower_eval_native_frame_static_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    frame_class: &str,
+    method_name: &str,
+    no_override_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    eval::lower_eval_native_frame_static_method_call(
+        ctx,
+        inst,
+        frame_class,
+        method_name,
+        no_override_label,
+        done_label,
+    )
+}
+
+/// Lowers a late-static AOT-frame static-property read through an active eval override.
+pub(super) fn lower_eval_native_frame_static_property_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    frame_class: &str,
+    property_name: &str,
+    no_override_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    eval::lower_eval_native_frame_static_property_get(
+        ctx,
+        inst,
+        frame_class,
+        property_name,
+        no_override_label,
+        done_label,
+    )
+}
+
+/// Lowers a late-static AOT-frame static-property write through an active eval override.
+pub(super) fn lower_eval_native_frame_static_property_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+    frame_class: &str,
+    property_name: &str,
+    no_override_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    eval::lower_eval_native_frame_static_property_set(
+        ctx,
+        inst,
+        value,
+        frame_class,
+        property_name,
+        no_override_label,
+        done_label,
+    )
+}
+
+/// Lowers post-eval callable-array dispatch against eval dynamic callables.
+pub(super) fn lower_eval_callable_call_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callback: ValueId,
+    arg_array: ValueId,
+) -> Result<()> {
+    eval::lower_eval_callable_call_array(ctx, inst, callback, arg_array)
+}
+
+/// Lowers post-eval callable probes against eval dynamic callables.
+pub(super) fn lower_eval_is_callable(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callback: ValueId,
+) -> Result<()> {
+    eval::lower_eval_is_callable(ctx, inst, callback)
+}
+
+/// Lowers post-eval member-existence probes against eval dynamic metadata.
+pub(super) fn lower_eval_member_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: ValueId,
+    member: ValueId,
+    name: &str,
+) -> Result<()> {
+    eval::lower_eval_member_exists(ctx, inst, target, member, name)
+}
+
+/// Lowers post-eval class-relation probes against eval dynamic metadata.
+pub(super) fn lower_eval_class_relation(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: ValueId,
+    name: &str,
+) -> Result<()> {
+    eval::lower_eval_class_relation(ctx, inst, target, name)
+}
+
+/// Lowers post-eval object class-name introspection against eval dynamic metadata.
+pub(super) fn lower_eval_object_class_name(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    name: &str,
+) -> Result<()> {
+    eval::lower_eval_object_class_name(ctx, inst, object, name)
+}
+
+/// Lowers post-eval object/class relation predicates against eval dynamic metadata.
+pub(super) fn lower_eval_object_is_a(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    target_class: &str,
+    exclude_self: bool,
+) -> Result<()> {
+    eval::lower_eval_object_is_a(ctx, inst, object, target_class, exclude_self)
+}
+
+/// Lowers post-eval object/class relation predicates with runtime target cells.
+pub(super) fn lower_eval_object_is_a_dynamic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    target: ValueId,
+    exclude_self: bool,
+) -> Result<()> {
+    eval::lower_eval_object_is_a_dynamic(ctx, inst, object, target, exclude_self)
+}
+
+/// Returns true when this lowered function has a persistent eval context local.
+pub(super) fn has_eval_context(ctx: &FunctionContext<'_>) -> bool {
+    eval::has_eval_context(ctx)
+}
+
+/// Lowers post-eval dynamic function existence probes to the optional eval bridge.
+pub(super) fn lower_eval_function_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_function_exists(ctx, inst)
+}
+
+/// Lowers post-eval dynamic class existence probes to the optional eval bridge.
+pub(super) fn lower_eval_class_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_class_exists(ctx, inst)
+}
+
+/// Lowers post-eval dynamic constant existence probes to the optional eval bridge.
+pub(super) fn lower_eval_constant_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_constant_exists(ctx, inst)
+}
+
+/// Lowers post-eval dynamic constant fetches to the optional eval bridge.
+pub(super) fn lower_eval_constant_fetch(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_constant_fetch(ctx, inst)
+}
+
+/// Lowers post-eval class-like constant fetches to the optional eval bridge.
+pub(super) fn lower_eval_class_constant_fetch(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    constant_name: &str,
+) -> Result<()> {
+    eval::lower_eval_class_constant_fetch(ctx, inst, class_name, constant_name)
+}
+
+/// Lowers post-eval static-property reads to the optional eval bridge.
+pub(super) fn lower_eval_static_property_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    property_name: &str,
+) -> Result<()> {
+    eval::lower_eval_static_property_get(ctx, inst, class_name, property_name)
+}
+
+/// Lowers post-eval static-property writes to the optional eval bridge.
+pub(super) fn lower_eval_static_property_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+    class_name: &str,
+    property_name: &str,
+) -> Result<()> {
+    eval::lower_eval_static_property_set(ctx, inst, value, class_name, property_name)
 }
 
 /// Lowers `define("NAME", value)` with the duplicate-name runtime guard.
@@ -201,12 +491,12 @@ fn emit_mixed_gettype(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<(
 fn emit_branch_on_gettype_mixed_tag(ctx: &mut FunctionContext<'_>, tag: u8, label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp x0, #{}", tag));              // compare the unboxed Mixed tag against this gettype() case
-            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching gettype() type-name case
+            ctx.emitter.instruction(&format!("cmp x0, #{}", tag)); // compare the unboxed Mixed tag against this gettype() case
+            ctx.emitter.instruction(&format!("b.eq {}", label)); // branch to the matching gettype() type-name case
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp rax, {}", tag));              // compare the unboxed Mixed tag against this gettype() case
-            ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching gettype() type-name case
+            ctx.emitter.instruction(&format!("cmp rax, {}", tag)); // compare the unboxed Mixed tag against this gettype() case
+            ctx.emitter.instruction(&format!("je {}", label)); // branch to the matching gettype() type-name case
         }
     }
 }
@@ -289,7 +579,7 @@ pub(crate) fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instru
     store_if_result(ctx, inst)
 }
 
-/// Lowers AOT class/interface/enum existence checks for literal names.
+/// Lowers AOT class/interface/enum existence checks for literal or dynamic string names.
 pub(crate) fn lower_class_like_exists(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -297,29 +587,136 @@ pub(crate) fn lower_class_like_exists(
 ) -> Result<()> {
     ensure_arg_count_between(inst, name, 1, 2)?;
     let value = expect_operand(inst, 0)?;
-    let symbol_name = const_string_operand(ctx, value)?;
-    let exists = match name {
-        "class_exists" => contains_folded(
-            ctx.module
-                .class_infos
-                .keys()
-                .filter(|class_name| !is_internal_synthetic_class_name(class_name)),
-            &symbol_name,
-        ),
-        "interface_exists" => contains_folded(ctx.module.interface_infos.keys(), &symbol_name),
-        "trait_exists" => contains_folded(ctx.module.trait_table.names.iter(), &symbol_name),
-        "enum_exists" => contains_folded(ctx.module.enum_infos.keys(), &symbol_name),
-        _ => false,
-    };
-    emit_static_bool(ctx, exists);
+    if let Some(symbol_name) = maybe_const_string_operand(ctx, value)? {
+        let exists = match name {
+            "class_exists" => contains_folded(
+                ctx.module
+                    .class_infos
+                    .keys()
+                    .filter(|class_name| !is_internal_synthetic_class_name(class_name)),
+                &symbol_name,
+            ),
+            "interface_exists" => contains_folded(ctx.module.interface_infos.keys(), &symbol_name),
+            "trait_exists" => contains_folded(ctx.module.trait_table.names.iter(), &symbol_name),
+            "enum_exists" => contains_folded(ctx.module.enum_infos.keys(), &symbol_name),
+            _ => false,
+        };
+        emit_static_bool(ctx, exists);
+    } else {
+        lower_dynamic_class_like_exists(ctx, name, value)?;
+    }
     store_if_result(ctx, inst)
+}
+
+/// Lowers a dynamic string `class_exists()`-family lookup against known AOT metadata.
+fn lower_dynamic_class_like_exists(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    value: ValueId,
+) -> Result<()> {
+    if ctx.value_php_type(value)?.codegen_repr() != PhpType::Str {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} with non-string dynamic name",
+            name
+        )));
+    }
+    let candidates = dynamic_class_like_exists_candidates(ctx, name);
+    if candidates.is_empty() {
+        emit_static_bool(ctx, false);
+        return Ok(());
+    }
+
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    let matched_label = ctx.next_label(&format!("{}_dynamic_match", name));
+    let done_label = ctx.next_label(&format!("{}_dynamic_done", name));
+    for candidate in candidates {
+        emit_branch_if_dynamic_class_like_exists_candidate(ctx, &candidate, &matched_label);
+    }
+    emit_static_bool(ctx, false);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&matched_label);
+    emit_static_bool(ctx, true);
+
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
+/// Collects deterministic class-like name candidates for a dynamic existence lookup.
+fn dynamic_class_like_exists_candidates(ctx: &FunctionContext<'_>, name: &str) -> Vec<String> {
+    let mut candidates = BTreeSet::new();
+    match name {
+        "class_exists" => {
+            candidates.extend(
+                ctx.module
+                    .class_infos
+                    .keys()
+                    .filter(|class_name| !is_internal_synthetic_class_name(class_name))
+                    .cloned(),
+            );
+        }
+        "interface_exists" => candidates.extend(ctx.module.interface_infos.keys().cloned()),
+        "trait_exists" => candidates.extend(ctx.module.trait_table.names.iter().cloned()),
+        "enum_exists" => candidates.extend(ctx.module.enum_infos.keys().cloned()),
+        _ => {}
+    }
+    candidates.into_iter().collect()
+}
+
+/// Branches when the saved dynamic class-like string matches a metadata candidate.
+fn emit_branch_if_dynamic_class_like_exists_candidate(
+    ctx: &mut FunctionContext<'_>,
+    candidate: &str,
+    matched_label: &str,
+) {
+    let bare_candidate = candidate.trim_start_matches('\\');
+    emit_dynamic_class_like_exists_compare(ctx, bare_candidate.as_bytes(), matched_label);
+    let qualified_candidate = format!("\\{}", bare_candidate);
+    emit_dynamic_class_like_exists_compare(ctx, qualified_candidate.as_bytes(), matched_label);
+}
+
+/// Emits one case-insensitive comparison for the saved dynamic class-like lookup.
+fn emit_dynamic_class_like_exists_compare(
+    ctx: &mut FunctionContext<'_>,
+    candidate: &[u8],
+    matched_label: &str,
+) {
+    let (candidate_label, candidate_len) = ctx.data.add_string(candidate);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
+            abi::emit_symbol_address(ctx.emitter, "x3", &candidate_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x4", candidate_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+            ctx.emitter.instruction("cmp x0, #0"); // did the dynamic class-like name match this metadata entry?
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label)); // report existence when the runtime name matches case-insensitively
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+            abi::emit_symbol_address(ctx.emitter, "rdx", &candidate_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", candidate_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+            ctx.emitter.instruction("test rax, rax"); // did the dynamic class-like name match this metadata entry?
+            ctx.emitter.instruction(&format!("je {}", matched_label)); // report existence when the runtime name matches case-insensitively
+        }
+    }
 }
 
 /// Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers.
 pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_callable", 1)?;
     let value = expect_operand(inst, 0)?;
-    match ctx.value_php_type(value)?.codegen_repr() {
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    if has_eval_context(ctx) && value_ty != PhpType::Callable {
+        return lower_eval_is_callable(ctx, inst, value);
+    }
+    match value_ty {
         PhpType::Callable => emit_static_bool(ctx, true),
         PhpType::Str => {
             if let Ok(function_name) = const_string_operand(ctx, value) {
@@ -373,7 +770,7 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// Calls the runtime `is_callable` helper for pointer-shaped values already in result regs.
 fn emit_is_callable_pointer_lookup(ctx: &mut FunctionContext<'_>, label: &str) {
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // move pointer-shaped value into helper argument 0
+        ctx.emitter.instruction("mov rdi, rax"); // move pointer-shaped value into helper argument 0
     }
     abi::emit_call_label(ctx.emitter, label);
 }
@@ -382,15 +779,203 @@ fn emit_is_callable_pointer_lookup(ctx: &mut FunctionContext<'_>, label: &str) {
 fn emit_is_callable_dynamic_string_lookup(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // move string pointer into helper argument 0
-            ctx.emitter.instruction("mov x1, x2");                              // move string length into helper argument 1
+            ctx.emitter.instruction("mov x0, x1"); // move string pointer into helper argument 0
+            ctx.emitter.instruction("mov x1, x2"); // move string length into helper argument 1
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, rax");                            // move string pointer into helper argument 0
-            ctx.emitter.instruction("mov rsi, rdx");                            // move string length into helper argument 1
+            ctx.emitter.instruction("mov rdi, rax"); // move string pointer into helper argument 0
+            ctx.emitter.instruction("mov rsi, rdx"); // move string length into helper argument 1
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_is_callable_string");
+}
+
+/// Lowers `method_exists()` and `property_exists()` through eval or static metadata.
+fn lower_member_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    ensure_arg_count(inst, name, 2)?;
+    let target = expect_operand(inst, 0)?;
+    let member = expect_operand(inst, 1)?;
+    if has_eval_context(ctx) {
+        return lower_eval_member_exists(ctx, inst, target, member, name);
+    }
+    let member_name = const_string_operand(ctx, member)?;
+    let exists = match ctx.value_php_type(target)?.codegen_repr() {
+        PhpType::Object(class_name) => {
+            static_member_exists_on_class(ctx, &class_name, &member_name, name, true)
+        }
+        PhpType::Str => {
+            let class_name = const_string_operand(ctx, target)?;
+            static_member_exists_on_class(ctx, &class_name, &member_name, name, false)
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} target PHP type {:?}",
+                name, other
+            )))
+        }
+    };
+    emit_static_bool(ctx, exists);
+    store_if_result(ctx, inst)
+}
+
+/// Checks one static class-like target for `method_exists()` or `property_exists()`.
+fn static_member_exists_on_class(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    member_name: &str,
+    name: &str,
+    target_is_object: bool,
+) -> bool {
+    let Some((resolved_class, class_info)) = lookup_class_info(ctx, class_name) else {
+        return false;
+    };
+    match name {
+        "method_exists" => static_method_exists_on_class_info(
+            ctx,
+            &resolved_class,
+            class_info,
+            member_name,
+            target_is_object,
+        ),
+        "property_exists" => static_property_exists_on_class_info(
+            &resolved_class,
+            class_info,
+            member_name,
+            target_is_object,
+        ),
+        _ => false,
+    }
+}
+
+/// Looks up class metadata using PHP's case-insensitive class-name semantics.
+fn lookup_class_info<'a>(
+    ctx: &'a FunctionContext<'_>,
+    class_name: &str,
+) -> Option<(String, &'a ClassInfo)> {
+    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    ctx.module
+        .class_infos
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
+        .map(|(candidate, class_info)| (candidate.clone(), class_info))
+}
+
+/// Checks static method metadata while hiding inherited private methods on class-string targets.
+fn static_method_exists_on_class_info(
+    ctx: &FunctionContext<'_>,
+    resolved_class: &str,
+    class_info: &ClassInfo,
+    method_name: &str,
+    target_is_object: bool,
+) -> bool {
+    let method_key = php_symbol_key(method_name);
+    if class_info.methods.contains_key(&method_key) {
+        return target_is_object
+            || method_visible_from_class_string(
+                resolved_class,
+                &method_key,
+                &class_info.method_visibilities,
+                &class_info.method_declaring_classes,
+            );
+    }
+    if class_info.static_methods.contains_key(&method_key) {
+        return target_is_object
+            || method_visible_from_class_string(
+                resolved_class,
+                &method_key,
+                &class_info.static_method_visibilities,
+                &class_info.static_method_declaring_classes,
+            );
+    }
+    if target_is_object {
+        return static_parent_chain_method_exists(ctx, class_info, &method_key);
+    }
+    false
+}
+
+/// Checks parent class metadata for private methods visible to object-target `method_exists()`.
+fn static_parent_chain_method_exists(
+    ctx: &FunctionContext<'_>,
+    class_info: &ClassInfo,
+    method_key: &str,
+) -> bool {
+    let mut visited = BTreeSet::new();
+    let mut parent_name = class_info.parent.as_deref();
+    while let Some(candidate) = parent_name {
+        let parent_key = php_symbol_key(candidate.trim_start_matches('\\'));
+        if !visited.insert(parent_key) {
+            return false;
+        }
+        let Some((_resolved_class, parent_info)) = lookup_class_info(ctx, candidate) else {
+            return false;
+        };
+        if parent_info.methods.contains_key(method_key)
+            || parent_info.static_methods.contains_key(method_key)
+        {
+            return true;
+        }
+        parent_name = parent_info.parent.as_deref();
+    }
+    false
+}
+
+/// Returns whether a method should be visible for a class-string member probe.
+fn method_visible_from_class_string(
+    resolved_class: &str,
+    method_key: &str,
+    visibilities: &std::collections::HashMap<String, Visibility>,
+    declaring_classes: &std::collections::HashMap<String, String>,
+) -> bool {
+    visibilities.get(method_key) != Some(&Visibility::Private)
+        || declaring_classes
+            .get(method_key)
+            .is_none_or(|declaring_class| {
+                php_symbol_key(declaring_class.trim_start_matches('\\'))
+                    == php_symbol_key(resolved_class.trim_start_matches('\\'))
+            })
+}
+
+/// Checks static property metadata while hiding inherited private properties.
+fn static_property_exists_on_class_info(
+    resolved_class: &str,
+    class_info: &ClassInfo,
+    property_name: &str,
+    _target_is_object: bool,
+) -> bool {
+    property_visible_from_class_string(
+        resolved_class,
+        property_name,
+        &class_info.property_visibilities,
+        &class_info.property_declaring_classes,
+    ) || property_visible_from_class_string(
+        resolved_class,
+        property_name,
+        &class_info.static_property_visibilities,
+        &class_info.static_property_declaring_classes,
+    )
+}
+
+/// Returns whether a property exists for a class-string or ordinary object probe.
+fn property_visible_from_class_string(
+    resolved_class: &str,
+    property_name: &str,
+    visibilities: &std::collections::HashMap<String, Visibility>,
+    declaring_classes: &std::collections::HashMap<String, String>,
+) -> bool {
+    let Some(visibility) = visibilities.get(property_name) else {
+        return false;
+    };
+    visibility != &Visibility::Private
+        || declaring_classes
+            .get(property_name)
+            .is_none_or(|declaring_class| {
+                php_symbol_key(declaring_class.trim_start_matches('\\'))
+                    == php_symbol_key(resolved_class.trim_start_matches('\\'))
+            })
 }
 
 /// Returns true when a static `Class::method` string names a public static method.
@@ -420,8 +1005,8 @@ fn emit_variant_function_exists(ctx: &mut FunctionContext<'_>, function_name: &s
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &active_symbol, 0);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));        // test whether an include has activated this function variant
-            ctx.emitter.instruction(&format!("cset {}, ne", result_reg));       // return true only when a function variant is active
+            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg)); // test whether an include has activated this function variant
+            ctx.emitter.instruction(&format!("cset {}, ne", result_reg)); // return true only when a function variant is active
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // test whether an include has activated this function variant
@@ -573,6 +1158,10 @@ pub(crate) fn lower_floatval(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "floatval for PHP type {:?}",
@@ -605,6 +1194,10 @@ pub(crate) fn lower_boolval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             predicates::emit_array_truthiness(ctx, value)?;
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "boolval for PHP type {:?}",
@@ -613,6 +1206,12 @@ pub(crate) fn lower_boolval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Lowers `strval()` through the same semantics as an explicit PHP string cast.
+fn lower_strval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "strval", 1)?;
+    conversions::lower_cast_to_string(ctx, inst)
 }
 
 /// Lowers `empty()` for concrete scalar and array-like operands.
@@ -678,13 +1277,13 @@ fn emit_int_result_zero_bool(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));        // compare the empty() integer operand against zero
-            ctx.emitter.instruction(&format!("cset {}, eq", result_reg));       // return true when the integer operand is zero
+            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg)); // compare the empty() integer operand against zero
+            ctx.emitter.instruction(&format!("cset {}, eq", result_reg)); // return true when the integer operand is zero
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, 0", result_reg));         // compare the empty() integer operand against zero
-            ctx.emitter.instruction("sete al");                                 // materialize true when the integer operand is zero
-            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
+            ctx.emitter.instruction(&format!("cmp {}, 0", result_reg)); // compare the empty() integer operand against zero
+            ctx.emitter.instruction("sete al"); // materialize true when the integer operand is zero
+            ctx.emitter.instruction("movzx rax, al"); // widen the boolean byte into the integer result register
         }
     }
 }
@@ -693,14 +1292,14 @@ fn emit_int_result_zero_bool(ctx: &mut FunctionContext<'_>) {
 fn emit_float_result_zero_bool(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("fcmp d0, #0.0");                           // compare the empty() float operand against zero
-            ctx.emitter.instruction("cset x0, eq");                             // return true when the float operand is zero
+            ctx.emitter.instruction("fcmp d0, #0.0"); // compare the empty() float operand against zero
+            ctx.emitter.instruction("cset x0, eq"); // return true when the float operand is zero
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize a zero float register for empty() comparison
-            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the empty() float operand against zero
-            ctx.emitter.instruction("sete al");                                 // materialize true when the float operand is zero
-            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
+            ctx.emitter.instruction("xorpd xmm1, xmm1"); // materialize a zero float register for empty() comparison
+            ctx.emitter.instruction("ucomisd xmm0, xmm1"); // compare the empty() float operand against zero
+            ctx.emitter.instruction("sete al"); // materialize true when the float operand is zero
+            ctx.emitter.instruction("movzx rax, al"); // widen the boolean byte into the integer result register
         }
     }
 }
@@ -710,13 +1309,13 @@ fn emit_string_length_zero_bool(ctx: &mut FunctionContext<'_>) {
     let len_reg = abi::string_result_regs(ctx.emitter).1;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", len_reg));           // compare the empty() string length against zero
-            ctx.emitter.instruction("cset x0, eq");                             // return true when the string length is zero
+            ctx.emitter.instruction(&format!("cmp {}, #0", len_reg)); // compare the empty() string length against zero
+            ctx.emitter.instruction("cset x0, eq"); // return true when the string length is zero
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, 0", len_reg));            // compare the empty() string length against zero
-            ctx.emitter.instruction("sete al");                                 // materialize true when the string length is zero
-            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
+            ctx.emitter.instruction(&format!("cmp {}, 0", len_reg)); // compare the empty() string length against zero
+            ctx.emitter.instruction("sete al"); // materialize true when the string length is zero
+            ctx.emitter.instruction("movzx rax, al"); // widen the boolean byte into the integer result register
         }
     }
 }
@@ -725,10 +1324,10 @@ fn emit_string_length_zero_bool(ctx: &mut FunctionContext<'_>) {
 fn invert_bool_result(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("eor x0, x0, #1");                          // invert the canonical boolean result for empty()
+            ctx.emitter.instruction("eor x0, x0, #1"); // invert the canonical boolean result for empty()
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("xor rax, 1");                              // invert the canonical boolean result for empty()
+            ctx.emitter.instruction("xor rax, 1"); // invert the canonical boolean result for empty()
         }
     }
 }
@@ -775,17 +1374,17 @@ fn emit_tagged_scalar_int_predicate(
                 "cmp x1, #{}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
             );
-            ctx.emitter.instruction(&cmp_inst);                                 // does the tagged scalar carry the runtime null tag?
-            ctx.emitter.instruction("cset x0, ne");                             // materialize true when the tagged scalar holds an integer
+            ctx.emitter.instruction(&cmp_inst); // does the tagged scalar carry the runtime null tag?
+            ctx.emitter.instruction("cset x0, ne"); // materialize true when the tagged scalar holds an integer
         }
         Arch::X86_64 => {
             let cmp_inst = format!(
                 "cmp rdx, {}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
             );
-            ctx.emitter.instruction(&cmp_inst);                                 // does the tagged scalar carry the runtime null tag?
-            ctx.emitter.instruction("setne al");                                // materialize true when the tagged scalar holds an integer
-            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
+            ctx.emitter.instruction(&cmp_inst); // does the tagged scalar carry the runtime null tag?
+            ctx.emitter.instruction("setne al"); // materialize true when the tagged scalar holds an integer
+            ctx.emitter.instruction("movzx rax, al"); // widen the boolean byte into the integer result register
         }
     }
     Ok(())
@@ -836,24 +1435,24 @@ fn emit_mixed_is_iterable(ctx: &mut FunctionContext<'_>, value: ValueId) -> Resu
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #4");                              // check for a boxed indexed-array payload
-            ctx.emitter.instruction(&format!("b.eq {}", true_case));            // indexed arrays satisfy is_iterable
-            ctx.emitter.instruction("cmp x0, #5");                              // check for a boxed associative-array payload
-            ctx.emitter.instruction(&format!("b.eq {}", true_case));            // associative arrays satisfy is_iterable
-            ctx.emitter.instruction("cmp x0, #6");                              // check for a boxed object payload
-            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // objects need a Traversable interface check
-            ctx.emitter.instruction("mov x0, #0");                              // all other Mixed payloads are not iterable
-            ctx.emitter.instruction(&format!("b {}", done));                    // skip the truthy result path
+            ctx.emitter.instruction("cmp x0, #4"); // check for a boxed indexed-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", true_case)); // indexed arrays satisfy is_iterable
+            ctx.emitter.instruction("cmp x0, #5"); // check for a boxed associative-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", true_case)); // associative arrays satisfy is_iterable
+            ctx.emitter.instruction("cmp x0, #6"); // check for a boxed object payload
+            ctx.emitter.instruction(&format!("b.eq {}", object_case)); // objects need a Traversable interface check
+            ctx.emitter.instruction("mov x0, #0"); // all other Mixed payloads are not iterable
+            ctx.emitter.instruction(&format!("b {}", done)); // skip the truthy result path
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 4");                              // check for a boxed indexed-array payload
-            ctx.emitter.instruction(&format!("je {}", true_case));              // indexed arrays satisfy is_iterable
-            ctx.emitter.instruction("cmp rax, 5");                              // check for a boxed associative-array payload
-            ctx.emitter.instruction(&format!("je {}", true_case));              // associative arrays satisfy is_iterable
-            ctx.emitter.instruction("cmp rax, 6");                              // check for a boxed object payload
-            ctx.emitter.instruction(&format!("je {}", object_case));            // objects need a Traversable interface check
-            ctx.emitter.instruction("mov rax, 0");                              // all other Mixed payloads are not iterable
-            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the truthy result path
+            ctx.emitter.instruction("cmp rax, 4"); // check for a boxed indexed-array payload
+            ctx.emitter.instruction(&format!("je {}", true_case)); // indexed arrays satisfy is_iterable
+            ctx.emitter.instruction("cmp rax, 5"); // check for a boxed associative-array payload
+            ctx.emitter.instruction(&format!("je {}", true_case)); // associative arrays satisfy is_iterable
+            ctx.emitter.instruction("cmp rax, 6"); // check for a boxed object payload
+            ctx.emitter.instruction(&format!("je {}", object_case)); // objects need a Traversable interface check
+            ctx.emitter.instruction("mov rax, 0"); // all other Mixed payloads are not iterable
+            ctx.emitter.instruction(&format!("jmp {}", done)); // skip the truthy result path
         }
     }
     ctx.emitter.label(&object_case);
@@ -879,16 +1478,16 @@ fn emit_runtime_object_iterable_check(
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str x1, [sp, #-16]!");                     // preserve the unboxed object pointer across Traversable checks
+            ctx.emitter.instruction("str x1, [sp, #-16]!"); // preserve the unboxed object pointer across Traversable checks
             for interface_id in interface_ids {
                 emit_saved_object_interface_check(ctx, interface_id, &object_true);
             }
-            ctx.emitter.instruction("add sp, sp, #16");                         // discard the saved object pointer after failed checks
-            ctx.emitter.instruction("mov x0, #0");                              // non-Traversable objects are not iterable
-            ctx.emitter.instruction(&format!("b {}", done));                    // skip the truthy result path
+            ctx.emitter.instruction("add sp, sp, #16"); // discard the saved object pointer after failed checks
+            ctx.emitter.instruction("mov x0, #0"); // non-Traversable objects are not iterable
+            ctx.emitter.instruction(&format!("b {}", done)); // skip the truthy result path
             ctx.emitter.label(&object_true);
-            ctx.emitter.instruction("add sp, sp, #16");                         // discard the saved object pointer before returning true
-            ctx.emitter.instruction(&format!("b {}", true_case));               // continue through the shared truthy result path
+            ctx.emitter.instruction("add sp, sp, #16"); // discard the saved object pointer before returning true
+            ctx.emitter.instruction(&format!("b {}", true_case)); // continue through the shared truthy result path
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rdi");
@@ -896,11 +1495,11 @@ fn emit_runtime_object_iterable_check(
                 emit_saved_object_interface_check(ctx, interface_id, &object_true);
             }
             abi::emit_pop_reg(ctx.emitter, "r10");
-            ctx.emitter.instruction("xor eax, eax");                            // non-Traversable objects are not iterable
-            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the truthy result path
+            ctx.emitter.instruction("xor eax, eax"); // non-Traversable objects are not iterable
+            ctx.emitter.instruction(&format!("jmp {}", done)); // skip the truthy result path
             ctx.emitter.label(&object_true);
             abi::emit_pop_reg(ctx.emitter, "r10");
-            ctx.emitter.instruction(&format!("jmp {}", true_case));             // continue through the shared truthy result path
+            ctx.emitter.instruction(&format!("jmp {}", true_case)); // continue through the shared truthy result path
         }
     }
 }
@@ -913,20 +1512,20 @@ fn emit_saved_object_interface_check(
 ) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the object pointer as matcher argument 1
+            ctx.emitter.instruction("ldr x0, [sp]"); // reload the object pointer as matcher argument 1
             abi::emit_load_int_immediate(ctx.emitter, "x1", interface_id as i64);
             abi::emit_load_int_immediate(ctx.emitter, "x2", 1);
-            abi::emit_call_label(ctx.emitter, "__rt_exception_matches");        // check whether the object implements the Traversable interface
-            ctx.emitter.instruction("cmp x0, #0");                              // test whether the runtime matcher succeeded
-            ctx.emitter.instruction(&format!("b.ne {}", true_case));            // a matching interface makes the object iterable
+            abi::emit_call_label(ctx.emitter, "__rt_exception_matches"); // check whether the object implements the Traversable interface
+            ctx.emitter.instruction("cmp x0, #0"); // test whether the runtime matcher succeeded
+            ctx.emitter.instruction(&format!("b.ne {}", true_case)); // a matching interface makes the object iterable
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // reload the object pointer as matcher argument 1
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]"); // reload the object pointer as matcher argument 1
             abi::emit_load_int_immediate(ctx.emitter, "rsi", interface_id as i64);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", 1);
-            abi::emit_call_label(ctx.emitter, "__rt_exception_matches");        // check whether the object implements the Traversable interface
-            ctx.emitter.instruction("test rax, rax");                           // test whether the runtime matcher succeeded
-            ctx.emitter.instruction(&format!("jne {}", true_case));             // a matching interface makes the object iterable
+            abi::emit_call_label(ctx.emitter, "__rt_exception_matches"); // check whether the object implements the Traversable interface
+            ctx.emitter.instruction("test rax, rax"); // test whether the runtime matcher succeeded
+            ctx.emitter.instruction(&format!("jne {}", true_case)); // a matching interface makes the object iterable
         }
     }
 }
@@ -1092,23 +1691,26 @@ fn is_internal_synthetic_class_name(name: &str) -> bool {
 
 /// Returns a string literal value defined by a `ConstStr` instruction.
 fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<String> {
+    maybe_const_string_operand(ctx, value)?.ok_or_else(|| {
+        CodegenIrError::unsupported("function_exists with non-literal function name")
+    })
+}
+
+/// Returns a string literal operand when a value is produced by `ConstStr`.
+fn maybe_const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<String>> {
     let value_ref = ctx
         .function
         .value(value)
         .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
     let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Err(CodegenIrError::unsupported(
-            "function_exists with non-literal function name",
-        ));
+        return Ok(None);
     };
     let inst_ref = ctx
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     if inst_ref.op != Op::ConstStr {
-        return Err(CodegenIrError::unsupported(
-            "function_exists with non-literal function name",
-        ));
+        return Ok(None);
     }
     let Some(Immediate::Data(data)) = inst_ref.immediate else {
         return Err(CodegenIrError::invalid_module(
@@ -1120,6 +1722,7 @@ fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Str
         .strings
         .get(data.as_raw() as usize)
         .cloned()
+        .map(Some)
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
 }
 

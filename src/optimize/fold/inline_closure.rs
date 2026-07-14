@@ -149,6 +149,7 @@ fn expr_contains_call(expr: &Expr) -> bool {
         | ExprKind::ExprCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::NewObject { .. }
         | ExprKind::NewScopedObject { .. } => true,

@@ -16,7 +16,7 @@ Contributions created with the help of AI tools are welcome. What matters to us 
 
 ## Planning Larger Work
 
-If you're working toward something bigger than a single, self-contained change, we recommend writing a plan before you dive into the code. Plans live in the `.plans` directory of the repository.
+If you're working toward something bigger than a single, self-contained change, we recommend writing a plan before you dive into the code. Plans live in the `.plans` directory of the repository, and every plan in `.plans` must be written in English.
 
 Start each plan with a checklist of the tasks it involves, then follow it with the detailed implementation notes for each of them. Keeping the task list up front makes the plan's progress easy to verify at a glance — whether it's complete is simply a matter of checking which tasks are marked done.
 
@@ -83,6 +83,74 @@ Before opening a Pull Request, please ensure that:
 * When the Pull Request addresses an existing issue, reference it in the description.
 
 Please keep Pull Requests focused and self-contained. A Pull Request that solves a single, well-defined problem is far easier to review than a large one that bundles several unrelated changes together.
+
+### Pull Request labels
+
+Pull Requests are classified automatically by the `PR labels` workflow. Its
+catalog and matching rules live in `.github/pr-labels.json`, and the classifier
+is implemented in `.github/scripts/pr-labels.cjs`.
+
+The workflow runs when a Pull Request is opened, reopened, updated, edited, or
+marked ready for review. On each run it recalculates the managed labels and
+removes managed labels that no longer match. Contributors therefore do not need
+label-management permissions and should not add or remove labels in the
+following namespaces by hand:
+
+| Namespace | Meaning | Values |
+|---|---|---|
+| `type:*` | The intent of the change. Exactly one is assigned from the conventional PR title, falling back to the branch prefix. | `type:feature`, `type:fix`, `type:docs`, `type:refactor`, `type:chore`, `type:test`, `type:triage` |
+| `area:*` | The primary compiler or repository components affected by the changed paths. Up to three are assigned. | `area:lexer`, `area:parser`, `area:resolver`, `area:types`, `area:optimizer`, `area:eir`, `area:codegen`, `area:runtime`, `area:builtins`, `area:web`, `area:magician`, `area:platform`, `area:tooling-ci`, `area:docs`, `area:triage` |
+| `target:*` | A target explicitly affected by the title, branch, or changed paths. Target-neutral changes receive no target label. | `target:linux-x86_64`, `target:linux-aarch64`, `target:macos-aarch64`, `target:windows-x86_64`, `target:wasm32-wasi` |
+| `size:*` | Review size derived from the number of changed files and total added plus deleted lines. Exactly one is assigned. | `size:xs`, `size:s`, `size:m`, `size:l`, `size:xl` |
+| `scope:*` | Additional review attention for unusually broad changes. | `scope:multi-area` |
+
+The recognized conventional prefixes map directly to type labels: `feat:` and
+`feature:` become `type:feature`; `fix:` becomes `type:fix`; `docs:` becomes
+`type:docs`; `refactor:` becomes `type:refactor`; `chore:` becomes `type:chore`;
+and `test:` or `tests:` becomes `type:test`. A title or branch without a
+recognized prefix receives `type:triage`. The title takes precedence over the
+branch name, so correcting the title is normally enough to correct the type.
+
+Size labels use the first matching threshold below. Either the file count or
+the changed-line count can move a Pull Request into the larger category.
+
+| Label | Threshold |
+|---|---|
+| `size:xl` | More than 100 files or 10,000 changed lines |
+| `size:l` | More than 30 files or 2,000 changed lines |
+| `size:m` | More than 10 files or 500 changed lines |
+| `size:s` | More than 3 files or 100 changed lines |
+| `size:xs` | Everything smaller |
+
+A `target:*` label describes target-specific content; it does not add that
+target to the supported-target matrix. The supported-target policy in
+`AGENTS.md` remains authoritative.
+
+Some labels require maintainer judgment and are deliberately preserved by the
+automation:
+
+- `topic:*` describes cross-cutting semantics. The available labels are
+  `topic:php-compat`, `topic:ownership-gc`, `topic:performance`, `topic:abi`,
+  `topic:arrays`, `topic:strings`, `topic:closures`, `topic:generators`,
+  `topic:fibers`, `topic:regex`, `topic:magic-methods`, `topic:control-flow`,
+  `topic:numeric-literals`, `topic:json`, and `topic:errors`.
+- `priority:high` is assigned only by maintainers.
+
+The repository-wide labels `bug`, `enhancement`, `duplicate`, `good first
+issue`, `help wanted`, `invalid`, `question`, and `wontfix` are reserved for
+issue triage. GitHub exposes the same label catalog to issues and Pull Requests,
+but these labels should not be used in place of the PR `type:*` labels.
+
+If an automatic label looks wrong, first check the conventional title and the
+changed paths. Explain any remaining mismatch in the Pull Request instead of
+creating a near-duplicate label; a maintainer can assign an appropriate
+`topic:*` label or adjust the classifier rules. Changes to the label catalog or
+classification behavior must update `.github/pr-labels.json` and the focused
+tests, which can be run with:
+
+```bash
+node --test .github/scripts/pr-labels.test.cjs
+```
 
 ### Draft until it's ready
 

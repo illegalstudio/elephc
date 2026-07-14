@@ -9,7 +9,7 @@
 //! - Signatures, callable aliases, optimizer effects, and codegen builtin dispatch must remain in lockstep.
 
 use crate::errors::CompileError;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -46,20 +46,36 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "isset() takes at least 1 argument"));
             }
             for arg in args {
-                // `isset($obj->prop)` on an undeclared property dispatches to
-                // `__isset`; the helper infers the receiver but skips the bare
-                // property access that would otherwise reject the property.
-                if checker
-                    .isset_unset_property_magic_class(arg, "__isset", env)?
-                    .is_some()
-                {
-                    continue;
-                }
-                checker.infer_type(arg, env)?;
+                check_isset_arg(checker, arg, env)?;
             }
             Ok(Some(PhpType::Bool))
         }
         _ => Ok(None),
+    }
+}
+
+/// Type-checks one `isset()` operand while preserving PHP's non-reading property semantics.
+fn check_isset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+    if let ExprKind::PropertyAccess { object, .. }
+    | ExprKind::NullsafePropertyAccess { object, .. } = &arg.kind
+    {
+        let object_ty = checker.infer_type(object, env)?;
+        if isset_object_receiver_type(checker, &object_ty) {
+            return Ok(());
+        }
+    }
+    checker.infer_type(arg, env).map(|_| ())
+}
+
+/// Returns true when `isset($object->property)` can be checked without reading the property.
+fn isset_object_receiver_type(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) | PhpType::Mixed => true,
+        PhpType::Union(members) => {
+            checker.union_single_object_class(ty).is_some()
+                || members.iter().any(|member| matches!(member, PhpType::Mixed))
+        }
+        _ => false,
     }
 }
 

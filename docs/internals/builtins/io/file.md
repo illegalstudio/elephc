@@ -2,7 +2,7 @@
 title: "file() — internals"
 description: "Compiler internals for file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 161
+  order: 165
 ---
 
 ## `file()` — internals
@@ -33,6 +33,11 @@ function file(string $filename): array
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/file.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

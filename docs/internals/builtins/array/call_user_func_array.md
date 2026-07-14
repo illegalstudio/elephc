@@ -34,6 +34,11 @@ function call_user_func_array(callable $callback, array $args): mixed
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/call_user_func_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/call_user_func_array.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `call_user_func_array()`](../../../php/builtins/array/call_user_func_array.md)

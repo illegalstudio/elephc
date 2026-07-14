@@ -175,7 +175,12 @@ pub enum StmtKind {
     FunctionDecl {
         name: String,
         params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
+        /// PHP 8 attribute groups attached to each function parameter, aligned with `params`
+        /// plus the variadic parameter when present.
+        param_attributes: Vec<Vec<AttributeGroup>>,
         variadic: Option<String>,
+        /// Whether the variadic parameter was declared by reference (`&...$args`).
+        variadic_by_ref: bool,
         /// Declared element type hint on the variadic parameter (`int ...$xs`), if any. Each
         /// argument collected into the variadic is checked against this type.
         variadic_type: Option<TypeExpr>,
@@ -227,6 +232,8 @@ pub enum StmtKind {
         cases: Vec<EnumCaseDecl>,
         /// Interfaces the enum implements (`enum E implements Foo, Bar`).
         implements: Vec<Name>,
+        /// Trait-use declarations flattened into enum method metadata by the checker.
+        trait_uses: Vec<TraitUse>,
         /// User-declared enum methods (instance and static). Enums dispatch instance methods on
         /// the case singleton, like a class.
         methods: Vec<ClassMethod>,

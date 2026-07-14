@@ -2,7 +2,7 @@
 title: "is_iterable() — internals"
 description: "Compiler internals for is_iterable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 425
+  order: 429
 ---
 
 ## `is_iterable()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_iterable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_iterable.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:795](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L795) (`lower_is_iterable`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1394](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1394) (`lower_is_iterable`)
 - **Function symbol**: `lower_is_iterable()`
 
 
@@ -31,6 +31,11 @@ function is_iterable(mixed $value): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/is_iterable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_iterable.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 
