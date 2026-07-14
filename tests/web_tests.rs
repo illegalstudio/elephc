@@ -17,7 +17,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -45,14 +45,14 @@ fn elephc_bin() -> String {
     })
 }
 
-/// Compiles `source` with the given extra elephc flags; returns the binary path.
-fn compile_web(dir: &Path, source: &str, stem: &str) -> PathBuf {
+/// Compiles `source` in web mode with extra compiler flags and returns the binary path.
+fn compile_web_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> PathBuf {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
-    cmd.arg("--web").arg(&php);
+    cmd.arg("--web").args(flags).arg(&php);
     let output = cmd.output().expect("failed to spawn elephc");
     assert!(
         output.status.success(),
@@ -60,6 +60,11 @@ fn compile_web(dir: &Path, source: &str, stem: &str) -> PathBuf {
         String::from_utf8_lossy(&output.stderr)
     );
     dir.join(stem)
+}
+
+/// Compiles `source` in web mode without extra compiler flags.
+fn compile_web(dir: &Path, source: &str, stem: &str) -> PathBuf {
+    compile_web_with_flags(dir, source, stem, &[])
 }
 
 /// Picks an ephemeral localhost port by binding :0 and releasing it.
@@ -576,6 +581,60 @@ fn web_conditional_early_return_halts() {
     assert!(!bad.contains("good"), "no-ok must not run code after return: {:?}", bad);
     assert!(good.starts_with("HTTP/1.1 200"), "ok status: {:?}", good);
     assert!(good.ends_with("good"), "ok body must be 'good': {:?}", good);
+}
+
+/// Verifies `--gc-stats` emits one counter line after every web request,
+/// including a request that leaves the top-level handler through early return.
+#[test]
+fn web_gc_stats_are_emitted_per_request() {
+    let dir = make_test_dir("web_gc_stats");
+    let src = "<?php if (!isset($_GET['ok'])) { echo 'early'; return; } echo 'normal';";
+    let bin = compile_web_with_flags(&dir, src, "app", &["--gc-stats"]);
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let stderr_path = dir.join("server.stderr");
+    let stderr_file = fs::File::create(&stderr_path).expect("create server stderr capture");
+    let mut child = Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1"])
+        .stderr(Stdio::from(stderr_file))
+        .spawn()
+        .expect("spawn web server with gc stats");
+    wait_until_ready(&addr);
+
+    let early = http_request(&addr, "GET", "/", &[], "");
+    let normal = http_request(&addr, "GET", "/?ok=1", &[], "");
+    let pid = child.id();
+    let signal = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .expect("send SIGTERM to web server");
+    assert!(signal.success(), "failed to stop web server");
+    let status = child.wait().expect("wait for web server shutdown");
+    assert_eq!(status.code(), Some(0), "web server must stop cleanly");
+
+    assert!(early.ends_with("early"), "early-return response: {:?}", early);
+    assert!(normal.ends_with("normal"), "normal response: {:?}", normal);
+    let stderr = fs::read_to_string(&stderr_path).expect("read captured server stderr");
+    let stats: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("GC: allocs="))
+        .collect();
+    assert_eq!(
+        stats.len(),
+        2,
+        "expected one gc-stats line per handled request, stderr: {}",
+        stderr
+    );
+    for line in stats {
+        let Some((allocs, frees)) = line
+            .strip_prefix("GC: allocs=")
+            .and_then(|rest| rest.split_once(" frees="))
+        else {
+            panic!("malformed gc-stats line: {}", line);
+        };
+        assert!(allocs.parse::<u64>().is_ok(), "invalid allocation count: {}", line);
+        assert!(frees.parse::<u64>().is_ok(), "invalid free count: {}", line);
+    }
 }
 
 /// Verifies a request body over --max-body-size is rejected with 413, and a body
