@@ -200,6 +200,9 @@ pub(super) fn emit_function_prologue_with_label(
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
+
+    // Save every incoming argument before any parameter post-processing can call
+    // a runtime helper and clobber caller-saved argument registers.
     let mut incoming_args = abi::IncomingArgCursor::for_target(ctx.emitter.target, 0);
     for (index, param) in ctx.function.params.iter().enumerate() {
         let slot = LocalSlotId::from_raw(index as u32);
@@ -212,6 +215,13 @@ pub(super) fn emit_function_prologue_with_label(
             param.by_ref,
             &mut incoming_args,
         );
+    }
+
+    // Once all ABI inputs are safe in their frame slots, materialize any widened
+    // Mixed boxes and retain the parameters whose slots become callee-owned.
+    for (index, param) in ctx.function.params.iter().enumerate() {
+        let slot = LocalSlotId::from_raw(index as u32);
+        let offset = ctx.local_offset(slot)?;
         let local_ty = ctx.local_php_type(slot)?;
         let converted_to_owned_mixed = !param.by_ref
             && local_ty.codegen_repr() == PhpType::Mixed
@@ -236,11 +246,11 @@ pub(super) fn emit_function_prologue_with_label(
 /// Retains a mutable by-value parameter so its frame slot has one callee-owned reference.
 fn retain_owned_parameter_local(emitter: &mut Emitter, offset: usize, ty: &PhpType) {
     abi::emit_load(emitter, ty, offset);
-    if matches!(ty, PhpType::Str) {
-        abi::emit_call_label(emitter, "__rt_str_persist");
-    } else {
+    if !matches!(ty, PhpType::Str) {
         abi::emit_incref_if_refcounted(emitter, ty);
     }
+    // `emit_store` performs the string persist itself; other refcounted values
+    // were retained explicitly above and are stored without another incref.
     abi::emit_store(emitter, ty, offset);
 }
 
@@ -1217,3 +1227,6 @@ fn superglobal_storage_needed(ctx: &FunctionContext<'_>, name: &str) -> bool {
 fn argv_array_type() -> PhpType {
     PhpType::Array(Box::new(PhpType::Str))
 }
+
+#[cfg(test)]
+mod tests;

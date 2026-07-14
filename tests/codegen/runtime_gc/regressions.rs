@@ -289,6 +289,29 @@ echo clean("Hello World");
     assert_eq!(out, "hello_world");
 }
 
+/// Verifies retaining a mutable string parameter cannot clobber a later ABI
+/// argument before the callee saves it, and that the retained copy is released.
+#[test]
+fn test_owned_string_parameter_preserves_later_mixed_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function describe(string $label, mixed $value): string {
+    $label .= "!";
+    return $label . ":" . count($value);
+}
+$items = [1, 2, 3];
+echo describe("items", $items);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "items!:3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected one balanced string-parameter retain, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test: `explode` result used as an array inside a function, then
 /// indexed. Verifies that `$parts[0]` and `$parts[1]` access the correct exploded
 /// segments after `explode` is called on a comma-separated string.
