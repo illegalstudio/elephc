@@ -42,6 +42,7 @@ mod array_intersect_refcounted;
 mod array_intersect_key;
 mod array_is_list;
 mod array_key_exists;
+mod array_key_exists_mixed_key;
 mod array_map;
 mod array_map_mixed;
 mod array_map_str;
@@ -221,6 +222,8 @@ pub use array_intersect_key::emit_array_intersect_key;
 pub use array_is_list::emit_array_is_list;
 /// Emit array key existence check helper.
 pub use array_key_exists::emit_array_key_exists;
+/// Emit the storage-kind-dispatching presence-only array key existence helper.
+pub use array_key_exists_mixed_key::emit_array_key_exists_mixed_key;
 /// Emit array map helper.
 pub use array_map::emit_array_map;
 /// Emit mixed-result array map helper.

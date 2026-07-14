@@ -396,6 +396,50 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         slot
     }
 
+    /// Re-binds a by-value container parameter to a fresh OWNING shadow slot.
+    ///
+    /// PHP passes arrays by value. elephc implements that with refcount + copy-on-write, but the
+    /// call site hands the callee a `+0` BORROW: the parameter slot holds the caller's pointer
+    /// without ever incrementing its refcount. `__rt_array_ensure_unique` only splits at refcount
+    /// >= 2, so it stayed inert and every write in the callee landed straight in the CALLER's
+    /// storage — `function f(array $a) { $a[] = 1; }` mutated the caller's array.
+    ///
+    /// The fix is to give the PHP name a slot that genuinely owns a reference. This emits, at
+    /// function entry, exactly what `$shadow = $param;` already emits for any user assignment —
+    /// `LoadLocal` + `Acquire` + `StoreLocal` — and then re-points the name at the shadow. The
+    /// callee's refcount is now 2, so the first write really copy-on-write splits, and the
+    /// existing epilogue cleanup releases the shadow (skipping it when its value is returned).
+    /// No new op, no new assembly: the mechanism is the one every `$b = $a;` in every compiled
+    /// program already exercises.
+    ///
+    /// The `#` in the shadow's name makes it uninhabitable by a PHP identifier, so it can never
+    /// collide with a user local or with a host parameter after inlining.
+    pub(crate) fn privatize_container_param(
+        &mut self,
+        name: &str,
+        php_type: &PhpType,
+        span: Option<Span>,
+    ) {
+        // Read the incoming borrow while the name still resolves to the parameter slot.
+        let borrowed = self.load_local(name, span);
+
+        // Allocate the shadow directly: `declare_local_with_kind` early-returns the existing slot
+        // when the name is already mapped, which is exactly the case here.
+        let shadow = self.builder.add_local(
+            Some(format!("{}#cow", name)),
+            value_ir_type(php_type),
+            php_type.clone(),
+            LocalKind::PhpLocal,
+        );
+        self.local_slots.insert(name.to_string(), shadow);
+        self.local_kinds.insert(name.to_string(), LocalKind::PhpLocal);
+
+        // The shadow is deliberately NOT marked initialized yet: `store_local` must not treat it
+        // as holding a previous occupant to release. Its own store marks it initialized, so a
+        // later `$a = [...]` in the body does correctly release what the shadow held.
+        self.store_local(name, borrowed, php_type.clone(), span);
+    }
+
     /// Marks a local slot as initialized by caller or synthetic setup.
     pub(crate) fn mark_local_initialized(&mut self, name: &str) {
         if let Some(slot) = self.local_slots.get(name) {
@@ -1055,6 +1099,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_defining_op(value.value),
                 Some(
                     Op::Acquire
+                    // `__rt_array_set_mixed_key` returns a `+1` the caller owns: the in-place paths
+                    // hand back the reference the lowering acquired, the promote paths release the
+                    // abandoned source and return a freshly built hash. Either way the result must
+                    // be released once it has been stored, or every mixed-key write leaks.
+                    | Op::ArraySetMixedKey
                     | Op::IToStr
                     | Op::FToStr
                     | Op::BoolToStr
@@ -1154,6 +1203,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns whether a container read now owns a caller reference.
+    ///
+    /// The silent variants must be listed alongside the warning ones: they share
+    /// the very same codegen (`Op::ArrayGetSilent` lowers through
+    /// `arrays::lower_array_get` with warnings off, and
+    /// `Op::ArrayGetMixedKeySilent` through `__rt_array_get_mixed_key` with the
+    /// warn flag cleared), so they hand back an equally owned reference. The
+    /// mixed-key reads own theirs unconditionally — `__rt_array_get_mixed_key`
+    /// either boxes the element into a fresh `Mixed` cell or increfs the stored
+    /// one before returning it (hence its `ALLOC_HEAP` effect) — so omitting them
+    /// here leaked one cell per `$arr[$key]` read on a mixed key.
     fn value_is_owning_container_read(&self, value: ValueId) -> bool {
         let php_type = self.builder.value_php_type(value);
         let php_type = php_type.codegen_repr();
@@ -1162,7 +1221,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             || (php_type.is_refcounted() && php_type != PhpType::Str))
             && matches!(
                 op,
-                Some(Op::ArrayGet | Op::HashGet)
+                Some(
+                    Op::ArrayGet
+                        | Op::ArrayGetSilent
+                        | Op::HashGet
+                        | Op::ArrayGetMixedKey
+                        | Op::ArrayGetMixedKeySilent
+                )
             )
     }
 

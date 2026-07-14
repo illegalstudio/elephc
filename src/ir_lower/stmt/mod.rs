@@ -30,6 +30,8 @@ use crate::parser::ast::{
 use crate::span::Span;
 use crate::types::{PhpType, ThrowAccessKind};
 
+mod nested_append;
+
 /// Lowers one AST statement into the current EIR insertion block.
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     if ctx.builder.insertion_block_is_terminated() {
@@ -93,7 +95,14 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             lower_include_once_guard(ctx, label, body, stmt.span);
         }
         StmtKind::Throw(expr) => lower_throw(ctx, expr),
-        StmtKind::Synthetic(body) => lower_block(ctx, body),
+        // A nested append (`$a[$k][] = $v`) desugars, at parse time, into a synthetic
+        // read/push/write-back triple. Recognize it and lower it as a fused, auto-vivifying,
+        // in-place append; anything unrecognized falls open to the ordinary block lowering,
+        // bit for bit. See `nested_append`.
+        StmtKind::Synthetic(body) => match nested_append::recognize(ctx, body) {
+            Some(group) => nested_append::lower(ctx, &group, stmt.span),
+            None => lower_block(ctx, body),
+        },
         StmtKind::Try {
             try_body,
             catches,
@@ -781,7 +790,12 @@ fn lower_mixed_key_array_set(
         Op::ArraySetMixedKey.default_effects(),
         Some(span),
     );
-    ctx.store_mutated_local(array, result, mixed_array_ty, Some(span));
+    // `store_local`, not `store_mutated_local`: the promote paths replace the slot's array with a
+    // brand-new hash, and only `store_local` releases what the slot held before. With
+    // `store_mutated_local` the abandoned array was simply overwritten and leaked. For the in-place
+    // paths the previous occupant IS the stored value, so the acquire and the release cancel and the
+    // ledger is unchanged.
+    ctx.store_local(array, result, mixed_array_ty, Some(span));
 }
 
 /// Returns the associative type produced by a string-key write to an indexed array.

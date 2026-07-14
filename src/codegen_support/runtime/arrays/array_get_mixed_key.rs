@@ -213,32 +213,32 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_array_get_mixed_key_string_on_indexed");      // string key on indexed storage → warn + null
 
     // -- integer key on indexed storage: inline bounds-checked read --
-    emitter.instruction("mov r12, QWORD PTR [rbp - 16]");                       // r12 = key_lo (int index)
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // r8 = key_lo (int index); caller-saved scratch only
     emitter.instruction("mov r9, QWORD PTR [rdi]");                             // r9 = array length (header offset 0)
-    emitter.instruction("test r12, r12");                                       // negative index → null
+    emitter.instruction("test r8, r8");                                         // negative index → null
     emitter.instruction("js __rt_array_get_mixed_key_int_missing");             // warn and return null for a negative indexed-array key
-    emitter.instruction("cmp r12, r9");                                         // index >= length → null
+    emitter.instruction("cmp r8, r9");                                          // index >= length → null
     emitter.instruction("jge __rt_array_get_mixed_key_int_missing");            // warn and return null for an out-of-bounds indexed-array key
-    emitter.instruction("mov r13, QWORD PTR [rdi - 8]");                        // reload kind metadata for element type tag
-    emitter.instruction("shr r13, 8");                                          // shift the element type tag into the low 7 bits
-    emitter.instruction("and r13, 0x7f");                                       // mask the element type tag
+    emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                        // reload kind metadata for element type tag
+    emitter.instruction("shr r11, 8");                                          // shift the element type tag into the low 7 bits
+    emitter.instruction("and r11, 0x7f");                                       // mask the element type tag
     emitter.instruction("lea r10, [rdi + 24]");                                 // skip the 24-byte array header to reach the contiguous payload
-    emitter.instruction("cmp r13, 7");                                          // are indexed slots already boxed Mixed pointers?
+    emitter.instruction("cmp r11, 7");                                          // are indexed slots already boxed Mixed pointers?
     emitter.instruction("je __rt_array_get_mixed_key_indexed_boxed");            // boxed slots must be retained before returning
-    emitter.instruction("cmp r13, 1");                                          // do indexed slots contain string pointer/length pairs?
+    emitter.instruction("cmp r11, 1");                                          // do indexed slots contain string pointer/length pairs?
     emitter.instruction("je __rt_array_get_mixed_key_indexed_string");           // string slots need a 16-byte load before boxing
-    emitter.instruction("cmp r13, 8");                                          // do indexed slots represent null payloads?
+    emitter.instruction("cmp r11, 8");                                          // do indexed slots represent null payloads?
     emitter.instruction("je __rt_array_get_mixed_key_indexed_null");             // null slots have no payload to read
-    emitter.instruction("mov rdi, QWORD PTR [r10 + r12 * 8]");                  // load scalar or pointer payload from the typed indexed slot
+    emitter.instruction("mov rdi, QWORD PTR [r10 + r8 * 8]");                   // load scalar or pointer payload from the typed indexed slot
     emitter.instruction("xor rsi, rsi");                                        // typed indexed slots use one payload word except strings
-    emitter.instruction("mov rax, r13");                                        // rax = runtime value_type tag for the boxed result
+    emitter.instruction("mov rax, r11");                                        // rax = runtime value_type tag for the boxed result
     emitter.instruction("call __rt_mixed_from_value");                          // box the typed indexed-array element into a Mixed cell
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
     emitter.label("__rt_array_get_mixed_key_indexed_boxed");
-    emitter.instruction("mov rax, QWORD PTR [r10 + r12 * 8]");                  // load the boxed Mixed pointer from the indexed slot
+    emitter.instruction("mov rax, QWORD PTR [r10 + r8 * 8]");                   // load the boxed Mixed pointer from the indexed slot
     emitter.instruction("test rax, rax");                                       // empty slot → null Mixed
     emitter.instruction("je __rt_array_get_mixed_key_null");                    // return null for an empty boxed slot
     emitter.instruction("call __rt_incref");                                     // retain the stored Mixed cell so the caller owns the returned result
@@ -247,8 +247,8 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
     emitter.label("__rt_array_get_mixed_key_indexed_string");
-    emitter.instruction("shl r12, 4");                                          // convert the element index to a 16-byte string slot offset
-    emitter.instruction("add r10, r12");                                        // r10 = address of the selected string slot
+    emitter.instruction("shl r8, 4");                                           // convert the element index to a 16-byte string slot offset
+    emitter.instruction("add r10, r8");                                         // r10 = address of the selected string slot
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load string pointer from the selected slot
     emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // load string length from the selected slot
     emitter.instruction("mov rax, 1");                                          // rax = string runtime value_type tag

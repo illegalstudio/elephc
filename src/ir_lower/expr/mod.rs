@@ -1812,7 +1812,7 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         // Plain extern calls release owned argument temporaries the same way method
         // and builtin calls do, so a fresh owned temporary passed as an argument is
         // not leaked once per call. The alias guard keeps a pass-through result alive.
-        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), expr.span);
+        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), expr.span, None);
         return call;
     }
     if is_user_function {
@@ -1828,7 +1828,7 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         // Plain user calls release owned argument temporaries the same way method and
         // builtin calls do. The alias guard keeps a passthrough result (e.g. a function
         // that returns its own array argument typed `iterable`) from being freed.
-        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), expr.span);
+        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), expr.span, sig.as_ref());
         return call;
     }
     emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span)
@@ -1851,7 +1851,7 @@ fn emit_builtin_call_value(
         effects_lookup::builtin_effects(name),
         Some(span),
     );
-    release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), span);
+    release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), span, None);
     call
 }
 
@@ -2166,7 +2166,7 @@ fn lower_native_isset_offset_probe_from_value(
     match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             let mut index_value = lower_expr(ctx, index);
-            let index_ty = index_expr_key_type(ctx, index);
+            let index_ty = isset_index_expr_key_type(ctx, index, index_value.value);
             if index_ty == PhpType::Int {
                 index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
                 ctx.emit_value(
@@ -2180,12 +2180,16 @@ fn lower_native_isset_offset_probe_from_value(
             } else {
                 // String or mixed key on indexed storage: read through the
                 // mixed-key runtime path and check if the result is null.
+                // `isset()` never emits an undefined-array-key warning, so this
+                // uses the silent probe variant (mirrors the int-key `ArrayIsset`
+                // op, which is likewise warning-free) rather than the warning
+                // `Op::ArrayGetMixedKey` a plain `$arr[$key]` read would use.
                 let read_value = ctx.emit_value(
-                    Op::ArrayGetMixedKey,
+                    Op::ArrayGetMixedKeySilent,
                     vec![array_value.value, index_value.value],
                     None,
                     PhpType::Mixed,
-                    Op::ArrayGetMixedKey.default_effects(),
+                    Op::ArrayGetMixedKeySilent.default_effects(),
                     Some(expr.span),
                 );
                 let is_null = ctx.emit_value(
@@ -2196,6 +2200,13 @@ fn lower_native_isset_offset_probe_from_value(
                     Op::IsNull.default_effects(),
                     Some(expr.span),
                 );
+                // The probe owns the cell `__rt_array_get_mixed_key` handed back
+                // (it boxes the element into a fresh `Mixed` — even for a miss,
+                // which returns a boxed null — or increfs an already-boxed one),
+                // and `Op::IsNull` only reads its tag. Nothing stores the cell, so
+                // without this release every evaluated `isset($arr[$key])` would
+                // leak one Mixed cell.
+                crate::ir_lower::ownership::release_if_owned(ctx, read_value, Some(expr.span));
                 let zero = ctx.emit_value(
                     Op::ConstI64,
                     Vec::new(),
@@ -7243,7 +7254,7 @@ fn lower_array_access_from_value(
     let mut index_value = lower_expr(ctx, index);
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
-            let index_ty = index_expr_key_type(ctx, index);
+            let index_ty = index_expr_key_type(ctx, index, index_value.value);
             if index_ty == PhpType::Int {
                 index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
                 if warn_on_missing {
@@ -7323,11 +7334,87 @@ fn lower_nullable_array_access(
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 
-/// Returns the statically-known key type for an array index expression.
-/// Used to decide between Op::ArrayGet (int key) and Op::ArrayGetMixedKey.
-fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
-    let ty = infer_expr_type_syntactic(index);
-    normalized_array_key_type(index, ty)
+/// Returns the statically-known key type for a *read* of an array index, used to
+/// decide between `Op::ArrayGet` (int key) and `Op::ArrayGetMixedKey`.
+///
+/// `infer_expr_type_syntactic` is a context-free syntactic guess with no
+/// `ExprKind::Variable` arm: it silently defaults every unresolved expression to
+/// `PhpType::Int`. A non-literal *string* key (one constant propagation did not
+/// already fold into a literal, e.g. a `string` function parameter) therefore
+/// used to be misrouted onto the integer-key fast path, `str_to_i`-coerced
+/// (`"foo"` → `0`) and read the wrong element. So when the syntactic guess says
+/// `Int` but the lowered SSA value — the same source of truth codegen itself
+/// uses via `FunctionContext::value_php_type` — proves the key is a `Str`, the
+/// SSA type wins and the read takes the mixed-key path.
+///
+/// The upgrade is deliberately limited to a *definite* `Str`, and does not fire
+/// for a `Mixed`/`Union` key. `Mixed` keys on a read must keep the legacy
+/// int-coercion path: a `Mixed`-typed key is very often a runtime integer that
+/// merely lost its static type (`$i++` lowers to `Op::IChecked*`, whose result
+/// PHP type is `Mixed`, so any incremented loop counter is statically `Mixed`
+/// from its second use on — see the `MultipleIterator` prelude bodies in
+/// `src/types/checker/builtin_spl_classes/multiple.rs`). Routing those onto the
+/// mixed-key path is semantically fine but retypes the *result* to a boxed
+/// `Mixed` (`array_access_result_type`), which breaks a downstream typed
+/// assignment like `Iterator $it = $this->iterators[$i]`. `isset()` has no such
+/// hazard — its result is a `Bool` either way — so its probe widens the upgrade
+/// to `Mixed`/`Union` as well; see `isset_index_expr_key_type`.
+fn index_expr_key_type(
+    ctx: &LoweringContext<'_, '_>,
+    index: &Expr,
+    index_value: ValueId,
+) -> PhpType {
+    let syntactic = normalized_array_key_type(index, infer_expr_type_syntactic(index));
+    if syntactic != PhpType::Int {
+        return syntactic;
+    }
+    if ctx.builder.value_php_type(index_value) == PhpType::Str {
+        // Re-normalize rather than returning `Str` outright: PHP coerces a
+        // numeric-string key to an integer one, so a non-literal string key is
+        // `Mixed` (only the runtime can see the characters and decide), which is
+        // exactly the key type the mixed-key path is built to resolve.
+        return normalized_array_key_type(index, PhpType::Str);
+    }
+    syntactic
+}
+
+/// Returns the statically-known key type for an `isset($arr[$key])` probe, used
+/// to decide between `Op::ArrayIsset` (int key) and `Op::ArrayGetMixedKeySilent`.
+///
+/// Same correction as `index_expr_key_type` — the syntactic guess defaults an
+/// unresolved key to `PhpType::Int`, which would `str_to_i`-coerce a real string
+/// key and probe the wrong slot — but the upgrade also covers `Mixed`/`Union`
+/// keys, because an `isset` probe yields a `Bool` whatever path it takes and so
+/// cannot retype anything downstream (the hazard that keeps the read path in
+/// `index_expr_key_type` conservative for `Mixed`). A `Mixed` key holding a
+/// runtime integer still resolves correctly on the mixed-key path: it carries
+/// the int-key sentinel and lands on `__rt_array_get_mixed_key`'s bounds-checked
+/// indexed read.
+fn isset_index_expr_key_type(
+    ctx: &LoweringContext<'_, '_>,
+    index: &Expr,
+    index_value: ValueId,
+) -> PhpType {
+    let syntactic = normalized_array_key_type(index, infer_expr_type_syntactic(index));
+    if syntactic != PhpType::Int {
+        return syntactic;
+    }
+    let lowered = ctx.builder.value_php_type(index_value);
+    // A union codegen-funnelled to `TaggedScalar` (an `int|null` under
+    // `NullRepr::Tagged`) is an INT key in an inline `{payload, tag}` pair, not a
+    // boxed `Mixed` cell. The mixed-key codegen has no arm for that repr and
+    // rejects it outright (`lower_inst::hashes`), so upgrading it would turn
+    // valid PHP — `isset($arr[$maybeIndex])` with `?int $maybeIndex` — into a
+    // compile error. It stays on the integer path, which handles it today.
+    if matches!(lowered.codegen_repr(), PhpType::TaggedScalar) {
+        return syntactic;
+    }
+    match lowered {
+        ty @ (PhpType::Str | PhpType::Mixed | PhpType::Union(_)) => {
+            normalized_array_key_type(index, ty)
+        }
+        _ => syntactic,
+    }
 }
 
 /// Returns the best PHP result type for a lowered array/string/hash access.
@@ -8904,7 +8991,7 @@ fn lower_method_call(
         op.default_effects(),
         Some(expr.span),
     );
-    release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
+    release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span, sig.as_ref());
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
 }
@@ -9186,26 +9273,48 @@ fn lower_method_call_with_receiver(
         op.default_effects(),
         Some(expr.span),
     );
-    release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
+    release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span, sig.as_ref());
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
 }
 
 /// Releases normalized call arguments that cannot be returned by this call.
+///
+/// `callee_privatizes_containers` must be `true` exactly for calls into PHP code that elephc
+/// lowered itself (a user function, method, static method or closure). Those callees privatize
+/// every by-value container parameter into an owning shadow slot on entry
+/// (`ir_lower::context::privatize_container_param`), so their result is either that shadow — which
+/// carries its own `+1` — or a fresh array. It can therefore NEVER be an argument's un-retained
+/// payload, and the alias guard below becomes a systematic false positive: honouring it would
+/// orphan the argument temporary at refcount 1 forever (measured: one leaked block per call).
+///
+/// It must stay `false` for extern C calls and builtins, which do not privatize anything and can
+/// legitimately hand an argument's payload straight back.
 fn release_owned_call_arg_temporaries(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[crate::ir::ValueId],
     result: Option<crate::ir::ValueId>,
     span: Span,
+    callee_sig: Option<&FunctionSig>,
 ) {
-    for value in args {
+    for (index, value) in args.iter().enumerate() {
         let php_type = ctx.builder.value_php_type(*value);
         let lowered = LoweredValue {
             value: *value,
             ir_type: value_ir_type(&php_type),
         };
         if ctx.value_is_owning_temporary(lowered) {
-            if call_result_may_alias_arg(ctx, *value, result) {
+            // A parameter the callee PRIVATIZES cannot be handed back: the callee returns either
+            // its own shadow slot (which carries a `+1` of its own) or a fresh array. Honouring the
+            // alias guard there would orphan this temporary at refcount 1 forever — one leaked
+            // block per call.
+            //
+            // The test must be per PARAMETER, not per call. Only a by-value `Array`/`AssocArray`
+            // repr is privatized; an `iterable` parameter keeps its own runtime shape and is NOT,
+            // so a function that returns its own `iterable` argument really does alias it and the
+            // guard is what keeps the result alive.
+            let callee_owns = callee_sig.is_some_and(|sig| sig.param_is_callee_owned(index));
+            if !callee_owns && call_result_may_alias_arg(ctx, *value, result) {
                 continue;
             }
             crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));

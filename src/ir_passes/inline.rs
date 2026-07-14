@@ -259,6 +259,17 @@ fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>) -> bool {
     if callee.flags.is_generator || callee.flags.is_fiber_wrapper {
         return false;
     }
+    // A by-value container parameter is privatized on entry into an owning shadow slot
+    // (`ir_lower::context::privatize_container_param`), which is what gives PHP its by-value array
+    // semantics. That shadow's `StoreLocal` was lowered at FUNCTION ENTRY, where the loop stack is
+    // empty, so it carries no release-of-previous. Splice the body into a host LOOP and the shadow
+    // is overwritten on every iteration without releasing what it held — an N-1 leak. Refuse to
+    // inline such a callee until the inliner reproduces the ownership ABI itself (it would have to
+    // emit a `Release` of each transplanted shadow on the continuation edge). Keeping `-O` and
+    // `-O0` semantically identical is worth more than inlining these.
+    if callee_has_by_value_container_param(callee) {
+        return false;
+    }
     if has_exception_handlers(callee) {
         return false;
     }
@@ -597,12 +608,17 @@ fn transplant_callee_body(
     let mut inst_map: HashMap<InstId, InstId> = HashMap::new();
     let mut local_map: HashMap<LocalSlotId, LocalSlotId> = HashMap::new();
 
-    // Parameter slots and directly-returned slots are excluded from the callee's
-    // epilogue cleanup (borrowed argument / ownership moved into the return value). The
-    // host epilogue keys cleanup off `LocalKind::PhpLocal`, so transplant these slots as
-    // `HiddenTemp` to reproduce that exclusion; ordinary refcounted internal locals keep
-    // their `PhpLocal` kind so the host epilogue still frees them (the only difference is
-    // deferred timing, which is unobservable for the destructor-free types we inline).
+    // Parameter slots and directly-returned slots are excluded from the callee's epilogue
+    // cleanup: a param slot holds a +0 BORROW of the caller's value, and a directly-returned
+    // slot has moved its ownership into the return value. Transplanting either into the host
+    // must carry that exclusion with it, or the host releases a reference it never acquired.
+    //
+    // This used to be signalled by remapping the slot's `LocalKind` to `HiddenTemp` — but
+    // `codegen::frame::local_kind_needs_epilogue_cleanup` sweeps `HiddenTemp` as well as
+    // `PhpLocal`, so the exclusion was a NO-OP. The host released the borrow anyway, and a
+    // read-only `array` parameter called in a loop died with `heap debug detected bad refcount`
+    // under `-O` while `-O0` stayed clean. The slots now keep their real kind and are recorded
+    // in `no_epilogue_cleanup_slots`, which the epilogue actually honours.
     let excluded_from_cleanup: HashSet<LocalSlotId> = callee_param_slots(callee)
         .into_iter()
         .chain(callee_directly_returned_slots(callee))
@@ -610,17 +626,15 @@ fn transplant_callee_body(
 
     // Clone locals first.
     for local in &callee.locals {
-        let kind = if excluded_from_cleanup.contains(&local.id) {
-            LocalKind::HiddenTemp
-        } else {
-            local.kind
-        };
         let new_id = host.add_local(
             local.name.clone(),
             local.ir_type,
             local.php_type.clone(),
-            kind,
+            local.kind,
         );
+        if excluded_from_cleanup.contains(&local.id) {
+            host.no_epilogue_cleanup_slots.insert(new_id);
+        }
         local_map.insert(local.id, new_id);
     }
 
@@ -1035,4 +1049,18 @@ pub(crate) fn inline_small_functions(module: &mut Module) -> bool {
 #[cfg(test)]
 mod tests {
     // Real tests are in src/ir_passes/tests/inline_test.rs (Builder-driven, per repo policy).
+}
+
+/// Returns whether a callee takes a by-value array or associative-array parameter.
+///
+/// Such a parameter is privatized into an owning shadow slot at function entry, and that shadow
+/// cannot currently be transplanted safely into a host loop; see the gate in `is_eligible_callee`.
+fn callee_has_by_value_container_param(callee: &Function) -> bool {
+    callee.params.iter().any(|param| {
+        !param.by_ref
+            && matches!(
+                param.php_type.codegen_repr(),
+                crate::types::PhpType::Array(_) | crate::types::PhpType::AssocArray { .. }
+            )
+    })
 }

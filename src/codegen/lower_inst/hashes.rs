@@ -523,6 +523,7 @@ fn materialize_mixed_hash_key_aarch64(
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
+    let float_key = ctx.next_label("mixed_hash_key_float");
     let scalar_key = ctx.next_label("mixed_hash_key_scalar");
     let done = ctx.next_label("mixed_hash_key_done");
     ctx.load_value_to_reg(key, "x0")?;
@@ -535,7 +536,13 @@ fn materialize_mixed_hash_key_aarch64(
     ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep integer keys as integer hash keys
     ctx.emitter.instruction("cmp x0, #3");                                      // boolean mixed keys normalize like integer keys
     ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep boolean keys as integer hash keys
+    ctx.emitter.instruction("cmp x0, #2");                                      // float mixed keys truncate toward zero, exactly like PHP
+    ctx.emitter.instruction(&format!("b.eq {}", float_key));                    // route float keys through the truncating conversion
     ctx.emitter.instruction("mov x1, #0");                                      // unsupported mixed key tags fall back to integer key zero
+    ctx.emitter.instruction(&format!("b {}", scalar_key));                      // the float arm sits between here and the scalar path
+    ctx.emitter.label(&float_key);
+    ctx.emitter.instruction("fmov d0, x1");                                     // move the raw IEEE-754 payload bits into an FP register
+    ctx.emitter.instruction("fcvtzs x1, d0");                                   // truncate toward zero: PHP casts a float array key to int
     ctx.emitter.label(&scalar_key);
     ctx.emitter.instruction("mov x2, #-1");                                     // key_hi sentinel marks scalar mixed keys as integers
     ctx.emitter.instruction(&format!("b {}", done));                            // skip string-key normalization after scalar selection
@@ -555,6 +562,7 @@ fn materialize_mixed_hash_key_x86_64(
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
+    let float_key = ctx.next_label("mixed_hash_key_float");
     let scalar_key = ctx.next_label("mixed_hash_key_scalar");
     let done = ctx.next_label("mixed_hash_key_done");
     ctx.load_value_to_reg(key, "rax")?;
@@ -567,9 +575,16 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep integer keys as integer hash keys
     ctx.emitter.instruction("cmp rax, 3");                                      // boolean mixed keys normalize like integer keys
     ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep boolean keys as integer hash keys
+    ctx.emitter.instruction("cmp rax, 2");                                      // float mixed keys truncate toward zero, exactly like PHP
+    ctx.emitter.instruction(&format!("je {}", float_key));                      // route float keys through the truncating conversion
     ctx.emitter.instruction("xor esi, esi");                                    // unsupported mixed key tags fall back to integer key zero
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks fallback mixed keys as integers
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after fallback selection
+    ctx.emitter.label(&float_key);
+    ctx.emitter.instruction("movq xmm0, rdi");                                  // move the raw IEEE-754 payload bits into an FP register
+    ctx.emitter.instruction("cvttsd2si rsi, xmm0");                             // truncate toward zero: PHP casts a float array key to int
+    ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks the truncated float as an integer key
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after the float conversion
     ctx.emitter.label(&null_key);
     emit_empty_string_hash_key_x86_64(ctx);                                    // null normalizes to the empty string "" hash key
     ctx.emitter.instruction(&format!("jmp {}", done));                         // skip the string-key normalization path
@@ -1285,7 +1300,14 @@ fn source_load_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<O
     let Some(inst_ref) = ctx.function.instruction(inst) else {
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
-    if inst_ref.op == Op::LoadLocal {
+    // `Op::LoadRefCell` must be recognized alongside `Op::LoadLocal`, exactly as the
+    // indexed-array twin of this helper does (`lower_inst::arrays::source_load_local_slot`).
+    // Without it, a hash write through a reference-bound local (`$r = &$a; $r["k"] = 1;`)
+    // finds no destination slot, so the table pointer `__rt_hash_set` returns is thrown
+    // away. That pointer changes whenever the table rehashes past its load factor or is
+    // COW-split, and the stale one keeps being read: a 41-key hash built through a ref
+    // reported a garbage count instead of 41.
+    if matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
         if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
             return Ok(Some(slot));
         }

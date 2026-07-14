@@ -493,6 +493,11 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
         .locals
         .iter()
         .filter(|local| local_kind_needs_epilogue_cleanup(local.kind))
+        // Slots this frame only BORROWS (inliner-transplanted callee params, and slots whose
+        // ownership moved into a return value) must never be released here: the frame never
+        // acquired them. Releasing a borrow is a use-after-free, and it is what made a
+        // read-only `array` param in a loop die with `heap debug detected bad refcount`.
+        .filter(|local| !ctx.function.no_epilogue_cleanup_slots.contains(&local.id))
         .filter(|local| !promoted_ref_cell_local_slots(ctx.function).contains(&local.id))
         .filter(|local| {
             local
@@ -747,6 +752,11 @@ fn function_cleanup_locals(
         .locals
         .iter()
         .filter(|local| local_kind_needs_epilogue_cleanup(local.kind))
+        // Slots this frame only BORROWS (inliner-transplanted callee params, and slots whose
+        // ownership moved into a return value) must never be released here: the frame never
+        // acquired them. Releasing a borrow is a use-after-free, and it is what made a
+        // read-only `array` param in a loop die with `heap debug detected bad refcount`.
+        .filter(|local| !ctx.function.no_epilogue_cleanup_slots.contains(&local.id))
         .filter(|local| !promoted_ref_cell_local_slots(ctx.function).contains(&local.id))
         .filter(|local| {
             local

@@ -139,6 +139,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayIsset => builtins::lower_array_isset(ctx, &inst),
         Op::ArrayElemAddr => arrays::lower_array_elem_addr(ctx, &inst),
         Op::ArraySet => arrays::lower_array_set(ctx, &inst),
+        Op::SlotDetach => arrays::lower_slot_detach(ctx, &inst),
         Op::ArraySetMixedKey => arrays::lower_array_set_mixed_key(ctx, &inst),
         Op::ArrayGetMixedKey => arrays::lower_array_get_mixed_key(ctx, &inst, true),
         Op::ArrayGetMixedKeySilent => arrays::lower_array_get_mixed_key(ctx, &inst, false),

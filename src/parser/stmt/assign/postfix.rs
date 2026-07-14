@@ -10,7 +10,9 @@
 
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::ast::{
+    BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind, NESTED_APPEND_TEMP_PREFIX,
+};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
@@ -145,7 +147,7 @@ fn lower_nested_append_assignment(
 ) -> Result<Stmt, CompileError> {
     let mut lowerer = EffectfulTargetLowerer::new(span);
     let target = lowerer.stabilize_array_target(target);
-    let temp = lowerer.next_temp_name();
+    let temp = lowerer.next_nested_append_temp_name();
     lowerer.stmts.push(Stmt::new(
         StmtKind::Assign {
             name: temp.clone(),
@@ -331,6 +333,19 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
         return lower_effectful_static_assignment(lhs_expr, op, rhs, span).map(Some);
     }
     let value = assignment_value(lhs_expr.clone(), op, rhs, span);
+
+    // `self::$b[$k][] = $v` (and its `static::` / `parent::` / `Named::` siblings) is an append
+    // through a *nested* target. The trailing `[]` was stripped from the LHS tokens above, so
+    // `lhs_expr` is an `ExprKind::ArrayAccess` and the `if is_append` guard on the bare
+    // `StaticPropertyAccess` arm below — which only ever handles `self::$b[] = $v` — cannot
+    // match it. Left alone it falls into the plain `ArrayAccess` arm, which ignores `is_append`
+    // entirely and emits `StaticPropertyArrayAssign`: the append is silently dropped and the
+    // bucket is OVERWRITTEN with the single value. Route it through the same read/append/
+    // write-back desugar every other nested-append target already uses; the write-back builder
+    // (`assignment_target_store_stmt`) already supports the static-property family.
+    if is_append && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. }) {
+        return lower_nested_append_assignment(lhs_expr, value, span).map(Some);
+    }
 
     let stmt = match lhs_expr.kind {
         ExprKind::StaticPropertyAccess { receiver, property } if is_append => {
@@ -739,6 +754,24 @@ impl EffectfulTargetLowerer {
         let name = format!(
             "__elephc_compound_{}_{}_{}",
             self.span.line, self.span.col, self.next_temp
+        );
+        self.next_temp += 1;
+        name
+    }
+
+    /// Mints the temporary that holds the bucket of a nested append, under its own reserved
+    /// prefix.
+    ///
+    /// The prefix is what lets IR lowering recognize a nested-append `Synthetic` group and
+    /// lower it as a fused, in-place append instead of the read/copy/write-back it desugars
+    /// to here. `next_temp_name`'s prefix is shared with the `.=` / `+=` desugars, which emit
+    /// the same statement shapes, so it cannot serve as that signal. PHP source cannot forge
+    /// either lock: the name is not a legal PHP identifier and `StmtKind::Synthetic` has no
+    /// surface syntax.
+    fn next_nested_append_temp_name(&mut self) -> String {
+        let name = format!(
+            "{}{}_{}_{}",
+            NESTED_APPEND_TEMP_PREFIX, self.span.line, self.span.col, self.next_temp
         );
         self.next_temp += 1;
         name

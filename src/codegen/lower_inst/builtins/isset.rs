@@ -304,6 +304,14 @@ fn emit_isset_hash_found_null_check_x86_64(
 }
 
 /// Emits AArch64 indexed-array `isset` offset bounds and null checks.
+///
+/// The packed payload walk below is only valid on kind-2 (packed) storage, so it is
+/// guarded by a runtime storage-kind dispatch: an `Array(_)`-typed local can still be
+/// backed by *hash* storage, because a mixed-key write promotes the storage at runtime
+/// while the checker only promotes the static type to `AssocArray` at a provably
+/// string-keyed write. Without the guard, a promoted array bounds-checks the index
+/// against the hash header's live-entry count and then reads the header's `head` field
+/// as if it were a boxed element pointer.
 fn emit_isset_array_offset_missing_aarch64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
@@ -315,6 +323,12 @@ fn emit_isset_array_offset_missing_aarch64(
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let len_reg = abi::secondary_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
+    let promoted = ctx.next_label("isset_array_idx_promoted");
+    ctx.load_value_to_reg(array, array_reg)?;
+    ctx.emitter.instruction(&format!("ldr {}, [{}, #-8]", len_reg, array_reg)); // load the storage-kind metadata word from the array header
+    ctx.emitter.instruction(&format!("and {}, {}, #0xff", len_reg, len_reg));   // isolate the low byte holding the storage kind
+    ctx.emitter.instruction(&format!("cmp {}, #3", len_reg));                   // kind 3 = storage was promoted to a hash at runtime
+    ctx.emitter.instruction(&format!("b.eq {}", promoted));                     // a promoted array has no packed payload to index into
     ctx.load_value_to_reg(index, result_reg)?;
     ctx.load_value_to_reg(array, array_reg)?;
     ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));                // reject negative indexes as missing array elements
@@ -324,6 +338,9 @@ fn emit_isset_array_offset_missing_aarch64(
     ctx.emitter.instruction(&format!("b.ge {}", missing));                      // out-of-bounds indexes make isset return false
     emit_isset_array_in_bounds_missing_aarch64(ctx, array_reg, result_reg, elem_ty)?;
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the out-of-bounds isset result after an in-bounds probe
+    ctx.emitter.label(&promoted);
+    emit_isset_promoted_hash_probe_aarch64(ctx, array, index, missing)?;
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the missing result after a promoted-hash probe
     ctx.emitter.label(missing);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, 1);
     ctx.emitter.label(done);
@@ -331,6 +348,8 @@ fn emit_isset_array_offset_missing_aarch64(
 }
 
 /// Emits x86_64 indexed-array `isset` offset bounds and null checks.
+///
+/// Storage-kind guarded exactly like the AArch64 emitter above.
 fn emit_isset_array_offset_missing_x86_64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
@@ -342,6 +361,12 @@ fn emit_isset_array_offset_missing_x86_64(
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let len_reg = abi::secondary_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
+    let promoted = ctx.next_label("isset_array_idx_promoted");
+    ctx.load_value_to_reg(array, array_reg)?;
+    ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} - 8]", len_reg, array_reg)); // load the storage-kind metadata word from the array header
+    ctx.emitter.instruction(&format!("and {}, 0xff", len_reg));                 // isolate the low byte holding the storage kind
+    ctx.emitter.instruction(&format!("cmp {}, 3", len_reg));                    // kind 3 = storage was promoted to a hash at runtime
+    ctx.emitter.instruction(&format!("je {}", promoted));                       // a promoted array has no packed payload to index into
     ctx.load_value_to_reg(array, array_reg)?;
     ctx.load_value_to_reg(index, result_reg)?;
     ctx.emitter.instruction(&format!("cmp {}, 0", result_reg));                 // reject negative indexes as missing array elements
@@ -351,9 +376,71 @@ fn emit_isset_array_offset_missing_x86_64(
     ctx.emitter.instruction(&format!("jge {}", missing));                       // out-of-bounds indexes make isset return false
     emit_isset_array_in_bounds_missing_x86_64(ctx, array_reg, result_reg, elem_ty)?;
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the out-of-bounds isset result after an in-bounds probe
+    ctx.emitter.label(&promoted);
+    emit_isset_promoted_hash_probe_x86_64(ctx, array, index, missing)?;
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the missing result after a promoted-hash probe
     ctx.emitter.label(missing);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, 1);
     ctx.emitter.label(done);
+    Ok(())
+}
+
+/// Emits the AArch64 `isset` probe for an indexed array promoted to hash storage.
+///
+/// Presence is decided from the *runtime* value tag `__rt_hash_get` reports rather than
+/// from the array's static element type: a promoted array can hold an entry stored under
+/// its own concrete tag as well as a boxed `Mixed` cell, and only tag 8 (null) — directly
+/// or wrapped inside a boxed cell — makes `isset()` answer false.
+fn emit_isset_promoted_hash_probe_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+    missing: &str,
+) -> Result<()> {
+    let present = ctx.next_label("isset_array_idx_promoted_present");
+    super::super::hashes::materialize_hash_key_aarch64(ctx, index)?;
+    ctx.load_value_to_reg(array, "x0")?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    ctx.emitter.instruction(&format!("cbz x0, {}", missing));                   // the key is absent from the promoted hash storage
+    ctx.emitter.instruction("cmp x3, #8");                                      // runtime tag 8 means the stored value is PHP null
+    ctx.emitter.instruction(&format!("b.eq {}", missing));                      // a null value is absent for isset (but present for array_key_exists)
+    ctx.emitter.instruction("cmp x3, #7");                                      // runtime tag 7 means the entry holds a boxed Mixed cell
+    ctx.emitter.instruction(&format!("b.ne {}", present));                      // any other concrete tag is already a non-null value
+    ctx.emitter.instruction("mov x0, x1");                                      // pass the boxed Mixed cell to the unbox helper
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("cmp x0, #8");                                      // a boxed Mixed cell can still wrap PHP null
+    ctx.emitter.instruction(&format!("b.eq {}", missing));                      // null-wrapping cells are absent for isset
+    ctx.emitter.label(&present);
+    ctx.emitter.instruction("mov x0, #0");                                      // a found non-null entry is present for isset
+    Ok(())
+}
+
+/// Emits the x86_64 `isset` probe for an indexed array promoted to hash storage.
+///
+/// `__rt_hash_get`'s x86_64 ABI is *not* a mirror of its AArch64 one: it returns
+/// `rax = found`, `rdi = value_lo`, `rsi = value_hi`, `rcx = value_tag`.
+fn emit_isset_promoted_hash_probe_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+    missing: &str,
+) -> Result<()> {
+    let present = ctx.next_label("isset_array_idx_promoted_present");
+    super::super::hashes::materialize_hash_key_x86_64(ctx, index)?;
+    ctx.load_value_to_reg(array, "rdi")?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    ctx.emitter.instruction("test rax, rax");                                   // did the promoted hash storage hold the key?
+    ctx.emitter.instruction(&format!("jz {}", missing));                        // the key is absent from the promoted hash storage
+    ctx.emitter.instruction("cmp rcx, 8");                                      // runtime tag 8 means the stored value is PHP null
+    ctx.emitter.instruction(&format!("je {}", missing));                        // a null value is absent for isset (but present for array_key_exists)
+    ctx.emitter.instruction("cmp rcx, 7");                                      // runtime tag 7 means the entry holds a boxed Mixed cell
+    ctx.emitter.instruction(&format!("jne {}", present));                       // any other concrete tag is already a non-null value
+    ctx.emitter.instruction("mov rax, rdi");                                    // pass the boxed Mixed cell to the unbox helper
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("cmp rax, 8");                                      // a boxed Mixed cell can still wrap PHP null
+    ctx.emitter.instruction(&format!("je {}", missing));                        // null-wrapping cells are absent for isset
+    ctx.emitter.label(&present);
+    ctx.emitter.instruction("xor eax, eax");                                    // a found non-null entry is present for isset
     Ok(())
 }
 

@@ -485,6 +485,12 @@ fn lower_array_set_mixed_key_aarch64(
     }
     abi::emit_push_reg(ctx.emitter, "x0");
     ctx.load_value_to_reg(array, "x0")?;
+    // Hand the helper an OWNED reference, mirroring `Op::ArrayToHash`. Its promote paths abandon
+    // the source indexed array for a freshly built hash and must release it; without this acquire
+    // the helper would be releasing the caller's only reference — a use-after-free. With it, the
+    // ledger closes: the in-place paths hand the `+1` back inside the returned pointer, the promote
+    // paths consume it, and `store_local` then releases whatever the slot held before.
+    abi::emit_incref_if_refcounted(ctx.emitter, &ctx.value_php_type(array)?);
     ctx.load_value_to_reg(key, "x1")?;
     abi::emit_pop_reg(ctx.emitter, "x2");
     abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");
@@ -506,7 +512,12 @@ fn lower_array_set_mixed_key_x86_64(
         box_value_for_mixed_container(ctx, value, value_ty)?;
     }
     abi::emit_push_reg(ctx.emitter, "rax");
-    ctx.load_value_to_reg(array, "rdi")?;
+    ctx.load_value_to_reg(array, "rax")?;
+    // See the AArch64 twin: the helper is handed an OWNED reference so its promote paths can
+    // release the source array they abandon. `emit_incref_if_refcounted` retains the pointer in the
+    // int-result register, so the array is loaded there first and moved into the ABI register after.
+    abi::emit_incref_if_refcounted(ctx.emitter, &ctx.value_php_type(array)?);
+    ctx.emitter.instruction("mov rdi, rax");                                    // publish the retained array as the helper's first argument
     ctx.load_value_to_reg(key, "rsi")?;
     abi::emit_pop_reg(ctx.emitter, "rdx");
     abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");
@@ -1891,4 +1902,114 @@ fn expect_capacity(inst: &Instruction) -> Result<u32> {
             inst.op.name()
         ))),
     }
+}
+
+/// Lowers `Op::SlotDetach` — writes PHP null into `container[key]`, releasing whatever was there.
+///
+/// This is the nested-append lowering's ownership hand-off. After the bucket has been read into
+/// the append temporary, it is owned twice (the container slot and the temporary), which would
+/// make the upcoming push copy-on-write clone it. Nulling the slot drops the count back to one,
+/// so the push mutates in place; the write-back that follows re-publishes the bucket into the
+/// same slot. It cannot free the bucket: it only ever runs after the read has taken its
+/// reference, so the count it decrements is at least two.
+///
+/// No new runtime helper and no new ABI knowledge: the two storage kinds go through the very
+/// call sites `lower_hash_set` and `lower_array_set` already use, with a null payload
+/// substituted for the value. `__rt_hash_set` may grow or rehash the table, and
+/// `__rt_array_set_refcounted` may copy-on-write split the array, so both return a possibly-new
+/// container pointer — which the receiver write-back below republishes.
+pub(super) fn lower_slot_detach(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let container = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let container_ty = ctx.value_php_type(container)?.codegen_repr();
+    let source_local = source_load_local_slot(ctx, container)?;
+    match container_ty {
+        PhpType::AssocArray { .. } => match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_slot_detach_hash_aarch64(ctx, container, key)?,
+            Arch::X86_64 => lower_slot_detach_hash_x86_64(ctx, container, key)?,
+        },
+        PhpType::Array(_) => match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_slot_detach_indexed_aarch64(ctx, container, key)?,
+            Arch::X86_64 => lower_slot_detach_indexed_x86_64(ctx, container, key)?,
+        },
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "slot_detach container PHP type {:?}",
+                other
+            )));
+        }
+    }
+    ctx.store_result_value(container)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, container)?;
+    }
+    ctx.writeback_global_array_source(container)?;
+    Ok(())
+}
+
+/// Emits the AArch64 hash-storage slot detach: `__rt_hash_set(table, key, null)`.
+///
+/// Mirrors `lower_hash_set_aarch64`'s call sequence exactly, minus the value materialization:
+/// PHP null is the `(value_lo = 0, value_hi = 0, value_tag = 8)` triple. The key is
+/// materialized before the table is loaded because key normalization may call a helper, which
+/// would clobber `x0`.
+fn lower_slot_detach_hash_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+) -> Result<()> {
+    super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+    ctx.load_value_to_reg(hash, "x0")?;
+    ctx.emitter.instruction("mov x3, xzr");                                     // value_lo = 0 (PHP null has no payload)
+    ctx.emitter.instruction("mov x4, xzr");                                     // value_hi = 0
+    abi::emit_load_int_immediate(ctx.emitter, "x5", 8);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    Ok(())
+}
+
+/// Emits the x86_64 hash-storage slot detach: `__rt_hash_set(table, key, null)`.
+///
+/// `__rt_hash_set`'s SysV ABI is `rdi = table, rsi = key_lo, rdx = key_hi, rcx = value_lo,
+/// r8 = value_hi, r9 = value_tag -> rax = table`.
+fn lower_slot_detach_hash_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+) -> Result<()> {
+    super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+    ctx.load_value_to_reg(hash, "rdi")?;
+    ctx.emitter.instruction("xor ecx, ecx");                                    // value_lo = 0 (PHP null has no payload)
+    ctx.emitter.instruction("xor r8d, r8d");                                    // value_hi = 0
+    abi::emit_load_int_immediate(ctx.emitter, "r9", 8);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    Ok(())
+}
+
+/// Emits the AArch64 indexed-storage slot detach: `__rt_array_set_refcounted(array, index, 0)`.
+///
+/// A null payload makes the helper skip its element-type stamp and its retain (an incref of a
+/// null pointer is a no-op), while still releasing the element it overwrites.
+fn lower_slot_detach_indexed_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_reg(array, "x0")?;
+    ctx.load_value_to_reg(index, "x1")?;
+    ctx.emitter.instruction("mov x2, xzr");                                     // payload = null: release the old element, store nothing
+    abi::emit_call_label(ctx.emitter, "__rt_array_set_refcounted");
+    Ok(())
+}
+
+/// Emits the x86_64 indexed-storage slot detach: `__rt_array_set_refcounted(array, index, 0)`.
+fn lower_slot_detach_indexed_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_reg(array, "rdi")?;
+    ctx.load_value_to_reg(index, "rsi")?;
+    ctx.emitter.instruction("xor edx, edx");                                    // payload = null: release the old element, store nothing
+    abi::emit_call_label(ctx.emitter, "__rt_array_set_refcounted");
+    Ok(())
 }

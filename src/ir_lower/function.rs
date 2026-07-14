@@ -617,6 +617,31 @@ fn lower_body_into_function(
             ctx.mark_ref_bound_local(name);
         }
     }
+    // PHP passes arrays BY VALUE. The call site hands the callee a `+0` borrow of the caller's
+    // array, so `__rt_array_ensure_unique` (which only splits at refcount >= 2) stayed inert and
+    // every write in the callee landed in the CALLER's storage. Re-bind each by-value container
+    // parameter to an owning shadow slot, which restores the refcount the copy-on-write split
+    // depends on. This one site is the single funnel for free functions, methods, static methods
+    // and closures, so every call flavour — including `call_user_func`, dynamic `$f(...)` and
+    // recursion — is covered without any per-flavour code.
+    //
+    // By-reference parameters are excluded by definition: `array &$a` must alias, not copy.
+    // `$this` is excluded because it is an object, never a container.
+    for (index, (name, php_type)) in params.iter().enumerate() {
+        if by_ref_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        if name == "this" {
+            continue;
+        }
+        if !matches!(
+            php_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ) {
+            continue;
+        }
+        ctx.privatize_container_param(name, php_type, None);
+    }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
     for stmt in body {
         crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);

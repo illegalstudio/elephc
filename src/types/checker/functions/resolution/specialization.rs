@@ -228,19 +228,48 @@ impl Checker {
                     }
                 }
             }
+            // A DECLARED `array` hint is generic: it resolves to `Array(Mixed)` and is then
+            // specialized to the first call site's concrete element type. That narrowing has to be
+            // joined over ALL call sites, or a later `Array(Mixed)` argument is passed to a body
+            // compiled for raw scalar slots and read back as a POINTER. The `declared_params` gate
+            // below used to exclude it from the very widening machinery that exists to prevent
+            // exactly this, because `array` is, technically, declared.
+            //
+            // `array` is the only PHP hint that resolves to an `Array`/`AssocArray` type, so a
+            // declared parameter currently carrying one can only have come from a generic hint.
+            let declared = stored_sig
+                .declared_params
+                .get(seen_idx)
+                .copied()
+                .unwrap_or(false);
+            let generic_array_param = param_types
+                .get(seen_idx)
+                .is_some_and(|(_, ty)| {
+                    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                });
             if seen_idx < regular_param_count
-                && !stored_sig
-                    .declared_params
-                    .get(seen_idx)
-                    .copied()
-                    .unwrap_or(false)
+                && (!declared || generic_array_param)
                 && !matches!(actual_ty, PhpType::Never | PhpType::Callable)
                 && (!matches!(actual_ty, PhpType::Void)
                     || crate::codegen::sentinels::null_repr_is_tagged())
             {
                 let key = (name.to_string(), seen_idx);
                 let seen = self.param_specialization_seen.contains(&key);
-                if param_types[seen_idx].1 == PhpType::Int && !seen {
+                if Self::is_generic_array_hint(&param_types[seen_idx].1)
+                    && !seen
+                    && matches!(actual_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                {
+                    // Discard the generic `array` hint exactly once, mirroring the `Int` fallback
+                    // below: adopt the first call's concrete array type so an all-`array<int>`
+                    // parameter is not immediately polluted back to `array<mixed>` by unioning with
+                    // its own declaration. The seen set marks the discard, so every LATER call
+                    // widens instead of re-adopting — which is the whole point.
+                    self.param_specialization_seen.insert(key);
+                    if param_types[seen_idx].1 != actual_ty {
+                        param_types[seen_idx].1 = actual_ty.clone();
+                        changed = true;
+                    }
+                } else if param_types[seen_idx].1 == PhpType::Int && !seen {
                     // Discard the `Int` fallback exactly once: adopt the type of the
                     // first call so an all-`Str` (etc.) parameter is not polluted by
                     // unioning the fallback. The seen set marks the discard so a real

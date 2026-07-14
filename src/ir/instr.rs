@@ -281,6 +281,18 @@ pub enum Op {
     ArraySet,
     HashSet,
     HashUnset,
+    /// Writes PHP null into `container[key]`, releasing whatever was there.
+    ///
+    /// Used by the nested-append lowering to hand a bucket's *only other* reference over to
+    /// the temporary that is about to be appended to: after the read the bucket is owned by
+    /// both the slot and the temp (refcount 2), which would make the append copy-on-write
+    /// clone it — O(length) on every push, hence O(n^2) over a growing bucket. Nulling the
+    /// slot drops it back to 1, so the append mutates in place, and the write-back then
+    /// re-publishes the bucket into the very same slot.
+    ///
+    /// It can never free the bucket: it only ever runs *after* the read has taken its
+    /// reference, so the refcount it decrements is at least 2.
+    SlotDetach,
     ArrayPush,
     MixedArrayAppend,
     HashAppend,
@@ -469,6 +481,10 @@ impl Op {
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            // ALLOC_HEAP because the hash-storage lowering goes through `__rt_hash_set`, which
+            // checks its load factor and may grow/rehash the table before it even knows whether
+            // the key is already present.
+            SlotDetach => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             ArrayElemAddr | ArraySetMixedKey => {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
             }
@@ -635,6 +651,7 @@ impl Op {
             ArraySet => "array_set",
             HashSet => "hash_set",
             HashUnset => "hash_unset",
+            SlotDetach => "slot_detach",
             ArrayPush => "array_push",
             MixedArrayAppend => "mixed_array_append",
             HashAppend => "hash_append",

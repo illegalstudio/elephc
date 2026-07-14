@@ -992,3 +992,756 @@ echo $a[$key];
     );
     assert_eq!(out, "hello world");
 }
+
+// --- isset()/array_key_exists() on an `Array(_)`-typed receiver with a Str/Mixed key ---
+//
+// `isset($arr[$strKey])` and `array_key_exists($strKey, $arr)` used to fail (or, for
+// `isset`, silently miscompile — see below) whenever `$arr` was still statically an
+// indexed array type, which is the normal state for a membership probe done before the
+// array's first string-keyed write. The checker only promotes an array's *static* type
+// to `PhpType::AssocArray` at a provably string-keyed write
+// (`src/types/checker/stmt_check/assignments/arrays.rs`), so a probe beforehand — or an
+// array that only ever gets a *dynamic* (Mixed-typed key) write, which the checker can't
+// prove is string-keyed — keeps the `Array(_)` type through to codegen.
+//
+// All of these fixtures route the key through a helper function parameter (not a local
+// reassigned from a literal in the same straight-line block) because `elephc`'s AST-level
+// constant-propagation pass (`src/optimize/propagate`) folds a straight-line
+// `$k = "foo"; ...$arr[$k]...` back into a literal `$arr["foo"]` — which already worked
+// before this fix, since `normalized_array_key_type` special-cases literal expressions.
+// Routing through a function parameter is what actually exercises a *non-literal* Str/
+// Mixed key and would have hit the bugs below without it.
+
+/// Verifies `isset($arr[$k])` and `array_key_exists($k, $arr)` compile and both answer
+/// `false` for a non-literal string key probed on a plain indexed array *before* any
+/// string-keyed write ever happened — the original failing shape (A1/A3). Before the
+/// fix, `array_key_exists` hit a loud compile error ("array_key_exists key PHP type
+/// Str") from `require_indexed_key_type` in
+/// `src/codegen/lower_inst/builtins/arrays/key_exists.rs`, and `isset` — once its
+/// receiver-type gate was already permissive enough to reach
+/// `lower_native_isset_offset_probe_from_value` — silently miscompiled: `index_expr_key_type`
+/// (`src/ir_lower/expr/mod.rs`) derived the key's type from `infer_expr_type_syntactic`,
+/// which has no `ExprKind::Variable` arm and defaults to `PhpType::Int`, so the string key
+/// got `str_to_i`-coerced (`"foo"` → `0`) and probed integer index 0 instead.
+#[test]
+fn test_indexed_array_string_key_probe_before_any_hash_write() {
+    let out = compile_and_run(
+        r#"<?php
+function isset_of(array $arr, string $k): bool {
+    return isset($arr[$k]);
+}
+function key_exists_of(array $arr, string $k): bool {
+    return array_key_exists($k, $arr);
+}
+$arr = [10, 20, 30];
+echo isset_of($arr, "foo") ? "yes" : "no";
+echo ":";
+echo key_exists_of($arr, "foo") ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "no:no");
+}
+
+/// Verifies a packed/indexed array (never promoted to hash storage) probed with a
+/// non-literal string key returns `false` for both constructs without crashing, and
+/// without corrupting the result the way the pre-fix `index_expr_key_type` default did
+/// (`str_to_i("bogus")` → `0`, which is in-bounds on a 2-element array and would have
+/// wrongly reported both constructs as `true`).
+#[test]
+fn test_packed_indexed_array_string_key_probe_no_hash_promotion() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function isset_of(array $arr, string $k): bool {
+    return isset($arr[$k]);
+}
+function key_exists_of(array $arr, string $k): bool {
+    return array_key_exists($k, $arr);
+}
+$arr = ["a", "b"];
+var_dump(isset_of($arr, "bogus"));
+var_dump(key_exists_of($arr, "bogus"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\n");
+}
+
+/// Verifies `isset($arr[$k])` answers `true` for a present, non-null value and `false`
+/// for an absent key, once `$arr` has been promoted to runtime hash storage via a
+/// dynamic (Mixed-typed key) write that the checker cannot statically prove is
+/// string-keyed — so `$arr` stays `Array(Mixed)`, not `AssocArray`, and the probe must
+/// go through `__rt_array_get_mixed_key`'s runtime storage-kind dispatch.
+#[test]
+fn test_indexed_array_mixed_key_write_then_isset_present_and_absent() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function set_key(array $arr, mixed $k, mixed $v): array {
+    $arr[$k] = $v;
+    return $arr;
+}
+function isset_of(array $arr, string $k): bool {
+    return isset($arr[$k]);
+}
+$a = set_key([], "present", "value");
+var_dump(isset_of($a, "present"));
+var_dump(isset_of($a, "absent"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
+}
+
+/// The distinguishing semantic pair (per PHP): `array_key_exists()` is `true` for a key
+/// whose stored value is `null`, while `isset()` is `false` for that same key (isset
+/// requires present *and* non-null). This is why `array_key_exists`'s mixed-key runtime
+/// path is a dedicated presence-only helper (`__rt_array_key_exists_mixed_key`,
+/// `src/codegen_support/runtime/arrays/array_key_exists_mixed_key.rs`) rather than a
+/// reuse of `__rt_array_get_mixed_key` plus an is-null check (which is exactly how
+/// `isset`'s own probe is built, and exactly why it must answer differently here) — a
+/// design that answers `array_key_exists` from `is_null` would get this pair backwards.
+#[test]
+fn test_indexed_array_mixed_key_null_value_distinguishes_key_exists_from_isset() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function set_key(array $arr, mixed $k, mixed $v): array {
+    $arr[$k] = $v;
+    return $arr;
+}
+function isset_of(array $arr, string $k): bool {
+    return isset($arr[$k]);
+}
+function key_exists_of(array $arr, string $k): bool {
+    return array_key_exists($k, $arr);
+}
+$a = set_key([], "k", null);
+var_dump(key_exists_of($a, "k"));
+var_dump(isset_of($a, "k"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
+}
+
+/// Verifies `array_key_exists($k, $arr)` answers `true`/`false` correctly for a
+/// non-literal string key once `$arr` has been promoted to runtime hash storage via a
+/// dynamic mixed-key write, while `$arr` stays statically `Array(Mixed)` (not
+/// `AssocArray`) — the gap this test targets in
+/// `src/codegen/lower_inst/builtins/arrays/key_exists.rs::lower_indexed_array_key_exists`.
+#[test]
+fn test_indexed_array_mixed_key_write_then_key_exists_present_and_absent() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function set_key(array $arr, mixed $k, mixed $v): array {
+    $arr[$k] = $v;
+    return $arr;
+}
+function key_exists_of(array $arr, string $k): bool {
+    return array_key_exists($k, $arr);
+}
+$a = set_key([], "present", 1);
+var_dump(key_exists_of($a, "present"));
+var_dump(key_exists_of($a, "absent"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
+}
+
+/// Verifies `isset($arr[$intKey])` and `array_key_exists($intKey, $arr)` stay correct once
+/// `$arr` has been promoted to runtime *hash* storage by a mixed-key write, while its static
+/// type remains an indexed `Array(Mixed)`.
+///
+/// The mixed-key probes dispatch on the runtime storage kind, but the integer-key probes used
+/// to be storage-kind-blind: they bounds-checked the index against the array header's first
+/// word — which on hash storage is the live-entry COUNT, not a length — and then read
+/// `[array + 24 + 8 * idx]` as if it were a packed element. On a hash header offset 24 holds
+/// `head`, an insertion-order slot index, so `isset($a[0])` on a one-entry hash both passed the
+/// bounds check and dereferenced that integer as a boxed `Mixed` pointer (SIGSEGV whenever
+/// `head != 0`), and `array_key_exists(0, $a)` answered `true` for a key that does not exist.
+#[test]
+fn test_indexed_array_int_key_probe_after_runtime_hash_promotion() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function set_key(array $arr, mixed $k, mixed $v): array {
+    $arr[$k] = $v;
+    return $arr;
+}
+function isset_of(array $arr, int $k): bool {
+    return isset($arr[$k]);
+}
+function key_exists_of(array $arr, int $k): bool {
+    return array_key_exists($k, $arr);
+}
+$a = set_key([], "present", "value");
+var_dump(isset_of($a, 0));
+var_dump(key_exists_of($a, 0));
+$b = set_key([], 7, "seven");
+var_dump(isset_of($b, 7));
+var_dump(key_exists_of($b, 7));
+var_dump(isset_of($b, 0));
+var_dump(key_exists_of($b, 0));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\n"
+    );
+}
+
+/// Verifies PHP's numeric-string array-key coercion holds through the mixed-key probes on
+/// packed storage: `"1"` is the *integer* key 1 (present), while `"0123"`, `"-1"`, `"3"` and
+/// `"foo"` are all absent — `"0123"` because a leading zero makes it a genuine string key,
+/// `"-1"` and `"3"` because they coerce to out-of-range integer keys.
+///
+/// This is the only test that reaches the new helper's packed-storage *found* branch: every
+/// other packed probe in this file asserts absence, so a helper that always answered
+/// "not found" on kind-2 storage would otherwise still be green.
+#[test]
+fn test_packed_indexed_array_numeric_string_key_probes_coerce_like_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function isset_of(array $arr, string $k): bool {
+    return isset($arr[$k]);
+}
+function key_exists_of(array $arr, string $k): bool {
+    return array_key_exists($k, $arr);
+}
+$p = [10, 20, 30];
+foreach (["1", "0123", "-1", "3", "foo"] as $k) {
+    echo $k, "=", isset_of($p, $k) ? "1" : "0", key_exists_of($p, $k) ? "1" : "0", "\n";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1=11\n0123=00\n-1=00\n3=00\nfoo=00\n");
+}
+
+/// Verifies a `Mixed`-typed key that holds a runtime *float* truncates toward zero into an
+/// integer key, exactly as PHP casts a float array key — `isset($a[2.7])` finds key 2.
+///
+/// `materialize_mixed_hash_key_{aarch64,x86_64}` had no float arm, so tag 2 fell into the
+/// "unsupported tag" fallback and normalized to integer key **0**, silently probing the
+/// wrong slot. The same test also pins a `Mixed` key holding a runtime *string*, which is
+/// the case the isset probe's `Mixed`/`Union` widening exists for in the first place.
+#[test]
+fn test_mixed_key_holding_float_truncates_and_holding_string_resolves() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function set_key(array $arr, mixed $k, mixed $v): array {
+    $arr[$k] = $v;
+    return $arr;
+}
+function isset_m(array $arr, mixed $k): bool {
+    return isset($arr[$k]);
+}
+function key_exists_m(array $arr, mixed $k): bool {
+    return array_key_exists($k, $arr);
+}
+$a = set_key([], 2, "two");
+var_dump(isset_m($a, 2.7));
+$b = set_key([], "s", "v");
+var_dump(isset_m($b, "s"));
+var_dump(isset_m($b, "nope"));
+var_dump(key_exists_m($b, "s"));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\nbool(true)\nbool(false)\nbool(true)\n"
+    );
+}
+
+/// Verifies the `array_key_exists`-vs-`isset` split for a null *element of packed storage*.
+///
+/// The sibling test above pins this on hash storage, which takes `__rt_hash_get`'s found
+/// flag; packed storage takes a completely different branch (a bounds check plus an element
+/// null probe), so it needs its own coverage: a null element is **present** for
+/// `array_key_exists` and **absent** for `isset`.
+#[test]
+fn test_packed_indexed_array_null_element_distinguishes_key_exists_from_isset() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function isset_i(array $arr, int $k): bool {
+    return isset($arr[$k]);
+}
+function key_exists_i(array $arr, int $k): bool {
+    return array_key_exists($k, $arr);
+}
+$p = [1, null, 3];
+var_dump(key_exists_i($p, 1));
+var_dump(isset_i($p, 1));
+var_dump(key_exists_i($p, 9));
+var_dump(isset_i($p, 9));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\nbool(false)\nbool(false)\nbool(false)\n"
+    );
+}
+
+/// Verifies `isset()` stays silent on a missing mixed key while a plain read of the same
+/// missing key still warns — the two probes deliberately lower to different ops
+/// (`Op::ArrayGetMixedKeySilent` vs `Op::ArrayGetMixedKey`), and nothing else pins that
+/// split, so a future refactor that unified them would go unnoticed.
+#[test]
+fn test_isset_mixed_key_is_silent_while_read_of_missing_key_warns() {
+    let quiet = compile_and_run_capture(
+        r#"<?php
+function set_key(array $arr, mixed $k, mixed $v): array {
+    $arr[$k] = $v;
+    return $arr;
+}
+function isset_of(array $arr, string $k): bool {
+    return isset($arr[$k]);
+}
+$a = set_key([], "present", "value");
+var_dump(isset_of($a, "absent"));
+"#,
+    );
+    assert!(quiet.success, "program failed: {}", quiet.stderr);
+    assert_eq!(quiet.stdout, "bool(false)\n");
+    assert!(
+        !quiet.stderr.contains("Undefined array key"),
+        "isset() must never emit an undefined-array-key warning, got: {}",
+        quiet.stderr
+    );
+
+    let noisy = compile_and_run_capture(
+        r#"<?php
+function set_key(array $arr, mixed $k, mixed $v): array {
+    $arr[$k] = $v;
+    return $arr;
+}
+function read_of(array $arr, string $k): mixed {
+    return $arr[$k];
+}
+$a = set_key([], "present", "value");
+var_dump(read_of($a, "absent"));
+"#,
+    );
+    assert!(noisy.success, "program failed: {}", noisy.stderr);
+    assert!(
+        noisy.stderr.contains("Undefined array key"),
+        "a plain read of a missing key must still warn, got: {}",
+        noisy.stderr
+    );
+}
+
+/// Verifies a nullable-int key still compiles and probes correctly.
+///
+/// A `?int` funnels to the codegen-internal `TaggedScalar` repr — an inline `{payload, tag}`
+/// pair, not a boxed `Mixed` cell — which the mixed-key codegen has no arm for. Widening the
+/// `isset` key-type upgrade to unions therefore has to exclude it explicitly, or this valid
+/// PHP stops compiling.
+#[test]
+fn test_isset_with_nullable_int_key_stays_on_the_integer_path() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function isset_of(array $arr, ?int $k): bool {
+    return isset($arr[$k]);
+}
+$p = [10, 20, 30];
+var_dump(isset_of($p, 1));
+var_dump(isset_of($p, 7));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\n");
+}
+
+/// Verifies the mixed-key probes and reads do not leak *per evaluation*.
+///
+/// `__rt_array_get_mixed_key` hands back an *owned* Mixed cell (it boxes the element into a
+/// fresh cell — even a miss returns a boxed null — or increfs an already-boxed one), so both
+/// the `isset` probe and a plain `$arr[$key]` read own a reference. Neither op was classified
+/// as an owning container read, and the probe stored its cell nowhere, so every evaluation
+/// leaked one cell.
+///
+/// The assertion is deliberately a *scaling* one rather than `leak summary: clean`: the
+/// mixed-key **write** that builds the fixture (`$arr[$k] = $v`) has its own pre-existing
+/// per-call leak, which a clean-heap assertion would trip over and which would mask this
+/// test's actual subject. Running the identical program at two loop counts holds that
+/// constant baseline fixed, so any residual growth is attributable to the probes and reads
+/// alone — a per-evaluation leak shows up as a difference proportional to the extra
+/// iterations, and nothing else can.
+#[test]
+fn test_mixed_key_probe_and_read_do_not_leak_per_evaluation() {
+    fn live_blocks(iterations: usize) -> u64 {
+        let source = format!(
+            r#"<?php
+function set_key(array $arr, mixed $k, mixed $v): array {{
+    $arr[$k] = $v;
+    return $arr;
+}}
+function isset_of(array $arr, string $k): bool {{
+    return isset($arr[$k]);
+}}
+function read_of(array $arr, string $k): mixed {{
+    return $arr[$k];
+}}
+$a = set_key([], "present", "value");
+$hits = 0;
+for ($i = 0; $i < {}; $i++) {{
+    if (isset_of($a, "present")) {{
+        $hits++;
+    }}
+    if (isset_of($a, "absent")) {{
+        $hits++;
+    }}
+    $v = read_of($a, "present");
+}}
+echo $hits;
+"#,
+            iterations
+        );
+        let out = compile_and_run_with_heap_debug(&source);
+        assert!(out.success, "program failed: {}", out.stderr);
+        assert_eq!(out.stdout, iterations.to_string());
+        let summary = out
+            .stderr
+            .lines()
+            .find(|line| line.contains("leak summary"))
+            .unwrap_or_else(|| panic!("no heap-debug leak summary in: {}", out.stderr))
+            .to_string();
+        if summary.contains("clean") {
+            return 0;
+        }
+        summary
+            .split("live_blocks=")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|count| count.parse().ok())
+            .unwrap_or_else(|| panic!("unparsable heap-debug leak summary: {}", summary))
+    }
+
+    let few = live_blocks(8);
+    let many = live_blocks(256);
+    assert_eq!(
+        few, many,
+        "mixed-key probes/reads leak per evaluation: 8 iterations left {} live blocks and \
+         256 iterations left {} — the growth scales with the loop, so each probe or read is \
+         leaking the boxed Mixed cell it owns",
+        few, many
+    );
+}
+
+/// Verifies a nested append through a *static property* actually appends.
+///
+/// `self::$b[$k][] = $v` was a silent miscompile: the append was dropped and the bucket was
+/// OVERWRITTEN with the single value, i.e. it compiled as `self::$b[$k] = $v`. A statement
+/// whose LHS contains `::` is claimed by `try_parse_scoped_property_assignment`, which strips
+/// the trailing `[]` before parsing the target — so the parsed target is an `ExprKind::ArrayAccess`
+/// and the `if is_append` guard, which sits only on the bare `StaticPropertyAccess` arm
+/// (handling `self::$b[] = $v`), can never match it. The plain `ArrayAccess` arm that caught it
+/// instead ignored `is_append` entirely. Nothing downstream recovered the append, and no test
+/// covered the shape.
+#[test]
+fn test_static_property_nested_append_actually_appends() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Bag {
+    public static array $b = [];
+
+    public static function add(int $v): void {
+        self::$b[0][] = $v;
+    }
+}
+Bag::$b[0] = [];
+Bag::add(1);
+Bag::add(2);
+Bag::add(3);
+echo count(Bag::$b[0]), ":", Bag::$b[0][0], Bag::$b[0][1], Bag::$b[0][2], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3:123\n");
+}
+
+/// Verifies PHP's auto-vivification of a nested append into a key that does not exist yet.
+///
+/// `$g = []; $g["k"][] = 1;` used to print `count() == 0`: the parser desugars every nested
+/// append into a read/push/write-back triple, and nothing created the missing inner array the
+/// way PHP does. The read of a missing key came back as a boxed null, and the append then
+/// silently DROPPED the value. This is the single most common grouping idiom in PHP, and it
+/// lost every row of every new bucket.
+#[test]
+fn test_nested_append_auto_vivifies_a_missing_bucket() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$g = [];
+$g["k"][] = 1;
+$g["k"][] = 2;
+$g["j"][] = 9;
+echo count($g), "|", count($g["k"]), "|", $g["k"][0], $g["k"][1], "|", count($g["j"]), "|", $g["j"][0], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2|2|12|1|9\n");
+}
+
+/// Negative control for the nested-append fusion: copy-on-write must still fire when the bucket
+/// is genuinely shared.
+///
+/// The fusion makes the append mutate the bucket *in place* by nulling the container slot between
+/// the read and the push, so the bucket's refcount drops to one. That is only sound because a
+/// bucket the user also holds a reference to still has a count above one, and copy-on-write still
+/// splits it. If this test ever prints `2:2` instead of `1:2`, the fusion has silently broken PHP
+/// value semantics — which no amount of speed would justify.
+#[test]
+fn test_nested_append_still_copies_a_shared_bucket() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = ["k" => [1]];
+$c = $a["k"];
+$a["k"][] = 2;
+echo count($c), ":", count($a["k"]), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:2\n");
+}
+
+/// Complexity gate: appending into one bucket must allocate a number of blocks that grows
+/// *linearly* with the number of rows.
+///
+/// Before the fusion, the read left the bucket owned twice (the container slot and the append
+/// temporary), so every push copy-on-write cloned the whole bucket — O(length) per push, O(n^2)
+/// overall. The assertion is deliberately a ratio rather than an absolute bound: one allocation
+/// per push is inherent (each value is boxed into the bucket's Mixed storage), so any fixed
+/// ceiling would fail on a correct build. Quadratic growth would show up as roughly a 16x
+/// increase for 4x the rows; linear growth stays near 4x.
+#[test]
+fn test_nested_append_into_one_bucket_is_linear_not_quadratic() {
+    fn allocs(rows: usize) -> u64 {
+        let source = format!(
+            r#"<?php
+$g = [];
+for ($i = 0; $i < {}; $i++) {{
+    $g["k"][] = $i;
+}}
+echo count($g["k"]);
+"#,
+            rows
+        );
+        let out = compile_and_run_with_gc_stats(&source);
+        assert!(out.success, "program failed: {}", out.stderr);
+        assert_eq!(out.stdout, rows.to_string());
+        let (allocs, frees) = parse_gc_stats(&out.stderr);
+        assert_eq!(
+            allocs, frees,
+            "nested append leaks: {} allocs vs {} frees at {} rows",
+            allocs, frees, rows
+        );
+        allocs
+    }
+
+    let small = allocs(250);
+    let large = allocs(1000);
+    assert!(
+        large < small * 5,
+        "nested append is super-linear: 250 rows allocated {} blocks, 1000 rows allocated {} \
+         (a linear build lands near 4x; a copy-on-write clone per push lands near 16x)",
+        small,
+        large
+    );
+}
+
+/// Verifies a mixed-key write into a still-typed indexed array does not destroy the array.
+///
+/// `$a[$k] = $v` with a `mixed` key routes to `__rt_array_set_mixed_key`. For an in-bounds
+/// integer key that lands on packed storage, it called `__rt_array_set_mixed`, which re-stamps the
+/// destination's `value_type` to 7 (boxed Mixed) and its slot width to 8 — but never converted the
+/// slots ALREADY in the array. So `[1, 2, 3]` came back with slot 0 holding a real Mixed cell and
+/// slots 1 and 2 still holding the raw integers 2 and 3, behind a header claiming all three were
+/// cell pointers. Reading `$a[1]` dereferenced the integer `2` as an address and **segfaulted**;
+/// only the element just written could be read back.
+///
+/// The key's static type is the whole trigger: a `mixed` key corrupts, an `int` key does not. The
+/// fix widens the destination through `__rt_array_to_mixed` before the write, exactly as the
+/// Mixed-append lowering already did.
+#[test]
+fn test_mixed_key_write_into_typed_indexed_array_preserves_the_other_elements() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function set_at(array $a, mixed $k, mixed $v): array {
+    $a[$k] = $v;
+    return $a;
+}
+function set_at_str(array $a, mixed $k, mixed $v): array {
+    $a[$k] = $v;
+    return $a;
+}
+$ints = set_at([1, 2, 3], 0, 99);
+echo $ints[0], ",", $ints[1], ",", $ints[2], "\n";
+
+$strs = set_at_str(["a", "b", "c"], 0, "z");
+echo $strs[0], ",", $strs[1], ",", $strs[2], "\n";
+
+$mid = set_at([1, 2, 3, 4, 5], 2, 77);
+echo $mid[0], ",", $mid[1], ",", $mid[2], ",", $mid[3], ",", $mid[4], "\n";
+
+$appended = set_at([1, 2], 2, 3);
+echo count($appended), ":", $appended[0], $appended[1], $appended[2], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "99,2,3\nz,b,c\n1,2,77,4,5\n3:123\n"
+    );
+}
+
+/// Negative control for the widening fix above: the caller's array must not be mutated.
+///
+/// A mixed-key write into an array the caller still holds has to copy-on-write split it, exactly
+/// as PHP's by-value array semantics require. Widening the destination to boxed Mixed slots must
+/// not turn that split into an in-place rewrite of the caller's own storage.
+#[test]
+fn test_mixed_key_write_still_copies_an_aliased_source_array() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function set_at(array $a, mixed $k, mixed $v): array {
+    $a[$k] = $v;
+    return $a;
+}
+$src = [1, 2, 3];
+$copy = set_at($src, 0, 99);
+echo $src[0], $src[1], $src[2], ":", $copy[0], $copy[1], $copy[2], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "123:9923\n");
+}
+
+/// Verifies PHP's by-value array parameter semantics: mutating an `array` parameter must NOT
+/// mutate the caller's array.
+///
+/// elephc passed array arguments as a `+0` BORROW: the parameter slot held the caller's pointer
+/// without ever incrementing its refcount, so `__rt_array_ensure_unique` — which only splits at
+/// refcount >= 2 — stayed inert and every write in the callee landed straight in the CALLER's
+/// storage. `function f(array $a) { $a[] = 1; }` modified the caller's array, on all three write
+/// paths (mixed key, int key, append).
+///
+/// Each caller-side assertion below LAUNDERS its read through a function call. That is not
+/// stylistic: a direct `$src[0]` after the call is CONSTANT-FOLDED — the optimizer folds the
+/// literal, correctly assuming by-value semantics — so it prints the right answer while the
+/// runtime mutates underneath. A test written with direct reads passes against the bug.
+#[test]
+fn test_array_parameters_are_passed_by_value() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function set_mixed(array $a, mixed $k, mixed $v): array {
+    $a[$k] = $v;
+    return $a;
+}
+function set_int(array $a, int $k, int $v): array {
+    $a[$k] = $v;
+    return $a;
+}
+function push_it(array $a, int $v): array {
+    $a[] = $v;
+    return $a;
+}
+function first_of(array $a): int {
+    return $a[0];
+}
+function len_of(array $a): int {
+    return count($a);
+}
+
+$m = [1, 2, 3];
+$rm = set_mixed($m, 0, 99);
+echo first_of($m), ":", first_of($rm), "\n";
+
+$i = [1, 2, 3];
+$ri = set_int($i, 0, 99);
+echo first_of($i), ":", first_of($ri), "\n";
+
+$p = [1, 2, 3];
+$rp = push_it($p, 4);
+echo len_of($p), ":", len_of($rp), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:99\n1:99\n3:4\n");
+}
+
+/// Verifies the by-value parameter privatization keeps the refcount ledger balanced.
+///
+/// The privatized shadow slot holds a genuine `+1`, consumed either by the copy-on-write split's
+/// raw decrement or by the epilogue release — never both, never neither. Two shapes used to die
+/// outright with `heap debug detected bad refcount` (a use-after-free): a parameter merely READ in
+/// a loop (an inliner bug — its cleanup exclusion was a no-op, so the host released a borrow it
+/// never acquired), and a parameter mutated and returned.
+#[test]
+fn test_array_parameter_passing_keeps_the_refcount_ledger_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function read_only(array $a): int {
+    return count($a);
+}
+function mutate_and_return(array $a): array {
+    $a[] = 9;
+    return $a;
+}
+function mutate_and_discard(array $a): int {
+    $a[] = 9;
+    return count($a);
+}
+$src = [1, 2, 3];
+$total = 0;
+for ($i = 0; $i < 8; $i++) {
+    $total += read_only($src);
+    $kept = mutate_and_return($src);
+    $total += mutate_and_discard($src);
+    $fresh = mutate_and_return([7, 8]);
+    $total += count($kept) + count($fresh);
+}
+echo $total, ":", count($src);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "112:3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a generic `array` parameter hint joins over ALL its call sites, not just the first.
+///
+/// A bare `array` hint resolves to `Array(Mixed)` and is then specialized to the first call site's
+/// concrete element type. That narrowing was never joined with later calls, and the widening
+/// machinery that exists for exactly this (`union_param_type`) was gated on `!declared_params[i]`
+/// — which excludes `array`, because `array` is, technically, declared. So `first_of` pinned to
+/// `Array(Int)` on its first call, its body was code-generated for raw integer slots, and a later
+/// `Array(Mixed)` argument (whose slots hold boxed cell POINTERS) was accepted silently and read
+/// back as a raw scalar: it printed a pointer.
+///
+/// The tell was order-dependence — calling `first_of($mixed)` FIRST made both calls correct. This
+/// test pins the buggy order.
+#[test]
+fn test_generic_array_param_widens_across_call_sites() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function widen(array $a, mixed $k, mixed $v): array {
+    $b = $a;
+    $b[$k] = $v;
+    return $b;
+}
+function first_of(array $a): int {
+    return $a[0];
+}
+$ints = [1, 2, 3];
+$mixed = widen($ints, 0, 99);
+echo first_of($ints), ":", first_of($mixed), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:99\n");
+}

@@ -6,8 +6,17 @@
 //! - `crate::codegen::lower_inst::builtins::arrays::lower_array_key_exists()`.
 //!
 //! Key details:
-//! - Indexed arrays use `__rt_array_key_exists` with integer-like keys.
+//! - Indexed arrays use `__rt_array_key_exists` with integer-like keys, and
+//!   `__rt_array_key_exists_mixed_key` (the storage-kind-dispatching presence
+//!   probe, mirroring `__rt_array_get_mixed_key`'s packed/hash dispatch) for a
+//!   Str/Mixed/Union/null key — an `Array(_)`-typed local can still be
+//!   runtime-backed by promoted hash storage even though the checker only
+//!   promotes the *static* type to `AssocArray` at a provably string-keyed write.
 //! - Associative arrays probe `__rt_hash_get`; its found flag is already a PHP bool result.
+//! - `array_key_exists()` must answer `true` for a key present with a `null`
+//!   value (unlike `isset()`, which answers `false`), so the mixed-key path
+//!   cannot reuse `__rt_array_get_mixed_key` plus an is-null check — it needs
+//!   its own presence-only helper.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -33,14 +42,37 @@ pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instr
     }
 }
 
-/// Lowers indexed-array key existence through the bounds-check runtime helper.
+/// Lowers indexed-array key existence, dispatching on the key's PHP type: an
+/// Int/Bool key uses the bounds-check-only fast path, while a Str/Mixed/Union/
+/// null key routes through the storage-kind-dispatching mixed-key helper (the
+/// key's runtime tag, and possibly the array's runtime storage kind, are only
+/// known at runtime for these).
 fn lower_indexed_array_key_exists(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     key: ValueId,
     array: ValueId,
 ) -> Result<()> {
-    require_indexed_key_type(ctx.value_php_type(key)?)?;
+    match ctx.value_php_type(key)?.codegen_repr() {
+        PhpType::Int | PhpType::Bool => lower_indexed_array_key_exists_int(ctx, inst, key, array),
+        PhpType::Str | PhpType::Mixed | PhpType::Union(_) | PhpType::Void | PhpType::Never => {
+            lower_indexed_array_key_exists_mixed_key(ctx, inst, key, array)
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_key_exists key PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Lowers indexed-array key existence for an Int/Bool key through the
+/// bounds-check runtime helper.
+fn lower_indexed_array_key_exists_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    key: ValueId,
+    array: ValueId,
+) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
@@ -52,6 +84,34 @@ fn lower_indexed_array_key_exists(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_key_exists");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers indexed-array key existence for a Str/Mixed/Union/null key through
+/// `__rt_array_key_exists_mixed_key`, which dispatches on the array's runtime
+/// storage kind (packed vs. promoted-to-hash) exactly like
+/// `__rt_array_get_mixed_key`'s read path, but only reports presence.
+fn lower_indexed_array_key_exists_mixed_key(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    key: ValueId,
+    array: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            super::super::super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        }
+        Arch::X86_64 => {
+            super::super::super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(array, "rdi")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_key_exists_mixed_key");
     store_if_result(ctx, inst)
 }
 
@@ -207,15 +267,4 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction("mov rsi, rax");                                    // move normalized key_lo into the hash lookup ABI register
     ctx.emitter.label(&done);
     Ok(())
-}
-
-/// Verifies indexed-array key existence can use the integer-key runtime helper.
-fn require_indexed_key_type(key_ty: PhpType) -> Result<()> {
-    match key_ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool => Ok(()),
-        other => Err(CodegenIrError::unsupported(format!(
-            "array_key_exists key PHP type {:?}",
-            other
-        ))),
-    }
 }
