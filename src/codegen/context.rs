@@ -152,6 +152,19 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
     }
 
+    /// Returns a function value's IR storage type.
+    ///
+    /// This is the ONLY reliable way to tell whether a value is a genuinely boxed `Mixed` CELL.
+    /// The PHP type lies here: `Op::IChecked*` (which is what `$i++` lowers to) reports a PHP type
+    /// of `Mixed` while its runtime value is a RAW INTEGER, not a heap cell. Unboxing that as a
+    /// pointer reads garbage.
+    pub(super) fn value_ir_type(&self, value: ValueId) -> Result<crate::ir::IrType> {
+        self.function
+            .value(value)
+            .map(|metadata| metadata.ir_type)
+            .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
+    }
+
     /// Returns a function value's source PHP metadata before codegen representation erasure.
     pub(super) fn raw_value_php_type(&self, value: ValueId) -> Result<PhpType> {
         self.function

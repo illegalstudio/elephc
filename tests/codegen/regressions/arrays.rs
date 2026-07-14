@@ -1745,3 +1745,224 @@ echo first_of($ints), ":", first_of($mixed), "\n";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "1:99\n");
 }
+
+/// Verifies a plain read `$a[$k]` on an `Array(_)` receiver promoted to hash storage does not
+/// crash.
+///
+/// `Op::ArrayGet`'s codegen walked the packed payload unconditionally. An `Array(_)`-typed local
+/// can be HASH-backed at runtime — a mixed-key write promotes the storage kind while the checker
+/// only promotes the static type to `AssocArray` at a provably string-keyed write — so the read
+/// bounds-checked the index against the hash header's live-entry COUNT and then read the header's
+/// own fields as if they were elements. It SEGFAULTED. `Op::ArrayIsset` and `array_key_exists`
+/// were given a storage-kind dispatch; `Op::ArrayGet` was not, and it is the one shape that
+/// actually crashes.
+#[test]
+fn test_array_read_on_a_hash_promoted_receiver_does_not_crash() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function set_key(array $a, mixed $k, mixed $v): array {
+    $a[$k] = $v;
+    return $a;
+}
+function read_at(array $a, mixed $k): mixed {
+    return $a[$k];
+}
+$promoted = set_key([], "foo", 42);
+var_dump(read_at($promoted, 0));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\n");
+}
+
+/// Verifies a `Mixed`-typed key reads the RIGHT element, on both storage kinds.
+///
+/// `$a[$k]` with a `mixed` key used to `str_to_i`-coerce the key before the read: `"foo"` became
+/// `0` and the read silently returned element 0. The obvious fix — routing such a key to the
+/// mixed-key op — was NOT taken, because that op retypes the read's RESULT to a boxed `Mixed`,
+/// which breaks a downstream typed assignment like `Iterator $it = $this->iterators[$i]`. And that
+/// is not a corner case: `$i++` lowers to `Op::IChecked*`, whose PHP result type is `Mixed`, so
+/// EVERY incremented loop counter is statically `Mixed` from its second use on. (Widening it
+/// naively regressed four `MultipleIterator` tests.)
+///
+/// Instead the key keeps `Op::ArrayGet` — whose result stays the array's element type — and is
+/// simply no longer coerced; the codegen materializes it on both storage kinds. PHP's
+/// numeric-string key rule then comes for free from `materialize_hash_key`: `"1"` IS the integer
+/// key 1, while `"foo"` is a genuine string key, which never exists in packed storage.
+#[test]
+fn test_mixed_typed_key_reads_the_right_element() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function set_key(array $a, mixed $k, mixed $v): array {
+    $a[$k] = $v;
+    return $a;
+}
+function read_at(array $a, mixed $k): mixed {
+    return $a[$k];
+}
+$promoted = set_key([], "foo", 42);
+var_dump(read_at($promoted, "foo"));
+
+$packed = [10, 20, 30];
+var_dump(read_at($packed, "1"));
+var_dump(read_at($packed, 2));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "int(42)\nint(20)\nint(30)\n");
+}
+
+/// Verifies nested append auto-vivifies on an OBJECT-PROPERTY base, not just a local.
+///
+/// `$this->b[$k][] = $v` desugars to the same read/push/write-back triple as a local base, and hit
+/// the same defect: nothing created the missing inner array, so the first push into every bucket
+/// read back a boxed null and silently DROPPED the value. `count()` returned 0.
+///
+/// The fusion vivifies through the ordinary `PropertyArrayAssign` lowering — the very one the
+/// group's own write-back uses — because the append temporary's checker type is the container's
+/// VALUE type (typically `Mixed`), so assigning a bare `Array(Never)` literal into it would bypass
+/// the boxing the storage expects and the bucket would segfault the moment it outgrew its initial
+/// capacity. The growth case below pins exactly that.
+///
+/// A property base deliberately does NOT get `Op::SlotDetach`: that op republishes the possibly
+/// rehashed container pointer through a LOCAL slot, and on a property the new pointer would never
+/// reach the property. So the property base is correct but still quadratic.
+#[test]
+fn test_nested_append_vivifies_on_a_property_base() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Bag {
+    public array $b = [];
+
+    public function add(string $k, int $v): void {
+        $this->b[$k][] = $v;
+    }
+}
+$bag = new Bag();
+$bag->add("a", 1);
+$bag->add("b", 2);
+$bag->add("a", 3);
+echo count($bag->b), ":", count($bag->b["a"]), ":", count($bag->b["b"]), "\n";
+
+$grow = new Bag();
+for ($i = 0; $i < 12; $i++) {
+    $grow->add("k", $i);
+}
+echo count($grow->b["k"]), ":", $grow->b["k"][11], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2:2:1\n12:11\n");
+}
+
+/// Verifies nested append auto-vivifies on a STATIC-property base.
+///
+/// This shape needed two separate fixes. The parser was dropping the append outright —
+/// `self::$b[$k][] = $v` compiled as `self::$b[$k] = $v`, overwriting the bucket — and once that
+/// was routed through the desugar it inherited the missing auto-vivification and lost the first
+/// row of every bucket instead. Both are fixed; this pins the pair.
+#[test]
+fn test_nested_append_vivifies_on_a_static_property_base() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Registry {
+    public static array $b = [];
+
+    public static function add(int $k, int $v): void {
+        self::$b[$k][] = $v;
+    }
+}
+Registry::add(0, 1);
+Registry::add(0, 2);
+Registry::add(1, 9);
+echo count(Registry::$b), ":", count(Registry::$b[0]), ":", count(Registry::$b[1]), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2:2:1\n");
+}
+
+/// Negative control: a nested append on a property base must still copy-on-write a shared bucket.
+#[test]
+fn test_nested_append_on_a_property_base_still_copies_a_shared_bucket() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Bag {
+    public array $b = [];
+}
+$bag = new Bag();
+$bag->b["k"] = [1];
+$snapshot = $bag->b["k"];
+$bag->b["k"][] = 2;
+echo count($snapshot), ":", count($bag->b["k"]), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:2\n");
+}
+
+/// Verifies a store into a `Mixed`-typed property BOXES its value.
+///
+/// An UNTYPED property becomes `Mixed` as soon as two different types are assigned to it (here
+/// `$this->pos = 0` and `$this->pos = $this->pos + 1`). A `Mixed` slot holds a boxed cell — but
+/// `Op::PropSet` was handed the value exactly as lowered, so `$this->pos = 0` wrote a RAW integer
+/// into it, and reading it back dereferenced that integer as a cell pointer. `var_dump($this->pos)`
+/// printed **NULL** right after assigning `0` to it.
+///
+/// This bug survived because ANOTHER bug masked it perfectly: the array-read path used to coerce a
+/// `Mixed` key with `__rt_mixed_cast_int`, and casting that null cell gives `0` — so `$names[$this->pos]`
+/// read element 0 and returned the right answer, by accident. Reading the key correctly is what
+/// exposed it. Two bugs propping each other up.
+#[test]
+fn test_store_into_a_mixed_typed_property_is_boxed() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Cursor {
+    public $pos = 0;
+
+    public function reset(): void {
+        $this->pos = 0;
+    }
+
+    public function bump(): void {
+        $this->pos = $this->pos + 1;
+    }
+}
+$c = new Cursor();
+var_dump($c->pos);
+$c->reset();
+var_dump($c->pos);
+$c->bump();
+var_dump($c->pos);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "int(0)\nint(0)\nint(1)\n");
+}
+
+/// The end-to-end shape the two bugs above conspired to hide: an untyped cursor property used as an
+/// array index, advanced across calls. It is exactly `dir_readdir()`'s body in a stream wrapper.
+#[test]
+fn test_untyped_cursor_property_indexes_an_array_across_calls() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Reader {
+    public $pos = 0;
+
+    public function next(): string {
+        $names = ["a.txt", "b.txt"];
+        if ($this->pos >= 2) {
+            return "";
+        }
+        $n = $names[$this->pos];
+        $this->pos = $this->pos + 1;
+        return $n;
+    }
+}
+$r = new Reader();
+echo $r->next(), "|", $r->next(), "|", $r->next(), "|\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "a.txt|b.txt||\n");
+}

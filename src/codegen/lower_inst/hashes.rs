@@ -973,7 +973,7 @@ fn materialize_hash_concrete_value_x86_64(
 }
 
 /// Moves a successful AArch64 hash lookup payload into the canonical result registers.
-fn emit_hash_get_success_aarch64(
+pub(super) fn emit_hash_get_success_aarch64(
     ctx: &mut FunctionContext<'_>,
     value_ty: &PhpType,
     result_ty: &PhpType,
@@ -1010,7 +1010,7 @@ fn emit_hash_get_success_aarch64(
 }
 
 /// Moves a successful x86_64 hash lookup payload into the canonical result registers.
-fn emit_hash_get_success_x86_64(
+pub(super) fn emit_hash_get_success_x86_64(
     ctx: &mut FunctionContext<'_>,
     value_ty: &PhpType,
     result_ty: &PhpType,

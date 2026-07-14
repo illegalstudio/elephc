@@ -2258,6 +2258,20 @@ fn lower_property_assign(
         value_expr,
         span,
     );
+    // Box the value into the property's representation. A property whose type is `Mixed` — which is
+    // what an UNTYPED property becomes as soon as two different types are assigned to it — stores a
+    // boxed cell, but `Op::PropSet` was handed the value exactly as lowered: `$this->pos = 0` wrote
+    // a RAW integer into a Mixed slot, and reading it back dereferenced that integer as a cell
+    // pointer and yielded NULL. `$this->pos = 0; var_dump($this->pos);` printed `NULL`.
+    //
+    // It went unnoticed because the old array-read path masked it perfectly: it coerced a Mixed key
+    // with `__rt_mixed_cast_int`, and casting that null cell gives 0 — the right element, by
+    // accident. Reading the key correctly is what exposed it.
+    let property_ty = object_property_type(ctx, object.value, property);
+    let value = match property_ty {
+        Some(ty) => coerce_typed_assign_value(ctx, value, &ty, span),
+        None => value,
+    };
     if magic_set_receiver_has_method(ctx, object.value, property) {
         lower_magic_property_set(ctx, object.value, property, value, span);
         return;

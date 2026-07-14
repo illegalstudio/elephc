@@ -28,10 +28,12 @@
 //! - Anything it does not recognize **fails open** to `lower_block`, i.e. to today's lowering,
 //!   bit for bit. That is deliberate: the scope gate below is narrow on purpose.
 
-use crate::ir::Op;
-use crate::ir_lower::context::LoweringContext;
+use crate::ir::{IrHeapKind, IrType, Op};
+use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::ir_lower::expr::lower_expr;
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, NESTED_APPEND_TEMP_PREFIX};
+use crate::parser::ast::{
+    Expr, ExprKind, StaticReceiver, Stmt, StmtKind, NESTED_APPEND_TEMP_PREFIX,
+};
 use crate::span::Span;
 use crate::types::PhpType;
 
@@ -45,8 +47,28 @@ pub(super) struct NestedAppendGroup<'a> {
     read: &'a Stmt,
     push: &'a Stmt,
     write_back: &'a Stmt,
-    base: &'a str,
+    base: BaseKind<'a>,
     index: &'a Expr,
+}
+
+/// What the nested append's outer container is.
+///
+/// The distinction is not cosmetic. `Op::SlotDetach` republishes the container pointer through
+/// `source_load_local_slot`, which only resolves a LOCAL slot — `__rt_hash_set` may rehash the
+/// table and hand back a new pointer, and on a property base that pointer would never make it back
+/// into the property, leaving it stale. So a property base gets the auto-vivification (which is the
+/// data-loss fix) but NOT the detach (which is the O(n^2) fix). Correctness first; the property
+/// base stays quadratic until the detach can republish through a property store.
+enum BaseKind<'a> {
+    Local(&'a str),
+    Property {
+        object: &'a Expr,
+        property: &'a str,
+    },
+    StaticProperty {
+        receiver: &'a StaticReceiver,
+        property: &'a str,
+    },
 }
 
 /// Returns the nested-append group a synthetic body encodes, or `None` to fall back to
@@ -69,7 +91,25 @@ pub(super) fn recognize<'a>(
         StmtKind::Assign { name, value } if name.starts_with(NESTED_APPEND_TEMP_PREFIX) => {
             match &value.kind {
                 ExprKind::ArrayAccess { array, index } => match &array.kind {
-                    ExprKind::Variable(base) => (name.as_str(), base.as_str(), index.as_ref()),
+                    ExprKind::Variable(base) => {
+                        (name.as_str(), BaseKind::Local(base.as_str()), index.as_ref())
+                    }
+                    ExprKind::PropertyAccess { object, property } => (
+                        name.as_str(),
+                        BaseKind::Property {
+                            object: object.as_ref(),
+                            property: property.as_str(),
+                        },
+                        index.as_ref(),
+                    ),
+                    ExprKind::StaticPropertyAccess { receiver, property } => (
+                        name.as_str(),
+                        BaseKind::StaticProperty {
+                            receiver,
+                            property: property.as_str(),
+                        },
+                        index.as_ref(),
+                    ),
                     _ => return None,
                 },
                 _ => return None,
@@ -83,18 +123,53 @@ pub(super) fn recognize<'a>(
         _ => return None,
     }
 
-    match &triple[2].kind {
-        StmtKind::ArrayAssign { array, value, .. } if array == base => match &value.kind {
+    // The write-back must target the SAME container the read came from, and hand back the very
+    // temporary the push mutated. Both were built by the parser from one stabilized target, so
+    // matching the shape and the names is enough — the `Synthetic` wrapper and the reserved temp
+    // prefix already prove the provenance.
+    match (&triple[2].kind, &base) {
+        (StmtKind::ArrayAssign { array, value, .. }, BaseKind::Local(base_name))
+            if array == base_name =>
+        {
+            match &value.kind {
+                ExprKind::Variable(name) if name == temp => {}
+                _ => return None,
+            }
+        }
+        (
+            StmtKind::PropertyArrayAssign {
+                property, value, ..
+            },
+            BaseKind::Property {
+                property: base_property,
+                ..
+            },
+        ) if property == base_property => match &value.kind {
+            ExprKind::Variable(name) if name == temp => {}
+            _ => return None,
+        },
+        (
+            StmtKind::StaticPropertyArrayAssign {
+                property, value, ..
+            },
+            BaseKind::StaticProperty {
+                property: base_property,
+                ..
+            },
+        ) if property == base_property => match &value.kind {
             ExprKind::Variable(name) if name == temp => {}
             _ => return None,
         },
         _ => return None,
     }
 
-    // The container must be a real associative-array local the checker knows about; anything
-    // else (an indexed array, a Mixed local, an undeclared name) falls open.
-    if !ctx.has_local_slot(base) || !matches!(ctx.local_type(base), PhpType::AssocArray { .. }) {
-        return None;
+    // A local container must be an associative-array local the checker knows about; anything else
+    // (an indexed array, a Mixed local, an undeclared name) falls open to today's lowering. A
+    // property container is gated at lowering time instead, on the IR type of the loaded property.
+    if let BaseKind::Local(name) = base {
+        if !ctx.has_local_slot(name) || !matches!(ctx.local_type(name), PhpType::AssocArray { .. }) {
+            return None;
+        }
     }
 
     Some(NestedAppendGroup {
@@ -128,14 +203,28 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         super::lower_stmt(ctx, stmt);
     }
 
-    let container = ctx.load_local(group.base, Some(span));
+    // Load the container and probe the key. For a local this is a `LoadLocal`; for a property it is
+    // an ordinary property read, which is pure and can be replayed.
+    let container = load_container(ctx, group, span);
+    let isset_op = match container.ir_type {
+        IrType::Heap(IrHeapKind::Hash) => Op::HashIsset,
+        IrType::Heap(IrHeapKind::Array) => Op::ArrayIsset,
+        // Anything else (a `Mixed` property, an object) is out of scope: fall open to today's
+        // lowering, which is what the parser's desugar already produces.
+        _ => {
+            super::lower_stmt(ctx, group.read);
+            super::lower_stmt(ctx, group.push);
+            super::lower_stmt(ctx, group.write_back);
+            return;
+        }
+    };
     let key = lower_expr(ctx, group.index);
     let present = ctx.emit_value(
-        Op::HashIsset,
+        isset_op,
         vec![container.value, key.value],
         None,
         PhpType::Bool,
-        Op::HashIsset.default_effects(),
+        isset_op.default_effects(),
         Some(span),
     );
 
@@ -156,14 +245,7 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
     // -- vivify: PHP creates the missing inner array; nothing else does --
     ctx.builder.position_at_end(vivify_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    let vivify = Stmt::new(
-        StmtKind::ArrayAssign {
-            array: group.base.to_string(),
-            index: group.index.clone(),
-            value: Expr::new(ExprKind::ArrayLiteral(Vec::new()), span),
-        },
-        span,
-    );
+    let vivify = vivify_stmt(group, span);
     super::lower_stmt(ctx, &vivify);
     ctx.builder.terminate(crate::ir::Terminator::Br {
         target: body_block,
@@ -174,23 +256,95 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
     ctx.builder.position_at_end(body_block);
     ctx.restore_initialized_slots(split_initialized);
     super::lower_stmt(ctx, group.read);
-    // Re-load the container and key rather than reusing the values above: those were emitted in a
-    // predecessor block, and the vivification may have republished a grown or copy-on-write-split
-    // container pointer into the local. A `LoadLocal` is pure, and the key expression is either
-    // replayable or already hoisted into a prefix temporary, so neither is evaluated twice
-    // observably.
-    let container = ctx.load_local(group.base, Some(span));
-    let key = lower_expr(ctx, group.index);
-    // Hand the slot's reference to the temporary, so the push below sees a uniquely-owned bucket
-    // and mutates it in place instead of copy-on-write cloning it. This cannot free the bucket:
-    // the read above already took a reference, so the count it drops is at least two.
-    ctx.emit_void(
-        Op::SlotDetach,
-        vec![container.value, key.value],
-        None,
-        Op::SlotDetach.default_effects(),
-        Some(span),
-    );
+
+    // Hand the container slot's reference to the temporary, so the push below sees a uniquely-owned
+    // bucket and mutates it in place instead of copy-on-write cloning it — O(n^2) -> O(n). This
+    // cannot free the bucket: the read above already took a reference, so the count it drops is at
+    // least two.
+    //
+    // ONLY for a local base. `Op::SlotDetach` republishes the (possibly rehashed) container pointer
+    // through `source_load_local_slot`, which resolves a local slot and nothing else; on a property
+    // base the new pointer would never reach the property and it would be left stale. A property
+    // base therefore keeps the auto-vivification and stays quadratic.
+    if let BaseKind::Local(name) = &group.base {
+        // Re-load the container and key: they were emitted in a predecessor block, and the
+        // vivification may have republished a grown or copy-on-write-split container pointer into
+        // the local. A `LoadLocal` is pure, and the key is either replayable or already hoisted into
+        // a prefix temporary, so neither is evaluated twice observably.
+        let container = ctx.load_local(name, Some(span));
+        let key = lower_expr(ctx, group.index);
+        ctx.emit_void(
+            Op::SlotDetach,
+            vec![container.value, key.value],
+            None,
+            Op::SlotDetach.default_effects(),
+            Some(span),
+        );
+    }
+
     super::lower_stmt(ctx, group.push);
     super::lower_stmt(ctx, group.write_back);
+}
+
+/// Loads the nested append's outer container as a value.
+fn load_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    group: &NestedAppendGroup<'_>,
+    span: Span,
+) -> LoweredValue {
+    match &group.base {
+        BaseKind::Local(name) => ctx.load_local(name, Some(span)),
+        BaseKind::Property { object, property } => {
+            let access = Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new((*object).clone()),
+                    property: (*property).to_string(),
+                },
+                span,
+            );
+            lower_expr(ctx, &access)
+        }
+        BaseKind::StaticProperty { receiver, property } => {
+            let access = Expr::new(
+                ExprKind::StaticPropertyAccess {
+                    receiver: (*receiver).clone(),
+                    property: (*property).to_string(),
+                },
+                span,
+            );
+            lower_expr(ctx, &access)
+        }
+    }
+}
+
+/// Builds the statement that auto-vivifies the missing inner array.
+///
+/// It writes an empty array into the container through the SAME write-back lowering the group's own
+/// write-back uses. That is not a stylistic choice: the append temporary's checker type is the
+/// container's VALUE type (typically `Mixed`), so assigning a bare `Array(Never)` literal straight
+/// into it would bypass the boxing the container's storage expects. The bucket then looked fine
+/// until it outgrew its initial capacity, at which point growing it read a malformed header and
+/// segfaulted.
+fn vivify_stmt(group: &NestedAppendGroup<'_>, span: Span) -> Stmt {
+    let empty = Expr::new(ExprKind::ArrayLiteral(Vec::new()), span);
+    let kind = match &group.base {
+        BaseKind::Local(name) => StmtKind::ArrayAssign {
+            array: (*name).to_string(),
+            index: group.index.clone(),
+            value: empty,
+        },
+        BaseKind::Property { object, property } => StmtKind::PropertyArrayAssign {
+            object: Box::new((*object).clone()),
+            property: (*property).to_string(),
+            index: group.index.clone(),
+            value: empty,
+        },
+        BaseKind::StaticProperty { receiver, property } => StmtKind::StaticPropertyArrayAssign {
+            receiver: (*receiver).clone(),
+            property: (*property).to_string(),
+            index: group.index.clone(),
+            value: empty,
+        },
+    };
+    Stmt::new(kind, span)
 }

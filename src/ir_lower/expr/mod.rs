@@ -7255,7 +7255,31 @@ fn lower_array_access_from_value(
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             let index_ty = index_expr_key_type(ctx, index, index_value.value);
-            if index_ty == PhpType::Int {
+            // A `Mixed`-typed key keeps `Op::ArrayGet`, whose result is the array's ELEMENT type.
+            // Routing it to the mixed-key op instead would retype the result to a boxed `Mixed`
+            // and break a downstream typed assignment such as `Iterator $it = $this->iterators[$i]`
+            // — and `$i++` lowers to `Op::IChecked*`, whose PHP type IS `Mixed`, so every
+            // incremented loop counter is statically `Mixed` from its second use on. That hazard is
+            // why this key used to be `str_to_i`-coerced instead: `"foo"` became `0` and the read
+            // silently returned element 0. It is not coerced any more — the codegen materializes
+            // the key itself, on both storage kinds, and PHP's numeric-string rule comes free with
+            // `materialize_hash_key` (`"123"` is the INT key 123; `"foo"` is a genuine string key,
+            // which never exists in packed storage).
+            // Gate on the IR type, NOT the PHP type. `Op::IChecked*` — what `$i++` lowers to —
+            // reports a PHP type of `Mixed` while its runtime value is a RAW INTEGER, so an
+            // incremented loop counter would take the boxed-cell path and be unboxed as a pointer.
+            // Only a genuinely boxed `Mixed` cell may skip the integer coercion.
+            let index_is_mixed = matches!(
+                index_value.ir_type,
+                IrType::Heap(crate::ir::IrHeapKind::Mixed)
+            );
+            if index_is_mixed {
+                if warn_on_missing {
+                    Op::ArrayGet
+                } else {
+                    Op::ArrayGetSilent
+                }
+            } else if index_ty == PhpType::Int {
                 index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
                 if warn_on_missing {
                     Op::ArrayGet
