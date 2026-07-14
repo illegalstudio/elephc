@@ -65,7 +65,8 @@ impl Checker {
         // undeclared property routed to `__isset`/`__unset`, which must not be
         // eagerly inferred by argument normalization. Their handlers inspect the
         // raw operands directly.
-        let is_lazy_construct = matches!(name, "isset" | "unset");
+        let builtin_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
         let normalized_args;
         let args = if let Some(sig) =
             (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten()
@@ -81,6 +82,17 @@ impl Checker {
         } else {
             args
         };
+
+        if name == "eval" {
+            // eval is not registry-backed, and argument normalization tolerates
+            // zero-arg calls (trailing defaults are trimmed), so arity must be
+            // enforced here before the fast-path return.
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "eval() takes exactly 1 argument"));
+            }
+            self.infer_type(&args[0], env)?;
+            return Ok(Some(PhpType::Mixed));
+        }
 
         // Registry-first: if the builtin is registered, use its spec to check arity
         // and derive the return type (or call the spec's check hook for refined types).

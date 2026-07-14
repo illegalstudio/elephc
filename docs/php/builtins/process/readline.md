@@ -2,7 +2,7 @@
 title: "readline()"
 description: "Reads a line from the user's terminal."
 sidebar:
-  order: 310
+  order: 314
 ---
 
 ## readline()
@@ -17,6 +17,11 @@ Reads a line from the user's terminal.
 - `$prompt` (`string`), default `null`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/readline.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/readline.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

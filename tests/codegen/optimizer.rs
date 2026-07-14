@@ -31,6 +31,8 @@ mod eir_licm;
 mod identity_arithmetic;
 #[path = "optimizer/peephole.rs"]
 mod peephole;
+#[path = "optimizer/release_local_slot.rs"]
+mod release_local_slot;
 #[path = "optimizer/inline.rs"]
 mod inline;
 #[path = "optimizer/memory_model_propagation.rs"]

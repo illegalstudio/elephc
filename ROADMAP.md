@@ -1047,19 +1047,6 @@ future use cases.
 | Fiber parity v2 | Medium | MVP delivered in v0.20.x for ARM64 and Linux x86_64. Remaining parity work: arithmetic auto-unboxing on `mixed` payloads received from `suspend()`, true variadic `start(...$args)` beyond seven args, dynamic callback targets, by-reference callback start parameters, configurable stack sizing, and PHP-exact `FiberError` hierarchy. See `docs/php/fibers.md`. |
 | Conditional include class-like variants | High | Keep class/interface/trait/enum duplicate detection strict for now. Supporting branch-selected class-like declarations would require runtime class metadata/layout dispatch, while modern PHP can avoid the ambiguity with namespaces. |
 
----
-
-## Will not implement
-
-Features that are fundamentally incompatible with a static ahead-of-time compiler.
-
-| Feature | Reason |
-|---|---|
-| `compact()` | Resolves variable names from strings at runtime. In elephc, variables are fixed stack slots allocated at compile time — there is no variable name table at runtime. |
-| `extract()` | Creates new variables from array keys at runtime. A static compiler must know all variables before execution — it cannot allocate stack slots on the fly. |
-| `$$var` (variable variables) | Requires a runtime symbol table to resolve variable names dynamically. Incompatible with static stack-based variable allocation. |
-| `eval()` | Requires a full interpreter/compiler at runtime. Fundamentally impossible in an AOT compiler. |
-
 ## Future 1.0 perspective
 
 1.0 is not an active planning gate for the current roadmap. Revisit it only

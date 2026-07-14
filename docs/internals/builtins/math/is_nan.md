@@ -2,7 +2,7 @@
 title: "is_nan() — internals"
 description: "Compiler internals for is_nan(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 253
+  order: 257
 ---
 
 ## `is_nan()` — internals
@@ -31,6 +31,11 @@ function is_nan(float $num): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/is_nan.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_nan.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -72,6 +72,72 @@ fn test_is_numeric_string() {
     assert_eq!(out, "");
 }
 
+/// Verifies PHP scalar predicate aliases and container/object predicates compile as builtin calls.
+#[test]
+fn test_type_predicate_aliases_array_and_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {}
+$object = new Box();
+echo is_integer(1) ? "i" : "_";
+echo is_long(1) ? "l" : "_";
+echo is_double(1.5) ? "d" : "_";
+echo is_real(1.5) ? "r" : "_";
+echo is_array([1]) ? "a" : "_";
+echo is_array(["x" => 1]) ? "h" : "_";
+echo is_object($object) ? "o" : "_";
+echo is_object([1]) ? "bad" : "_";
+"#,
+    );
+    assert_eq!(out, "ildraho_");
+}
+
+/// Verifies `is_array()` inspects boxed Mixed JSON payload tags for array values.
+#[test]
+fn test_is_array_recognizes_arrays_inside_mixed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$values = [json_decode("[1]"), json_decode("{\"a\":2}", true), 3];
+foreach ($values as $value) {
+    echo is_array($value) ? "a" : "_";
+}
+"#,
+    );
+    assert_eq!(out, "aa_");
+}
+
+/// Verifies `strval()` works directly, as a first-class callable, and through string callable dispatch.
+#[test]
+fn test_strval_direct_first_class_and_callable_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+echo strval(12);
+echo ":";
+$strval = strval(...);
+echo $strval(true);
+echo ":";
+echo call_user_func("strval", 7);
+"#,
+    );
+    assert_eq!(out, "12:1:7");
+}
+
+/// Verifies `function_exists()` recognizes PHP predicate aliases and `strval()` case-insensitively.
+#[test]
+fn test_function_exists_recognizes_scalar_alias_builtins() {
+    let out = compile_and_run(
+        r#"<?php
+echo function_exists("is_integer") ? "1" : "0";
+echo function_exists("IS_LONG") ? "1" : "0";
+echo function_exists("is_double") ? "1" : "0";
+echo function_exists("IS_REAL") ? "1" : "0";
+echo function_exists("is_object") ? "1" : "0";
+echo function_exists("strval") ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "111111");
+}
+
 // --- Mixed-cell-aware predicates ---
 //
 // `is_string()` / `is_int()` / `is_bool()` peek at the runtime tag of a

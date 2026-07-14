@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/function_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/function_exists.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:276](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L276) (`lower_function_exists`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:566](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L566) (`lower_function_exists`)
 - **Function symbol**: `lower_function_exists()`
 
 
@@ -36,6 +36,11 @@ function function_exists(string $function): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/function_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/function_exists.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

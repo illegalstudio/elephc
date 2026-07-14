@@ -127,18 +127,28 @@ fn union_params(union: &mut Vec<(String, bool)>, params: &[(String, bool)]) {
 }
 
 /// Converts an AST parameter tuple list into `(param name, is_by_ref)` pairs.
-fn params_signature(
+fn params_signature_with_variadic(
     params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    variadic: Option<&str>,
+    variadic_by_ref: bool,
 ) -> Vec<(String, bool)> {
-    params
+    let mut signature: Vec<_> = params
         .iter()
         .map(|(name, _, _, is_ref)| (name.clone(), *is_ref))
-        .collect()
+        .collect();
+    if let Some(variadic) = variadic {
+        signature.push((variadic.to_string(), variadic_by_ref));
+    }
+    signature
 }
 
 /// Records one method declaration into the by-name union and the ctor flag.
 fn collect_method(method: &ClassMethod, sigs: &mut ByRefSignatures) {
-    let signature = params_signature(&method.params);
+    let signature = params_signature_with_variadic(
+        &method.params,
+        method.variadic.as_deref(),
+        method.variadic_by_ref,
+    );
     if method.name.eq_ignore_ascii_case("__construct")
         && signature.iter().any(|(_, by_ref)| *by_ref)
     {
@@ -173,9 +183,17 @@ fn collect_properties(properties: &[ClassProperty], sigs: &mut ByRefSignatures) 
 fn collect_from_block(body: &[Stmt], sigs: &mut ByRefSignatures) {
     for stmt in body {
         match &stmt.kind {
-            StmtKind::FunctionDecl { name, params, .. } => {
-                sigs.functions
-                    .insert(name.clone(), params_signature(params));
+            StmtKind::FunctionDecl {
+                name,
+                params,
+                variadic,
+                variadic_by_ref,
+                ..
+            } => {
+                sigs.functions.insert(
+                    name.clone(),
+                    params_signature_with_variadic(params, variadic.as_deref(), *variadic_by_ref),
+                );
             }
             StmtKind::ClassDecl {
                 properties,

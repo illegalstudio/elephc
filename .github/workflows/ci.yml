@@ -21,6 +21,7 @@ env:
     -p elephc-phar
     -p elephc-tz
     -p elephc-image
+    -p elephc-magician
     -p elephc-web
 
 jobs:
@@ -66,7 +67,8 @@ jobs:
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
         # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a. Build
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
+        # and libelephc_web.a. Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -137,7 +139,8 @@ jobs:
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
         # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a. Build
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
+        # and libelephc_web.a. Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -208,7 +211,8 @@ jobs:
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
         # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a. Build
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
+        # and libelephc_web.a. Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -233,7 +237,7 @@ jobs:
     name: Non-Codegen Tests (macos-aarch64)
     needs: build-archive-macos-aarch64
     runs-on: macos-14
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -262,7 +266,7 @@ jobs:
     name: Non-Codegen Tests (linux-x86_64)
     needs: build-archive-linux-x86_64
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -302,7 +306,7 @@ jobs:
     name: Non-Codegen Tests (linux-aarch64)
     needs: build-archive-linux-aarch64
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -363,11 +367,14 @@ jobs:
           path: ${{ runner.temp }}
 
       - name: Run codegen test shard
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'binary(codegen_tests)' \
+            -E 'binary(codegen_tests) and not test(~codegen::eval)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -408,11 +415,14 @@ jobs:
           path: ${{ runner.temp }}
 
       - name: Run codegen test shard
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'binary(codegen_tests)' \
+            -E 'binary(codegen_tests) and not test(~codegen::eval)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -453,14 +463,153 @@ jobs:
           path: ${{ runner.temp }}
 
       - name: Run codegen test shard
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'binary(codegen_tests)' \
+            -E 'binary(codegen_tests) and not test(~codegen::eval)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
+
+  # Eval integration tests compile, link, and run full programs while exercising
+  # eval/magician paths, so keep them out of the ordinary codegen shards. Two
+  # workers per shard reduce wall time without increasing the number of test runs.
+  eval-codegen-tests-macos-aarch64:
+    name: Eval Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
+    needs: build-archive-macos-aarch64
+    runs-on: macos-14
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: brew install pcre2
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run eval codegen test shard
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(codegen_tests) and test(~codegen::eval)' \
+            --partition hash:${{ matrix.shard }}/16 \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 2
+
+  eval-codegen-tests-linux-x86_64:
+    name: Eval Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Run eval codegen test shard
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(codegen_tests) and test(~codegen::eval)' \
+            --partition hash:${{ matrix.shard }}/16 \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 2
+
+  eval-codegen-tests-linux-aarch64:
+    name: Eval Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
+    needs: build-archive-linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run eval codegen test shard
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(codegen_tests) and test(~codegen::eval)' \
+            --partition hash:${{ matrix.shard }}/16 \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 2
 
   image-api-sync:
     name: Image API stubs in sync
@@ -505,10 +654,11 @@ jobs:
             rust-builtins-docs-
 
       - name: Build the builtin docs exporter
-        # The docs generator reads the single-source `builtin!` registry via the
-        # `gen_builtins` binary (`extract.py` prefers the prebuilt binary at
-        # target/debug/gen_builtins), so it must be built before regeneration.
-        run: cargo build --bin gen_builtins
+        # The docs generator reads the single-source `builtin!` registry plus the
+        # eval interpreter's `eval_builtin!` registry via the `gen_builtins`
+        # example (`extract.py` prefers the prebuilt binary at
+        # target/debug/examples/gen_builtins), so it must be built first.
+        run: cargo build --example gen_builtins
 
       - name: Regenerate builtins documentation
         # Re-run the generator; the committed Markdown pages and JSON registry
@@ -584,8 +734,14 @@ jobs:
       - name: Run benchmark suite
         run: python3 scripts/benchmark_suite.py --iterations 3 --warmup 1 --json benchmark-results.json --markdown benchmark-results.md
 
+      - name: Run magician benchmark suite
+        run: python3 scripts/benchmark_magician.py --iterations 3 --warmup 1 --json magician-benchmark-results.json --markdown magician-benchmark-results.md
+
       - name: Publish benchmark summary
-        run: cat benchmark-results.md >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          cat benchmark-results.md >> "$GITHUB_STEP_SUMMARY"
+          printf '\n## Magician eval benchmark suite\n\n' >> "$GITHUB_STEP_SUMMARY"
+          cat magician-benchmark-results.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
@@ -594,3 +750,5 @@ jobs:
           path: |
             benchmark-results.json
             benchmark-results.md
+            magician-benchmark-results.json
+            magician-benchmark-results.md

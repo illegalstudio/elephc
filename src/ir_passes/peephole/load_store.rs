@@ -103,6 +103,7 @@ fn escaping_slots(function: &Function) -> HashSet<LocalSlotId> {
             Op::PromoteLocalRefCell
                 | Op::AliasLocalRefCell
                 | Op::ReleaseLocalRefCell
+                | Op::ReleaseLocalSlot
                 | Op::InvokerRefArg
         ) {
             for slot in slots_of(inst) {
@@ -217,6 +218,7 @@ fn consumes_operands_by_value(op: Op) -> bool {
             | StoreGlobal
             | StoreStaticLocal
             | StoreStaticProperty
+            | StoreReflectionStaticProperty
             | InitStaticLocal
             | ThrowException
             | GeneratorYield

@@ -2,7 +2,7 @@
 title: "ceil()"
 description: "Rounds a number up to the nearest integer."
 sidebar:
-  order: 240
+  order: 244
 ---
 
 ## ceil()
@@ -17,6 +17,11 @@ Rounds a number up to the nearest integer.
 - `$num` (`float`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/ceil.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/ceil.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

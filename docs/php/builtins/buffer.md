@@ -7,7 +7,7 @@ sidebar:
 
 ## Buffer builtins
 
-| Function | Signature | Returns |
-|---|---|---|
-| [`buffer_free()`](./buffer/buffer_free.md) | `(buffer $buffer): mixed` | `mixed` |
-| [`buffer_len()`](./buffer/buffer_len.md) | `(buffer $buffer): int` | `int` |
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`buffer_free()`](./buffer/buffer_free.md) | `(buffer $buffer): mixed` | `mixed` | ✓ | ✓ |
+| [`buffer_len()`](./buffer/buffer_len.md) | `(buffer $buffer): int` | `int` | ✓ | ✓ |

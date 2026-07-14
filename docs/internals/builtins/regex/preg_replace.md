@@ -2,7 +2,7 @@
 title: "preg_replace() — internals"
 description: "Compiler internals for preg_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 318
+  order: 322
 ---
 
 ## `preg_replace()` — internals
@@ -32,6 +32,11 @@ function preg_replace(string $pattern, string $replacement, string $subject): st
 ## What the type checker enforces
 
 - **Arity**: takes exactly 3 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_replace.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

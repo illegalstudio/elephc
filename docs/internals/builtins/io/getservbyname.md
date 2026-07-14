@@ -2,7 +2,7 @@
 title: "getservbyname() — internals"
 description: "Compiler internals for getservbyname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 182
+  order: 186
 ---
 
 ## `getservbyname()` — internals
@@ -32,6 +32,11 @@ function getservbyname(string $service, string $protocol): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/getservbyname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/getservbyname.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -163,7 +163,8 @@ pub(super) fn parse_closure(
         return Err(CompileError::new(span, "Unexpected token: Function"));
     }
     *pos = after_fn + 1;
-    let (params, variadic, variadic_type) = parse_closure_params(tokens, pos, span)?;
+    let (params, variadic, variadic_by_ref, variadic_type) =
+        parse_closure_params(tokens, pos, span)?;
     let mut captures = Vec::new();
     let mut capture_refs = Vec::new();
     if *pos < tokens.len() && tokens[*pos].0 == Token::Use {
@@ -218,6 +219,7 @@ pub(super) fn parse_closure(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -247,7 +249,8 @@ pub(super) fn parse_arrow_closure(
         return Err(CompileError::new(span, "Expected '(' after 'fn'"));
     }
     *pos += 1;
-    let (params, variadic, variadic_type) = parse_closure_params(tokens, pos, span)?;
+    let (params, variadic, variadic_by_ref, variadic_type) =
+        parse_closure_params(tokens, pos, span)?;
     let return_type = parse_optional_closure_return_type(tokens, pos, span)?;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleArrow {
         return Err(CompileError::new(
@@ -263,6 +266,7 @@ pub(super) fn parse_arrow_closure(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -341,6 +345,7 @@ fn collect_arrow_expr_captures(
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
@@ -459,6 +464,17 @@ fn collect_arrow_expr_captures(
                 collect_arrow_expr_captures(arg, bound, seen, captures);
             }
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            collect_arrow_expr_captures(object, bound, seen, captures);
+            collect_arrow_expr_captures(method, bound, seen, captures);
+            for arg in args {
+                collect_arrow_expr_captures(arg, bound, seen, captures);
+            }
+        }
         ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => {
             collect_arrow_expr_captures(object, bound, seen, captures);
         }
@@ -514,12 +530,14 @@ fn parse_closure_params(
     (
         Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)>,
         Option<String>,
+        bool,
         Option<crate::parser::ast::TypeExpr>,
     ),
     CompileError,
 > {
     let mut params = Vec::new();
     let mut variadic = None;
+    let mut variadic_by_ref = false;
     let mut variadic_type = None;
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         if !params.is_empty() || variadic.is_some() {
@@ -561,6 +579,7 @@ fn parse_closure_params(
             match tokens.get(*pos).map(|(token, _)| token) {
                 Some(Token::Variable(name)) => {
                     variadic = Some(name.clone());
+                    variadic_by_ref = is_ref;
                     variadic_type = type_ann;
                     *pos += 1;
                 }
@@ -587,7 +606,7 @@ fn parse_closure_params(
         return Err(CompileError::new(span, "Expected ')' after parameters"));
     }
     *pos += 1;
-    Ok((params, variadic, variadic_type))
+    Ok((params, variadic, variadic_by_ref, variadic_type))
 }
 
 /// Parses a named expression that could be a constant reference, function call, buffer_new<T>, ptr_cast<T>, or static/class method access.
@@ -599,6 +618,15 @@ pub(super) fn parse_named_expr(
     span: Span,
 ) -> Result<Expr, CompileError> {
     let name = parse_name(tokens, pos, span, "Expected name")?;
+    // PHP's legacy `array(...)` construct is an array literal, not a call:
+    // its elements may use `key => value` pairs that call arguments reject.
+    if name.parts.len() == 1
+        && name.parts[0].eq_ignore_ascii_case("array")
+        && *pos < tokens.len()
+        && tokens[*pos].0 == Token::LParen
+    {
+        return super::prefix::parse_legacy_array_literal(tokens, pos, span);
+    }
     if name.parts.len() == 1
         && name.parts[0] == "buffer_new"
         && *pos < tokens.len()

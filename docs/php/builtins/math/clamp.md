@@ -2,7 +2,7 @@
 title: "clamp()"
 description: "Clamps a value to be within a specified range."
 sidebar:
-  order: 241
+  order: 245
 ---
 
 ## clamp()
@@ -19,6 +19,11 @@ Clamps a value to be within a specified range.
 - `$max` (`int`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/clamp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/clamp.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

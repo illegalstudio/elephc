@@ -3,6 +3,14 @@
 All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
+## [Unreleased]
+- Added experimental PHP `eval()` support across macOS ARM64, Linux ARM64, and Linux x86_64. Eligible literal fragments are parsed at compile time and lowered to native EIR, including direct or scope-backed caller-local synchronization; dynamic strings and unsupported literal shapes fall back to the optional statically linked `elephc-magician` EvalIR interpreter. Within the supported eval subset, the fallback preserves caller/global scope updates, dynamic functions/classes/constants, callables, reflection, builtins, exceptions, ownership/COW behavior, and PHP-visible diagnostics without requiring PHP or the Zend Engine. Bridge linking is automatic when required and can be forced with `--with-eval`; generated builtin documentation now reports AOT and eval availability separately.
+- Added PHP 8.3 typed class constants for classes, interfaces, traits, and enums. Declared types are enforced for initializers and inherited overrides, including covariant narrowing, and are exposed through `ReflectionClassConstant::hasType()` and `getType()`; untyped constants and enum cases retain PHP-compatible reflection defaults.
+- Fixed `--web --max-requests` crash-loop accounting (issue #516): workers that exit after a planned request-quota recycle now use a dedicated status that the master excludes from startup-death streaks, so sustained traffic with a low quota keeps respawning workers instead of shutting down the server; genuine setup failures, other exit codes, and signal deaths still feed the guard.
+- Fixed nullable chained array reads (issue #525): consuming a value from a `?array` receiver now releases the one-shot hidden owned Mixed temporary created by nullable access, on both null and non-null paths, without invalidating the extracted result or double-releasing repeated reads.
+- Fixed owned boxed Mixed temporaries leaking after string conversion (issue #527): explicit `(string)` casts plus implicit concatenation and interpolation now release detached Mixed sources, including by-value `foreach` element reads and non-null unions represented as Mixed; borrowed, persistent, moved, and non-heap values remain release no-ops.
+- Fixed boxed Mixed values leaking when nested loops reinitialize a local whose storage widens after lowering (issue #534): EIR now records a deferred `ReleaseLocalSlot` before the overwrite, prunes it for final scalar or ref-bound slots, and lowers it using the final slot representation. Cleanup is flow-sensitive across conditional ref-cell promotion, aliases, by-reference `foreach` and pointer paths, and widened parameters, preventing both missed releases and double frees with the EIR optimizer enabled or disabled.
+
 ## [0.26.1]
 - Expanded flow-sensitive type narrowing for PHP's common guard patterns: `int|false` and other false-sentinel unions now preserve the literal `false` subtype and narrow to their success type after a divergent `=== false` guard, without incorrectly removing a full `bool` member; `=== null` and `is_null()` guards narrow nullable values; and stable object properties can be narrowed through `instanceof`, ternaries, and throw guards. Property facts are invalidated after writes or receiver rebindings and are not retained across property hooks or `__get`, whose repeated reads may differ.
 - Object-subtype declaration defaults are now validated after class and interface schemas are complete: parameters, methods, and constructor-promoted properties may use an implementing class or subclass instance as the default for an interface/base-class type, while unrelated object defaults are still rejected with a type error.
@@ -466,6 +474,7 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.26.1...HEAD
 [0.26.1]: https://github.com/illegalstudio/elephc/compare/v0.26.0...v0.26.1
 [0.26.0]: https://github.com/illegalstudio/elephc/compare/v0.25.2...v0.26.0
 [0.25.2]: https://github.com/illegalstudio/elephc/compare/v0.25.1...v0.25.2

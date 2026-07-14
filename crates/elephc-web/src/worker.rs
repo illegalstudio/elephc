@@ -45,6 +45,14 @@ fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener
 /// Process-local (each forked worker has its own copy starting at 0).
 static SERVED: AtomicUsize = AtomicUsize::new(0);
 
+/// Exit code a worker child uses for a planned `--max-requests` recycle.
+/// Distinct from 0 (clean exit), 1 (worker setup/handler errors), and 2 (usage
+/// errors) so the master can tell an intentional recycle from a genuine crash:
+/// under sustained traffic a worker can serve its whole quota in well under the
+/// master's fast-death window, and counting that as a crash-on-startup would
+/// shut the server down. Checked by `server::is_planned_recycle`.
+pub(crate) const RECYCLE_EXIT_CODE: i32 = 86;
+
 /// Per-request handler time limit in seconds (`0` = none), read by `run_handler`
 /// to arm a `SIGALRM` watchdog around the blocking `handler()` call.
 static MAX_EXEC_SECS: AtomicU32 = AtomicU32::new(0);

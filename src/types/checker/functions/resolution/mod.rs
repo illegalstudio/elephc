@@ -158,6 +158,13 @@ impl Checker {
             return result;
         }
 
+        if self.eval_barrier_active {
+            for arg in args {
+                self.infer_type(arg, caller_env)?;
+            }
+            return Ok(PhpType::Mixed);
+        }
+
         let decl = self
             .fn_decls
             .get(name)
@@ -181,15 +188,34 @@ impl Checker {
                     decl.variadic
                         .iter()
                         .cloned()
-                        .map(|name| (name, PhpType::Array(Box::new(PhpType::Int)))),
+                        .map(|name| {
+                            let elem_ty = if decl.variadic_by_ref {
+                                PhpType::Mixed
+                            } else {
+                                PhpType::Int
+                            };
+                            (name, PhpType::Array(Box::new(elem_ty)))
+                        }),
                 )
-            .collect(),
+                .collect(),
+            param_type_exprs: decl
+                .param_types
+                .iter()
+                .cloned()
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
+                .collect(),
+            param_attributes: decl.param_attributes.clone(),
             defaults: decl.defaults.clone(),
             return_type: PhpType::Int,
             declared_return: decl.return_type.is_some(),
             by_ref_return: false,
             ref_params: decl.ref_params.clone(),
-            declared_params: decl.param_types.iter().map(|type_ann| type_ann.is_some()).collect(),
+            declared_params: decl
+                .param_types
+                .iter()
+                .map(|type_ann| type_ann.is_some())
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
+                .collect(),
             variadic: decl.variadic.clone(),
             deprecation: None,
         };
@@ -383,7 +409,9 @@ impl Checker {
         }
 
         if let Some(ref vp) = decl.variadic {
-            if let Some(declared) = &decl.variadic_type {
+            if decl.variadic_by_ref {
+                param_types.push((vp.clone(), PhpType::Array(Box::new(PhpType::Mixed))));
+            } else if let Some(declared) = &decl.variadic_type {
                 // A declared element type (`int ...$xs`) constrains every collected argument;
                 // it takes precedence over inference so call validation enforces the hint.
                 let elem_ty = self.resolve_declared_param_type_hint(

@@ -2,7 +2,7 @@
 title: "microtime() — internals"
 description: "Compiler internals for microtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 94
+  order: 98
 ---
 
 ## `microtime()` — internals
@@ -41,6 +41,11 @@ function microtime(bool $as_float = false): mixed
 ## What the type checker enforces
 
 - **Arity**: takes 0–1 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/microtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/microtime.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

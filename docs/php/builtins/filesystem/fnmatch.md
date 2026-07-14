@@ -2,7 +2,7 @@
 title: "fnmatch()"
 description: "Matches a filename against a pattern."
 sidebar:
-  order: 118
+  order: 122
 ---
 
 ## fnmatch()
@@ -19,6 +19,11 @@ Matches a filename against a pattern.
 - `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fnmatch.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fnmatch.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

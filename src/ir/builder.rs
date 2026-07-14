@@ -106,6 +106,38 @@ impl<'f> Builder<'f> {
         self.func.locals[slot.as_raw() as usize].php_type.clone()
     }
 
+    /// Neutralizes deferred `release_local_slot` ops whose slot never widened to
+    /// lifetime-tracked storage.
+    ///
+    /// Lowering emits `release_local_slot` before a loop store when the slot's
+    /// storage type LOOKS untracked at that point but a later store on a
+    /// back-edge path may still widen it (e.g. a `for` counter widened
+    /// Int→Mixed by its checked-add update). Once the whole body is lowered the
+    /// final storage types are known, so ops guarding slots that stayed
+    /// untracked are rewritten to `nop`s. This keeps scalar slots eligible for
+    /// dead-store elimination and load forwarding, which conservatively exclude
+    /// any slot named by an unknown op.
+    pub fn prune_untracked_release_local_slot_ops(&mut self) {
+        for inst in &mut self.func.instructions {
+            if inst.op != Op::ReleaseLocalSlot {
+                continue;
+            }
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+                continue;
+            };
+            let storage_type = &self.func.locals[slot.as_raw() as usize].php_type;
+            if Ownership::php_type_needs_lifetime_tracking(storage_type) {
+                continue;
+            }
+            // The slot's final storage is a plain scalar: the deferred release
+            // can never free anything, so erase it instead of shipping a no-op
+            // that pessimizes slot analyses in later passes.
+            inst.op = Op::Nop;
+            inst.immediate = None;
+            inst.effects = Op::Nop.default_effects();
+        }
+    }
+
     /// Returns the semantic role of a local slot.
     pub fn local_kind(&self, slot: LocalSlotId) -> LocalKind {
         self.func.locals[slot.as_raw() as usize].kind

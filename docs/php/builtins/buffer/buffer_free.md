@@ -18,6 +18,11 @@ Lowers `buffer_free()` through the direct buffer opcode helper.
 
 **Returns**: `mixed`
 
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_free.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_free.rs)).
+
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 

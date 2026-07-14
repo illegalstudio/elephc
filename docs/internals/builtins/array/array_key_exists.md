@@ -20,7 +20,8 @@ sidebar:
 
 ## Runtime helpers
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+The following runtime helpers are referenced:
+- `__rt_hash_get`
 
 ## Signature summary
 
@@ -31,6 +32,11 @@ function array_key_exists(string $key, array $array): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_key_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_key_exists.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

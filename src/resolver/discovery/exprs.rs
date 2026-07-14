@@ -69,6 +69,7 @@ pub(super) fn discover_expr(
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
+        | ExprKind::Clone(value)
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
         | ExprKind::Spread(value)
@@ -186,6 +187,15 @@ pub(super) fn discover_expr(
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_exprs(args, base_dir, loaded_paths, include_chain, state, output)?;
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_expr(method, base_dir, loaded_paths, include_chain, state, output)?;
             discover_exprs(args, base_dir, loaded_paths, include_chain, state, output)?;
         }
         ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Method { object, .. }) => {

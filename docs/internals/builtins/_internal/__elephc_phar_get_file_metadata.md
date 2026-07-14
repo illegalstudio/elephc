@@ -2,7 +2,7 @@
 title: "__elephc_phar_get_file_metadata() — internals"
 description: "Compiler internals for __elephc_phar_get_file_metadata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 437
+  order: 441
 ---
 
 ## `__elephc_phar_get_file_metadata()` — internals
@@ -31,6 +31,10 @@ function __elephc_phar_get_file_metadata(string $url): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -2,7 +2,7 @@
 title: "base64_encode()"
 description: "Encodes binary data into a Base64 string."
 sidebar:
-  order: 341
+  order: 345
 ---
 
 ## base64_encode()
@@ -17,6 +17,11 @@ Encodes binary data into a Base64 string.
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/base64_encode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/base64_encode.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

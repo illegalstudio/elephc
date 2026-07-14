@@ -37,11 +37,13 @@ impl Checker {
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
             if self.interfaces.contains_key(class_name) {
-                return self.infer_method_call_on_interface_type(
-                    class_name, method, args, expr, env,
-                );
+                return self
+                    .infer_method_call_on_interface_type(class_name, method, args, expr, env);
             }
-            return self.infer_method_call_on_class_type(class_name, method, args, expr, env);
+            let return_ty = self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
+            return Ok(self
+                .tracked_reflection_class_method_return_type(object, method)
+                .unwrap_or(return_ty));
         }
         // Method calls on a union object type are allowed when the union has a
         // single object class. `?Foo` / `Foo|null` faults on a null receiver as in
@@ -65,7 +67,11 @@ impl Checker {
                         env,
                     );
                 }
-                return self.infer_method_call_on_class_type(&class_name, method, args, expr, env);
+                let return_ty =
+                    self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;
+                return Ok(self
+                    .tracked_reflection_class_method_return_type(object, method)
+                    .unwrap_or(return_ty));
             }
             // Union of two or more distinct object classes (`A|B`, `A|B|false`):
             // the method must exist on every object member; codegen dispatches on
@@ -166,6 +172,24 @@ impl Checker {
         }
     }
 
+    /// Returns a concrete reflected object type for tracked `ReflectionClass` construction helpers.
+    fn tracked_reflection_class_method_return_type(
+        &self,
+        object: &Expr,
+        method: &str,
+    ) -> Option<PhpType> {
+        let ExprKind::Variable(name) = &object.kind else {
+            return None;
+        };
+        let reflected_class = self.reflection_class_targets.get(name)?;
+        match php_symbol_key(method).as_str() {
+            "newinstance" | "newinstanceargs" | "newinstancewithoutconstructor" => {
+                Some(PhpType::Object(reflected_class.clone()))
+            }
+            _ => None,
+        }
+    }
+
     /// Infers the type of a nullsafe method call expression (`$obj?->method(...)`).
     ///
     /// Returns `PhpType::Void` for invalid receivers. For valid nullable object
@@ -194,6 +218,33 @@ impl Checker {
         } else {
             Ok(return_ty)
         }
+    }
+
+    /// Infers `$obj?->$method(...)` when the method name is known only at runtime.
+    ///
+    /// The receiver must still be an object-or-null like other nullsafe member
+    /// accesses. The dynamic target prevents method signature validation, so the
+    /// return type is `Mixed`; method-name and argument expressions are inferred
+    /// only when the receiver is not statically null.
+    pub(crate) fn infer_nullsafe_dynamic_method_call_type(
+        &mut self,
+        object: &Expr,
+        method: &Expr,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let obj_ty = self.infer_type(object, env)?;
+        let Some((_class_name, _nullable)) =
+            self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
+        else {
+            return Ok(PhpType::Void);
+        };
+        self.infer_type(method, env)?;
+        for arg in args {
+            self.infer_type(arg, env)?;
+        }
+        Ok(PhpType::Mixed)
     }
 
     /// Infers the type of a method call on an interface type.
@@ -254,12 +305,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         self.infer_method_call_on_class_type_with_options(
-            class_name,
-            method,
-            args,
-            expr,
-            env,
-            false,
+            class_name, method, args, expr, env, false,
         )
     }
 
@@ -273,14 +319,7 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        self.infer_method_call_on_class_type_with_options(
-            class_name,
-            method,
-            args,
-            expr,
-            env,
-            true,
-        )
+        self.infer_method_call_on_class_type_with_options(class_name, method, args, expr, env, true)
     }
 
     /// Shared implementation for class method call inference.
@@ -377,8 +416,7 @@ impl Checker {
                 }
             } else if let Some(sig) = class_info.methods.get("__call") {
                 let magic_args = Self::magic_call_args(method, args, expr.span);
-                let declared_flags =
-                    Self::declared_method_param_flags(class_info, "__call", false);
+                let declared_flags = Self::declared_method_param_flags(class_info, "__call", false);
                 let mut effective_sig =
                     Self::callable_sig_for_declared_params(sig, &declared_flags);
                 Self::relax_magic_call_validation_sig(&mut effective_sig);
@@ -447,6 +485,10 @@ impl Checker {
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
                         && declared_flags.get(i).copied().unwrap_or(false)
+                        && !Self::method_array_param_keeps_generic_shape(
+                            &impl_class_name,
+                            &method_key,
+                        )
                         && Self::is_generic_array_hint(&sig.params[i].1)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
@@ -474,11 +516,15 @@ impl Checker {
                     sig,
                     regular_param_count,
                     env,
-                ) {
+                ) && !method_variadic_param_is_by_ref(sig)
+                {
                     if let Some((_, variadic_ty)) = sig.params.last_mut() {
                         *variadic_ty = PhpType::Iterable;
                     }
-                } else if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                } else if sig.variadic.is_some()
+                    && arg_types.len() > regular_param_count
+                    && !method_variadic_param_is_by_ref(sig)
+                {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
@@ -492,6 +538,12 @@ impl Checker {
             }
         }
         Ok(PhpType::Int)
+    }
+
+    /// Returns true for builtin method array params whose accepted shape must remain broad.
+    fn method_array_param_keeps_generic_shape(class_name: &str, method_key: &str) -> bool {
+        matches!(class_name, "ReflectionFunction" | "ReflectionMethod")
+            && method_key == php_symbol_key("invokeArgs")
     }
 
     /// Builds synthetic `__call` arguments: `[method_name, [args...]]`.
@@ -524,7 +576,7 @@ impl Checker {
     /// Refines a `__callStatic($name, $args)` signature's array parameter from
     /// the actual static-call arguments, the static counterpart of
     /// `specialize_magic_call_signature`.
-    fn specialize_magic_callstatic_signature(
+    fn specialize_magic_static_call_signature(
         &mut self,
         class_name: &str,
         args: &[Expr],
@@ -713,12 +765,18 @@ impl Checker {
             return self
                 .check_enum_static_call(&enum_info, class_name, method, args, env, expr.span);
         }
+        let method_key = php_symbol_key(method);
         let normalized_args: Vec<Expr>;
+        let mut magic_return_ty = None;
+        let mut magic_original_args = None;
         if let Some(class_info) = self.classes.get(class_name) {
-            if let Some(sig) = class_info.static_methods.get(method) {
+            if let Some(sig) = class_info.static_methods.get(&method_key) {
                 if let Some(reason) = sig.deprecation.clone() {
                     let message = if reason.is_empty() {
-                        format!("Call to deprecated static method: {}::{}()", class_name, method)
+                        format!(
+                            "Call to deprecated static method: {}::{}()",
+                            class_name, method
+                        )
                     } else {
                         format!(
                             "Call to deprecated static method: {}::{}() — {}",
@@ -728,10 +786,10 @@ impl Checker {
                     self.warnings
                         .push(crate::errors::CompileWarning::new(expr.span, &message));
                 }
-                if let Some(visibility) = class_info.static_method_visibilities.get(method) {
+                if let Some(visibility) = class_info.static_method_visibilities.get(&method_key) {
                     let declaring_class = class_info
                         .static_method_declaring_classes
-                        .get(method)
+                        .get(&method_key)
                         .map(String::as_str)
                         .unwrap_or(class_name);
                     if !self.can_access_member(declaring_class, visibility) {
@@ -746,8 +804,13 @@ impl Checker {
                         ));
                     }
                 }
-                let declared_flags = Self::declared_method_param_flags(class_info, method, true);
-                let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
+                let declared_flags =
+                    Self::declared_method_param_flags(class_info, &method_key, true);
+                let mut effective_sig =
+                    Self::callable_sig_for_declared_params(sig, &declared_flags);
+                if method_key == "__callstatic" {
+                    Self::relax_magic_call_validation_sig(&mut effective_sig);
+                }
                 normalized_args = self.normalize_named_call_args(
                     &effective_sig,
                     args,
@@ -783,16 +846,16 @@ impl Checker {
                         },
                     ));
                 }
-                let sig = class_info.methods.get(method).ok_or_else(|| {
+                let sig = class_info.methods.get(&method_key).ok_or_else(|| {
                     CompileError::new(
                         expr.span,
                         &format!("Undefined method: {}::{}", class_name, method),
                     )
                 })?;
-                if let Some(visibility) = class_info.method_visibilities.get(method) {
+                if let Some(visibility) = class_info.method_visibilities.get(&method_key) {
                     let declaring_class = class_info
                         .method_declaring_classes
-                        .get(method)
+                        .get(&method_key)
                         .map(String::as_str)
                         .unwrap_or(class_name);
                     if !self.can_access_member(declaring_class, visibility) {
@@ -807,7 +870,8 @@ impl Checker {
                         ));
                     }
                 }
-                let declared_flags = Self::declared_method_param_flags(class_info, method, false);
+                let declared_flags =
+                    Self::declared_method_param_flags(class_info, &method_key, false);
                 let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
                 normalized_args = self.normalize_named_call_args(
                     &effective_sig,
@@ -848,23 +912,7 @@ impl Checker {
                         ),
                     )?;
                 }
-            } else if let Some(callstatic_sig) =
-                class_info.static_methods.get("__callstatic").cloned()
-            {
-                // Forward `Foo::missing(...)` to `Foo::__callStatic("missing", [...])`.
-                let magic_args = Self::magic_call_args(method, args, expr.span);
-                let mut validation_sig = callstatic_sig.clone();
-                Self::relax_magic_call_validation_sig(&mut validation_sig);
-                self.check_known_callable_call(
-                    &validation_sig,
-                    &magic_args,
-                    expr.span,
-                    env,
-                    &format!("Static method {}::__callStatic", class_name),
-                )?;
-                self.specialize_magic_callstatic_signature(class_name, args, env)?;
-                return Ok(callstatic_sig.return_type.clone());
-            } else if class_info.methods.contains_key(method) {
+            } else if class_info.methods.contains_key(&method_key) {
                 return Err(CompileError::new(
                     expr.span,
                     &format!(
@@ -872,17 +920,61 @@ impl Checker {
                         class_name, method
                     ),
                 ));
+            } else if let Some(sig) = class_info.static_methods.get("__callstatic") {
+                let magic_args = Self::magic_call_args(method, args, expr.span);
+                let declared_flags =
+                    Self::declared_method_param_flags(class_info, "__callstatic", true);
+                let mut effective_sig =
+                    Self::callable_sig_for_declared_params(sig, &declared_flags);
+                Self::relax_magic_call_validation_sig(&mut effective_sig);
+                normalized_args = self.normalize_named_call_args(
+                    &effective_sig,
+                    &magic_args,
+                    expr.span,
+                    &format!("Static method {}::__callStatic", class_name),
+                    env,
+                )?;
+                if allow_by_ref_spread {
+                    self.check_known_callable_call_allowing_by_ref_spread(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Static method {}::__callStatic", class_name),
+                    )?;
+                } else {
+                    self.check_known_callable_call(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Static method {}::__callStatic", class_name),
+                    )?;
+                }
+                magic_return_ty = Some(effective_sig.return_type.clone());
+                magic_original_args = Some(args.to_vec());
             } else {
                 return Err(CompileError::new(
                     expr.span,
                     &format!("Undefined method: {}::{}", class_name, method),
                 ));
             }
+        } else if self.eval_barrier_active && matches!(receiver, StaticReceiver::Named(_)) {
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            return Ok(PhpType::Mixed);
         } else {
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined class: {}", class_name),
             ));
+        }
+        if let Some(return_ty) = magic_return_ty {
+            if let Some(args) = magic_original_args {
+                self.specialize_magic_static_call_signature(class_name, &args, env)?;
+            }
+            return Ok(return_ty);
         }
         let mut arg_types = Vec::new();
         for arg in &normalized_args {
@@ -892,7 +984,7 @@ impl Checker {
         let direct_impl_class_name = if parent_call || self_call {
             self.classes
                 .get(class_name)
-                .and_then(|class_info| class_info.method_impl_classes.get(method))
+                .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
                 .cloned()
                 .unwrap_or_else(|| class_name.to_string())
         } else {
@@ -901,10 +993,10 @@ impl Checker {
         let static_declared_flags = self
             .classes
             .get(class_name)
-            .map(|class_info| Self::declared_method_param_flags(class_info, method, true))
+            .map(|class_info| Self::declared_method_param_flags(class_info, &method_key, true))
             .unwrap_or_default();
         if let Some(class_info) = self.classes.get_mut(class_name) {
-            if let Some(sig) = class_info.static_methods.get_mut(method) {
+            if let Some(sig) = class_info.static_methods.get_mut(&method_key) {
                 let regular_param_count = if sig.variadic.is_some() {
                     sig.params.len().saturating_sub(1)
                 } else {
@@ -940,11 +1032,15 @@ impl Checker {
                     sig,
                     regular_param_count,
                     env,
-                ) {
+                ) && !method_variadic_param_is_by_ref(sig)
+                {
                     if let Some((_, variadic_ty)) = sig.params.last_mut() {
                         *variadic_ty = PhpType::Iterable;
                     }
-                } else if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                } else if sig.variadic.is_some()
+                    && arg_types.len() > regular_param_count
+                    && !method_variadic_param_is_by_ref(sig)
+                {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
@@ -961,12 +1057,12 @@ impl Checker {
             let instance_declared_flags = self
                 .classes
                 .get(&direct_impl_class_name)
-                .map(|class_info| Self::declared_method_param_flags(class_info, method, false))
+                .map(|class_info| Self::declared_method_param_flags(class_info, &method_key, false))
                 .unwrap_or_default();
             if let Some(sig) = self
                 .classes
                 .get_mut(&direct_impl_class_name)
-                .and_then(|class_info| class_info.methods.get_mut(method))
+                .and_then(|class_info| class_info.methods.get_mut(&method_key))
             {
                 let regular_param_count = if sig.variadic.is_some() {
                     sig.params.len().saturating_sub(1)
@@ -998,7 +1094,10 @@ impl Checker {
                         }
                     }
                 }
-                if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                if sig.variadic.is_some()
+                    && arg_types.len() > regular_param_count
+                    && !method_variadic_param_is_by_ref(sig)
+                {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
@@ -1046,6 +1145,19 @@ fn method_variadic_tail_needs_iterable(
                     .any(|(param_name, _)| param_name == name)
         )
     })
+}
+
+/// Returns whether a method signature stores its variadic slot by reference.
+fn method_variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
+    let Some(variadic_name) = sig.variadic.as_ref() else {
+        return false;
+    };
+    sig.params
+        .iter()
+        .position(|(name, _)| name == variadic_name)
+        .and_then(|index| sig.ref_params.get(index))
+        .copied()
+        .unwrap_or(false)
 }
 
 /// Returns true when a spread source can carry string keys into a variadic method tail.

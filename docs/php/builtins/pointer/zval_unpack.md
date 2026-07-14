@@ -2,7 +2,7 @@
 title: "zval_unpack()"
 description: "Unpacks a PHP zval pointer into an owned elephc Mixed value."
 sidebar:
-  order: 303
+  order: 307
 ---
 
 ## zval_unpack()
@@ -17,6 +17,11 @@ Unpacks a PHP zval pointer into an owned elephc Mixed value.
 - `$zval` (`pointer`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

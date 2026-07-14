@@ -35,6 +35,12 @@ function call_user_func(callable $callback, ...$args): mixed
 - **Arity**: takes exactly 1 argument.
 - **Variadic**: collects excess arguments into `$args`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/call_user_func.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/call_user_func.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+- **Variadic**: collects excess arguments into `$args`.
+
 ## Cross-references
 
 - [User reference for `call_user_func()`](../../../php/builtins/array/call_user_func.md)

@@ -2,7 +2,7 @@
 title: "touch()"
 description: "Sets access and modification time of a file."
 sidebar:
-  order: 150
+  order: 154
 ---
 
 ## touch()
@@ -19,6 +19,11 @@ Sets access and modification time of a file.
 - `$atime` (`int`), default `null`, optional
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/touch.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/touch.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -46,6 +46,40 @@ fn test_parse_class_decl() {
     }
 }
 
+/// Verifies PHP 8.3 class-constant types are retained in the parsed AST while
+/// a semi-reserved constant name followed by `=` remains untyped.
+#[test]
+fn test_parse_typed_class_constant_metadata() {
+    let statements = parse_source(
+        "<?php class Limits { public const int|string VALUE = 1; const string = 'name'; }",
+    );
+    let StmtKind::ClassDecl { constants, .. } = &statements[0].kind else {
+        panic!("Expected ClassDecl");
+    };
+    assert_eq!(constants.len(), 2);
+    assert_eq!(
+        constants[0].type_expr,
+        Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Str]))
+    );
+    assert_eq!(constants[0].name, "VALUE");
+    assert_eq!(constants[1].type_expr, None);
+    assert_eq!(constants[1].name, "string");
+}
+
+/// Verifies that `clone`, a PHP operator keyword, is still accepted as a method name.
+#[test]
+fn test_parse_clone_named_method() {
+    let stmts =
+        parse_source("<?php class Image { public function clone(): Image { return $this; } }");
+    match &stmts[0].kind {
+        StmtKind::ClassDecl { methods, .. } => {
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].name, "clone");
+        }
+        _ => panic!("Expected ClassDecl"),
+    }
+}
+
 /// Verifies that `<?php $p = new Point(1, 2);` parses `new` expression with constructor args
 /// into `StmtKind::Assign` wrapping `ExprKind::NewObject` with class name and argument list.
 #[test]
@@ -98,6 +132,38 @@ fn test_parse_new_dynamic_object() {
     }
 }
 
+/// Verifies that `<?php new Point(1, 2);` parses as an expression statement.
+#[test]
+fn test_parse_new_object_expression_statement() {
+    let stmts = parse_source("<?php new Point(1, 2);");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::NewObject { class_name, args } => {
+                assert_eq!(class_name, "Point");
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("Expected NewObject, got {:?}", other),
+        },
+        other => panic!("Expected ExprStmt, got {:?}", other),
+    }
+}
+
+/// Verifies that `<?php new $className();` parses as a dynamic-new expression statement.
+#[test]
+fn test_parse_new_dynamic_expression_statement() {
+    let stmts = parse_source("<?php new $className();");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::NewDynamic { name_expr, args } => {
+                assert!(matches!(&name_expr.kind, ExprKind::Variable(name) if name == "className"));
+                assert!(args.is_empty());
+            }
+            other => panic!("Expected NewDynamic, got {:?}", other),
+        },
+        other => panic!("Expected ExprStmt, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php class Child extends Base { ... }` parses to `ClassDecl` with the
 /// extends name set and the subclass body (method count, name) correctly captured.
 #[test]
@@ -115,6 +181,21 @@ fn test_parse_class_decl_with_extends() {
             assert_eq!(extends.as_deref(), Some("Base"));
             assert_eq!(methods.len(), 1);
             assert_eq!(methods[0].name, "run");
+        }
+        _ => panic!("Expected ClassDecl"),
+    }
+}
+
+/// Verifies that class methods preserve `&...$items` as by-reference variadic metadata.
+#[test]
+fn test_parse_method_by_ref_variadic_param() {
+    let stmts = parse_source("<?php class Box { public function collect(&...$items) {} }");
+    match &stmts[0].kind {
+        StmtKind::ClassDecl { methods, .. } => {
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].name, "collect");
+            assert_eq!(methods[0].variadic.as_deref(), Some("items"));
+            assert!(methods[0].variadic_by_ref);
         }
         _ => panic!("Expected ClassDecl"),
     }

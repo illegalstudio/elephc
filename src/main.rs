@@ -15,7 +15,9 @@ mod codegen;
 mod codegen_support;
 mod conditional;
 mod errors;
+mod eval_aot;
 mod exports;
+mod image_prelude;
 mod intrinsics;
 #[allow(dead_code, unused_imports)]
 mod ir;
@@ -23,12 +25,11 @@ mod ir;
 mod ir_lower;
 #[allow(dead_code, unused_imports)]
 mod ir_passes;
-mod linker;
 mod lexer;
+mod linker;
 mod list_id_prelude;
 mod magic_constants;
 mod name_resolver;
-mod image_prelude;
 mod names;
 mod optimize;
 mod parser;

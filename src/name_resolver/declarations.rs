@@ -40,7 +40,9 @@ pub(super) fn resolve_decl_stmt(
             by_ref_return,
             name,
             params,
+            param_attributes,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -51,7 +53,12 @@ pub(super) fn resolve_decl_stmt(
                     by_ref_return: *by_ref_return,
                     name: canonical_name_for_decl(namespace, name),
                     params: resolve_params(params, namespace, imports, symbols),
+                    param_attributes: param_attributes
+                        .iter()
+                        .map(|groups| resolve_attribute_groups(groups, namespace, imports, symbols))
+                        .collect(),
                     variadic: variadic.clone(),
+                    variadic_by_ref: *variadic_by_ref,
                     variadic_type: variadic_type.clone(),
                     return_type: return_type
                         .as_ref()
@@ -108,9 +115,14 @@ pub(super) fn resolve_decl_stmt(
             backing_type,
             cases,
             implements,
+            trait_uses,
             methods,
             constants,
         } => {
+            let trait_uses = trait_uses
+                .iter()
+                .map(|trait_use| resolve_trait_use(trait_use, namespace, imports, symbols))
+                .collect::<Result<Vec<_>, CompileError>>()?;
             let resolved_cases = cases
                 .iter()
                 .map(|case| crate::parser::ast::EnumCaseDecl {
@@ -140,6 +152,7 @@ pub(super) fn resolve_decl_stmt(
                             resolved_name(resolved_class_name(name, namespace, imports, symbols))
                         })
                         .collect(),
+                    trait_uses,
                     methods: resolved_methods,
                     constants: resolve_class_consts(constants, namespace, imports, symbols),
                 },
@@ -276,10 +289,7 @@ fn resolve_attribute_groups(
                 .iter()
                 .map(|attr| Attribute {
                     name: resolved_name(resolved_class_name(
-                        &attr.name,
-                        namespace,
-                        imports,
-                        symbols,
+                        &attr.name, namespace, imports, symbols,
                     )),
                     args: attr
                         .args
@@ -308,6 +318,11 @@ fn resolve_methods(
             let body = resolve_stmt_list(&method.body, namespace, imports, symbols)?;
             Ok(ClassMethod {
                 params: resolve_params(&method.params, namespace, imports, symbols),
+                param_attributes: method
+                    .param_attributes
+                    .iter()
+                    .map(|groups| resolve_attribute_groups(groups, namespace, imports, symbols))
+                    .collect(),
                 return_type: method
                     .return_type
                     .as_ref()
@@ -336,13 +351,12 @@ fn resolve_class_consts(
     constants
         .iter()
         .map(|constant| ClassConst {
+            type_expr: constant
+                .type_expr
+                .as_ref()
+                .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
             value: resolve_expr(&constant.value, namespace, imports, symbols),
-            attributes: resolve_attribute_groups(
-                &constant.attributes,
-                namespace,
-                imports,
-                symbols,
-            ),
+            attributes: resolve_attribute_groups(&constant.attributes, namespace, imports, symbols),
             ..constant.clone()
         })
         .collect()
@@ -367,19 +381,16 @@ fn resolve_properties(
                 .default
                 .as_ref()
                 .map(|expr| resolve_expr(expr, namespace, imports, symbols)),
-            attributes: resolve_attribute_groups(
-                &property.attributes,
-                namespace,
-                imports,
-                symbols,
-            ),
+            attributes: resolve_attribute_groups(&property.attributes, namespace, imports, symbols),
             ..property.clone()
         })
         .collect()
 }
 
-/// Resolves a trait use statement by rewriting its trait names and adaptations
-/// (aliases and instead-of rules) through `resolved_class_name` and `php_symbol_key`.
+/// Resolves a trait use statement by rewriting trait names and method selectors.
+///
+/// Alias display names keep their declared spelling because Reflection exposes
+/// them, while later method lookup still normalizes through `php_symbol_key`.
 pub(super) fn resolve_trait_use(
     trait_use: &TraitUse,
     current_namespace: Option<&str>,
@@ -409,18 +420,16 @@ pub(super) fn resolve_trait_use(
                     alias,
                     visibility,
                 } => Ok(TraitAdaptation::Alias {
-                    trait_name: trait_name
-                        .as_ref()
-                        .map(|name| {
-                            resolved_name(resolved_class_name(
-                                name,
-                                current_namespace,
-                                imports,
-                                symbols,
-                            ))
-                        }),
+                    trait_name: trait_name.as_ref().map(|name| {
+                        resolved_name(resolved_class_name(
+                            name,
+                            current_namespace,
+                            imports,
+                            symbols,
+                        ))
+                    }),
                     method: php_symbol_key(method),
-                    alias: alias.as_ref().map(|alias| php_symbol_key(alias)),
+                    alias: alias.clone(),
                     visibility: visibility.clone(),
                 }),
                 TraitAdaptation::InsteadOf {
@@ -428,16 +437,14 @@ pub(super) fn resolve_trait_use(
                     method,
                     instead_of,
                 } => Ok(TraitAdaptation::InsteadOf {
-                    trait_name: trait_name
-                        .as_ref()
-                        .map(|name| {
-                            resolved_name(resolved_class_name(
-                                name,
-                                current_namespace,
-                                imports,
-                                symbols,
-                            ))
-                        }),
+                    trait_name: trait_name.as_ref().map(|name| {
+                        resolved_name(resolved_class_name(
+                            name,
+                            current_namespace,
+                            imports,
+                            symbols,
+                        ))
+                    }),
                     method: php_symbol_key(method),
                     instead_of: instead_of
                         .iter()

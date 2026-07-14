@@ -2,7 +2,7 @@
 title: "SPL"
 description: "Standard PHP Library interfaces, exceptions, and runtime-backed container classes."
 sidebar:
-  order: 10
+  order: 11
 ---
 
 elephc ships the SPL pieces that are needed by supported PHP code today:
@@ -574,6 +574,10 @@ SPL autoload and class-introspection helpers are documented in
 `spl_autoload_extensions()`, `spl_autoload_call()`, `spl_classes()`,
 `spl_object_id()`, `spl_object_hash()`, `class_implements()`,
 `class_parents()`, and `class_uses()`.
+
+Inside `eval()`, `spl_classes()` is available through direct calls,
+`call_user_func()`, `call_user_func_array()`, and `function_exists()` and
+returns the same static registry snapshot as native code.
 
 ## Iterator Helper Functions
 

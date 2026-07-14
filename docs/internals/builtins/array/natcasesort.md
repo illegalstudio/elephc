@@ -34,6 +34,12 @@ function natcasesort(array $array): bool
 - **Arity**: takes exactly 1 argument.
 - **By-reference parameters**: `$array`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/natcasesort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/natcasesort.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
+- **By-reference parameters**: `$array`.
+
 ## Cross-references
 
 - [User reference for `natcasesort()`](../../../php/builtins/array/natcasesort.md)

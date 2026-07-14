@@ -26,13 +26,8 @@ pub(crate) fn lower_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     ensure_arg_count(inst, "ptr", 1)?;
     let value = expect_operand(inst, 0)?;
     match pointer_source(ctx, value)? {
-        PointerSource::Local { slot, is_ref_cell } => {
-            let offset = ctx.local_offset(slot)?;
-            if is_ref_cell || ctx.local_stores_ref_cell_pointer(slot) {
-                abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
-            } else {
-                abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
-            }
+        PointerSource::Local { slot } => {
+            ctx.materialize_local_storage_address(slot, abi::int_result_reg(ctx.emitter))?;
         }
         PointerSource::Global { symbol, bytes } => {
             ctx.data.add_comm(symbol.clone(), bytes);
@@ -223,7 +218,7 @@ fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Str
 
 /// Addressable storage source accepted by the `ptr()` builtin.
 enum PointerSource {
-    Local { slot: LocalSlotId, is_ref_cell: bool },
+    Local { slot: LocalSlotId },
     Global { symbol: String, bytes: usize },
     Null,
 }
@@ -247,10 +242,7 @@ fn pointer_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<PointerSo
                     "ptr() local load has no local slot",
                 ));
             };
-            Ok(PointerSource::Local {
-                slot,
-                is_ref_cell: inst_ref.op == Op::LoadRefCell,
-            })
+            Ok(PointerSource::Local { slot })
         }
         Op::LoadGlobal => {
             let Some(Immediate::GlobalName(data)) = inst_ref.immediate else {

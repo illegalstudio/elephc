@@ -2,7 +2,7 @@
 title: "sin() — internals"
 description: "Compiler internals for sin(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 266
+  order: 270
 ---
 
 ## `sin()` — internals
@@ -31,6 +31,11 @@ function sin(float $num): float
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/sin.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/sin.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

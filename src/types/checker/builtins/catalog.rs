@@ -10,6 +10,8 @@
 //! - `SUPPORTED_BUILTIN_FUNCTIONS` is the source of truth for PHP-visible builtin names.
 //! - `INTERNAL_BUILTIN_FUNCTIONS` is now an empty placeholder; internal builtins are
 //!   registered via `internal: true` in `src/builtins/` and recognized through the registry.
+//! - `LANGUAGE_CONSTRUCT_FUNCTIONS` participates in call resolution but stays
+//!   hidden from `function_exists()` and first-class callable surfaces.
 
 const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "buffer_free",
@@ -18,7 +20,14 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "die",
     "empty",
     "exit",
+    "is_double",
+    "is_integer",
+    "is_long",
+    "is_real",
     "isset",
+    "method_exists",
+    "property_exists",
+    "strval",
     "unset",
 ];
 
@@ -28,10 +37,14 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
 // `is_supported_builtin_function_exact` compiles unchanged.
 const INTERNAL_BUILTIN_FUNCTIONS: &[&str] = &[];
 
-/// Checks if the exact (lowercase) name is in the PHP-visible or internal builtin lists.
+const LANGUAGE_CONSTRUCT_FUNCTIONS: &[&str] = &["eval"];
+
+/// Checks if the exact (lowercase) name is in any callable-resolution builtin list.
 /// Does not perform case folding; use `is_supported_builtin_function` for case-insensitive lookup.
 fn is_supported_builtin_function_exact(name: &str) -> bool {
-    SUPPORTED_BUILTIN_FUNCTIONS.contains(&name) || INTERNAL_BUILTIN_FUNCTIONS.contains(&name)
+    SUPPORTED_BUILTIN_FUNCTIONS.contains(&name)
+        || INTERNAL_BUILTIN_FUNCTIONS.contains(&name)
+        || LANGUAGE_CONSTRUCT_FUNCTIONS.contains(&name)
 }
 
 /// Returns the union of PHP-visible supported builtin function names from the

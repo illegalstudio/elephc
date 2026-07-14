@@ -2,7 +2,7 @@
 title: "__elephc_phar_set_stub() — internals"
 description: "Compiler internals for __elephc_phar_set_stub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 447
+  order: 451
 ---
 
 ## `__elephc_phar_set_stub()` — internals
@@ -31,6 +31,10 @@ function __elephc_phar_set_stub(string $filename, string $stub): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

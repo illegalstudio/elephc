@@ -2,7 +2,7 @@
 title: "str_repeat() — internals"
 description: "Compiler internals for str_repeat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 386
+  order: 390
 ---
 
 ## `str_repeat()` — internals
@@ -32,6 +32,11 @@ function str_repeat(string $string, int $times): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/str_repeat.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_repeat.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

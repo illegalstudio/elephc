@@ -2,7 +2,7 @@
 title: "ptr_set()"
 description: "Writes one machine word through a raw pointer."
 sidebar:
-  order: 294
+  order: 298
 ---
 
 ## ptr_set()
@@ -18,6 +18,11 @@ Writes one machine word through a raw pointer.
 - `$value` (`mixed`)
 
 **Returns**: `void`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_set.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_set.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

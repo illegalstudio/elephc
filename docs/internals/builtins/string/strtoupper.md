@@ -2,7 +2,7 @@
 title: "strtoupper() — internals"
 description: "Compiler internals for strtoupper(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 399
+  order: 403
 ---
 
 ## `strtoupper()` — internals
@@ -32,6 +32,11 @@ function strtoupper(string $string): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/strtoupper.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strtoupper.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

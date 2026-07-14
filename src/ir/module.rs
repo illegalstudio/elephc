@@ -9,12 +9,13 @@
 //! - Runtime helper bodies remain outside EIR; modules reference runtime
 //!   features and metadata needed to select/link helpers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 use crate::ir::function::{Function, FunctionId};
 use crate::ir::types::IrType;
+use crate::parser::ast::{ExprKind, Visibility};
 use crate::types::{
     ClassInfo, EnumInfo, ExternClassInfo, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
 };
@@ -35,10 +36,21 @@ impl DataId {
     }
 }
 
+/// Method metadata retained for standalone trait reflection.
+#[derive(Debug, Clone)]
+pub struct TraitMethodInfo {
+    pub signature: FunctionSig,
+    pub visibility: Visibility,
+    pub is_static: bool,
+    pub is_final: bool,
+    pub is_abstract: bool,
+}
+
 /// Complete EIR module for one compile target.
 #[derive(Debug, Clone)]
 pub struct Module {
     pub target: Target,
+    pub source_path: Option<String>,
     pub functions: Vec<Function>,
     pub class_methods: Vec<Function>,
     pub closures: Vec<Function>,
@@ -56,7 +68,19 @@ pub struct Module {
     pub declared_class_names: Vec<String>,
     pub declared_interface_names: Vec<String>,
     pub declared_trait_names: Vec<String>,
+    pub declared_trait_source_lines: HashMap<String, u32>,
     pub declared_trait_uses: HashMap<String, Vec<String>>,
+    pub declared_trait_method_names: HashMap<String, Vec<String>>,
+    pub declared_trait_methods: HashMap<String, HashMap<String, TraitMethodInfo>>,
+    pub declared_trait_property_names: HashMap<String, Vec<String>>,
+    pub declared_trait_constant_names: HashMap<String, Vec<String>>,
+    pub declared_trait_constants: HashMap<String, HashMap<String, crate::parser::ast::Expr>>,
+    pub declared_trait_constant_types:
+        HashMap<String, HashMap<String, crate::parser::ast::TypeExpr>>,
+    pub declared_trait_constant_visibilities: HashMap<String, HashMap<String, Visibility>>,
+    pub declared_trait_final_constants: HashMap<String, HashSet<String>>,
+    /// Prescanned global constant values used by EIR lowering and eval metadata registration.
+    pub global_constants: HashMap<String, (ExprKind, PhpType)>,
     pub class_infos: HashMap<String, ClassInfo>,
     pub interface_infos: HashMap<String, InterfaceInfo>,
     pub enum_infos: HashMap<String, EnumInfo>,
@@ -72,6 +96,7 @@ impl Module {
     pub fn new(target: Target) -> Self {
         Self {
             target,
+            source_path: None,
             functions: Vec::new(),
             class_methods: Vec::new(),
             closures: Vec::new(),
@@ -89,7 +114,17 @@ impl Module {
             declared_class_names: Vec::new(),
             declared_interface_names: Vec::new(),
             declared_trait_names: Vec::new(),
+            declared_trait_source_lines: HashMap::new(),
             declared_trait_uses: HashMap::new(),
+            declared_trait_method_names: HashMap::new(),
+            declared_trait_methods: HashMap::new(),
+            declared_trait_property_names: HashMap::new(),
+            declared_trait_constant_names: HashMap::new(),
+            declared_trait_constants: HashMap::new(),
+            declared_trait_constant_types: HashMap::new(),
+            declared_trait_constant_visibilities: HashMap::new(),
+            declared_trait_final_constants: HashMap::new(),
+            global_constants: HashMap::new(),
             class_infos: HashMap::new(),
             interface_infos: HashMap::new(),
             enum_infos: HashMap::new(),

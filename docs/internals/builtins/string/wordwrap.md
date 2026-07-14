@@ -2,7 +2,7 @@
 title: "wordwrap() — internals"
 description: "Compiler internals for wordwrap(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 409
+  order: 413
 ---
 
 ## `wordwrap()` — internals
@@ -33,6 +33,11 @@ function wordwrap(string $string, int $width = 75, string $break = '\n', bool $c
 ## What the type checker enforces
 
 - **Arity**: takes 1–4 arguments (3 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/wordwrap.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/wordwrap.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

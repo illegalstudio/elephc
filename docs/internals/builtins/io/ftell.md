@@ -2,7 +2,7 @@
 title: "ftell() — internals"
 description: "Compiler internals for ftell(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 174
+  order: 178
 ---
 
 ## `ftell()` — internals
@@ -32,6 +32,11 @@ function ftell(resource $stream): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/ftell.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/ftell.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

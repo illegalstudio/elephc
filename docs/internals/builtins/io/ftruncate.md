@@ -2,7 +2,7 @@
 title: "ftruncate() — internals"
 description: "Compiler internals for ftruncate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 175
+  order: 179
 ---
 
 ## `ftruncate()` — internals
@@ -31,6 +31,11 @@ function ftruncate(resource $stream, int $size): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/ftruncate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/ftruncate.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

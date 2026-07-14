@@ -1,0 +1,18 @@
+[package]
+name = "elephc-magician"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Optional eval bridge staticlib for elephc compiled PHP programs"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+elephc-crypto = { path = "../elephc-crypto" }
+elephc-phar = { path = "../elephc-phar" }
+flate2 = "1"
+inventory = "0.3"
+libc = "0.2"
+unicode-segmentation = "1"

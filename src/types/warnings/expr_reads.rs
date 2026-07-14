@@ -44,6 +44,7 @@ pub(super) fn collect_expr_reads(
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
@@ -99,6 +100,17 @@ pub(super) fn collect_expr_reads(
             if let ExprKind::NullsafeMethodCall { object, .. } = &expr.kind {
                 collect_expr_reads(object, scope, warnings);
             }
+            for arg in args {
+                collect_expr_reads(arg, scope, warnings);
+            }
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            collect_expr_reads(object, scope, warnings);
+            collect_expr_reads(method, scope, warnings);
             for arg in args {
                 collect_expr_reads(arg, scope, warnings);
             }

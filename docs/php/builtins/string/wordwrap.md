@@ -2,7 +2,7 @@
 title: "wordwrap()"
 description: "Wraps a string to a given number of characters."
 sidebar:
-  order: 409
+  order: 413
 ---
 
 ## wordwrap()
@@ -20,6 +20,11 @@ Wraps a string to a given number of characters.
 - `$cut_long_words` (`bool`), default `false`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/wordwrap.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/wordwrap.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

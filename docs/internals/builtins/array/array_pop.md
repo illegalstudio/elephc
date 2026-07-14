@@ -35,6 +35,12 @@ function array_pop(array $array): mixed
 - **Arity**: takes exactly 1 argument.
 - **By-reference parameters**: `$array`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_pop.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_pop.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
+- **By-reference parameters**: `$array`.
+
 ## Cross-references
 
 - [User reference for `array_pop()`](../../../php/builtins/array/array_pop.md)

@@ -2,7 +2,7 @@
 title: "strpos() — internals"
 description: "Compiler internals for strpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 394
+  order: 398
 ---
 
 ## `strpos()` — internals
@@ -31,6 +31,11 @@ function strpos(string $haystack, string $needle, int $offset = 0): mixed
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/strpos.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strpos.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

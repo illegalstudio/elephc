@@ -45,6 +45,46 @@ echo $x ** $y;
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies that constant propagation does not substitute a scalar fact across
+/// `eval`, because the fragment may replace the caller's visible local.
+#[test]
+fn test_constant_propagation_stops_at_eval_barrier() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_eval_barrier");
+    let (user_asm, runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$x = 2;
+eval('$x = 5;');
+echo $x + 1;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    // The scalar-store fragment now compiles through the literal-eval AOT
+    // path (no interpreter bridge); the barrier semantics are proven by the
+    // runtime output below: propagation of `$x = 2` across the eval would
+    // print 3 instead of 6.
+    assert!(
+        user_asm.contains("eval literal AOT"),
+        "literal eval should compile through the AOT path:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        &runtime_obj_for_asm(&runtime_asm),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "6");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies that when both branches of an `if` assign the same constant (`$base = 2`)
 /// the optimizer merges them and folds `$base ** 3` to `8` with no `pow` call.
 #[test]

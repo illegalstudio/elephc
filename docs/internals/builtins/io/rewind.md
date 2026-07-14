@@ -2,7 +2,7 @@
 title: "rewind() — internals"
 description: "Compiler internals for rewind(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 187
+  order: 191
 ---
 
 ## `rewind()` — internals
@@ -31,6 +31,11 @@ function rewind(resource $stream): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/rewind.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/rewind.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -3,9 +3,11 @@
 Since the single-source builtin registry migration, every PHP builtin is declared
 once via `builtin!` in ``src/builtins/<area>/<name>.rs`` and collected through the
 `inventory` crate. The authoritative data is therefore read from the registry
-itself, via the ``gen_builtins`` binary (``cargo run --bin gen_builtins
+itself, via the ``gen_builtins`` example (``cargo run --example gen_builtins --
 --include-internal``), NOT by regex-scraping ``catalog.rs`` / ``signatures.rs``
-(which the migration emptied).
+(which the migration emptied). The exporter also attaches, per builtin, the eval
+interpreter's (elephc-magician) support block sourced from the ``eval_builtin!``
+registry, plus records for builtins only the eval interpreter exposes.
 
 For each builtin we enrich the registry data with:
 
@@ -60,25 +62,29 @@ from registry import (  # noqa: E402  (sys.path tweak above)
 # ---------------------------------------------------------------------------
 
 def run_gen_builtins(repo: Path) -> list[dict]:
-    """Return the registry as a list of dicts by invoking the `gen_builtins` binary.
+    """Return the registry as a list of dicts by invoking the `gen_builtins` example.
 
     Includes `internal` builtins (the docs pipeline renders compiler-internals
-    pages for the `__elephc_*` helpers). Prefers a prebuilt binary under
-    ``target/{release,debug}/`` when present (fast path for CI, which builds it
-    first); otherwise falls back to ``cargo run``.
+    pages for the `__elephc_*` helpers) and per-builtin eval-interpreter support
+    blocks. Prefers a prebuilt binary under ``target/{release,debug}/examples/``
+    when present (fast path for CI, which builds it first); otherwise falls back
+    to ``cargo run``.
     """
     cmd: list[str]
     for profile in ("release", "debug"):
-        exe = repo / "target" / profile / "gen_builtins"
+        exe = repo / "target" / profile / "examples" / "gen_builtins"
         if exe.exists():
             cmd = [str(exe), "--include-internal"]
             break
     else:
-        cmd = ["cargo", "run", "--quiet", "--bin", "gen_builtins", "--", "--include-internal"]
+        cmd = [
+            "cargo", "run", "--quiet", "--example", "gen_builtins", "--",
+            "--include-internal",
+        ]
     proc = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
     if proc.returncode != 0:
         sys.exit(
-            "gen_builtins failed (build it with `cargo build --bin gen_builtins`):\n"
+            "gen_builtins failed (build it with `cargo build --example gen_builtins`):\n"
             + proc.stderr
         )
     try:
@@ -468,9 +474,68 @@ LANGUAGE_CONSTRUCTS: dict[str, dict] = {
 }
 
 
+# Docs area for eval-only builtins, keyed by the magician EvalArea spelling.
+EVAL_AREA_TO_DOCS_AREA: dict[str, tuple[str, str]] = {
+    "array": ("Array", "Array"),
+    "core": ("Misc", "Misc"),
+    "filesystem": ("Filesystem", "Filesystem"),
+    "formatting": ("String", "String"),
+    "json": ("JSON", "JSON"),
+    "math": ("Math", "Math"),
+    "network_env": ("Network", "Network"),
+    "regex": ("Regex", "Regex"),
+    "raw_memory": ("Pointer", "Pointer"),
+    "string": ("String", "String"),
+    "symbols": ("Class", "Class"),
+    "time": ("Date", "Date"),
+    "types": ("Type", "Type"),
+}
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
+
+def _eval_only_builtin(entry: dict) -> Builtin:
+    """Build a Builtin for a name only the eval interpreter (magician) exposes."""
+    name = entry["name"]
+    canonical = name.lower()
+    eval_support = entry.get("eval") or {}
+    area, sub_area = EVAL_AREA_TO_DOCS_AREA.get(
+        eval_support.get("area", ""), ("Misc", "Misc")
+    )
+    params = [
+        Parameter(
+            name=p["name"],
+            php_type=_normalize_type(p.get("type", "mixed")),
+            by_ref=bool(p.get("by_ref")),
+            default=_render_default(p.get("default"), bool(p.get("optional"))),
+            optional=bool(p.get("optional")),
+        )
+        for p in entry.get("params", [])
+    ]
+    description = DESCRIPTION_OVERRIDES.get(canonical, "") or (
+        f"{name}() is available inside eval'd code via the magician interpreter; "
+        "compiled (AOT) code does not support it yet."
+    )
+    return Builtin(
+        name=name,
+        canonical_name=canonical,
+        in_catalog=True,
+        is_internal=bool(entry.get("internal")),
+        area=area,
+        sub_area=sub_area,
+        sig=BuiltinSig(
+            params=params,
+            variadic=entry.get("variadic"),
+            return_type=_normalize_type(entry.get("returns", "mixed")),
+        ),
+        lowering=LoweringInfo(),
+        description=description,
+        eval_support=eval_support,
+        eval_only=True,
+    )
+
 
 def build_registry(repo: Path) -> list[Builtin]:
     """Build the full list of builtins from the registry + language constructs."""
@@ -502,10 +567,22 @@ def build_registry(repo: Path) -> list[Builtin]:
 
     builtins: list[Builtin] = []
 
+    # Eval blocks for compiler-resident constructs (isset, strval, ...): the
+    # exporter appends them as `aot_resident` records; their AOT docs live in
+    # the hand-curated LANGUAGE_CONSTRUCTS entries (or on canonical alias
+    # pages), so only the eval block is consumed here.
+    resident_eval: dict[str, dict] = {}
+
     # --- registry builtins (PHP-visible + internal helpers) ---
     for entry in gen:
         name = entry["name"]
         canonical = name.lower()
+        if entry.get("aot_resident"):
+            resident_eval[canonical] = entry.get("eval") or {}
+            continue
+        if entry.get("eval_only"):
+            builtins.append(_eval_only_builtin(entry))
+            continue
         is_internal = bool(entry.get("internal"))
         in_catalog = not is_internal
 
@@ -570,6 +647,7 @@ def build_registry(repo: Path) -> list[Builtin]:
                 ),
                 lowering=lowering,
                 description=description,
+                eval_support=entry.get("eval"),
             )
         )
 
@@ -603,6 +681,7 @@ def build_registry(repo: Path) -> list[Builtin]:
                 ),
                 lowering=lowering,
                 description=description,
+                eval_support=resident_eval.get(canonical),
             )
         )
 
@@ -671,6 +750,8 @@ def _builtin_to_dict(b: Builtin) -> dict:
             "runtime_helpers": b.lowering.runtime_helpers,
             "notes": b.lowering.notes,
         },
+        "eval": b.eval_support or {"supported": False, "kind": "none"},
+        "eval_only": b.eval_only,
     }
 
 

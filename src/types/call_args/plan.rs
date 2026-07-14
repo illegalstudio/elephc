@@ -352,6 +352,8 @@ mod tests {
             .collect();
         FunctionSig {
             params,
+            param_type_exprs: vec![None; 3],
+            param_attributes: Vec::new(),
             defaults,
             return_type: PhpType::Int,
             declared_return: true,

@@ -2,7 +2,7 @@
 title: "hash_update() — internals"
 description: "Compiler internals for hash_update(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 359
+  order: 363
 ---
 
 ## `hash_update()` — internals
@@ -32,6 +32,11 @@ function hash_update(resource $context, string $data): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

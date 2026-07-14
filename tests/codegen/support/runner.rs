@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Handles platform-specific linker flags, qemu ARM64 execution, and runtime object caching.
+//! - Archived CI shards trust the bridge staticlibs packaged by the build job,
+//!   avoiding source-mtime rebuilds and network access on test runners.
 //! - Per-test assembly is fed to `as` over stdin so no intermediate `test.s`
 //!   file is written, which shaves ~1/3 of the file-system events the macOS
 //!   `syspolicyd` / on-access AV scans inspect during a full `cargo test`.
@@ -49,6 +51,10 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_image",
         package: "elephc-image",
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_magician",
+        package: "elephc-magician",
     },
 ];
 
@@ -156,14 +162,13 @@ fn requested_bridge_staticlibs<'a>(actual_link_libs: &[&str]) -> Vec<&'a TestBri
 }
 
 /// Builds any requested bridge staticlibs missing from the debug target directory.
-fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &str) {
+fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Path) {
     let _guard = BRIDGE_STATICLIB_BUILD_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
         .expect("bridge staticlib build lock poisoned");
     for bridge in requested_bridge_staticlibs(actual_link_libs) {
-        let archive_path =
-            Path::new(bridge_staticlib_dir).join(format!("lib{}.a", bridge.lib_name));
+        let archive_path = bridge_staticlib_dir.join(format!("lib{}.a", bridge.lib_name));
         if !bridge_staticlib_needs_build(&archive_path, bridge.package) {
             continue;
         }
@@ -194,12 +199,16 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
 
 /// Reports whether a bridge staticlib is missing or older than its package
 /// sources. This keeps codegen tests from linking stale bridge archives after a
-/// bridge crate changes inside the same worktree.
+/// bridge crate changes inside the same worktree. Archived CI runs can declare
+/// existing build-job artifacts authoritative through `ELEPHC_TEST_PREBUILT_BRIDGES`.
 fn bridge_staticlib_needs_build(archive_path: &Path, package: &str) -> bool {
     let archive_mtime = match archive_path.metadata().and_then(|meta| meta.modified()) {
         Ok(mtime) => mtime,
         Err(_) => return true,
     };
+    if prebuilt_bridge_staticlibs_are_trusted() {
+        return false;
+    }
     let package_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("crates")
         .join(package);
@@ -207,6 +216,98 @@ fn bridge_staticlib_needs_build(archive_path: &Path, package: &str) -> bool {
     source_path_newer_than(&package_dir.join("Cargo.toml"), archive_mtime)
         || source_path_newer_than(&package_dir.join("build.rs"), archive_mtime)
         || source_tree_newer_than(&package_dir.join("src"), archive_mtime)
+}
+
+/// Returns whether this test process should trust existing bridge archives without mtime checks.
+fn prebuilt_bridge_staticlibs_are_trusted() -> bool {
+    std::env::var("ELEPHC_TEST_PREBUILT_BRIDGES").is_ok_and(|value| {
+        value == "1" || value.eq_ignore_ascii_case("true")
+    })
+}
+
+/// Resolves the debug directory containing bridge archives for the current test process.
+fn bridge_staticlib_dir() -> std::path::PathBuf {
+    let cargo_target_dir = std::env::var_os("CARGO_TARGET_DIR");
+    let current_exe = std::env::current_exe().ok();
+    bridge_staticlib_dir_for(
+        cargo_target_dir.as_deref(),
+        current_exe.as_deref(),
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        prebuilt_bridge_staticlibs_are_trusted(),
+    )
+}
+
+/// Selects a bridge archive directory from an explicit target, archive executable, or workspace.
+fn bridge_staticlib_dir_for(
+    cargo_target_dir: Option<&std::ffi::OsStr>,
+    current_exe: Option<&Path>,
+    manifest_dir: &Path,
+    trust_prebuilt: bool,
+) -> std::path::PathBuf {
+    if let Some(target_dir) = cargo_target_dir.filter(|dir| !dir.is_empty()) {
+        return std::path::PathBuf::from(target_dir).join("debug");
+    }
+
+    if trust_prebuilt {
+        if let Some(executable_dir) = current_exe.and_then(Path::parent) {
+            let debug_dir = if executable_dir.ends_with("deps") {
+                executable_dir.parent().unwrap_or(executable_dir)
+            } else {
+                executable_dir
+            };
+            return debug_dir.to_path_buf();
+        }
+    }
+
+    manifest_dir.join("target/debug")
+}
+
+#[cfg(test)]
+mod bridge_staticlib_dir_tests {
+    use super::*;
+
+    /// Verifies archived tests resolve bridge libraries beside the extracted test binary.
+    #[test]
+    fn archived_tests_use_extracted_target_debug_directory() {
+        let resolved = bridge_staticlib_dir_for(
+            None,
+            Some(Path::new(
+                "/tmp/nextest-archive/target/debug/deps/codegen_tests-hash",
+            )),
+            Path::new("/workspace/elephc"),
+            true,
+        );
+
+        assert_eq!(resolved, Path::new("/tmp/nextest-archive/target/debug"));
+    }
+
+    /// Verifies an explicit Cargo target directory remains authoritative in Docker runs.
+    #[test]
+    fn cargo_target_dir_overrides_archived_executable_directory() {
+        let resolved = bridge_staticlib_dir_for(
+            Some(std::ffi::OsStr::new("/shared/target")),
+            Some(Path::new(
+                "/tmp/nextest-archive/target/debug/deps/codegen_tests-hash",
+            )),
+            Path::new("/workspace/elephc"),
+            true,
+        );
+
+        assert_eq!(resolved, Path::new("/shared/target/debug"));
+    }
+
+    /// Verifies ordinary local tests continue to use the workspace debug directory.
+    #[test]
+    fn local_tests_use_workspace_target_debug_directory() {
+        let resolved = bridge_staticlib_dir_for(
+            None,
+            Some(Path::new("/workspace/target/debug/deps/codegen_tests-hash")),
+            Path::new("/workspace/elephc"),
+            false,
+        );
+
+        assert_eq!(resolved, Path::new("/workspace/elephc/target/debug"));
+    }
 }
 
 /// Reports whether an existing source path was modified after `archive_mtime`.
@@ -260,26 +361,14 @@ pub(crate) fn link_binary(
 ) {
     let actual_link_libs = effective_link_libs(extra_link_libs);
 
-    // The bridge staticlibs (elephc-tls, elephc-pdo, elephc-crypto, elephc-phar,
-    // elephc-tz, elephc-image) all live in `<target>/debug` alongside the test
-    // binaries; surface that directory on the linker search path automatically
-    // whenever a compiled program links any bridge, so PDO/crypto/phar/tz/image
-    // tests get the same robust, absolute `-L` as TLS instead of depending on a
-    // cwd-relative lookup. The Docker scripts override CARGO_TARGET_DIR to point at
-    // a shared volume, so honour that envvar before falling back to the in-tree
-    // target/.
-    let needs_bridge_staticlib = actual_link_libs.iter().any(|l| {
-        *l == "elephc_tls"
-            || *l == "elephc_pdo"
-            || *l == "elephc_crypto"
-            || *l == "elephc_phar"
-            || *l == "elephc_tz"
-            || *l == "elephc_image"
-    });
-    let bridge_staticlib_dir = match std::env::var("CARGO_TARGET_DIR") {
-        Ok(dir) if !dir.is_empty() => format!("{}/debug", dir),
-        _ => format!("{}/target/debug", env!("CARGO_MANIFEST_DIR")),
-    };
+    // Bridge staticlibs live in `<target>/debug` alongside the test binaries;
+    // surface that directory automatically whenever a compiled program links a
+    // known bridge, so tests get robust absolute `-L` paths instead of depending
+    // on cwd-relative lookup. Docker scripts override CARGO_TARGET_DIR, archived
+    // shards derive it from their extracted executable, and local tests fall
+    // back to the workspace target directory.
+    let needs_bridge_staticlib = !requested_bridge_staticlibs(&actual_link_libs).is_empty();
+    let bridge_staticlib_dir = bridge_staticlib_dir();
     if needs_bridge_staticlib {
         ensure_bridge_staticlibs(&actual_link_libs, &bridge_staticlib_dir);
     }
@@ -300,7 +389,7 @@ pub(crate) fn link_binary(
                 get_sdk_version(),
             ]);
             if needs_bridge_staticlib {
-                ld_cmd.arg(format!("-L{}", bridge_staticlib_dir));
+                ld_cmd.arg(format!("-L{}", bridge_staticlib_dir.display()));
             }
             for path in extra_link_paths {
                 ld_cmd.arg(format!("-L{}", path));
@@ -336,7 +425,7 @@ pub(crate) fn link_binary(
                 ld_cmd.arg("-Wl,--no-as-needed");
             }
             if needs_bridge_staticlib {
-                ld_cmd.arg(format!("-L{}", bridge_staticlib_dir));
+                ld_cmd.arg(format!("-L{}", bridge_staticlib_dir.display()));
             }
             for path in extra_link_paths {
                 ld_cmd.arg(format!("-L{}", path));

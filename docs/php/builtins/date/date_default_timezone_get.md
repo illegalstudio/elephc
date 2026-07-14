@@ -2,7 +2,7 @@
 title: "date_default_timezone_get()"
 description: "Gets the default timezone."
 sidebar:
-  order: 87
+  order: 91
 ---
 
 ## date_default_timezone_get()
@@ -16,6 +16,11 @@ Gets the default timezone.
 **Parameters**: none.
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_get.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_get.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

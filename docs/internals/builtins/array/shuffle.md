@@ -34,6 +34,12 @@ function shuffle(array $array): bool
 - **Arity**: takes exactly 1 argument.
 - **By-reference parameters**: `$array`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/shuffle.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/shuffle.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
+- **By-reference parameters**: `$array`.
+
 ## Cross-references
 
 - [User reference for `shuffle()`](../../../php/builtins/array/shuffle.md)

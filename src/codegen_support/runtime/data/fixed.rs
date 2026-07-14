@@ -99,6 +99,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _fiber_main_saved_sp, 8, 3\n");
     out.push_str(".comm _fiber_main_saved_exc, 8, 3\n");
     out.push_str(".comm _fiber_main_saved_call_frame, 8, 3\n");
+    out.push_str(".comm _elephc_eval_dynamic_object_destruct_fn, 8, 3\n");
     out.push_str(".comm _rt_diag_suppression, 8, 3\n");
     // elephc_web_capture: per-request output-capture mode flag read by
     // __rt_stdout_write. Zero (the default) routes echo output to the plain

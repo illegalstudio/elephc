@@ -2,7 +2,7 @@
 title: "ptr_write_string()"
 description: "Copies PHP string bytes into raw memory at the given pointer."
 sidebar:
-  order: 299
+  order: 303
 ---
 
 ## ptr_write_string()
@@ -18,6 +18,11 @@ Copies PHP string bytes into raw memory at the given pointer.
 - `$string` (`string`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_write_string.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_write_string.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

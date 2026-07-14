@@ -2,7 +2,7 @@
 title: "strstr() — internals"
 description: "Compiler internals for strstr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 397
+  order: 401
 ---
 
 ## `strstr()` — internals
@@ -31,6 +31,11 @@ function strstr(string $haystack, string $needle, bool $before_needle = false): 
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/strstr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strstr.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -32,6 +32,11 @@ function array_pad(array $array, int $length, mixed $value): array
 
 - **Arity**: takes exactly 3 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_pad.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_pad.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `array_pad()`](../../../php/builtins/array/array_pad.md)

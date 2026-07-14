@@ -225,12 +225,6 @@ pub(in crate::parser::stmt) fn parse_enum_decl(
     if !properties.is_empty() {
         return Err(CompileError::new(span, "Enums cannot declare properties"));
     }
-    if !trait_uses.is_empty() {
-        return Err(CompileError::new(
-            span,
-            "Enums using traits are not supported yet",
-        ));
-    }
 
     Ok(Stmt::new(
         StmtKind::EnumDecl {
@@ -238,6 +232,7 @@ pub(in crate::parser::stmt) fn parse_enum_decl(
             backing_type,
             cases,
             implements,
+            trait_uses,
             methods,
             constants,
         },

@@ -2,7 +2,7 @@
 title: "stream_socket_client() — internals"
 description: "Compiler internals for stream_socket_client(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 217
+  order: 221
 ---
 
 ## `stream_socket_client()` — internals
@@ -33,6 +33,11 @@ function stream_socket_client(string $address): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_client.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_client.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

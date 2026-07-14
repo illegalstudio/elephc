@@ -2,7 +2,7 @@
 title: "gzuncompress() — internals"
 description: "Compiler internals for gzuncompress(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 351
+  order: 355
 ---
 
 ## `gzuncompress()` — internals
@@ -32,6 +32,11 @@ function gzuncompress(string $data, int $max_length = 0): mixed
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/gzuncompress.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/gzuncompress.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

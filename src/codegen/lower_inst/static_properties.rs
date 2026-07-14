@@ -8,7 +8,9 @@
 //! Key details:
 //! - This slice supports public scalar/string/array/object static properties with
 //!   named, lexical `self`, and lexical `parent` receivers, but not late static
-//!   binding, references, or non-indexed array mutation.
+//!   references or non-indexed array mutation.
+//! - `static::` receivers use native class-id branches for generated classes and
+//!   the eval native-frame override when late static scope points at an eval class.
 //! - Typed static properties use the same high-word uninitialized sentinel as
 //!   the emitted code before reads.
 
@@ -21,7 +23,7 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
-use super::{expect_data, expect_operand, store_if_result};
+use super::{builtins, expect_data, expect_operand, load_value_to_first_int_arg, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
 const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
@@ -45,36 +47,125 @@ struct StaticPropertyBranch {
 }
 
 /// Lowers a direct static property read into the current result register(s).
-pub(super) fn lower_load_static_property(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let slot = resolve_static_property_slot(ctx, inst)?;
+pub(super) fn lower_load_static_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if let Some((class_name, property)) = eval_dynamic_static_property_target(ctx, inst)? {
+        return builtins::lower_eval_static_property_get(ctx, inst, &class_name, &property);
+    }
+    let slot = resolve_static_property_slot(ctx, inst, true)?;
     ensure_static_property_type_supported(&slot.php_type, inst)?;
+    let eval_done_label = emit_eval_native_frame_static_property_get_if_needed(ctx, inst, &slot)?;
     if slot.late_bound && !slot.branches.is_empty() {
         let class_id_reg = class_id_work_reg(ctx.emitter);
         if emit_called_class_id_to_reg(ctx, class_id_reg)? {
             emit_dynamic_load_static_property_result(ctx, &slot, class_id_reg)?;
-            return store_if_result(ctx, inst);
+            store_if_result(ctx, inst)?;
+            if let Some(done_label) = eval_done_label {
+                ctx.emitter.label(&done_label);
+            }
+            return Ok(());
         }
     }
+    emit_direct_load_static_property_result(ctx, &slot);
+    store_if_result(ctx, inst)?;
+    if let Some(done_label) = eval_done_label {
+        ctx.emitter.label(&done_label);
+    }
+    Ok(())
+}
+
+/// Returns an eval dynamic static-property target when no AOT class owns the receiver.
+fn eval_dynamic_static_property_target(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<Option<(String, String)>> {
+    if !builtins::has_eval_context(ctx) {
+        return Ok(None);
+    }
+    let label = static_property_label(ctx, inst)?;
+    let (receiver, property) = parse_static_property_label(label)?;
+    let receiver = resolve_static_property_receiver(ctx, receiver, inst)?;
+    if ctx.module.class_infos.contains_key(receiver.as_str()) {
+        return Ok(None);
+    }
+    Ok(Some((receiver, property.to_string())))
+}
+
+/// Lowers a direct static property write from one SSA operand into symbol-backed storage.
+pub(super) fn lower_store_static_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    if let Some((class_name, property)) = eval_dynamic_static_property_target(ctx, inst)? {
+        return builtins::lower_eval_static_property_set(
+            ctx,
+            inst,
+            value,
+            &class_name,
+            &property,
+        );
+    }
+    let slot = resolve_static_property_slot(ctx, inst, true)?;
+    ensure_static_property_type_supported(&slot.php_type, inst)?;
+    let value_ty = ctx.value_php_type(value)?;
+    ensure_static_property_value_supported(&slot, &value_ty, inst)?;
+    let release_previous = !value_is_same_static_property_load(ctx, value, &slot)?;
+    let eval_done_label =
+        emit_eval_native_frame_static_property_set_if_needed(ctx, inst, value, &slot)?;
+    load_static_property_store_value_to_result(ctx, value, &slot.php_type)?;
+    if slot.late_bound && !slot.branches.is_empty() {
+        let class_id_reg = class_id_work_reg(ctx.emitter);
+        if emit_called_class_id_to_reg(ctx, class_id_reg)? {
+            emit_dynamic_store_static_property_result(ctx, &slot, class_id_reg, release_previous);
+            if let Some(done_label) = eval_done_label {
+                ctx.emitter.label(&done_label);
+            }
+            return Ok(());
+        }
+    }
+    emit_direct_store_static_property_result(ctx, &slot, release_previous);
+    if let Some(done_label) = eval_done_label {
+        ctx.emitter.label(&done_label);
+    }
+    Ok(())
+}
+
+/// Lowers a Reflection static property read, bypassing PHP member visibility.
+pub(super) fn lower_load_reflection_static_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = resolve_static_property_slot(ctx, inst, false)?;
+    ensure_static_property_type_supported(&slot.php_type, inst)?;
     emit_direct_load_static_property_result(ctx, &slot);
     store_if_result(ctx, inst)
 }
 
-/// Lowers a direct static property write from one SSA operand into symbol-backed storage.
-pub(super) fn lower_store_static_property(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+/// Lowers a Reflection static-property initialization probe.
+pub(super) fn lower_reflection_static_property_initialized(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = resolve_static_property_slot(ctx, inst, false)?;
+    emit_direct_static_property_initialized_result(ctx, &slot);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a Reflection static property write, bypassing PHP member visibility.
+pub(super) fn lower_store_reflection_static_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    let slot = resolve_static_property_slot(ctx, inst)?;
+    let slot = resolve_static_property_slot(ctx, inst, false)?;
     ensure_static_property_type_supported(&slot.php_type, inst)?;
     let value_ty = ctx.value_php_type(value)?;
     ensure_static_property_value_supported(&slot, &value_ty, inst)?;
     load_static_property_store_value_to_result(ctx, value, &slot.php_type)?;
     let release_previous = !value_is_same_static_property_load(ctx, value, &slot)?;
-    if slot.late_bound && !slot.branches.is_empty() {
-        let class_id_reg = class_id_work_reg(ctx.emitter);
-        if emit_called_class_id_to_reg(ctx, class_id_reg)? {
-            emit_dynamic_store_static_property_result(ctx, &slot, class_id_reg, release_previous);
-            return Ok(());
-        }
-    }
     emit_direct_store_static_property_result(ctx, &slot, release_previous);
     Ok(())
 }
@@ -94,16 +185,21 @@ fn value_is_same_static_property_load(
     let Some(inst_ref) = ctx.function.instruction(inst) else {
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
-    if inst_ref.op != crate::ir::Op::LoadStaticProperty {
+    if !matches!(
+        inst_ref.op,
+        crate::ir::Op::LoadStaticProperty | crate::ir::Op::LoadReflectionStaticProperty
+    ) {
         return Ok(false);
     }
-    Ok(resolve_static_property_slot(ctx, inst_ref)?.symbol == slot.symbol)
+    let enforce_visibility = inst_ref.op == crate::ir::Op::LoadStaticProperty;
+    Ok(resolve_static_property_slot(ctx, inst_ref, enforce_visibility)?.symbol == slot.symbol)
 }
 
 /// Resolves a static property immediate into declaring-class symbol metadata.
 fn resolve_static_property_slot(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
+    enforce_visibility: bool,
 ) -> Result<StaticPropertySlot> {
     let label = static_property_label(ctx, inst)?;
     let (receiver, property) = parse_static_property_label(label)?;
@@ -135,7 +231,9 @@ fn resolve_static_property_slot(
         .class_infos
         .get(declaring_class)
         .ok_or_else(|| CodegenIrError::unsupported(format!("unknown static property declaring class {}", declaring_class)))?;
-    ensure_static_property_visibility(ctx, declaring_class, property, declaring_info, inst)?;
+    if enforce_visibility {
+        ensure_static_property_visibility(ctx, declaring_class, property, declaring_info, inst)?;
+    }
     let (raw_receiver, _) = parse_static_property_label(label)?;
     let late_bound = raw_receiver.trim_start_matches('\\') == "static";
     let branches = dynamic_static_property_branches(ctx, late_bound, property, declaring_class);
@@ -187,6 +285,18 @@ fn emit_direct_load_static_property_result(
     abi::emit_load_symbol_to_result(ctx.emitter, &slot.symbol, &slot.php_type);
 }
 
+/// Emits `true` when the static-property slot is initialized.
+fn emit_direct_static_property_initialized_result(
+    ctx: &mut FunctionContext<'_>,
+    slot: &StaticPropertySlot,
+) {
+    if !slot.is_declared {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        return;
+    }
+    emit_static_property_initialized_bool(ctx, slot);
+}
+
 /// Emits a direct static property store into the fallback declaring-class symbol.
 fn emit_direct_store_static_property_result(
     ctx: &mut FunctionContext<'_>,
@@ -195,6 +305,28 @@ fn emit_direct_store_static_property_result(
 ) {
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, release_previous);
     clear_uninitialized_marker_after_static_store(ctx, &slot.symbol, &slot.php_type);
+}
+
+/// Compares a typed static-property marker with the uninitialized sentinel.
+fn emit_static_property_initialized_bool(
+    ctx: &mut FunctionContext<'_>,
+    slot: &StaticPropertySlot,
+) {
+    let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, marker_reg, &slot.symbol, 8);
+    abi::emit_load_int_immediate(ctx.emitter, sentinel_reg, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction("cset x0, ne");                             // materialize true when the static property is initialized
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction("setne al");                                // materialize true when the static property is initialized
+            ctx.emitter.instruction("movzx rax, al");                           // widen the initialization flag into the integer result register
+        }
+    }
 }
 
 /// Loads the forwarded called-class id into `dest_reg` when the current frame has it.
@@ -208,6 +340,56 @@ fn emit_called_class_id_to_reg(
     let offset = ctx.local_offset(slot)?;
     abi::load_at_offset(ctx.emitter, dest_reg, offset);
     Ok(true)
+}
+
+/// Emits an eval late-static override read before falling back to native slots.
+fn emit_eval_native_frame_static_property_get_if_needed(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    slot: &StaticPropertySlot,
+) -> Result<Option<String>> {
+    if !slot.late_bound || !ctx.module.required_runtime_features.eval_bridge {
+        return Ok(None);
+    }
+    let frame_class = super::current_method_class(ctx)?.to_string();
+    let no_override_label = ctx.next_label("eval_late_static_prop_get_no_override");
+    let done_label = ctx.next_label("eval_late_static_prop_get_done");
+    builtins::lower_eval_native_frame_static_property_get(
+        ctx,
+        inst,
+        &frame_class,
+        &slot.property,
+        &no_override_label,
+        &done_label,
+    )?;
+    ctx.emitter.label(&no_override_label);
+    Ok(Some(done_label))
+}
+
+/// Emits an eval late-static override write before falling back to native slots.
+fn emit_eval_native_frame_static_property_set_if_needed(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+    slot: &StaticPropertySlot,
+) -> Result<Option<String>> {
+    if !slot.late_bound || !ctx.module.required_runtime_features.eval_bridge {
+        return Ok(None);
+    }
+    let frame_class = super::current_method_class(ctx)?.to_string();
+    let no_override_label = ctx.next_label("eval_late_static_prop_set_no_override");
+    let done_label = ctx.next_label("eval_late_static_prop_set_done");
+    builtins::lower_eval_native_frame_static_property_set(
+        ctx,
+        inst,
+        value,
+        &frame_class,
+        &slot.property,
+        &no_override_label,
+        &done_label,
+    )?;
+    ctx.emitter.label(&no_override_label);
+    Ok(Some(done_label))
 }
 
 /// Emits a late-bound static property read selected by the runtime called-class id.
@@ -526,6 +708,9 @@ fn ensure_static_property_value_supported(
     if is_empty_array_for_array_static_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if can_coerce_mixed_to_scalar_static_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     Err(CodegenIrError::unsupported(format!(
         "{} assigning PHP type {:?} to {}::${} with PHP type {:?}",
         inst.op.name(),
@@ -545,6 +730,15 @@ fn is_empty_array_for_array_static_property(value_ty: &PhpType, slot_ty: &PhpTyp
         return false;
     }
     matches!(value_elem.codegen_repr(), PhpType::Never | PhpType::Void)
+}
+
+/// Returns true when a boxed Mixed value can be coerced before a scalar static-property store.
+fn can_coerce_mixed_to_scalar_static_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && matches!(
+            slot_ty.codegen_repr(),
+            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+        )
 }
 
 /// Returns true when a value can materialize the inline nullable-int static-property shape.
@@ -597,6 +791,20 @@ fn load_static_property_store_value_to_result(
                     other
                 )))
             }
+        }
+        return Ok(());
+    }
+    if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        load_value_to_first_int_arg(ctx, value)?;
+        match slot_ty.codegen_repr() {
+            PhpType::Str => {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            }
+            PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
+            PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
+            PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
+            _ => {}
         }
         return Ok(());
     }

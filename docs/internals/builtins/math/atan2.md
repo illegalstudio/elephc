@@ -2,7 +2,7 @@
 title: "atan2() — internals"
 description: "Compiler internals for atan2(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 239
+  order: 243
 ---
 
 ## `atan2()` — internals
@@ -31,6 +31,11 @@ function atan2(float $y, float $x): float
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/atan2.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/atan2.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

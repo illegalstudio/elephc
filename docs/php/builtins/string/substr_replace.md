@@ -2,7 +2,7 @@
 title: "substr_replace()"
 description: "Replaces text within a portion of a string."
 sidebar:
-  order: 401
+  order: 405
 ---
 
 ## substr_replace()
@@ -20,6 +20,11 @@ Replaces text within a portion of a string.
 - `$length` (`int`), default `null`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/substr_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/substr_replace.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

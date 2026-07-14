@@ -2,7 +2,7 @@
 title: "ptr_read_string()"
 description: "Copies raw bytes from a pointer into a PHP string of the given length."
 sidebar:
-  order: 293
+  order: 297
 ---
 
 ## ptr_read_string()
@@ -18,6 +18,11 @@ Copies raw bytes from a pointer into a PHP string of the given length.
 - `$length` (`int`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_read_string.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_read_string.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

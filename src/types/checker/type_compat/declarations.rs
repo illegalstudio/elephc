@@ -211,8 +211,8 @@ impl Checker {
     }
 
     /// Builds the initial parameter type list for a function declaration, resolving type hints,
-    /// validating defaults, and inferring types for untyped parameters. Adds variadic parameter
-    /// type as `PhpType::Array(Int)` if the function is variadic.
+    /// validating defaults, and inferring types for untyped parameters. Adds a variadic parameter
+    /// array type, using the declared element type for typed variadics.
     pub(crate) fn initial_function_param_types(
         &self,
         name: &str,
@@ -240,10 +240,18 @@ impl Checker {
             }
         }
         if let Some(variadic_name) = decl.variadic.as_ref() {
-            param_types.push((
-                variadic_name.clone(),
-                PhpType::Array(Box::new(PhpType::Int)),
-            ));
+            let elem_ty = if decl.variadic_by_ref {
+                PhpType::Mixed
+            } else if let Some(type_ann) = decl.variadic_type.as_ref() {
+                self.resolve_declared_param_type_hint(
+                    type_ann,
+                    decl.span,
+                    &format!("Function '{}' variadic parameter ${}", name, variadic_name),
+                )?
+            } else {
+                PhpType::Int
+            };
+            param_types.push((variadic_name.clone(), PhpType::Array(Box::new(elem_ty))));
         }
         Ok(param_types)
     }
@@ -307,6 +315,7 @@ impl Checker {
         let saved_globals = self.active_globals.clone();
         let saved_statics = self.active_statics.clone();
         let saved_foreach_keys = self.foreach_key_locals.clone();
+        let saved_eval_barrier_active = self.eval_barrier_active;
         let saved_break_continue_depth = self.break_continue_depth;
         let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
 
@@ -314,6 +323,7 @@ impl Checker {
         self.active_globals.clear();
         self.active_statics.clear();
         self.foreach_key_locals.clear();
+        self.eval_barrier_active = false;
         self.break_continue_depth = 0;
         self.finally_break_continue_bases.clear();
 
@@ -323,6 +333,7 @@ impl Checker {
         self.active_globals = saved_globals;
         self.active_statics = saved_statics;
         self.foreach_key_locals = saved_foreach_keys;
+        self.eval_barrier_active = saved_eval_barrier_active;
         self.break_continue_depth = saved_break_continue_depth;
         self.finally_break_continue_bases = saved_finally_break_continue_bases;
 

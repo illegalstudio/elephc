@@ -12,13 +12,19 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
-use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, Module, Op, ValueDef, ValueId};
 use crate::names::php_symbol_key;
-use crate::types::{AttrArgEntry, AttrArgValue, ClassInfo, PhpType};
+use crate::types::{AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+pub(in crate::codegen::lower_inst) const REFLECTION_ATTRIBUTE_TARGET_CLASS: i64 = 1;
+pub(in crate::codegen::lower_inst) const REFLECTION_ATTRIBUTE_TARGET_FUNCTION: i64 = 2;
+pub(in crate::codegen::lower_inst) const REFLECTION_ATTRIBUTE_TARGET_METHOD: i64 = 4;
+pub(in crate::codegen::lower_inst) const REFLECTION_ATTRIBUTE_TARGET_PROPERTY: i64 = 8;
+pub(in crate::codegen::lower_inst) const REFLECTION_ATTRIBUTE_TARGET_CLASS_CONSTANT: i64 = 16;
+pub(in crate::codegen::lower_inst) const REFLECTION_ATTRIBUTE_TARGET_PARAMETER: i64 = 32;
 
 /// Fixed object slot layout for the synthetic `ReflectionAttribute` class.
 struct ReflectionAttributeLayout {
@@ -30,6 +36,10 @@ struct ReflectionAttributeLayout {
     args_hi: usize,
     factory_lo: usize,
     factory_hi: usize,
+    target_lo: usize,
+    target_hi: usize,
+    repeated_lo: usize,
+    repeated_hi: usize,
 }
 
 /// Lowers `class_attribute_names(class)` into an indexed string array.
@@ -48,7 +58,7 @@ pub(crate) fn lower_class_attribute_names(
     super::store_if_result(ctx, inst)
 }
 
-/// Lowers `class_attribute_args(class, attr)` into an indexed Mixed array.
+/// Lowers `class_attribute_args(class, attr)` into a Mixed PHP argument array.
 pub(crate) fn lower_class_attribute_args(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -76,7 +86,12 @@ pub(crate) fn lower_class_get_attributes(
         .map(|info| (info.attribute_names.clone(), info.attribute_args.clone()))
         .unwrap_or_else(|| (Vec::new(), Vec::new()));
 
-    emit_reflection_attribute_array(ctx, &attr_names, &attr_args)?;
+    emit_reflection_attribute_array(
+        ctx,
+        &attr_names,
+        &attr_args,
+        REFLECTION_ATTRIBUTE_TARGET_CLASS,
+    )?;
     super::store_if_result(ctx, inst)
 }
 
@@ -89,15 +104,18 @@ fn attribute_args(
     let attr_key = php_symbol_key(attr_name.trim_start_matches('\\'));
     class_info(ctx, class_name)
         .and_then(|info| {
-            info.attribute_names.iter().enumerate().find_map(|(idx, name)| {
-                let candidate = php_symbol_key(name.trim_start_matches('\\'));
-                (candidate == attr_key).then(|| {
-                    info.attribute_args
-                        .get(idx)
-                        .and_then(Clone::clone)
-                        .unwrap_or_default()
+            info.attribute_names
+                .iter()
+                .enumerate()
+                .find_map(|(idx, name)| {
+                    let candidate = php_symbol_key(name.trim_start_matches('\\'));
+                    (candidate == attr_key).then(|| {
+                        info.attribute_args
+                            .get(idx)
+                            .and_then(Clone::clone)
+                            .unwrap_or_default()
+                    })
                 })
-            })
         })
         .unwrap_or_default()
 }
@@ -117,6 +135,7 @@ pub(in crate::codegen::lower_inst) fn emit_reflection_attribute_array(
     ctx: &mut FunctionContext<'_>,
     attr_names: &[String],
     attr_args: &[Option<Vec<AttrArgEntry>>],
+    target: i64,
 ) -> Result<()> {
     let layout = reflection_attribute_layout(ctx)?;
     allocate_indexed_array(ctx, attr_names.len().max(1), 8);
@@ -131,11 +150,15 @@ pub(in crate::codegen::lower_inst) fn emit_reflection_attribute_array(
             .get(idx)
             .and_then(|args| args.as_deref())
             .unwrap_or(&[]);
-        let factory_id = crate::codegen::reflection::attribute_factory_id(
-            &ctx.module.class_infos,
-            attr_name,
-            attr_arg_list,
-        );
+        let factory_id = {
+            let function_attrs = function_attribute_sources(ctx.module);
+            crate::codegen::reflection::attribute_factory_id_with_extra(
+                &ctx.module.class_infos,
+                &function_attrs,
+                attr_name,
+                attr_arg_list,
+            )
+        };
 
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_attribute_object(ctx, &layout);
@@ -143,10 +166,33 @@ pub(in crate::codegen::lower_inst) fn emit_reflection_attribute_array(
         emit_set_name_property(ctx, attr_name, &layout);
         emit_set_args_property(ctx, attr_arg_list, &layout)?;
         emit_set_factory_property(ctx, factory_id, &layout);
+        emit_set_target_property(ctx, target, &layout);
+        emit_set_repeated_property(
+            ctx,
+            reflection_attribute_name_is_repeated(attr_names, attr_name),
+            &layout,
+        );
         emit_append_reflection_attribute_object(ctx);
     }
 
     Ok(())
+}
+
+/// Returns reflection-visible top-level function attribute metadata sources.
+fn function_attribute_sources(
+    module: &Module,
+) -> Vec<crate::codegen::reflection::AttributeMetadataSource<'_>> {
+    module
+        .functions
+        .iter()
+        .filter(|function| !function.attribute_names.is_empty())
+        .map(|function| {
+            (
+                function.attribute_names.as_slice(),
+                function.attribute_args.as_slice(),
+            )
+        })
+        .collect()
 }
 
 /// Returns the synthetic `ReflectionAttribute` class layout from EIR metadata.
@@ -159,6 +205,8 @@ fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAt
     let name_lo = reflection_property_offset(info, "__name")?;
     let args_lo = reflection_property_offset(info, "__args")?;
     let factory_lo = reflection_property_offset(info, "__factory")?;
+    let target_lo = reflection_property_offset(info, "__target")?;
+    let repeated_lo = reflection_property_offset(info, "__is_repeated")?;
     Ok(ReflectionAttributeLayout {
         class_id: info.class_id,
         property_count: info.properties.len(),
@@ -168,6 +216,10 @@ fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAt
         args_hi: args_lo + 8,
         factory_lo,
         factory_hi: factory_lo + 8,
+        target_lo,
+        target_hi: target_lo + 8,
+        repeated_lo,
+        repeated_hi: repeated_lo + 8,
     })
 }
 
@@ -189,19 +241,26 @@ fn emit_reflection_attribute_object(
     let payload_size = 8 + layout.property_count * 16;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov x0, #{}", payload_size));     // request ReflectionAttribute object payload storage
+            ctx.emitter
+                .instruction(&format!("mov x0, #{}", payload_size));            // request ReflectionAttribute object payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks ReflectionAttribute as an object
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the object heap header before the payload
-            ctx.emitter.instruction(&format!("mov x10, #{}", layout.class_id)); // materialize the ReflectionAttribute class id
+            ctx.emitter
+                .instruction(&format!("mov x10, #{}", layout.class_id));        // materialize the ReflectionAttribute class id
             ctx.emitter.instruction("str x10, [x0]");                           // store the class id at object payload offset zero
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov rax, {}", payload_size));     // request ReflectionAttribute object payload storage
+            ctx.emitter
+                .instruction(&format!("mov rax, {}", payload_size));            // request ReflectionAttribute object payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word
+            ctx.emitter.instruction(&format!(
+                "mov r10, 0x{:x}",
+                (X86_64_HEAP_MAGIC_HI32 << 32) | 4
+            ));                                                                 // materialize the x86_64 object heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the object heap header before the payload
-            ctx.emitter.instruction(&format!("mov r10, {}", layout.class_id));  // materialize the ReflectionAttribute class id
+            ctx.emitter
+                .instruction(&format!("mov r10, {}", layout.class_id));         // materialize the ReflectionAttribute class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero
         }
     }
@@ -276,6 +335,44 @@ fn emit_set_factory_property(
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, layout.factory_hi);
 }
 
+/// Stores the PHP `Attribute::TARGET_*` bitmask on the stacked reflection object.
+fn emit_set_target_property(
+    ctx: &mut FunctionContext<'_>,
+    target: i64,
+    layout: &ReflectionAttributeLayout,
+) {
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let target_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, target_reg, target);
+    abi::emit_store_to_address(ctx.emitter, target_reg, object_reg, layout.target_lo);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, layout.target_hi);
+}
+
+/// Stores whether this attribute name is repeated on the same owner.
+fn emit_set_repeated_property(
+    ctx: &mut FunctionContext<'_>,
+    repeated: bool,
+    layout: &ReflectionAttributeLayout,
+) {
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let repeated_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, repeated_reg, if repeated { 1 } else { 0 });
+    abi::emit_store_to_address(ctx.emitter, repeated_reg, object_reg, layout.repeated_lo);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, layout.repeated_hi);
+}
+
+/// Returns true when an attribute name appears multiple times on one reflected owner.
+fn reflection_attribute_name_is_repeated(attr_names: &[String], attr_name: &str) -> bool {
+    let needle = php_symbol_key(attr_name.trim_start_matches('\\'));
+    attr_names
+        .iter()
+        .filter(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == needle)
+        .nth(1)
+        .is_some()
+}
+
 /// Appends the stacked object to the stacked result array and leaves the array in result.
 fn emit_append_reflection_attribute_object(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
@@ -332,54 +429,126 @@ fn emit_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]
     ctx.emitter.instruction("pop rax");                                         // restore the final attribute-name array as the result
 }
 
-/// Allocates and fills an indexed array of boxed Mixed attribute arguments.
+/// Allocates and fills a PHP hash array of boxed Mixed attribute arguments.
 fn emit_mixed_array(ctx: &mut FunctionContext<'_>, attr_args: &[AttrArgEntry]) -> Result<()> {
-    allocate_indexed_array(ctx, attr_args.len().max(1), 8);
-    crate::codegen::emit_array_value_type_stamp(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        &PhpType::Mixed,
-    );
+    allocate_mixed_hash(ctx, attr_args.len().max(1));
     match ctx.emitter.target.arch {
         Arch::AArch64 => emit_mixed_array_fill_aarch64(ctx, attr_args),
         Arch::X86_64 => emit_mixed_array_fill_x86_64(ctx, attr_args),
     }
 }
 
-/// Appends boxed Mixed attribute arguments to the current result array on AArch64.
+/// Inserts boxed Mixed attribute arguments into the current result hash on AArch64.
 fn emit_mixed_array_fill_aarch64(
     ctx: &mut FunctionContext<'_>,
     attr_args: &[AttrArgEntry],
 ) -> Result<()> {
-    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the attribute-arg array while boxing values
-    for entry in attr_args {
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the attribute-arg hash while boxing values
+    for (index, entry) in attr_args.iter().enumerate() {
         emit_box_arg(ctx, &entry.value)?;
-        ctx.emitter.instruction("mov x1, x0");                                  // pass the boxed attribute argument as the append value
-        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the attribute-arg array for this append
-        abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
-        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown attribute-arg array
+        ctx.emitter.instruction("mov x3, x0");                                  // pass the boxed argument as the hash value payload
+        ctx.emitter.instruction("mov x4, xzr");                                 // boxed Mixed hash entries do not use a high payload word
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            "x5",
+            crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64,
+        );
+        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the attribute-arg hash for this insertion
+        emit_attribute_arg_key_aarch64(ctx, index, entry);
+        abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown attribute-arg hash
     }
-    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final attribute-arg array as the result
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final attribute-arg hash as the result
     Ok(())
 }
 
-/// Appends boxed Mixed attribute arguments to the current result array on x86_64.
+/// Inserts boxed Mixed attribute arguments into the current result hash on x86_64.
 fn emit_mixed_array_fill_x86_64(
     ctx: &mut FunctionContext<'_>,
     attr_args: &[AttrArgEntry],
 ) -> Result<()> {
-    ctx.emitter.instruction("push rax");                                        // park the attribute-arg array while boxing values
+    ctx.emitter.instruction("push rax");                                        // park the attribute-arg hash while boxing values
     ctx.emitter.instruction("sub rsp, 8");                                      // keep stack alignment stable across helper calls
-    for entry in attr_args {
+    for (index, entry) in attr_args.iter().enumerate() {
         emit_box_arg(ctx, &entry.value)?;
-        ctx.emitter.instruction("mov rsi, rax");                                // pass the boxed attribute argument as the append value
-        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the attribute-arg array for this append
-        abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
-        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown attribute-arg array
+        ctx.emitter.instruction("mov rcx, rax");                                // pass the boxed argument as the hash value payload
+        abi::emit_load_int_immediate(ctx.emitter, "r8", 0);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            "r9",
+            crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64,
+        );
+        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the attribute-arg hash for this insertion
+        emit_attribute_arg_key_x86_64(ctx, index, entry);
+        abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown attribute-arg hash
     }
     ctx.emitter.instruction("add rsp, 8");                                      // drop the temporary alignment slot
-    ctx.emitter.instruction("pop rax");                                         // restore the final attribute-arg array as the result
+    ctx.emitter.instruction("pop rax");                                         // restore the final attribute-arg hash as the result
     Ok(())
+}
+
+/// Materializes the hash key for one attribute argument on AArch64.
+fn emit_attribute_arg_key_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    index: usize,
+    entry: &AttrArgEntry,
+) {
+    match &entry.key {
+        Some(AttrKey::Str(name)) => {
+            let (label, len) = ctx.data.add_string(name.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Some(AttrKey::Int(value)) => {
+            abi::emit_load_int_immediate(ctx.emitter, "x1", *value);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
+        }
+        None => {
+            abi::emit_load_int_immediate(ctx.emitter, "x1", index as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
+        }
+    }
+}
+
+/// Materializes the hash key for one attribute argument on x86_64.
+fn emit_attribute_arg_key_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    index: usize,
+    entry: &AttrArgEntry,
+) {
+    match &entry.key {
+        Some(AttrKey::Str(name)) => {
+            let (label, len) = ctx.data.add_string(name.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        }
+        Some(AttrKey::Int(value)) => {
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", *value);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+        }
+        None => {
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", index as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+        }
+    }
+}
+
+/// Allocates a Mixed-valued PHP hash with room for captured attribute args.
+fn allocate_mixed_hash(ctx: &mut FunctionContext<'_>, capacity: usize) {
+    let capacity = (capacity * 2).max(16);
+    let value_tag = crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", capacity as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", value_tag);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", capacity as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", value_tag);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_new");
 }
 
 /// Boxes one captured attribute argument into a Mixed cell, leaving the cell in
@@ -388,12 +557,17 @@ fn emit_mixed_array_fill_x86_64(
 fn emit_box_arg(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue) -> Result<()> {
     if let AttrArgValue::Array(entries) = arg {
         // Build the nested array (leaves it in the result reg), then box the
-        // array pointer as a Mixed cell with the array runtime tag. The parent
-        // array being filled stays parked on the temporary stack across this.
+        // pointer as a Mixed cell. emit_mixed_array allocates a hash, so the
+        // cell must carry the assoc tag or Mixed readers dispatch the payload
+        // to the indexed-array helpers. The parent array being filled stays
+        // parked on the temporary stack across this.
         emit_mixed_array(ctx, entries)?;
         crate::codegen::emit_box_current_value_as_mixed(
             ctx.emitter,
-            &PhpType::Array(Box::new(PhpType::Mixed)),
+            &PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            },
         );
         return Ok(());
     }
@@ -440,7 +614,8 @@ fn emit_box_scalar_arg_aarch64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue
         }
         AttrArgValue::Bool(value) => {
             ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean payload
-            ctx.emitter.instruction(&format!("mov x1, #{}", *value as u64));    // pass the captured boolean as the mixed low word
+            ctx.emitter
+                .instruction(&format!("mov x1, #{}", *value as u64));           // pass the captured boolean as the mixed low word
             ctx.emitter.instruction("mov x2, xzr");                             // boolean mixed payloads do not use the high word
         }
         AttrArgValue::Str(value) => {
@@ -487,7 +662,8 @@ fn emit_box_scalar_arg_x86_64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue)
         }
         AttrArgValue::Bool(value) => {
             ctx.emitter.instruction("mov rax, 3");                              // runtime tag 3 = boolean payload
-            ctx.emitter.instruction(&format!("mov rdi, {}", *value as u64));    // pass the captured boolean as the mixed low word
+            ctx.emitter
+                .instruction(&format!("mov rdi, {}", *value as u64));           // pass the captured boolean as the mixed low word
             ctx.emitter.instruction("xor rsi, rsi");                            // boolean mixed payloads do not use the high word
         }
         AttrArgValue::Str(value) => {

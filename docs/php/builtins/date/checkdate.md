@@ -2,7 +2,7 @@
 title: "checkdate()"
 description: "Validates a Gregorian date."
 sidebar:
-  order: 85
+  order: 89
 ---
 
 ## checkdate()
@@ -19,6 +19,11 @@ Validates a Gregorian date.
 - `$year` (`int`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/checkdate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/checkdate.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -7,17 +7,17 @@ sidebar:
 
 ## SPL builtins
 
-| Function | Signature | Returns |
-|---|---|---|
-| [`iterator_apply()`](./spl/iterator_apply.md) | `(traversable $iterator, callable $callback, array $args = null): int` | `int` |
-| [`iterator_count()`](./spl/iterator_count.md) | `(traversable $iterator): int` | `int` |
-| [`iterator_to_array()`](./spl/iterator_to_array.md) | `(traversable $iterator, bool $preserve_keys = true): array` | `array` |
-| [`spl_autoload()`](./spl/spl_autoload.md) | `(string $class, string $file_extensions = null): void` | `void` |
-| [`spl_autoload_call()`](./spl/spl_autoload_call.md) | `(string $class): void` | `void` |
-| [`spl_autoload_extensions()`](./spl/spl_autoload_extensions.md) | `(string $file_extensions = null): string` | `string` |
-| [`spl_autoload_functions()`](./spl/spl_autoload_functions.md) | `(): array` | `array` |
-| [`spl_autoload_register()`](./spl/spl_autoload_register.md) | `(callable $callback = null, bool $throw = true, bool $prepend = false): bool` | `bool` |
-| [`spl_autoload_unregister()`](./spl/spl_autoload_unregister.md) | `(callable $callback): bool` | `bool` |
-| [`spl_classes()`](./spl/spl_classes.md) | `(): array` | `array` |
-| [`spl_object_hash()`](./spl/spl_object_hash.md) | `(object $object): string` | `string` |
-| [`spl_object_id()`](./spl/spl_object_id.md) | `(object $object): int` | `int` |
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`iterator_apply()`](./spl/iterator_apply.md) | `(traversable $iterator, callable $callback, array $args = null): int` | `int` | ✓ | ✓ |
+| [`iterator_count()`](./spl/iterator_count.md) | `(traversable $iterator): int` | `int` | ✓ | ✓ |
+| [`iterator_to_array()`](./spl/iterator_to_array.md) | `(traversable $iterator, bool $preserve_keys = true): array` | `array` | ✓ | ✓ |
+| [`spl_autoload()`](./spl/spl_autoload.md) | `(string $class, string $file_extensions = null): void` | `void` | ✓ | ✓ |
+| [`spl_autoload_call()`](./spl/spl_autoload_call.md) | `(string $class): void` | `void` | ✓ | ✓ |
+| [`spl_autoload_extensions()`](./spl/spl_autoload_extensions.md) | `(string $file_extensions = null): string` | `string` | ✓ | ✓ |
+| [`spl_autoload_functions()`](./spl/spl_autoload_functions.md) | `(): array` | `array` | ✓ | ✓ |
+| [`spl_autoload_register()`](./spl/spl_autoload_register.md) | `(callable $callback = null, bool $throw = true, bool $prepend = false): bool` | `bool` | ✓ | ✓ |
+| [`spl_autoload_unregister()`](./spl/spl_autoload_unregister.md) | `(callable $callback): bool` | `bool` | ✓ | ✓ |
+| [`spl_classes()`](./spl/spl_classes.md) | `(): array` | `array` | ✓ | ✓ |
+| [`spl_object_hash()`](./spl/spl_object_hash.md) | `(object $object): string` | `string` | ✓ | ✓ |
+| [`spl_object_id()`](./spl/spl_object_id.md) | `(object $object): int` | `int` | ✓ | ✓ |

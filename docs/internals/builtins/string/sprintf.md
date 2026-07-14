@@ -2,7 +2,7 @@
 title: "sprintf() — internals"
 description: "Compiler internals for sprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 380
+  order: 384
 ---
 
 ## `sprintf()` — internals
@@ -32,6 +32,12 @@ function sprintf(string $format, ...$values): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+- **Variadic**: collects excess arguments into `$values`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/formatting/sprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/formatting/sprintf.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 - **Variadic**: collects excess arguments into `$values`.
 
 ## Cross-references

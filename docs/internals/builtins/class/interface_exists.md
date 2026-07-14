@@ -2,7 +2,7 @@
 title: "interface_exists() — internals"
 description: "Compiler internals for interface_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 81
+  order: 85
 ---
 
 ## `interface_exists()` — internals
@@ -10,13 +10,13 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/interface_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/interface_exists.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:293](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L293) (`lower_class_like_exists`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L583) (`lower_class_like_exists`)
 - **Function symbol**: `lower_class_like_exists()`
 
 
 ### Lowering notes
 
-- Lowers AOT class/interface/enum existence checks for literal names.
+- Lowers AOT class/interface/enum existence checks for literal or dynamic string names.
 
 ## Runtime helpers
 
@@ -31,6 +31,11 @@ function interface_exists(string $interface, bool $autoload = true): bool
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/interface_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/interface_exists.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 
