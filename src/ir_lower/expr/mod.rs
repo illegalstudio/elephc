@@ -8594,6 +8594,9 @@ fn lower_array_access_from_value(
     };
     let result_type = array_access_result_type(ctx, array_value.value, op, expr);
     let release_receiver = ctx.value_is_owned_index_read_temp(array_value);
+    let release_owned_mixed_temp_receiver = op == Op::RuntimeCall
+        && ctx.builder.value_php_type(array_value.value).codegen_repr() == PhpType::Mixed
+        && ctx.value_is_owned_temp_load(array_value.value);
     let mut result = ctx.emit_value(
         op,
         vec![array_value.value, index_value.value],
@@ -8628,17 +8631,21 @@ fn lower_array_access_from_value(
     // merge temp `lower_nullable_array_access` uses for a chained `?array`
     // read) carries an owned reference that nothing else releases anymore:
     // `take_owned_temp` already cleared the backing slot, so this read is the
-    // temp value's last consuming use. Drop that reference here, exactly once,
-    // on the loaded SSA value itself so both merge results are freed — the
-    // populated container from the non-null path and the boxed Mixed null from
-    // the null path (Release is a no-op on genuinely empty values). This is
-    // restricted to the boxed Mixed runtime read because
+    // temp value's last consuming use. The exact-Mixed guard keeps this path on
+    // `__rt_mixed_array_get`; `Op::RuntimeCall` also represents `ArrayAccess`
+    // object dispatch and is broader than this ownership proof. Drop the temp's
+    // reference here exactly once, on the loaded SSA value itself, so both
+    // merge results are freed — the populated container from the non-null path
+    // and the boxed Mixed null from the null path. `release_if_owned` only
+    // type-gates EIR emission; the `OwnedTemp` load predicate establishes the
+    // ownership transfer at this call site.
+    //
     // `__rt_mixed_array_get` returns an owned, independent cell (string
     // payloads are persisted and child heap pointers retained), so releasing
     // the receiver cannot invalidate the result; typed reads (`ArrayGet`,
     // `StrCharAt`, ...) can return payloads that still borrow from the
     // receiver's storage and must keep it alive.
-    if op == Op::RuntimeCall && ctx.value_is_owned_temp_load(array_value.value) {
+    if release_owned_mixed_temp_receiver {
         crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(expr.span));
     }
     result
