@@ -855,7 +855,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) -> LoweredValue {
         let ir_type = value_ir_type(&php_type);
-        let ownership = Ownership::for_php_type(&php_type);
+        // This load exists specifically to release the owner held by the slot;
+        // mark it explicitly so finalization does not mistake it for a deferred
+        // borrowed expression load when the storage stays concrete.
+        let ownership = Ownership::Owned;
         let kind = self
             .local_kinds
             .get(name)
@@ -1230,13 +1233,78 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
     }
 
-    /// Emits a local storeback for in-place mutations without assignment acquire/release.
+    /// Releases the boxed local owner before a consuming mutation executes.
+    ///
+    /// The source load already owns an unboxed concrete reference. Widening the
+    /// destination storage before emitting this cleanup makes the final Mixed frame
+    /// representation visible, then dropping the old box transfers its payload owner
+    /// to the source SSA value so COW sees only real aliases during the mutation.
+    pub(crate) fn prepare_mutated_local_owner(
+        &mut self,
+        name: &str,
+        source: LoweredValue,
+        replacement_type: PhpType,
+        span: Option<Span>,
+    ) {
+        let previous_kind = self
+            .local_kinds
+            .get(name)
+            .copied()
+            .unwrap_or(LocalKind::PhpLocal);
+        if self.uses_global_storage(name, previous_kind) {
+            return;
+        }
+        let slot = self.declare_local(name, replacement_type.clone());
+        let is_ref_bound =
+            self.is_ref_bound_local(name) && previous_kind == LocalKind::PhpLocal;
+        let source_type = self.builder.value_php_type(source.value).codegen_repr();
+        self.builder
+            .widen_local_storage_type(slot, replacement_type);
+        let storage_type = self.builder.local_php_type(slot).codegen_repr();
+        if !is_ref_bound
+            && matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
+            && !matches!(source_type, PhpType::Mixed | PhpType::Union(_))
+        {
+            self.release_stored_local_value(name, slot, span);
+        }
+    }
+
+    /// Emits a consuming local storeback after a mutation or representation change.
+    ///
+    /// The mutation result already owns the reference that moves into the destination,
+    /// so this deliberately skips assignment acquire/release. When the local's final
+    /// frame representation is boxed Mixed but the mutation result is concrete, loading
+    /// the old value produced a separate owned unboxed reference; release the previous
+    /// Mixed box before replacing it so COW generations do not leak.
     pub(crate) fn store_mutated_local(
         &mut self,
         name: &str,
         value: LoweredValue,
         php_type: PhpType,
         span: Option<Span>,
+    ) -> LoweredValue {
+        self.store_mutated_local_impl(name, value, php_type, span, true)
+    }
+
+    /// Stores a mutation result whose previous boxed local owner was released beforehand.
+    pub(crate) fn store_prepared_mutated_local(
+        &mut self,
+        name: &str,
+        value: LoweredValue,
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        self.store_mutated_local_impl(name, value, php_type, span, false)
+    }
+
+    /// Implements consuming local storeback with caller-selected cleanup timing.
+    fn store_mutated_local_impl(
+        &mut self,
+        name: &str,
+        value: LoweredValue,
+        php_type: PhpType,
+        span: Option<Span>,
+        release_previous: bool,
     ) -> LoweredValue {
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
@@ -1258,15 +1326,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return value;
         }
         let is_ref_bound = self.is_ref_bound_local(name) && previous_kind == LocalKind::PhpLocal;
+        let value_type = self.builder.value_php_type(value.value).codegen_repr();
+        self.set_local_type(name, php_type.clone());
+        let storage_type = self.builder.local_php_type(slot).codegen_repr();
+        if release_previous
+            && !is_ref_bound
+            && matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
+            && !matches!(value_type, PhpType::Mixed | PhpType::Union(_))
+        {
+            self.release_stored_local_value(name, slot, span);
+        }
         match (is_ref_bound, previous_kind) {
             (true, _) => self.store_ref_cell_slot(slot, value, php_type, span),
             (false, LocalKind::StaticLocal) => {
                 self.store_slot_with_op(slot, value, Op::StoreStaticLocal, span);
-                self.set_local_type(name, php_type);
             }
             _ => {
                 self.store_slot_with_op(slot, value, Op::StoreLocal, span);
-                self.set_local_type(name, php_type);
             }
         }
         value
@@ -1464,6 +1540,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owned_temp_load(value.value) {
             return true;
         }
+        if self.value_is_owned_unboxed_local_load(value.value) {
+            return true;
+        }
         if self.value_is_owning_mixed_string_cast(value.value) {
             return true;
         }
@@ -1562,6 +1641,44 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return false;
         };
         self.builder.local_kind(slot) == LocalKind::OwnedTemp
+    }
+
+    /// Returns whether a concrete local heap load may require an owned-unbox release.
+    ///
+    /// Later source-order stores can widen the final frame slot after this load has
+    /// already been lowered. Array/hash/object/iterable loads are therefore treated as
+    /// provisional owners; builder finalization removes their emitted releases if the
+    /// slot stays concrete. Callable loads use the eager answer because assignment has
+    /// a separate move-vs-retain decision that cannot be repaired by pruning a release.
+    fn value_is_owned_unboxed_local_load(&self, value: ValueId) -> bool {
+        let Some(inst) = self.builder.value_defining_instruction(value) else {
+            return false;
+        };
+        if !matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+            return false;
+        }
+        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+            return false;
+        };
+        if !matches!(
+            self.builder.local_kind(slot),
+            LocalKind::PhpLocal | LocalKind::StaticLocal
+        ) {
+            return false;
+        }
+        let storage_type = self.builder.local_php_type(slot).codegen_repr();
+        let result_type = self.builder.value_php_type(value).codegen_repr();
+        if matches!(
+            result_type,
+            PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_)
+                | PhpType::Iterable
+        ) {
+            return true;
+        }
+        matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
+            && matches!(result_type, PhpType::Callable)
     }
 
     /// Returns whether a generic cast owns a detached string copy of a Mixed operand.

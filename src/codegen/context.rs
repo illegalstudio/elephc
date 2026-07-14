@@ -17,8 +17,8 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::{
-    BlockId, DataId, Function, InstId, LocalKind, LocalSlotId, Module, Op, Ownership, ValueDef,
-    ValueId,
+    BlockId, DataId, Function, Immediate, InstId, LocalKind, LocalSlotId, Module, Op, Ownership,
+    ValueDef, ValueId,
 };
 use crate::ir_passes::Allocation;
 use crate::types::PhpType;
@@ -572,6 +572,30 @@ impl<'a> FunctionContext<'a> {
         }
     }
 
+    /// Releases a boxed source-local owner before a consuming container mutation.
+    ///
+    /// A concrete container loaded from a final Mixed frame slot is unboxed with an
+    /// extra owned reference. Releasing the previous Mixed box before the runtime
+    /// mutation transfers sole ownership to that SSA value, avoiding an artificial
+    /// COW split while preserving real aliases. The mutation result can then be boxed
+    /// as an owned replacement through the ordinary local store path.
+    pub(super) fn release_mutated_source_local_owner(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        let source_ty = self.value_php_type(value)?;
+        let target_ty = self.local_php_type(slot)?;
+        if self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
+            && matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
+            && !matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            let offset = self.local_offset(slot)?;
+            super::frame::emit_owned_local_cleanup(self, slot, offset, &target_ty);
+        }
+        Ok(())
+    }
+
     /// Stores an SSA value into a slot known to contain its raw frame representation.
     pub(super) fn store_value_to_raw_local(
         &mut self,
@@ -815,7 +839,8 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns true when a value producer can leave an owned source consumed by Mixed boxing.
     pub(super) fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
-        if self.value_php_type(value)?.codegen_repr() == PhpType::Str {
+        let value_ty = self.value_php_type(value)?.codegen_repr();
+        if value_ty == PhpType::Str {
             return self.value_is_heap_owned_string_for_mixed_box(value);
         }
         let Some(value_ref) = self.function.value(value) else {
@@ -828,6 +853,21 @@ impl<'a> FunctionContext<'a> {
             .function
             .instruction(inst)
             .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        if matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+                return Ok(false);
+            };
+            let storage_ty = self.local_php_type(slot)?;
+            return Ok(matches!(storage_ty, PhpType::Mixed | PhpType::Union(_))
+                && matches!(
+                    value_ty,
+                    PhpType::Array(_)
+                        | PhpType::AssocArray { .. }
+                        | PhpType::Callable
+                        | PhpType::Object(_)
+                        | PhpType::Iterable
+                ));
+        }
         Ok(matches!(
             inst.op,
             Op::Acquire
