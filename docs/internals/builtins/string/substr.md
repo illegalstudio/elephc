@@ -2,7 +2,7 @@
 title: "substr() — internals"
 description: "Compiler internals for substr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 404
+  order: 405
 ---
 
 ## `substr()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/substr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/substr.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:731](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L731) (`lower_substr`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:776](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L776) (`lower_substr`)
 - **Function symbol**: `lower_substr()`
 
 

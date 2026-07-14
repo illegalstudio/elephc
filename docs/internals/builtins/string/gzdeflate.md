@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/gzdeflate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/gzdeflate.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:436](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L436) (`lower_gzdeflate`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:481](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L481) (`lower_gzdeflate`)
 - **Function symbol**: `lower_gzdeflate()`
 
 

@@ -2,7 +2,7 @@
 title: "strstr() — internals"
 description: "Compiler internals for strstr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 401
+  order: 402
 ---
 
 ## `strstr()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strstr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strstr.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:780](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L780) (`lower_strstr`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:825](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L825) (`lower_strstr`)
 - **Function symbol**: `lower_strstr()`
 
 

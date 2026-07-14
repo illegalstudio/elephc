@@ -383,6 +383,7 @@ sidebar:
 | [`lcfirst()`](./builtins/string/lcfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`long2ip()`](./builtins/string/long2ip.md) | `(int $ip): string` | `string` | ✓ | ✓ |
 | [`ltrim()`](./builtins/string/ltrim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
+| [`mb_strlen()`](./builtins/string/mb_strlen.md) | `(string $string, string $encoding = null): int` | `int` | ✓ | ✓ |
 | [`md5()`](./builtins/string/md5.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`nl2br()`](./builtins/string/nl2br.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`number_format()`](./builtins/string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |

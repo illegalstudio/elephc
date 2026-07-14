@@ -2,7 +2,7 @@
 title: "vprintf() — internals"
 description: "Compiler internals for vprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 411
+  order: 412
 ---
 
 ## `vprintf()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/vprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/vprintf.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:548](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L548) (`lower_vprintf`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:593](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L593) (`lower_vprintf`)
 - **Function symbol**: `lower_vprintf()`
 
 

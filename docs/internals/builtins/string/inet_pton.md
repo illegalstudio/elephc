@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/inet_pton.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/inet_pton.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:515](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L515) (`lower_inet`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:560](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L560) (`lower_inet`)
 - **Function symbol**: `lower_inet()`
 
 

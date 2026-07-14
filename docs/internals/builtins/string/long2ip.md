@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/long2ip.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/long2ip.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:494](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L494) (`lower_long2ip`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:539](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L539) (`lower_long2ip`)
 - **Function symbol**: `lower_long2ip()`
 
 

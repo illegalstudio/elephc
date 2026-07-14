@@ -5426,7 +5426,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_chr",
-      "codegen_line": 876,
+      "codegen_line": 921,
       "notes": [
         "Lowers `chr()` by converting an integer code point into a one-byte string."
       ],
@@ -6536,9 +6536,7 @@
       ],
       "runtime_helpers": [
         "__rt_crc32",
-        "__rt_hash",
-        "__rt_md5",
-        "__rt_sha1"
+        "__rt_mb_strlen"
       ],
       "sig_arm": null,
       "sig_file": "src/builtins/string/crc32.rs",
@@ -12165,7 +12163,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_gzcompress",
-      "codegen_line": 420,
+      "codegen_line": 465,
       "notes": [
         "Lowers `gzcompress(data, level?)` through inline zlib `compress2` calls."
       ],
@@ -12236,7 +12234,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_gzdeflate",
-      "codegen_line": 436,
+      "codegen_line": 481,
       "notes": [
         "Lowers `gzdeflate(data, level?)` through inline raw-DEFLATE zlib calls."
       ],
@@ -12307,7 +12305,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_gzinflate",
-      "codegen_line": 454,
+      "codegen_line": 499,
       "notes": [
         "Lowers `gzinflate(data, max_length?)` and boxes zlib failures as PHP false."
       ],
@@ -12378,7 +12376,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_gzuncompress",
-      "codegen_line": 475,
+      "codegen_line": 520,
       "notes": [
         "Lowers `gzuncompress(data, max_length?)` and boxes zlib failures as PHP false."
       ],
@@ -12583,9 +12581,7 @@
       ],
       "runtime_helpers": [
         "__rt_crc32",
-        "__rt_hash_copy",
-        "__rt_md5",
-        "__rt_sha1"
+        "__rt_hash_copy"
       ],
       "sig_arm": null,
       "sig_file": "src/builtins/string/hash_copy.rs",
@@ -13883,7 +13879,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_inet",
-      "codegen_line": 515,
+      "codegen_line": 560,
       "notes": [
         "Lowers `inet_ntop()` and `inet_pton()` and boxes invalid-address results as PHP false."
       ],
@@ -13943,7 +13939,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_inet",
-      "codegen_line": 515,
+      "codegen_line": 560,
       "notes": [
         "Lowers `inet_ntop()` and `inet_pton()` and boxes invalid-address results as PHP false."
       ],
@@ -14206,7 +14202,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_ip2long",
-      "codegen_line": 506,
+      "codegen_line": 551,
       "notes": [
         "Lowers `ip2long(string)` and boxes invalid-address results as PHP false."
       ],
@@ -17126,7 +17122,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_long2ip",
-      "codegen_line": 494,
+      "codegen_line": 539,
       "notes": [
         "Lowers `long2ip(value)` through the IPv4 formatting runtime helper."
       ],
@@ -17435,6 +17431,80 @@
   },
   {
     "area": "String",
+    "canonical_name": "mb_strlen",
+    "description": "Returns the character count of a string in the requested encoding.",
+    "eval": {
+      "area": "string",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/mb_strlen.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "encoding",
+          "optional": true
+        }
+      ],
+      "required_param_count": 1,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
+      "codegen_function": "lower_mb_strlen",
+      "codegen_line": 375,
+      "notes": [
+        "Lowers `mb_strlen(string, encoding = null)` through the multibyte runtime helper.",
+        "Omitted/null encodings use a null pointer plus zero length; explicit names stay byte strings for PHP-compatible case-insensitive lookup and `ValueError` handling."
+      ],
+      "runtime_helpers": [
+        "__rt_mb_strlen"
+      ],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/mb_strlen.rs",
+      "sig_line": null
+    },
+    "name": "mb_strlen",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "encoding",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "mb_strlen",
+    "sub_area": "String"
+  },
+  {
+    "area": "String",
     "canonical_name": "md5",
     "description": "Calculates the MD5 hash of a string.",
     "eval": {
@@ -17471,7 +17541,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_md5",
-      "codegen_line": 373,
+      "codegen_line": 418,
       "notes": [
         "Lowers `md5(data, binary?)` through the shared crypto-backed runtime helper."
       ],
@@ -18134,7 +18204,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_number_format",
-      "codegen_line": 893,
+      "codegen_line": 938,
       "notes": [
         "Lowers `number_format()` by arranging its runtime helper arguments."
       ],
@@ -18277,7 +18347,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_ord",
-      "codegen_line": 852,
+      "codegen_line": 897,
       "notes": [
         "Lowers `ord()` by returning the first byte of a string or zero for empty input."
       ],
@@ -19460,7 +19530,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_printf",
-      "codegen_line": 535,
+      "codegen_line": 580,
       "notes": [
         "Lowers `printf(format, values...)` as `sprintf()` followed by stdout emission."
       ],
@@ -21975,7 +22045,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_sha1",
-      "codegen_line": 378,
+      "codegen_line": 423,
       "notes": [
         "Lowers `sha1(data, binary?)` through the shared crypto-backed runtime helper."
       ],
@@ -22939,7 +23009,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_sprintf",
-      "codegen_line": 529,
+      "codegen_line": 574,
       "notes": [
         "Lowers `sprintf(format, values...)` by packing variadic records for `__rt_sprintf`."
       ],
@@ -23199,7 +23269,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_str_contains",
-      "codegen_line": 700,
+      "codegen_line": 745,
       "notes": [
         "Lowers `str_contains()` through `strpos()` and converts found positions to bool."
       ],
@@ -23357,7 +23427,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_string_replace",
-      "codegen_line": 798,
+      "codegen_line": 843,
       "notes": [
         "Lowers `str_replace()`/`str_ireplace()` with three string operands."
       ],
@@ -23454,7 +23524,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_str_pad",
-      "codegen_line": 836,
+      "codegen_line": 881,
       "notes": [
         "Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper."
       ],
@@ -23541,7 +23611,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_str_repeat",
-      "codegen_line": 764,
+      "codegen_line": 809,
       "notes": [
         "Lowers `str_repeat(string, times)` through the shared runtime helper."
       ],
@@ -23626,7 +23696,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_string_replace",
-      "codegen_line": 798,
+      "codegen_line": 843,
       "notes": [
         "Lowers `str_replace()`/`str_ireplace()` with three string operands."
       ],
@@ -27308,7 +27378,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_string_position",
-      "codegen_line": 718,
+      "codegen_line": 763,
       "notes": [
         "Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed."
       ],
@@ -27452,7 +27522,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_string_position",
-      "codegen_line": 718,
+      "codegen_line": 763,
       "notes": [
         "Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed."
       ],
@@ -27536,7 +27606,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_strstr",
-      "codegen_line": 780,
+      "codegen_line": 825,
       "notes": [
         "Lowers `strstr(haystack, needle)` by searching and returning the matching suffix."
       ],
@@ -27819,7 +27889,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_substr",
-      "codegen_line": 731,
+      "codegen_line": 776,
       "notes": [
         "Lowers `substr(string, offset, length?)` with target-local pointer arithmetic."
       ],
@@ -27911,7 +27981,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_substr_replace",
-      "codegen_line": 748,
+      "codegen_line": 793,
       "notes": [
         "Lowers `substr_replace(string, replacement, start, length?)`."
       ],
@@ -29600,7 +29670,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_vprintf",
-      "codegen_line": 548,
+      "codegen_line": 593,
       "notes": [
         "Lowers `vprintf(format, values)` as `vsprintf()` followed by stdout emission."
       ],
@@ -29673,7 +29743,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_vsprintf",
-      "codegen_line": 542,
+      "codegen_line": 587,
       "notes": [
         "Lowers `vsprintf(format, values)` through the array-to-sprintf runtime bridge."
       ],
@@ -29758,7 +29828,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_wordwrap",
-      "codegen_line": 820,
+      "codegen_line": 865,
       "notes": [
         "Lowers `wordwrap(string, width?, break?, cut?)` through the shared runtime helper."
       ],

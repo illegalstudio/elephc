@@ -23,8 +23,6 @@ sidebar:
 The following runtime helpers are referenced:
 - `__rt_crc32`
 - `__rt_hash_copy`
-- `__rt_md5`
-- `__rt_sha1`
 
 ## Signature summary
 

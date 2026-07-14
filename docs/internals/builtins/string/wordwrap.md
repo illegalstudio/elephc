@@ -2,7 +2,7 @@
 title: "wordwrap() — internals"
 description: "Compiler internals for wordwrap(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 413
+  order: 414
 ---
 
 ## `wordwrap()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/wordwrap.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/wordwrap.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:820](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L820) (`lower_wordwrap`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:865](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L865) (`lower_wordwrap`)
 - **Function symbol**: `lower_wordwrap()`
 
 
