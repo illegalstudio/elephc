@@ -198,7 +198,15 @@ pub(super) fn check_types_impl(
 
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
-    let interface_names: Vec<String> = interface_map.keys().cloned().collect();
+    // Sort before assigning ids: `interface_map` is a `HashMap`, so its key order
+    // is randomized per process. Assigning `next_interface_id` in that order would
+    // give each interface a different id on every compile, making codegen
+    // non-deterministic (breaking reproducible builds and, worse, occasionally
+    // miscompiling — the runtime class/interface metadata and the emitted
+    // `InstanceOf`/exception-match ids are derived from these, so an unstable
+    // order can produce a binary whose ids disagree). A stable name order fixes it.
+    let mut interface_names: Vec<String> = interface_map.keys().cloned().collect();
+    interface_names.sort();
     for interface_name in interface_names {
         if let Err(error) = build_interface_info_recursive(
             &interface_name,
@@ -214,7 +222,12 @@ pub(super) fn check_types_impl(
 
     let mut next_class_id = 0u64;
     let mut building = HashSet::new();
-    let class_names: Vec<String> = class_map.keys().cloned().collect();
+    // Sort before assigning ids (see the interface loop above): `class_map` is a
+    // `HashMap`, so a stable name order keeps class-id assignment deterministic
+    // across compiles, which reproducible builds and correct exception-match /
+    // method-dispatch ids both depend on.
+    let mut class_names: Vec<String> = class_map.keys().cloned().collect();
+    class_names.sort();
     for class_name in class_names {
         if let Err(error) = build_class_info_recursive(
             &class_name,

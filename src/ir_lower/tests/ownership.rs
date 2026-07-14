@@ -8,7 +8,7 @@
 //! - Verifies the Phase 03 ownership surface emits explicit acquire/release
 //!   markers for refcounted local values before the future EIR backend exists.
 
-use crate::ir::print_module;
+use crate::ir::{print_module, Op, ValueDef};
 
 /// Returns the printed EIR for `main`, excluding built-in helper and property-init functions.
 fn main_function_text(text: &str) -> &str {
@@ -118,5 +118,80 @@ function add($arr, $value) {
     assert!(
         text.contains("mixed_array_append"),
         "expected mixed_array_append for mixed parameter array push in {text}"
+    );
+}
+
+/// Stringifying a Mixed local read must not release its slot-backed source.
+#[test]
+fn mixed_string_cast_does_not_release_local_source() {
+    let module = super::lower_source(
+        r#"<?php
+function render_mixed(mixed $value): string {
+    $first = (string) $value;
+    return $first . "|" . (string) $value;
+}
+echo render_mixed(str_repeat("alive", 1));
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "render_mixed")
+        .expect("expected render_mixed EIR function");
+    let cast_sources = function
+        .instructions
+        .iter()
+        .filter(|inst| inst.op == Op::Cast)
+        .filter_map(|inst| inst.operands.first().copied())
+        .collect::<Vec<_>>();
+    assert_eq!(cast_sources.len(), 2, "expected two Mixed string casts");
+    for source in cast_sources {
+        assert!(
+            function
+                .instructions
+                .iter()
+                .all(|inst| inst.op != Op::Release || inst.operands.first().copied() != Some(source)),
+            "a Mixed local read must survive stringification"
+        );
+    }
+}
+
+/// Stringifying an owned Mixed container read must release that exact source value.
+#[test]
+fn mixed_string_cast_releases_owned_container_read() {
+    let module = super::lower_source(
+        r#"<?php
+$values = ["s" => str_repeat("x", 1), "n" => 1];
+echo (string) $values["s"];
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("expected main EIR function");
+    let source = function
+        .instructions
+        .iter()
+        .filter(|inst| inst.op == Op::Cast)
+        .filter_map(|inst| inst.operands.first().copied())
+        .find(|source| {
+            let Some(value) = function.value(*source) else {
+                return false;
+            };
+            let ValueDef::Instruction { inst, .. } = value.def else {
+                return false;
+            };
+            function
+                .instruction(inst)
+                .is_some_and(|inst| matches!(inst.op, Op::ArrayGet | Op::HashGet))
+        })
+        .expect("expected a Mixed string cast sourced from a container read");
+    assert!(
+        function
+            .instructions
+            .iter()
+            .any(|inst| inst.op == Op::Release && inst.operands.first().copied() == Some(source)),
+        "the owned Mixed container read must be released after stringification"
     );
 }

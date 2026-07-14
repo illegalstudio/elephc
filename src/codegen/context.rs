@@ -41,6 +41,8 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) epilogue_emitted: bool,
     pub(super) is_main: bool,
     pub(super) web: bool,
+    pub(super) web_worker: bool,
+    pub(super) web_worker_script: bool,
     pub(super) gc_stats: bool,
     pub(super) heap_debug: bool,
     pub(super) epilogue_label: Option<String>,
@@ -76,6 +78,8 @@ impl<'a> FunctionContext<'a> {
             epilogue_emitted: false,
             is_main,
             web: false,
+            web_worker: false,
+            web_worker_script: false,
             gc_stats,
             heap_debug,
             epilogue_label,
@@ -739,6 +743,83 @@ impl<'a> FunctionContext<'a> {
             .get(&token)
             .copied()
             .ok_or_else(|| CodegenIrError::invalid_module(format!("missing try handler token {}", token)))
+    }
+
+    /// Writes back a symbol-backed array source (global or static local) after
+    /// an in-place mutation, so the updated array is visible in the symbol storage.
+    pub(super) fn writeback_symbol_array_source(&mut self, value: ValueId) -> Result<()> {
+        let Some(value_ref) = self.function.value(value) else {
+            return Ok(());
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(());
+        };
+        let Some(inst_ref) = self.function.instruction(inst) else {
+            return Ok(());
+        };
+        match inst_ref.op {
+            Op::LoadGlobal => {
+                let Some(crate::ir::Immediate::GlobalName(data)) = inst_ref.immediate else {
+                    return Ok(());
+                };
+                let name = self.global_name_data(data)?.to_string();
+                let symbol = crate::names::ir_global_symbol(&name);
+                let ty = self.value_php_type(value)?;
+                self.data
+                    .add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
+                self.load_value_to_result(value)?;
+                abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
+            }
+            Op::LoadStaticLocal => {
+                let Some(crate::ir::Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+                    return Ok(());
+                };
+                let local = self
+                    .function
+                    .locals
+                    .get(slot.as_raw() as usize)
+                    .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))?;
+                let name = local.name.clone().ok_or_else(|| {
+                    CodegenIrError::invalid_module(
+                        "LoadStaticLocal is missing a source name".to_string(),
+                    )
+                })?;
+                let symbol = crate::names::static_local_symbol(&self.function.name, &name);
+                let ty = self.value_php_type(value)?;
+                self.data
+                    .add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
+                self.load_value_to_result(value)?;
+                abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Emits a call to `__rt_array_uncow_if_cell_unique` when the source is a
+    /// Mixed-boxed static/global, so in-place mutation can proceed without a
+    /// COW clone when the cell is uniquely owned.
+    pub(super) fn emit_uncow_if_mixed_boxed_static_source(&mut self, value: ValueId) -> Result<()> {
+        let Some(value_ref) = self.function.value(value) else {
+            return Ok(());
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(());
+        };
+        let Some(inst_ref) = self.function.instruction(inst) else {
+            return Ok(());
+        };
+        let is_symbol_source = matches!(inst_ref.op, Op::LoadGlobal | Op::LoadStaticLocal);
+        if !is_symbol_source {
+            return Ok(());
+        }
+        let ty = self.value_php_type(value)?;
+        if !matches!(ty, PhpType::Mixed) {
+            return Ok(());
+        }
+        self.load_value_to_result(value)?;
+        abi::emit_call_label(self.emitter, "__rt_array_uncow_if_cell_unique");
+        Ok(())
     }
 }
 

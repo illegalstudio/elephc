@@ -77,6 +77,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "empty" => lower_empty(ctx, inst),
         "unset" => types::lower_unset_builtin(ctx, inst),
         "isset" => isset::lower_isset(ctx, inst),
+        "elephc_worker_register" => system::lower_elephc_worker_register(ctx, inst),
         "exit" | "die" => system::lower_exit(ctx, inst),
         _ => Err(CodegenIrError::unsupported(format!("builtin call {}", name))),
     }
@@ -1016,6 +1017,37 @@ fn emit_variant_function_exists(ctx: &mut FunctionContext<'_>, function_name: &s
     }
 }
 
+/// Returns true when `value` is a container loaded from a Mixed storage slot,
+/// i.e. the load-side coercion unboxed the Mixed cell and emitted an incref,
+/// making this SSA value an OWNED codegen temporary that its consumer must
+/// release. Defaults to false (leak-safe: never decref a borrowed value).
+fn count_operand_is_owned_mixed_unbox(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Ok(false);
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Ok(false);
+    };
+    match inst_ref.op {
+        Op::LoadStaticLocal | Op::LoadLocal => {
+            let Some(crate::ir::Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+                return Ok(false);
+            };
+            let local = ctx
+                .function
+                .locals
+                .get(slot.as_raw() as usize)
+                .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))?;
+            Ok(matches!(local.php_type.codegen_repr(), PhpType::Mixed))
+        }
+        // LoadGlobal slot-type bookkeeping differs; left as a documented follow-up.
+        _ => Ok(false),
+    }
+}
+
 /// Lowers `count(array)` for concrete array values by reading the runtime length header.
 ///
 /// Called from `crate::builtins::array::count` (the registry home) via a thin wrapper.
@@ -1029,8 +1061,37 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             ctx.load_value_to_result(value)?;
-            let result_reg = abi::int_result_reg(ctx.emitter);
-            abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
+            if count_operand_is_owned_mixed_unbox(ctx, value)? {
+                // The container pointer in the int result register is an OWNED
+                // codegen temp (the Mixed-slot unbox increfed it). We must read
+                // the length header, then release the container before leaving
+                // the length as the count() result. Spill across the decref call
+                // because the runtime release clobbers the result register.
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("sub sp, sp, #16");             // reserve two 8-byte spill slots
+                        ctx.emitter.instruction("str x0, [sp]");                // spill owned container pointer
+                        ctx.emitter.instruction("ldr x0, [x0]");                // read length header from container
+                        ctx.emitter.instruction("str x0, [sp, #8]");            // spill length across decref call
+                        ctx.emitter.instruction("ldr x0, [sp]");                // reload container pointer for release
+                        abi::emit_decref_if_refcounted(ctx.emitter, &ty);
+                        ctx.emitter.instruction("ldr x0, [sp, #8]");            // restore length as count() result
+                        ctx.emitter.instruction("add sp, sp, #16");             // release spill slots
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("push rax");                    // spill owned container pointer
+                        ctx.emitter.instruction("mov rax, [rax]");              // read length header from container
+                        ctx.emitter.instruction("push rax");                    // spill length across decref call
+                        ctx.emitter.instruction("mov rax, [rsp+8]");            // reload container pointer for release
+                        abi::emit_decref_if_refcounted(ctx.emitter, &ty);
+                        ctx.emitter.instruction("pop rax");                     // restore length as count() result
+                        ctx.emitter.instruction("add rsp, 8");                  // drop the container spill slot
+                    }
+                }
+            } else {
+                let result_reg = abi::int_result_reg(ctx.emitter);
+                abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
+            }
             store_if_result(ctx, inst)
         }
         PhpType::Mixed | PhpType::Union(_) => {

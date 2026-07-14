@@ -89,6 +89,13 @@ pub(super) fn layout_for_function(
         offset += 8;
         callee_saved_offsets.push((*reg, offset));
     }
+    // Unconditionally save nested_call_reg (x19/r12): it is a callee-saved register used
+    // as a hardcoded scratch by callable dispatch (69 sites), never reported by the
+    // register allocator. Without this save, any EIR function called from Rust (e.g.
+    // the web worker trampoline) clobbers the caller's x19, corrupting the Rust sret
+    // return pointer.
+    offset += 8;
+    callee_saved_offsets.push((abi::nested_call_reg_for_target(target), offset));
     offset += 8;
     let concat_base_offset = offset;
     let frame_size = align_to_16(offset + FRAME_FOOTER_BYTES);
@@ -337,19 +344,22 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.label_global(WEB_HANDLER_SYMBOL);
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
-    // Reset all process-persistent state (function static locals, refcounted
-    // static property values, and `_concat_off`) BEFORE this frame captures the
-    // concat base and BEFORE the body's re-run static/enum initializers, so each
-    // request sees clean state. `__rt_web_reset` is generated per program after
-    // every function is emitted; the call here forward-references its label.
-    ctx.emitter.comment("reset per-request persistent state");
-    abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    // Reset all process-persistent state only in classic `--web` mode; worker
+    // modes keep statics/globals persistent across requests.
+    if !ctx.web_worker && !ctx.web_worker_script {
+        ctx.emitter.comment("reset per-request persistent state");
+        abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    }
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
     zero_initialize_main_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
+    // Install the exit()/die() request boundary for all web modes: in `--web`
+    // and `--web-worker=script` it ends the request; in `--web-worker` handler
+    // mode it catches exit()/die() during the master boot.
+    emit_web_exit_boundary(ctx);
 }
 
 /// Emits the `--web` top-level handler epilogue and returns to the bridge.
@@ -406,6 +416,89 @@ pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
     // staticlib, so it carries the platform's C-ABI underscore: resolve it through
     // `extern_symbol` (`_elephc_web_run` on macOS, `elephc_web_run` on Linux).
     let bridge_entry = target.extern_symbol("elephc_web_run");
+    abi::emit_call_label(ctx.emitter, &bridge_entry);
+    abi::emit_exit_with_result_reg(ctx.emitter);
+}
+
+/// Label for the `exit()`/`die()` bailout landing in web modes.
+const WEB_EXIT_BAILOUT_LABEL: &str = "__rt_web_exit_bailout";
+
+/// Installs the `exit()`/`die()` request boundary at the end of the
+/// `_elephc_web_handler` prologue. All web modes install it: in `--web` and
+/// `--web-worker=script` it ends the request; in `--web-worker` handler mode
+/// the boot runs in the master and `exit()`/`die()` must longjmp back to the
+/// master instead of killing the process.
+fn emit_web_exit_boundary(ctx: &mut FunctionContext<'_>) {
+    let target = ctx.emitter.target;
+    let arg0 = abi::int_arg_reg_name(target, 0);
+    ctx.emitter
+        .comment("-- install exit()/die() request boundary (setjmp into _exit_jmp_buf) --");
+    abi::emit_symbol_address(ctx.emitter, arg0, "_exit_jmp_buf");
+    ctx.emitter.bl_c("setjmp");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, WEB_EXIT_BAILOUT_LABEL);
+    let flag = abi::temp_int_reg(target);
+    abi::emit_load_int_immediate(ctx.emitter, flag, 1);
+    abi::emit_store_reg_to_symbol(ctx.emitter, flag, "_exit_boundary_active", 0);
+    abi::emit_load_symbol_to_reg(ctx.emitter, flag, "_exc_call_frame_top", 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, flag, "_exit_survivor_frame", 0);
+}
+
+/// Emits the shared `exit()`/`die()` bailout landing at the tail of the unique
+/// `_elephc_web_handler` body. Reached only via `setjmp` returning non-zero
+/// after `__rt_exit` longjmps into `_exit_jmp_buf`.
+pub(super) fn emit_web_exit_bailout_landing(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter.blank();
+    ctx.emitter
+        .comment("-- exit()/die() bailout landing: end the request, keep the worker alive --");
+    ctx.emitter.label(WEB_EXIT_BAILOUT_LABEL);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_exc_handler_top", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_rt_diag_suppression", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_exit_boundary_active", 0);
+    emit_web_handler_epilogue(ctx);
+}
+
+/// Emits the `--web-worker` process-entry stub: stores argc/argv to globals,
+/// loads the boot function address, calls `elephc_web_run_worker`, and exits.
+pub(super) fn emit_web_worker_entry_stub(ctx: &mut FunctionContext<'_>) {
+    let target = ctx.emitter.target;
+    if target.arch == Arch::AArch64 {
+        ctx.emitter.raw(".align 2");
+    }
+    ctx.emitter.blank();
+    ctx.emitter.comment("--web-worker process entry: call elephc_web_run_worker(argc, argv, &boot)");
+    ctx.emitter.entry_label();
+    abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    abi::emit_store_process_args_to_globals(ctx.emitter);
+    let argc_reg = abi::int_arg_reg_name(target, 0);
+    let argv_reg = abi::int_arg_reg_name(target, 1);
+    let boot_reg = abi::int_arg_reg_name(target, 2);
+    abi::emit_load_symbol_to_reg(ctx.emitter, argc_reg, "_global_argc", 0);
+    abi::emit_load_symbol_to_reg(ctx.emitter, argv_reg, "_global_argv", 0);
+    abi::emit_symbol_address(ctx.emitter, boot_reg, WEB_HANDLER_SYMBOL);
+    let bridge_entry = target.extern_symbol("elephc_web_run_worker");
+    abi::emit_call_label(ctx.emitter, &bridge_entry);
+    abi::emit_exit_with_result_reg(ctx.emitter);
+}
+
+/// Emits the `--web-worker=script` process-entry stub: stores argc/argv to
+/// globals, loads the handler address, calls `elephc_web_run_script`, and exits.
+pub(super) fn emit_web_worker_script_entry_stub(ctx: &mut FunctionContext<'_>) {
+    let target = ctx.emitter.target;
+    if target.arch == Arch::AArch64 {
+        ctx.emitter.raw(".align 2");
+    }
+    ctx.emitter.blank();
+    ctx.emitter.comment("--web-worker=script process entry: call elephc_web_run_script(argc, argv, &handler)");
+    ctx.emitter.entry_label();
+    abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    abi::emit_store_process_args_to_globals(ctx.emitter);
+    let argc_reg = abi::int_arg_reg_name(target, 0);
+    let argv_reg = abi::int_arg_reg_name(target, 1);
+    let handler_reg = abi::int_arg_reg_name(target, 2);
+    abi::emit_load_symbol_to_reg(ctx.emitter, argc_reg, "_global_argc", 0);
+    abi::emit_load_symbol_to_reg(ctx.emitter, argv_reg, "_global_argv", 0);
+    abi::emit_symbol_address(ctx.emitter, handler_reg, WEB_HANDLER_SYMBOL);
+    let bridge_entry = target.extern_symbol("elephc_web_run_script");
     abi::emit_call_label(ctx.emitter, &bridge_entry);
     abi::emit_exit_with_result_reg(ctx.emitter);
 }
@@ -1189,4 +1282,40 @@ fn superglobal_storage_needed(ctx: &FunctionContext<'_>, name: &str) -> bool {
 /// Returns the PHP storage type for `$argv`.
 fn argv_array_type() -> PhpType {
     PhpType::Array(Box::new(PhpType::Str))
+}
+
+/// Returns whether a local slot is ever written to by a `StoreLocal` or
+/// `CatchBind` instruction in the function body.
+fn local_slot_is_written(function: &Function, slot: LocalSlotId) -> bool {
+    function.instructions.iter().any(|inst| {
+        matches!(inst.op, Op::StoreLocal | Op::CatchBind)
+            && matches!(inst.immediate, Some(Immediate::LocalSlot(candidate)) if candidate == slot)
+    })
+}
+
+/// Returns whether a local slot is tracked for epilogue cleanup: it must own
+/// refcounted storage, be written, not be a parameter, and not be promoted to
+/// a ref-cell.
+pub(super) fn slot_is_cleanup_tracked(function: &Function, slot: LocalSlotId) -> bool {
+    let Some(local) = function.locals.iter().find(|local| local.id == slot) else {
+        return false;
+    };
+    if !local_kind_needs_epilogue_cleanup(local.kind) {
+        return false;
+    }
+    if local
+        .name
+        .as_deref()
+        .is_some_and(|name| function.params.iter().any(|param| param.name == name))
+    {
+        return false;
+    }
+    if !local_slot_is_written(function, slot) {
+        return false;
+    }
+    let ty = local.php_type.codegen_repr();
+    if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {
+        return false;
+    }
+    !promoted_ref_cell_local_slots(function).contains(&slot)
 }

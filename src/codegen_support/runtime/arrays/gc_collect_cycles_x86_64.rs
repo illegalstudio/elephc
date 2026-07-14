@@ -63,6 +63,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10d, r10d");                                     // is this heap block currently live?
     emitter.instruction("jz __rt_gc_collect_cycles_clear_next");                // free-list blocks already keep transient GC metadata cleared
     emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // load the full kind word with any stale x86_64 reachable metadata
+    emitter.instruction("test r11, 0x40");                                      // is this an immortal (boot-phase) block?
+    emitter.instruction("jnz __rt_gc_collect_cycles_clear_next");               // immortal blocks are skipped by the GC
     emitter.instruction("mov rcx, 0xffffffff0000ffff");                         // preserve the high-word heap marker and low 16 bits while clearing the transient x86_64 mark range
     emitter.instruction("and r11, rcx");                                        // clear the x86_64 transient reachable metadata while preserving kind and value_type bits
     emitter.instruction("mov QWORD PTR [r8 + 8], r11");                         // persist the cleared x86_64 kind word back into the heap header
@@ -85,6 +87,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10d, r10d");                                     // is this candidate block live?
     emitter.instruction("jz __rt_gc_collect_cycles_root_next");                 // free-list blocks cannot be GC roots
     emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // load the candidate kind word before deciding whether it participates in cycle collection
+    emitter.instruction("test r11, 0x40");                                      // is this an immortal (boot-phase) block?
+    emitter.instruction("jnz __rt_gc_collect_cycles_root_next");                // immortal blocks are never cycle-collector candidates
     emitter.instruction("mov rcx, r11");                                        // preserve the full kind word while isolating the low-byte heap kind tag
     emitter.instruction("and rcx, 0xff");                                       // isolate the low-byte heap kind tag for candidate dispatch
     emitter.instruction("cmp rcx, 2");                                          // is this candidate at least an indexed array?
@@ -119,6 +123,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r8d, r8d");                                       // is this source block live?
     emitter.instruction("jz __rt_gc_collect_cycles_count_next");                // free blocks contribute no outgoing graph edges
     emitter.instruction("mov r9, QWORD PTR [rdx + 8]");                         // load the source kind word before dispatching on its outgoing edge layout
+    emitter.instruction("test r9, 0x40");                                       // is this an immortal (boot-phase) block?
+    emitter.instruction("jnz __rt_gc_collect_cycles_count_next");               // immortal blocks contribute no outgoing edges
     emitter.instruction("mov r10, r9");                                         // preserve the full source kind word while isolating the low-byte heap kind tag
     emitter.instruction("and r10, 0xff");                                       // isolate the source heap kind tag for outgoing-edge dispatch
     emitter.instruction("cmp r10, 2");                                          // is this source at least an indexed array?
@@ -273,6 +279,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10d, r10d");                                     // is this block still live?
     emitter.instruction("jz __rt_gc_collect_cycles_free_next");                 // free-list blocks are already reclaimed and need no collector action
     emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // load the current kind word before deciding whether this block is a collector candidate
+    emitter.instruction("test r11, 0x40");                                      // is this an immortal (boot-phase) block?
+    emitter.instruction("jnz __rt_gc_collect_cycles_free_next");                // immortal blocks are never freed by the cycle collector
     emitter.instruction("mov rcx, r11");                                        // preserve the full kind word while isolating the low-byte heap kind tag
     emitter.instruction("and rcx, 0xff");                                       // isolate the low-byte heap kind tag for free-pass dispatch
     emitter.instruction("cmp rcx, 2");                                          // is this block at least an indexed array?

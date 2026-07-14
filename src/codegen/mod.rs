@@ -141,6 +141,8 @@ pub fn generate_user_asm_from_ir(
         &exported_functions,
         true,
         false,
+        false,
+        false,
     )
 }
 
@@ -163,6 +165,8 @@ pub fn generate_user_asm_from_ir_with_options(
     exported_functions: &HashMap<String, ExportedFunction>,
     regalloc_linear: bool,
     web: bool,
+    web_worker: bool,
+    web_worker_script: bool,
 ) -> Result<String> {
     let mut emitter = match emit {
         Emit::Cdylib => Emitter::new_pic(module.target),
@@ -182,6 +186,8 @@ pub fn generate_user_asm_from_ir_with_options(
         emit,
         regalloc_linear,
         web,
+        web_worker,
+        web_worker_script,
     )?;
     Ok(finalize_user_asm(
         module,

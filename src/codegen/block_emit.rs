@@ -63,6 +63,8 @@ pub(super) fn emit_module(
     emit: Emit,
     regalloc_linear: bool,
     web: bool,
+    web_worker: bool,
+    web_worker_script: bool,
 ) -> Result<()> {
     function_variants::emit_dispatchers(module, emitter, data);
     for function in module
@@ -97,13 +99,39 @@ pub(super) fn emit_module(
         requires_elephc_tls,
         regalloc_linear,
         web,
+        web_worker,
+        web_worker_script,
     )?;
     // Generate the per-request reset routine only for `--web`, and only after the
     // handler body is emitted so every function static local (including any in the
     // main body) has been recorded into `data`. The handler prologue's
     // `bl __rt_web_reset` forward-references the label emitted here.
     if web {
-        super::web::emit_web_reset(emitter, module, data);
+        super::web::declare_superglobal_storage(data);
+        if web_worker {
+            super::web::emit_web_worker_request_reset(emitter, module, data, true);
+        } else if web_worker_script {
+            super::web::emit_web_worker_request_reset(emitter, module, data, false);
+        } else {
+            super::web::emit_web_reset(emitter, module, data);
+        }
+        // Always emit a stub __rt_web_worker_request_reset so the bridge
+        // staticlib symbol resolves in classic --web mode (where it is never
+        // called). Use unique labels to avoid clashing with emit_web_reset.
+        if !web_worker && !web_worker_script {
+            emitter.blank();
+            emitter.comment("--- runtime: web worker request reset stub (unused in --web) ---");
+            emitter.label_global("__rt_web_worker_request_reset");
+            abi::emit_frame_prologue(emitter, 16);
+            abi::emit_frame_restore(emitter, 16);
+            abi::emit_return(emitter);
+            if emitter.platform == crate::codegen::platform::Platform::MacOS {
+                emitter.blank();
+                emitter.raw(".align 2");
+                emitter.label_global("___rt_web_worker_request_reset");
+                emitter.instruction("b __rt_web_worker_request_reset");
+            }
+        }
     }
     Ok(())
 }
@@ -757,6 +785,8 @@ fn emit_main_function(
     requires_elephc_tls: bool,
     regalloc_linear: bool,
     web: bool,
+    web_worker: bool,
+    web_worker_script: bool,
 ) -> Result<()> {
     let entry_symbol = if web {
         frame::WEB_HANDLER_SYMBOL
@@ -770,6 +800,8 @@ fn emit_main_function(
     );
     if web {
         ctx.web = true;
+        ctx.web_worker = web_worker;
+        ctx.web_worker_script = web_worker_script;
         frame::emit_web_handler_prologue(&mut ctx);
     } else {
         frame::emit_main_prologue(&mut ctx);
@@ -789,7 +821,14 @@ fn emit_main_function(
     }
     emit_endfn_marker(ctx.emitter, &function.name);
     if web {
-        frame::emit_web_entry_stub(&mut ctx);
+        frame::emit_web_exit_bailout_landing(&mut ctx);
+        if web_worker {
+            frame::emit_web_worker_entry_stub(&mut ctx);
+        } else if web_worker_script {
+            frame::emit_web_worker_script_entry_stub(&mut ctx);
+        } else {
+            frame::emit_web_entry_stub(&mut ctx);
+        }
     }
     Ok(())
 }

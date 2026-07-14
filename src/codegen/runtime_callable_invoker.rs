@@ -28,8 +28,12 @@ use crate::types::{FunctionSig, PhpType};
 
 const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
 const INVOKER_CONCAT_OFFSET: usize = 16;
-const INVOKER_FRAME_SIZE: usize = 32;
-const INVOKER_ARG_ARRAY_OFFSET: usize = 24;
+const INVOKER_FRAME_SIZE: usize = 64;
+const INVOKER_NESTED_CALL_SAVE_OFFSET: usize = 24;
+const INVOKER_X20_SAVE_OFFSET: usize = 32;
+const INVOKER_X21_SAVE_OFFSET: usize = 40;
+const INVOKER_X22_SAVE_OFFSET: usize = 48;
+const INVOKER_ARG_ARRAY_OFFSET: usize = 56;
 const INVOKER_BOUNDARY_FRAME_SIZE: usize = INVOKER_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE + 16;
 const INVOKER_BOUNDARY_BASE_OFFSET: usize = INVOKER_BOUNDARY_FRAME_SIZE - 16;
 
@@ -116,6 +120,13 @@ fn emit_runtime_callable_invoker_impl(
     emitter.raw(".align 2");
     emitter.label_global(invoker.label);
     abi::emit_frame_prologue(emitter, frame_size);
+    // Save callee-saved registers the invoker body clobbers (x19/x20/x21/x22).
+    // Without these saves, any EIR function called from Rust (e.g. the web worker
+    // trampoline) has its callee-saved state corrupted when the invoker returns.
+    abi::store_at_offset(emitter, call_reg, INVOKER_NESTED_CALL_SAVE_OFFSET);
+    abi::store_at_offset(emitter, "x20", INVOKER_X20_SAVE_OFFSET);
+    abi::store_at_offset(emitter, "x21", INVOKER_X21_SAVE_OFFSET);
+    abi::store_at_offset(emitter, "x22", INVOKER_X22_SAVE_OFFSET);
     abi::store_at_offset(
         emitter,
         abi::int_arg_reg_name(emitter.target, 0),
@@ -156,12 +167,22 @@ fn emit_runtime_callable_invoker_impl(
     if catch_native_throws {
         emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
     }
+    // Restore callee-saved registers before frame teardown.
+    abi::load_at_offset(emitter, call_reg, INVOKER_NESTED_CALL_SAVE_OFFSET);
+    abi::load_at_offset(emitter, "x20", INVOKER_X20_SAVE_OFFSET);
+    abi::load_at_offset(emitter, "x21", INVOKER_X21_SAVE_OFFSET);
+    abi::load_at_offset(emitter, "x22", INVOKER_X22_SAVE_OFFSET);
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
     if catch_native_throws {
         emitter.label(&escape_label);
         emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
         emit_null_invoker_result(emitter);
+        // Restore callee-saved registers on the escape path too.
+        abi::load_at_offset(emitter, call_reg, INVOKER_NESTED_CALL_SAVE_OFFSET);
+        abi::load_at_offset(emitter, "x20", INVOKER_X20_SAVE_OFFSET);
+        abi::load_at_offset(emitter, "x21", INVOKER_X21_SAVE_OFFSET);
+        abi::load_at_offset(emitter, "x22", INVOKER_X22_SAVE_OFFSET);
         abi::emit_frame_restore(emitter, frame_size);
         abi::emit_return(emitter);
     }

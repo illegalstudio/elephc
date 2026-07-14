@@ -1430,3 +1430,160 @@ emit_pair($a[0][0], replace_parent($a));
         out.stderr
     );
 }
+
+/// Regression test for issue #527: a by-value `foreach` over an array of arrays
+/// whose body string-coerces an element read (`echo $row[1] . "\n"`) must not
+/// leak. The `$row[1]` read produces an owned boxed Mixed temporary; the
+/// implicit Mixed→string coercion detaches its result, so the source box must
+/// be released after the cast instead of leaking two heap blocks per iteration
+/// (the box plus the string payload it owns).
+#[test]
+fn test_regression_527_foreach_value_element_string_coercion_heap_debug_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 4; $i++) { $a[] = ['kw', 'word' . $i]; }
+foreach ($a as $row) { echo $row[1] . "\n"; }
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "word0\nword1\nword2\nword3\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #527 (post-loop semantics): after a by-value
+/// `foreach` ends, the loop variable must still hold the LAST element like PHP,
+/// and string-coercing an element of that surviving copy must release the
+/// element box so the heap stays clean at exit.
+#[test]
+fn test_regression_527_foreach_value_var_survives_loop_and_heap_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 4; $i++) { $a[] = ['kw', 'word' . $i]; }
+foreach ($a as $row) {}
+echo $row[1] . "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "word3\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #527 (key + value form): iterating an associative
+/// array of arrays with string keys binds both an owned key copy and an owned
+/// value copy per iteration; string-coercing `$row[1]` inside the body must
+/// release the element box each iteration and end with a clean heap.
+#[test]
+fn test_regression_527_foreach_assoc_key_value_element_coercion_heap_debug_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$m = [];
+$m['alpha'] = ['kw', 'wordA'];
+$m['beta'] = ['kw', 'wordB'];
+$m['gamma'] = ['kw', 'wordC'];
+foreach ($m as $k => $row) { echo $k . '=' . $row[1] . "\n"; }
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "alpha=wordA\nbeta=wordB\ngamma=wordC\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #527 outside `foreach`: explicit casts,
+/// concatenation, and interpolation must release owned Mixed element boxes for
+/// every scalar runtime tag without changing PHP-visible string conversion.
+#[test]
+fn test_regression_527_mixed_string_coercions_outside_foreach_heap_debug_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = [
+    "string" => str_repeat("S", 3),
+    "int" => 42,
+    "float" => 2.5,
+    "true" => true,
+    "false" => false,
+    "null" => null,
+];
+$explicit = (string) $values["string"];
+$concat = "i=" . $values["int"];
+$interpolated = "f={$values['float']}";
+echo $explicit . "|" . $concat . "|" . $interpolated;
+echo "|t=" . $values["true"];
+echo "|f=" . $values["false"];
+echo "|n=" . $values["null"];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "SSS|i=42|f=2.5|t=1|f=|n=");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A non-owning Mixed local load must survive repeated explicit and implicit
+/// string conversions; releasing the parameter's box during the first cast
+/// would make the later reads use freed storage or double-release it at exit.
+#[test]
+fn test_regression_527_mixed_local_survives_repeated_string_coercion() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function render_mixed(mixed $value): void {
+    $explicit = (string) $value;
+    echo $explicit;
+    echo "|[$value]";
+    echo "|again=" . $value;
+    echo "|" . (string) $value;
+}
+render_mixed(str_repeat("alive", 1));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "alive|[alive]|again=alive|alive");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A non-null `int|string` union uses boxed Mixed codegen storage, so owned
+/// function results must be released after both explicit casts and implicit
+/// concatenation while the detached string result remains valid.
+#[test]
+fn test_regression_527_union_string_coercion_releases_owned_box() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function choose_union(bool $asString): int|string {
+    if ($asString) {
+        return str_repeat("union", 1);
+    }
+    return 42;
+}
+$left = (string) choose_union(true);
+$right = "n=" . choose_union(false);
+echo $left . "|" . $right;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "union|n=42");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

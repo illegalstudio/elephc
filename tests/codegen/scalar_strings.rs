@@ -203,6 +203,34 @@ fn test_exit_code() {
     assert_eq!(out, "before");
 }
 
+/// Verifies bare `exit`/`die` (no parentheses) parse as the PHP exit language
+/// construct — equivalent to `exit()`/`die()` — rather than an "Undefined
+/// constant" reference: execution stops and code after them never runs.
+#[test]
+fn test_bare_exit_and_die_stop_execution() {
+    assert_eq!(compile_and_run("<?php echo \"a\"; exit; echo \"b\";"), "a");
+    assert_eq!(compile_and_run("<?php echo \"a\"; die; echo \"b\";"), "a");
+}
+
+/// Verifies bare `exit`/`die` are case-insensitive (like every PHP language
+/// construct): `EXIT`, `Die`, etc. still stop execution.
+#[test]
+fn test_bare_exit_is_case_insensitive() {
+    assert_eq!(compile_and_run("<?php echo \"a\"; EXIT; echo \"b\";"), "a");
+    assert_eq!(compile_and_run("<?php echo \"a\"; Die; echo \"b\";"), "a");
+}
+
+/// Verifies `exit("msg")`/`die("msg")` print the string message (matching PHP:
+/// a string argument is echoed, then the program exits with status 0), as
+/// opposed to the integer-status form which prints nothing. Covers a literal,
+/// the `exit` spelling, and a computed (owned) string.
+#[test]
+fn test_exit_die_string_argument_prints_then_stops() {
+    assert_eq!(compile_and_run("<?php echo \"A\"; die(\"bye\"); echo \"B\";"), "Abye");
+    assert_eq!(compile_and_run("<?php exit(\"gone\");"), "gone");
+    assert_eq!(compile_and_run("<?php $m = \"x\" . \"y\"; die($m); echo \"no\";"), "xy");
+}
+
 // --- $argc ---
 
 /// Compiles `<?php echo $argc;` and asserts stdout is `1` (test binary is run with no extra args).

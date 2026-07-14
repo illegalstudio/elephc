@@ -101,6 +101,26 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _fiber_main_saved_call_frame, 8, 3\n");
     out.push_str(".comm _elephc_eval_dynamic_object_destruct_fn, 8, 3\n");
     out.push_str(".comm _rt_diag_suppression, 8, 3\n");
+    // exit()/die() request-boundary state (see __rt_exit and emit_web_exit_boundary).
+    // `_exit_jmp_buf` is the setjmp buffer the `--web`/`--web-worker=script` handler
+    // installs each request; `exit()`/`die()` longjmp into it to END THE REQUEST
+    // (flush the buffered response, keep the worker alive) instead of terminating the
+    // process. It is a channel SEPARATE from `_exc_handler_top`, so no user
+    // `catch (\Throwable)` or `finally` can intercept it — matching PHP, where `exit`
+    // is not an exception. Its 200-byte size mirrors the exception jmp_buf region
+    // (`TRY_HANDLER_SLOT_SIZE 224 − TRY_HANDLER_JMP_BUF_OFFSET 24`), enough for the
+    // libc `setjmp`/`longjmp` state on every supported target. `_exit_boundary_active`
+    // is 1 only while such a boundary is installed (a live request); it is 0 in CLI
+    // builds, during worker boot, and in `--web-worker` handler mode, so `__rt_exit`
+    // falls back to a real process exit there.
+    out.push_str(".comm _exit_jmp_buf, 200, 3\n");
+    out.push_str(".comm _exit_boundary_active, 8, 3\n");
+    // `_exit_survivor_frame` records the `_exc_call_frame_top` value captured when the
+    // request boundary was installed (the request-entry baseline). On `exit()`/`die()`
+    // the `__rt_exit` bailout passes it to `__rt_exception_cleanup_frames` so every PHP
+    // activation frame created during the request is released before the longjmp,
+    // rather than leaking until the worker is recycled.
+    out.push_str(".comm _exit_survivor_frame, 8, 3\n");
     // elephc_web_capture: per-request output-capture mode flag read by
     // __rt_stdout_write. Zero (the default) routes echo output to the plain
     // write(1, …) syscall; non-zero (set only by the --web bridge) routes it to

@@ -221,6 +221,7 @@ pub enum Op {
     InitStaticLocal,
     LoadStaticProperty,
     StoreStaticProperty,
+    StoreGlobalReleasing,
     LoadReflectionStaticProperty,
     StoreReflectionStaticProperty,
     ReflectionStaticPropertyInitialized,
@@ -524,6 +525,7 @@ impl Op {
             StoreGlobal
             | StoreStaticLocal
             | StoreStaticProperty
+            | StoreGlobalReleasing
             | StoreReflectionStaticProperty
             | InitStaticLocal
             | IncludeOnceMark
@@ -668,6 +670,7 @@ impl Op {
             InitStaticLocal => "init_static_local",
             LoadStaticProperty => "load_static_property",
             StoreStaticProperty => "store_static_property",
+            StoreGlobalReleasing => "store_global_releasing",
             LoadReflectionStaticProperty => "load_reflection_static_property",
             StoreReflectionStaticProperty => "store_reflection_static_property",
             ReflectionStaticPropertyInitialized => "reflection_static_property_initialized",

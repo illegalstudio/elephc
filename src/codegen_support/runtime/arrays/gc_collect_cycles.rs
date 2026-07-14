@@ -367,4 +367,14 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     emitter.label("__rt_gc_collect_cycles_done");
     emitter.instruction("ret");                                                 // return to the caller
+
+    // macOS C-ABI alias: ___rt_gc_collect_cycles -> __rt_gc_collect_cycles
+    if emitter.platform == crate::codegen::platform::Platform::MacOS {
+        emitter.blank();
+        emitter.raw(".align 2");
+        emitter.comment("-- macOS C-ABI alias: ___rt_gc_collect_cycles -> __rt_gc_collect_cycles --");
+        emitter.raw(".no_dead_strip ___rt_gc_collect_cycles");
+        emitter.label_global("___rt_gc_collect_cycles");
+        emitter.instruction("b __rt_gc_collect_cycles");
+    }
 }

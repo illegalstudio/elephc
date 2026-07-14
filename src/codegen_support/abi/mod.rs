@@ -44,8 +44,8 @@ pub(crate) use registers::{
     string_result_regs, symbol_scratch_reg, tertiary_scratch_reg,
 };
 pub use registers::{
-    nested_call_reg, process_argc_reg, process_argv_reg, temp_int_reg, IncomingArgCursor,
-    OutgoingArgAssignment,
+    nested_call_reg, nested_call_reg_for_target, process_argc_reg, process_argv_reg, temp_int_reg,
+    IncomingArgCursor, OutgoingArgAssignment,
 };
 pub use symbols::{
     emit_cmp_reg_to_symbol, emit_dec_symbol, emit_extern_symbol_address,

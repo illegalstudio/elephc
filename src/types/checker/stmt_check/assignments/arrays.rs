@@ -209,6 +209,51 @@ pub(super) fn check_nested_array_assign(
     }
 }
 
+/// Merges a pushed/unshifted value type into the element type of `$array` in `env`.
+///
+/// Reads the current type of `array` from `env`. If it is `PhpType::Array`, merges
+/// `val_ty` into the element type. If it is `PhpType::AssocArray`, merges the key
+/// type with `Int` and widens the value type to `Mixed` when the new value differs.
+///
+/// Does nothing if the variable is not in the environment, and performs no
+/// validation (buffer/object checks are the caller's responsibility).
+pub(crate) fn merge_pushed_element_type(
+    checker: &mut Checker,
+    array: &str,
+    val_ty: &PhpType,
+    env: &mut TypeEnv,
+) {
+    let Some(arr_ty) = env.get(array).cloned() else {
+        return;
+    };
+    if let PhpType::Array(elem_ty) = &arr_ty {
+        if **elem_ty != *val_ty {
+            let merged_ty = checker
+                .merge_array_element_type(elem_ty, val_ty)
+                .unwrap_or(PhpType::Mixed);
+            env.insert(array.to_string(), PhpType::Array(Box::new(merged_ty)));
+        }
+    } else if let PhpType::AssocArray {
+        key,
+        value: existing_value,
+    } = &arr_ty
+    {
+        let merged_key = merge_array_key_types(*key.clone(), PhpType::Int);
+        let merged_value = if **existing_value == *val_ty {
+            *existing_value.clone()
+        } else {
+            PhpType::Mixed
+        };
+        env.insert(
+            array.to_string(),
+            PhpType::AssocArray {
+                key: Box::new(merged_key),
+                value: Box::new(merged_value),
+            },
+        );
+    }
+}
+
 /// Validates and updates the type environment for `$array[] = $value` (push) assignments.
 ///
 /// Type-checks the value, then merges it into the element type of the array.
@@ -234,32 +279,8 @@ pub(super) fn check_array_push(
         .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
-    if let PhpType::Array(elem_ty) = &arr_ty {
-        if **elem_ty != val_ty {
-            let merged_ty = checker
-                .merge_array_element_type(elem_ty, &val_ty)
-                .unwrap_or(PhpType::Mixed);
-            env.insert(array.to_string(), PhpType::Array(Box::new(merged_ty)));
-        }
-    } else if let PhpType::AssocArray {
-        key,
-        value: existing_value,
-    } = &arr_ty
-    {
-        let merged_key = merge_array_key_types(*key.clone(), PhpType::Int);
-        let merged_value = if **existing_value == val_ty {
-            *existing_value.clone()
-        } else {
-            PhpType::Mixed
-        };
-        env.insert(
-            array.to_string(),
-            PhpType::AssocArray {
-                key: Box::new(merged_key),
-                value: Box::new(merged_value),
-            },
-        );
-    } else if matches!(arr_ty, PhpType::Buffer(_)) {
+    merge_pushed_element_type(checker, array, &val_ty, env);
+    if matches!(arr_ty, PhpType::Buffer(_)) {
         return Err(CompileError::new(
             span,
             "buffer<T> does not support push; allocate with buffer_new<T>(len)",

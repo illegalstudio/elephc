@@ -211,6 +211,10 @@ elephc --target linux-x86_64 hello.php
 elephc --web app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4
+
+# Worker mode: boot once, register a per-request handler (FrankenPHP-style)
+elephc --web-worker app.php
+./app --listen 127.0.0.1:8080 --workers 4 --max-requests 1000
 ```
 
 Or via cargo:

@@ -215,6 +215,7 @@ fn consumes_operands_by_value(op: Op) -> bool {
             | EnsureOwned
             | StoreLocal
             | StoreGlobal
+            | StoreGlobalReleasing
             | StoreStaticLocal
             | StoreStaticProperty
             | StoreReflectionStaticProperty

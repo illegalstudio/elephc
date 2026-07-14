@@ -649,3 +649,194 @@ try { echo $c->foo(); echo 'no'; } catch (Error $e) { echo 'err'; }
     );
     assert_eq!(out, "err");
 }
+
+/// Regression test: a `throw` that unwinds out of nested functions releases each
+/// unwound frame's owned refcounted locals via the per-frame activation-record
+/// cleanup callbacks (`_exc_call_frame_top` chain), so they do not leak.
+///
+/// Uses a delta method that isolates the frame-local cleanup from the separate,
+/// pre-existing leak of the caught exception object itself: both programs throw
+/// and catch once per loop iteration (identical exception-object cost), but only
+/// the second holds owned locals — big strings at all three nesting levels plus
+/// an array in the innermost frame. If the unwinder freed those locals, the two
+/// programs leak the same amount; before the activation-record cleanup landed,
+/// the owned version leaked ~9 KB per iteration. The test asserts the owned
+/// program allocated strictly more (so it is not vacuous) yet leaks exactly as
+/// much as the baseline.
+#[test]
+fn test_throw_through_nested_frames_releases_owned_locals() {
+    let baseline = compile_and_run_with_gc_stats(
+        "<?php \
+         function c($i) { if ($i >= 0) throw new Exception(\"x\"); } \
+         function b($i) { c($i); } \
+         function a($i) { b($i); } \
+         for ($i = 0; $i < 20; $i++) { try { a($i); } catch (Exception $e) {} } echo \"done\";",
+    );
+    let owned = compile_and_run_with_gc_stats(
+        "<?php \
+         function c($i) { $s = str_repeat(\"z\", 4000); $arr = [1, 2, 3, $i, \"tail\" . $i]; \
+             if ($i >= 0) throw new Exception(\"x\"); echo $s . count($arr); } \
+         function b($i) { $t = \"mid-\" . str_repeat(\"y\", 3000) . $i; c($i); echo $t; } \
+         function a($i) { $u = \"top-\" . str_repeat(\"w\", 2000) . $i; b($i); echo $u; } \
+         for ($i = 0; $i < 20; $i++) { try { a($i); } catch (Exception $e) {} } echo \"done\";",
+    );
+    assert!(baseline.success, "baseline failed: {}", baseline.stderr);
+    assert!(owned.success, "owned-locals program failed: {}", owned.stderr);
+    let (base_allocs, base_frees) = parse_gc_stats(&baseline.stderr);
+    let (owned_allocs, owned_frees) = parse_gc_stats(&owned.stderr);
+    assert!(
+        owned_allocs > base_allocs,
+        "test is vacuous: owned program must allocate more than baseline ({owned_allocs} vs {base_allocs})",
+    );
+    assert_eq!(
+        owned_allocs - owned_frees,
+        base_allocs - base_frees,
+        "owned locals leaked on nested throw-unwind: owned leak {} != baseline leak {}\n{}",
+        owned_allocs - owned_frees,
+        base_allocs - base_frees,
+        owned.stderr,
+    );
+}
+
+/// Regression test: a caught exception object bound to `$e` is released. Loops so the
+/// per-iteration rebind must free the previous object (catch-bind release-old) and the
+/// final object is freed at scope exit; with a constant message no heap string is
+/// involved, so allocs and frees must match exactly. Before the fix each caught
+/// exception leaked one object.
+#[test]
+fn test_caught_exception_object_released_over_loop() {
+    let out = compile_and_run_with_gc_stats(
+        "<?php for ($i = 0; $i < 8; $i++) { try { throw new Exception(\"boom\"); } \
+         catch (Exception $e) {} } echo \"end\";",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "end", "stdout: {:?}", out.stdout);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "caught exception object leaked: {}", out.stderr);
+}
+
+/// Regression test: a variable-less `catch (Exception)` still owns the caught object
+/// and must release it even though it never binds it. Before the fix the only
+/// reference was discarded unreleased, leaking one object per catch.
+#[test]
+fn test_variable_less_catch_releases_exception() {
+    let out = compile_and_run_with_gc_stats(
+        "<?php for ($i = 0; $i < 8; $i++) { try { throw new Exception(\"boom\"); } \
+         catch (Exception) {} } echo \"end\";",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "end", "stdout: {:?}", out.stdout);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "variable-less catch leaked the exception: {}", out.stderr);
+}
+
+/// Regression test: `throw $e` re-raises a caught-and-bound exception out of a
+/// function without a use-after-free or a leak. The re-raise retains the object so the
+/// throwing frame's owned-local cleanup callback cannot free it while it is in flight;
+/// the outer frame then takes ownership and releases it. A constant message read after
+/// the re-raise is the UAF canary (a freed object would yield garbage or crash), and
+/// the exact allocs/frees balance guards against both a leak and a double-free.
+#[test]
+fn test_rethrow_local_exception_balanced_and_correct() {
+    let out = compile_and_run_with_gc_stats(
+        "<?php function f() { try { throw new Exception(\"boom\"); } \
+             catch (Exception $e) { throw $e; } } \
+         for ($i = 0; $i < 6; $i++) { try { f(); } \
+             catch (Exception $e2) { echo $e2->getMessage(), \";\"; } }",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "boom;boom;boom;boom;boom;boom;", "stdout: {:?}", out.stdout);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "rethrow leaked or double-freed: {}", out.stderr);
+}
+
+/// Regression test: `$e` stays valid AFTER its `catch` block (PHP scopes the catch
+/// variable to the whole function/scope, not the block) and is still released. Reads
+/// the message past the block each iteration; a premature release would corrupt the
+/// output, and the counts must stay balanced.
+#[test]
+fn test_catch_variable_usable_after_block_and_released() {
+    let out = compile_and_run_with_gc_stats(
+        "<?php for ($i = 0; $i < 4; $i++) { try { throw new Exception(\"boom\"); } \
+         catch (Exception $e) {} echo $e->getMessage(), \";\"; }",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "boom;boom;boom;boom;", "stdout: {:?}", out.stdout);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "catch variable used after block leaked: {}", out.stderr);
+}
+
+/// Regression test: reassigning `$e` inside the catch body releases the caught object
+/// through the ordinary store-local old-release path exactly once, and the nulled slot
+/// is skipped at scope exit (no double-free).
+#[test]
+fn test_catch_variable_reassigned_in_body_balanced() {
+    let out = compile_and_run_with_gc_stats(
+        "<?php for ($i = 0; $i < 6; $i++) { try { throw new Exception(\"boom\"); } \
+         catch (Exception $e) { $e = null; } } echo \"end\";",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "end", "stdout: {:?}", out.stdout);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "reassigned catch variable leaked or double-freed: {}", out.stderr);
+}
+
+/// Regression test: a user subclass that declares its own constructor and calls
+/// `parent::__construct($message)` on a builtin Throwable links and behaves correctly.
+/// Built-in throwable constructors have no emitted method body, so before the fix this
+/// referenced the undefined symbol `_method_Exception___construct` and failed at link
+/// time. The inline field stamp must land the message on the inherited slot so
+/// `getMessage()` reads it back.
+#[test]
+fn test_parent_construct_builtin_throwable_links_and_reports_message() {
+    let out = compile_and_run(
+        "<?php class AppException extends Exception { \
+             public function __construct(string $m) { parent::__construct($m); } } \
+         try { throw new AppException(\"boom\"); } \
+         catch (AppException $e) { echo $e->getMessage(); }",
+    );
+    assert_eq!(out, "boom");
+}
+
+/// Regression test: `parent::__construct($message, $code)` forwards both arguments and
+/// coexists with the subclass's own property assignment. Verifies message, code, and the
+/// subclass property are all correct — the inherited `message`/`code` slots (object
+/// offsets 8/16 and 24) must not collide with the subclass's own property slot.
+#[test]
+fn test_parent_construct_forwards_code_alongside_own_property() {
+    let out = compile_and_run(
+        "<?php class AppException extends RuntimeException { \
+             public string $ctx = \"\"; \
+             public function __construct(string $m, int $code, string $ctx) { \
+                 parent::__construct($m, $code); $this->ctx = $ctx; } } \
+         try { throw new AppException(\"boom\", 42, \"cx\"); } \
+         catch (AppException $e) { echo $e->getMessage(), \"|\", $e->getCode(), \"|\", $e->ctx; }",
+    );
+    assert_eq!(out, "boom|42|cx");
+}
+
+/// Regression test: a subclass constructor that forwards a HEAP-backed message to
+/// `parent::__construct` must persist an owned copy so the object frees it exactly once.
+/// Loops with a per-iteration heap message and a heap subclass property; `--heap-debug`
+/// must report a clean leak summary. This is the worker/OOM-driving shape: without the
+/// persist the object would either leak the message or double-free the caller's local.
+#[test]
+fn test_parent_construct_heap_message_no_leak_over_loop() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php class AppException extends Exception { \
+             public string $ctx = \"\"; \
+             public function __construct(string $m, string $ctx) { \
+                 parent::__construct($m); $this->ctx = $ctx; } } \
+         $acc = 0; \
+         for ($i = 0; $i < 40; $i++) { \
+             try { throw new AppException(\"msg-\" . $i . \"-pad\", \"ctx-\" . $i); } \
+             catch (AppException $e) { $acc += strlen($e->getMessage()) + strlen($e->ctx); } } \
+         echo $acc;",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "parent::__construct heap message leaked: {}",
+        out.stderr,
+    );
+}

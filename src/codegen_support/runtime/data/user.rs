@@ -105,7 +105,20 @@ pub(crate) fn emit_runtime_data_user(
     static_property_symbols.sort();
     for symbol in static_property_symbols {
         out.push_str(&format!(".comm {}, 16, 3\n", symbol));
+        // Per-property once-init marker consumed by `--web-worker` / `--web-worker=script`
+        // codegen so a `public static X $p = <init>;` default runs at most once per worker
+        // (mirrors the static-local `_init` marker emitted above). Always emitted: the 8
+        // unused bytes of .bss are harmless in CLI/classic-web, where nothing reads it.
+        out.push_str(&format!(".comm {}_init, 8, 3\n", symbol));
     }
+
+    // Single once-init marker consumed by `--web-worker` / `--web-worker=script` codegen so
+    // the enum-case singleton objects are allocated at most once per worker instead of
+    // leaking a fresh object per case on every re-run of the top-level body (mirrors the
+    // static-property markers above, but one marker guards the whole enum-singleton block).
+    // Always emitted: the 8 unused bytes of .bss are harmless in CLI/classic-web, where
+    // nothing reads it.
+    out.push_str(".comm _enum_singletons_init, 8, 3\n");
 
     let mut sorted_enum_names: Vec<&String> = enums.keys().collect();
     sorted_enum_names.sort();

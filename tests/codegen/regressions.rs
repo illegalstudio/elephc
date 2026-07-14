@@ -33,3 +33,15 @@ mod mixed_method_dispatch;
 mod switch_and_float_params;
 #[path = "regressions/return_this_ownership.rs"]
 mod return_this_ownership;
+#[path = "regressions/superglobal_function_scope.rs"]
+mod superglobal_function_scope;
+#[path = "regressions/symbol_writeback.rs"]
+mod symbol_writeback;
+#[path = "regressions/refcell_return.rs"]
+mod refcell_return;
+#[path = "regressions/list_unpack_assoc.rs"]
+mod list_unpack_assoc;
+#[path = "regressions/implode_assoc.rs"]
+mod implode_assoc;
+#[path = "regressions/top_level_static_null_guard.rs"]
+mod top_level_static_null_guard;

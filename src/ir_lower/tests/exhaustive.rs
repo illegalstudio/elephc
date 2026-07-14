@@ -135,6 +135,7 @@ fn dummy_check_result() -> CheckResult {
         extern_classes,
         extern_globals: HashMap::new(),
         required_libraries: Vec::new(),
+        worker_register_call_span: None,
         warnings: Vec::new(),
         throw_access_sites: HashMap::new(),
     }

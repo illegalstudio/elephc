@@ -9,10 +9,12 @@
 //! - System helpers must preserve PHP-visible behavior while crossing libc, syscall, JSON, regex, and date formatter boundaries.
 
 mod build_argv;
+mod boot_phase;
 mod date;
 mod date_data;
 mod checkdate;
 mod date_default_timezone;
+mod exit;
 mod getdate;
 mod hrtime;
 mod localtime;
@@ -57,6 +59,7 @@ mod microtime;
 mod php_uname;
 
 pub(crate) use build_argv::emit_build_argv;
+pub(crate) use boot_phase::emit_end_boot_phase;
 pub(crate) use date::emit_date;
 pub(crate) use date_data::emit_date_data;
 pub(crate) use checkdate::emit_checkdate;
@@ -64,6 +67,7 @@ pub(crate) use getdate::emit_getdate;
 pub(crate) use hrtime::emit_hrtime;
 pub(crate) use localtime::emit_localtime;
 pub(crate) use date_default_timezone::emit_date_default_timezone;
+pub(crate) use exit::emit_rt_exit;
 pub(crate) use getenv::emit_getenv;
 pub(crate) use json_data::emit_json_data;
 pub(crate) use json_decode::emit_json_decode;

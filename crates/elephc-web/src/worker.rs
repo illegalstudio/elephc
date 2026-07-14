@@ -11,6 +11,7 @@
 //! - SO_REUSEPORT lets every worker bind the same port; the kernel balances.
 
 use std::convert::Infallible;
+use std::ffi::CString;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -29,8 +30,23 @@ use crate::request_state;
 /// Pending-connection backlog for each worker's listening socket.
 const LISTEN_BACKLOG: i32 = 1024;
 
+/// Maps a hyper HTTP version to its `$_SERVER['SERVER_PROTOCOL']` string as a
+/// `&'static str`, so the per-request path needs no allocation (and no `Debug`
+/// formatting) to record the protocol. Shared with `crate::worker_mode`.
+pub(crate) fn version_str(version: hyper::Version) -> &'static str {
+    match version {
+        v if v == hyper::Version::HTTP_09 => "HTTP/0.9",
+        v if v == hyper::Version::HTTP_10 => "HTTP/1.0",
+        v if v == hyper::Version::HTTP_11 => "HTTP/1.1",
+        v if v == hyper::Version::HTTP_2 => "HTTP/2.0",
+        v if v == hyper::Version::HTTP_3 => "HTTP/3.0",
+        _ => "HTTP/1.1",
+    }
+}
+
 /// Builds a listening std::net::TcpListener with SO_REUSEPORT set, bound to `addr`.
-fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
+/// Shared with `crate::worker_mode` (worker mode reuses the same SO_REUSEPORT setup).
+pub(crate) fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
     let domain = if addr.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 };
     let sock = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
     sock.set_reuse_address(true)?;
@@ -44,14 +60,6 @@ fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener
 /// Number of requests this worker has served, used by `--max-requests` recycling.
 /// Process-local (each forked worker has its own copy starting at 0).
 static SERVED: AtomicUsize = AtomicUsize::new(0);
-
-/// Exit code a worker child uses for a planned `--max-requests` recycle.
-/// Distinct from 0 (clean exit), 1 (worker setup/handler errors), and 2 (usage
-/// errors) so the master can tell an intentional recycle from a genuine crash:
-/// under sustained traffic a worker can serve its whole quota in well under the
-/// master's fast-death window, and counting that as a crash-on-startup would
-/// shut the server down. Checked by `server::is_planned_recycle`.
-pub(crate) const RECYCLE_EXIT_CODE: i32 = 86;
 
 /// Per-request handler time limit in seconds (`0` = none), read by `run_handler`
 /// to arm a `SIGALRM` watchdog around the blocking `handler()` call.
@@ -93,6 +101,9 @@ pub struct WorkerConfig {
     pub max_exec_secs: u32,
     /// gzip the response body when the client sent `Accept-Encoding: gzip`.
     pub gzip: bool,
+    /// Run `__rt_gc_collect_cycles` every N requests (worker mode only);
+    /// `0` = never, `1` = every request. Defaults to `1` in worker mode.
+    pub worker_gc_interval: u32,
 }
 
 /// Minimum response size (bytes) worth gzip-compressing; below this the framing
@@ -109,6 +120,7 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         access_log,
         max_exec_secs,
         gzip,
+        worker_gc_interval: _,
     } = cfg;
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
@@ -146,6 +158,11 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                 std::process::exit(1);
             }
         };
+        // Connection-serving config is identical for every connection, so build the
+        // hyper HTTP/1 builder once and reuse it (serve_connection takes &self).
+        let mut http = http1::Builder::new();
+        http.timer(TokioTimer::new())
+            .header_read_timeout(Duration::from_secs(30));
         loop {
             // --max-requests recycling: stop accepting once the cap is reached so
             // the master respawns a fresh worker (bounds memory growth over time).
@@ -156,39 +173,46 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                 Ok(pair) => pair,
                 Err(_) => continue,
             };
+            // Disable Nagle: responses are typically small and written in one
+            // shot, so Nagle interacting with delayed-ACK would add tens of ms of
+            // latency to keep-alive request/response round-trips. Best-effort.
+            let _ = stream.set_nodelay(true);
             let io = TokioIo::new(stream);
-            tokio::task::spawn_local(http1::Builder::new()
-                .timer(TokioTimer::new())
-                .header_read_timeout(Duration::from_secs(30))
+            tokio::task::spawn_local(http
                 .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| async move {
                     let started = Instant::now();
                     let method = req.method().as_str().to_string();
                     let uri = req.uri().to_string();
                     let path = req.uri().path().to_string();
                     let query = req.uri().query().unwrap_or("").to_string();
-                    let protocol = format!("{:?}", req.version());
+                    let protocol = version_str(req.version());
                     // Captured for the optional access log (method/path are moved into set_request).
                     let log_method_path = if access_log { Some((method.clone(), path.clone())) } else { None };
                     let accepts_gzip = gzip
                         && req.headers().get(hyper::header::ACCEPT_ENCODING).is_some_and(|v| {
                             v.to_str().map(|s| s.to_ascii_lowercase().contains("gzip")).unwrap_or(false)
                         });
-                    let headers: Vec<(String, String)> = req
+                    // Collect headers straight into their final (name, value, php_name)
+                    // CString form, so no intermediate owned (String, String) copy is
+                    // made per request and the $_SERVER key is precomputed in Rust.
+                    let headers: Vec<(CString, CString, CString)> = req
                         .headers()
                         .iter()
-                        .map(|(n, v)| (n.as_str().to_string(), String::from_utf8_lossy(v.as_bytes()).into_owned()))
+                        .map(|(n, v)| request_state::request_header_cstrings(n.as_str(), v.as_bytes()))
                         .collect();
                     // The body must be fully collected (async) BEFORE the blocking handler
                     // runs, since handler() cannot yield on the current-thread runtime.
                     // Collect with a size cap (0 = unlimited); an over-limit body
                     // short-circuits to 413 without ever running the PHP handler.
+                    // Keep the collected body as `Bytes` (no `.to_vec()` copy): it is
+                    // stored directly and exposed to PHP by pointer.
                     let collected = if max_body == 0 {
-                        req.into_body().collect().await.map(|c| c.to_bytes().to_vec()).map_err(|_| ())
+                        req.into_body().collect().await.map(|c| c.to_bytes()).map_err(|_| ())
                     } else {
                         Limited::new(req.into_body(), max_body)
                             .collect()
                             .await
-                            .map(|c| c.to_bytes().to_vec())
+                            .map(|c| c.to_bytes())
                             .map_err(|_| ())
                     };
                     let body = match collected {
@@ -253,10 +277,17 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
 
 /// gzip-compresses `data`, returning the compressed bytes, or `None` if encoding
 /// failed (so the caller leaves the body uncompressed and sets no Content-Encoding).
-fn gzip_bytes(data: &[u8]) -> Option<Vec<u8>> {
+/// Shared with `crate::worker_mode`.
+///
+/// Uses `Compression::fast()` (zlib level 1) rather than the default level 6:
+/// gzip runs synchronously on the worker's single thread, so a large body at
+/// level 6 blocks every other connection on that worker. Level 1 keeps a very
+/// similar ratio on HTML/JSON for a fraction of the CPU, which matters far more
+/// for tail latency than the marginal extra bytes level 6 would save.
+pub(crate) fn gzip_bytes(data: &[u8]) -> Option<Vec<u8>> {
     use std::io::Write;
     let mut encoder =
-        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     encoder.write_all(data).ok()?;
     encoder.finish().ok()
 }

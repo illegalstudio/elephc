@@ -31,27 +31,37 @@ binary is written next to it, named after the source without its extension.
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
+| `--web-worker` / `--web-worker=handler` | — | off | Compile a worker-**handler**-mode HTTP server binary: the top-level boots once and registers a per-request handler (via the `elephc_worker_register` API) instead of re-running the program per request. See [Web Server — Worker mode](../beyond-php/web.md#worker-mode---web-worker). |
+| `--web-worker=script` | — | off | Compile a worker-**script**-mode HTTP server binary: no registration API required, the top-level program re-runs per request, but statics, class properties, and globals persist across requests within the same worker process. The source program uses no elephc-specific API, so the same `.php` file also runs unmodified under php-fpm or `php -S`. |
 
-`--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
-be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`. See
+`--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web`,
+`--web-worker` (handler mode), and `--web-worker=script` (script mode) are
+mutually exclusive with each other and each cannot be combined with `--check`,
+`--emit cdylib`, `--emit-asm`, or `--emit-ir`. See
 [Output formats and diagnostics](output-and-diagnostics.md).
 
 ## Web server binary runtime arguments
 
-When a program is compiled with `--web`, the produced binary accepts these
-runtime arguments (not elephc compiler flags):
+When a program is compiled with `--web`, `--web-worker` (handler mode), or
+`--web-worker=script` (script mode), the produced binary accepts these runtime
+arguments (not elephc compiler flags):
 
 | Argument | Required | Default | Description |
 |---|---|---|---|
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of prefork worker processes. Minimum 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes (`0` = unlimited); oversized bodies get `413`. |
-| `--max-requests N` | No | `0` (never) | Recycle each worker after N requests (bounds memory growth). |
+| `--max-requests N` | No | `0` (classic) / `1000` (worker) | Recycle each worker after N requests (bounds memory growth). Worker mode defaults to 1000. |
+| `--worker-gc-interval N` | No | `0` (classic) / `1` (worker) | Run the cycle collector every N requests (`0` = never, `1` = every request). Worker-mode only. |
+| `--max-execution-time N` | No | `0` (none) | Kill a handler that runs longer than N seconds; the master respawns the worker. |
+| `--gzip` | No | off | Gzip-compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--access-log` | No | off | Log one line per request to stderr. |
 | `--help`, `--version` | No | — | Print usage / version and exit. |
 
 ```bash
 elephc --web app.php
+elephc --web-worker app.php
+elephc --web-worker=script app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4 --max-body-size 1048576 --access-log
 ```

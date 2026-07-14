@@ -13,10 +13,12 @@
 //! - One process per prefork worker means no shared-thread state: per-worker
 //!   request/response data lives in plain process statics, not behind a mutex.
 
+mod handler;
 mod multipart;
 mod request_state;
 mod server;
 mod worker;
+mod worker_mode;
 
 // Re-exported so the compiled `--web` runtime's `__rt_stdout_write` capture
 // branch links against the real per-request output sink (defined in
@@ -38,6 +40,10 @@ pub use request_state::{
 // Re-exported so the compiled `--web` runtime routines (`__rt_header`,
 // `__rt_http_response_code`) can link against the response-control setters.
 pub use request_state::{elephc_web_header, elephc_web_set_status};
+
+// Re-exported so the compiled `--web` web prelude can register multipart temp
+// file paths for per-request cleanup in worker mode (Phase 4).
+pub use worker_mode::elephc_web_register_tmp_file;
 
 /// Returns the elephc-web C ABI version. Bumped when the exported symbol set or
 /// any symbol's signature changes shape.

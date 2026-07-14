@@ -166,6 +166,16 @@ pub fn nested_call_reg(emitter: &Emitter) -> &'static str {
     }
 }
 
+/// Returns the callee-saved register used as the nested-call scratch, by target.
+/// AArch64: x19. x86_64: r12. Used by the frame layout to unconditionally reserve
+/// a save slot even when the register allocator does not report it.
+pub fn nested_call_reg_for_target(target: Target) -> &'static str {
+    match target.arch {
+        Arch::AArch64 => "x19",
+        Arch::X86_64 => "r12",
+    }
+}
+
 /// Returns true if `reg` is a floating-point register name (d0–d7 or xmm0–xmm7).
 pub(crate) fn is_float_register(reg: &str) -> bool {
     reg.starts_with('d') || reg.starts_with("xmm")

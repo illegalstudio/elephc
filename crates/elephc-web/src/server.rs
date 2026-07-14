@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::worker::{self, WorkerConfig};
+use crate::{handler, worker_mode};
 
 /// `--help` text for the produced `--web` binary.
 const HELP: &str = "\
@@ -26,18 +27,29 @@ Options:
   --listen HOST:PORT     Address to bind (required), e.g. 127.0.0.1:8080
   --workers N            Number of prefork worker processes (default: CPU count)
   --max-body-size BYTES  Max request body in bytes; 0 = unlimited (default: 8388608)
-  --max-requests N       Recycle a worker after N requests; 0 = never (default: 0)
+  --max-requests N       Recycle a worker after N requests; 0 = never (default: 0; worker mode: 1000)
   --access-log           Log one line per request to stderr
   --max-execution-time N Kill (and respawn) a worker whose handler runs > N seconds; 0 = no limit
+  --worker-gc-interval N Run the cycle collector every N requests; 0 = never, 1 = every request (worker mode default: 1)
   --gzip                 Compress responses when the client sends Accept-Encoding: gzip
   --help                 Show this help and exit
   --version              Show the server version and exit";
 
 /// A worker that dies within this window of being spawned counts as a crash-on-
 /// startup; too many in a row (e.g. a bind failure or a handler that crashes on
-/// every request) abort the master instead of fork-looping forever.
+/// every request) abort the master instead of fork-looping forever. Used as the
+/// fallback heuristic in classic `--web` mode (which has no boot-signal pipe).
 const FAST_DEATH: Duration = Duration::from_millis(1000);
 /// Consecutive fast worker deaths tolerated before the master gives up.
+///
+/// Crash-loop policy (startup vs runtime): in worker mode the master uses a
+/// pipe-based boot signal — the child writes one byte when it reaches
+/// `elephc_web_worker_register`, and the master inspects the pipe read end when a
+/// child dies. A death with no boot signal (pipe empty) is a startup failure
+/// (boot never completed) and counts toward `MAX_FAST_DEATHS`; a death after the
+/// boot signal is a runtime crash (counter reset, immediate respawn). In classic
+/// `--web` mode there is no boot pipe, so the timing heuristic (`FAST_DEATH`)
+/// is used instead.
 const MAX_FAST_DEATHS: u32 = 10;
 
 /// Set by the SIGINT/SIGTERM handler so the master supervision loop can break and
@@ -81,6 +93,25 @@ fn reset_signal_handlers_to_default() {
 /// Default request body cap in bytes (8 MiB), matching PHP's `post_max_size`.
 const DEFAULT_MAX_BODY: usize = 8 * 1024 * 1024;
 
+/// Closes all file descriptors inherited from the master process except
+/// stdin (0), stdout (1), stderr (2), and the boot-pipe write end (stored in
+/// `handler::BOOT_PIPE_WR`). Called in the forked child after boot-before-fork
+/// so workers don't share process-wide resources (DB connections, log files,
+/// etc.) opened during the master boot phase.
+fn close_inherited_fds() {
+    let max_fd = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) } as i32;
+    let max_fd = if max_fd > 0 { max_fd.min(65536) } else { 1024 };
+    let boot_pipe_wr = handler::peek_boot_pipe_wr();
+    for fd in 3..max_fd {
+        if let Some(wr) = boot_pipe_wr {
+            if fd == wr {
+                continue;
+            }
+        }
+        unsafe { libc::close(fd); }
+    }
+}
+
 /// Parsed server configuration from the binary's own argv.
 struct ServerArgs {
     listen: String,
@@ -95,10 +126,13 @@ struct ServerArgs {
     max_exec_secs: u32,
     /// gzip the response when the client accepts it.
     gzip: bool,
+    /// Run the cycle collector every N requests in worker mode; `0` = never,
+    /// `1` = every request. Ignored in classic `--web` mode.
+    worker_gc_interval: u32,
 }
 
 impl ServerArgs {
-    /// Builds the per-worker config handed to `worker::serve`.
+    /// Builds the per-worker config handed to `worker::serve` / `enter_worker_loop`.
     fn worker_config(&self) -> WorkerConfig {
         WorkerConfig {
             max_body: self.max_body,
@@ -106,6 +140,7 @@ impl ServerArgs {
             access_log: self.access_log,
             max_exec_secs: self.max_exec_secs,
             gzip: self.gzip,
+            worker_gc_interval: self.worker_gc_interval,
         }
     }
 }
@@ -132,7 +167,12 @@ fn collect_args(argc: i32, argv: *const *const c_char) -> Vec<String> {
 
 /// Parses argv into a runnable config or an early-exit. Handles `--help` /
 /// `--version` (print + exit 0) and a missing `--listen` (error + exit 2).
-fn parse_args(argc: i32, argv: *const *const c_char) -> ParsedArgs {
+///
+/// `worker_mode` selects the worker-mode defaults: `--max-requests` defaults to
+/// 1000 (vs 0 in classic mode) and `--worker-gc-interval` defaults to 1 (vs 0
+/// in classic mode, where it is unused). An explicitly passed `--max-requests`
+/// or `--worker-gc-interval` always overrides the default.
+fn parse_args(argc: i32, argv: *const *const c_char, worker_mode: bool) -> ParsedArgs {
     let args = collect_args(argc, argv);
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("{}", HELP);
@@ -146,23 +186,45 @@ fn parse_args(argc: i32, argv: *const *const c_char) -> ParsedArgs {
     let mut workers: usize = default_workers();
     let mut max_body: usize = DEFAULT_MAX_BODY;
     let mut max_requests: usize = 0;
+    let mut max_requests_set = false;
     let mut access_log = false;
     let mut max_exec_secs: u32 = 0;
     let mut gzip = false;
+    let mut worker_gc_interval: u32 = if worker_mode { 1 } else { 0 };
+    let mut worker_gc_interval_set = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--listen" => { i += 1; listen = args.get(i).cloned(); }
             "--workers" => { i += 1; workers = args.get(i).and_then(|w| w.parse().ok()).unwrap_or(workers); }
             "--max-body-size" => { i += 1; max_body = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_body); }
-            "--max-requests" => { i += 1; max_requests = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_requests); }
+            "--max-requests" => {
+                i += 1;
+                if let Some(v) = args.get(i).and_then(|v| v.parse().ok()) {
+                    max_requests = v;
+                    max_requests_set = true;
+                }
+            }
             "--max-execution-time" => { i += 1; max_exec_secs = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_exec_secs); }
+            "--worker-gc-interval" => {
+                i += 1;
+                if let Some(v) = args.get(i).and_then(|v| v.parse().ok()) {
+                    worker_gc_interval = v;
+                    worker_gc_interval_set = true;
+                }
+            }
             "--access-log" => { access_log = true; }
             "--gzip" => { gzip = true; }
             _ => {}
         }
         i += 1;
     }
+    // Worker-mode defaults: recycle after 1000 requests and collect cycles
+    // every request, unless the operator explicitly overrode either flag.
+    if worker_mode && !max_requests_set {
+        max_requests = 1000;
+    }
+    let _ = worker_gc_interval_set;
     match listen {
         Some(l) => ParsedArgs::Run(ServerArgs {
             listen: l,
@@ -172,6 +234,7 @@ fn parse_args(argc: i32, argv: *const *const c_char) -> ParsedArgs {
             access_log,
             max_exec_secs,
             gzip,
+            worker_gc_interval,
         }),
         None => {
             eprintln!("error: --web binary requires --listen host:port (try --help)");
@@ -185,11 +248,50 @@ fn default_workers() -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
 }
 
-/// Forks one worker child that serves until a planned `--max-requests` recycle
-/// (then exits with `worker::RECYCLE_EXIT_CODE`), returning the child pid in the
-/// master. The child restores default signal disposition and never returns. A
-/// fork failure aborts the whole process. Used for both initial spawn and respawn.
-fn spawn_worker(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) -> libc::pid_t {
+/// Selects which child-entry path a forked worker takes.
+enum WorkerKind {
+    /// Classic `--web`: re-execute the top-level PHP handler per request.
+    Classic { handler: extern "C" fn() },
+    /// `--web-worker`: boot PHP once per worker (legacy boot-after-fork path,
+    /// kept for fallback). Use `WorkerAfterBoot` for boot-before-fork.
+    #[allow(dead_code)]
+    Worker { boot: extern "C" fn() },
+    /// `--web-worker` with boot-before-fork: the master already booted and
+    /// registered the handler; each forked child enters the worker loop directly.
+    WorkerAfterBoot,
+    /// `--web-worker=script`: register the top-level body directly as the
+    /// per-request handler (void ABI) and enter the Rust worker loop, with no
+    /// separate PHP boot/register phase.
+    Script { handler: handler::ScriptHandler },
+}
+
+/// Forks one worker child that serves forever, returning the child pid and the
+/// boot-pipe read fd (for worker mode) in the master. The child restores default
+/// signal disposition, installs the per-mode worker config/listen address, and
+/// never returns. A fork failure aborts the whole process. Used for both initial
+/// spawn and respawn, in both modes.
+///
+/// For `WorkerKind::Worker` a pipe is created before fork; the child gets the
+/// write end (closed in `elephc_web_worker_register` after signaling) and the
+/// master gets the read end (stored alongside the pid so `supervise` can tell a
+/// startup crash from a runtime crash by whether the boot signal arrived). For
+/// `WorkerKind::Classic` the boot pipe read fd is `None`.
+fn spawn_worker(listen: &str, kind: WorkerKind, cfg: WorkerConfig) -> (libc::pid_t, Option<i32>) {
+    // Worker mode: create a boot-signal pipe before fork so the child can
+    // signal boot completion and the master can detect startup vs runtime
+    // crashes precisely instead of relying on the FAST_DEATH timing heuristic.
+    let boot_pipe_rd = match &kind {
+        WorkerKind::Worker { .. } | WorkerKind::Script { .. } | WorkerKind::WorkerAfterBoot => {
+            let mut fds = [0i32; 2];
+            // SAFETY: pipe(2) on a stack array; failure aborts the master.
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } == -1 {
+                eprintln!("error: boot pipe creation failed");
+                std::process::exit(1);
+            }
+            Some((fds[0], fds[1]))
+        }
+        WorkerKind::Classic { .. } => None,
+    };
     match unsafe { libc::fork() } {
         -1 => {
             eprintln!("error: fork failed");
@@ -197,56 +299,103 @@ fn spawn_worker(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) -> li
         }
         0 => {
             reset_signal_handlers_to_default();
-            worker::serve(listen, handler, cfg);
-            // serve() only returns when the worker stopped accepting on purpose
-            // after serving its --max-requests quota; exit with the recycle code
-            // so the reaper skips the crash-loop accounting for this death.
-            std::process::exit(worker::RECYCLE_EXIT_CODE);
+            match kind {
+                WorkerKind::Classic { handler } => {
+                    worker::serve(listen, handler, cfg);
+                    std::process::exit(0);
+                }
+                WorkerKind::Worker { boot } => {
+                    // Worker mode: publish config + listen address, boot PHP,
+                    // register handler, then enter the worker loop.
+                    worker_mode::set_worker_config(cfg);
+                    worker_mode::set_worker_listen(listen.to_string());
+                    handler::set_worker_boot(boot);
+                    if let Some((rd, wr)) = boot_pipe_rd {
+                        unsafe { libc::close(rd); }
+                        handler::set_boot_pipe(wr);
+                    }
+                    boot();
+                    if !handler::is_worker_handler_registered() {
+                        eprintln!("elephc-web: worker boot returned without registering a handler");
+                        std::process::exit(1);
+                    }
+                    handler::signal_boot_pub();
+                    crate::worker_mode::enter_worker_loop();
+                }
+                WorkerKind::Script { handler } => {
+                    // Script mode: publish config + listen address into the
+                    // process-static slots, then register the handler directly —
+                    // there is no separate PHP boot phase to run first.
+                    worker_mode::set_worker_config(cfg);
+                    worker_mode::set_worker_listen(listen.to_string());
+                    if let Some((rd, wr)) = boot_pipe_rd {
+                        unsafe { libc::close(rd); }
+                        handler::set_boot_pipe(wr);
+                    }
+                    handler::register_script_handler(handler);
+                    // register_script_handler is `-> !`: it diverges into
+                    // enter_worker_loop and never returns.
+                }
+                WorkerKind::WorkerAfterBoot => {
+                    // Boot-before-fork: the master already booted and registered
+                    // the handler. The child publishes config + listen address,
+                    // signals readiness via the boot pipe, and enters the worker
+                    // loop directly — no PHP boot phase.
+                    worker_mode::set_worker_config(cfg);
+                    worker_mode::set_worker_listen(listen.to_string());
+                    if let Some((rd, wr)) = boot_pipe_rd {
+                        unsafe { libc::close(rd); }
+                        handler::set_boot_pipe(wr);
+                    }
+                    // Close inherited FDs from the master (DB connections, log
+                    // files, etc.) so workers don't share process-wide resources
+                    // opened during the boot. Keep only the boot-pipe write end
+                    // and stdio. The listener is created per-worker inside
+                    // enter_worker_loop, so it doesn't need preserving here.
+                    close_inherited_fds();
+                    // Signal the master that this worker is ready, then enter the
+                    // accept loop. signal_boot writes one byte and closes the fd.
+                    handler::signal_boot_pub();
+                    crate::worker_mode::enter_worker_loop();
+                }
+            }
         }
-        pid => pid,
+        pid => {
+            // Master: close the write end, keep the read end with the pid so
+            // supervise can check whether the boot signal arrived.
+            let rd = match boot_pipe_rd {
+                Some((rd, wr)) => {
+                    // SAFETY: the write end belongs to the child; closing it in
+                    // the master so a read on the read end returns EOF once the
+                    // child closes its write end (after signaling or on crash).
+                    unsafe { libc::close(wr); }
+                    Some(rd)
+                }
+                None => None,
+            };
+            (pid, rd)
+        }
     }
 }
 
-/// Returns true when a reaped worker's `waitpid` status is a planned
-/// `--max-requests` recycle: a normal exit with `worker::RECYCLE_EXIT_CODE`.
-/// Signal deaths and every other exit code are real crashes and keep feeding
-/// the fast-death accounting. Without this distinction, sustained traffic with
-/// a small `--max-requests` recycles workers faster than `FAST_DEATH` and the
-/// master mistakes the healthy recycle churn for a startup crash loop.
-fn is_planned_recycle(status: libc::c_int) -> bool {
-    libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == worker::RECYCLE_EXIT_CODE
-}
-
-/// Server entry: parse args, prefork workers, supervise. Returns an exit code.
+/// Supervises `children`: waits for any child to exit, breaks on a shutdown
+/// request, respawns to keep the pool at its initial size, and aborts after too
+/// many consecutive startup failures. Shared by `elephc_web_run` and
+/// `elephc_web_run_worker`. Returns the master exit code.
 ///
-/// # Safety
-/// `handler` must be the compiler-emitted `_elephc_web_handler` symbol; argv
-/// must point to `argc` valid NUL-terminated C strings.
-#[no_mangle]
-pub extern "C" fn elephc_web_run(
-    argc: i32,
-    argv: *const *const c_char,
-    handler: extern "C" fn(),
+/// Each entry is `(pid, boot_pipe_rd, spawned_at)`. For worker mode, `boot_pipe_rd`
+/// is the read end of the boot-signal pipe; for classic mode it is `None`. When a
+/// worker-mode child dies, the boot pipe distinguishes a startup crash (pipe had
+/// no data: boot never reached `elephc_web_worker_register`) from a runtime crash
+/// (pipe had data: boot completed and the crash happened during request serving).
+/// Startup crashes count toward `MAX_FAST_DEATHS` with exponential backoff;
+/// runtime crashes reset the counter and respawn immediately.
+fn supervise(
+    listen: &str,
+    kind: WorkerKind,
+    cfg: WorkerConfig,
+    mut children: Vec<(libc::pid_t, Option<i32>, Instant)>,
 ) -> i32 {
-    let args = match parse_args(argc, argv) {
-        ParsedArgs::Run(a) => a,
-        ParsedArgs::Exit(code) => return code,
-    };
-    install_signal_handlers();
-    // Fork workers BEFORE creating any tokio runtime. Track each worker's spawn
-    // time so a crash-on-startup loop (e.g. a failed bind) can be detected.
-    let mut children: Vec<(libc::pid_t, Instant)> = Vec::new();
-    for _ in 0..args.workers {
-        let pid = spawn_worker(&args.listen, handler, args.worker_config());
-        children.push((pid, Instant::now()));
-    }
-    eprintln!(
-        "elephc-web: listening on http://{} ({} worker{})",
-        args.listen,
-        args.workers,
-        if args.workers == 1 { "" } else { "s" }
-    );
-    // Supervise: wait for any child; break on a shutdown request (SIGINT/SIGTERM).
     let mut fast_deaths: u32 = 0;
     loop {
         if SHUTDOWN.load(Ordering::SeqCst) {
@@ -258,40 +407,43 @@ pub extern "C" fn elephc_web_run(
             break;
         }
         if pid > 0 {
-            let spawned_at = children
+            let (boot_pipe_rd, spawned_at) = children
                 .iter()
-                .find(|(c, _)| *c == pid)
-                .map(|(_, t)| *t);
-            children.retain(|(c, _)| *c != pid);
+                .find(|(c, _, _)| *c == pid)
+                .map(|(_, rd, t)| (*rd, *t))
+                .unwrap_or((None, Instant::now()));
+            children.retain(|(c, _, _)| *c != pid);
+            // Close the boot-pipe read fd now that the child is dead; for worker
+            // mode it was used below to classify the crash, for classic mode it
+            // is None.
+            if let Some(rd) = boot_pipe_rd {
+                // SAFETY: the read end is owned by the master; close(2) is safe.
+                unsafe { libc::close(rd); }
+            }
             if SHUTDOWN.load(Ordering::SeqCst) {
                 if children.is_empty() {
                     break;
                 }
                 continue;
             }
-            // Crash-loop guard: if workers keep dying immediately after spawn,
-            // stop respawning (otherwise a failed bind fork-loops forever). A
-            // planned --max-requests recycle is exempt: it neither increments
-            // nor resets the streak, so healthy recycle churn cannot trip the
-            // guard yet also cannot mask a real crash loop interleaved with it.
-            if !is_planned_recycle(status) {
-                if spawned_at.map(|t| t.elapsed() < FAST_DEATH).unwrap_or(false) {
-                    fast_deaths += 1;
-                    if fast_deaths >= MAX_FAST_DEATHS {
-                        eprintln!(
-                            "elephc-web: {} workers died on startup (likely a bad --listen or a \
-                             handler crashing every request); giving up",
-                            fast_deaths
-                        );
-                        break;
-                    }
-                } else {
-                    fast_deaths = 0;
+            // Crash-loop guard: classify the crash as startup vs runtime.
+            let is_startup_crash = classify_crash(boot_pipe_rd, spawned_at);
+            if is_startup_crash {
+                fast_deaths += 1;
+                if fast_deaths >= MAX_FAST_DEATHS {
+                    eprintln!(
+                        "elephc-web: {} workers died on startup (likely a bad --listen or a \
+                         handler crashing every request); giving up",
+                        fast_deaths
+                    );
+                    break;
                 }
+            } else {
+                fast_deaths = 0;
             }
-            // The worker is gone (crash or recycle): replace it to keep the pool at N.
-            let new_pid = spawn_worker(&args.listen, handler, args.worker_config());
-            children.push((new_pid, Instant::now()));
+            // A worker died unexpectedly: replace it to keep the pool at N.
+            let (new_pid, new_rd) = spawn_worker(listen, kind.clone(), cfg);
+            children.push((new_pid, new_rd, Instant::now()));
         } else if pid == -1 {
             // ECHILD: nothing left to wait for. EINTR: a signal arrived → re-loop
             // and re-check SHUTDOWN at the top.
@@ -301,52 +453,166 @@ pub extern "C" fn elephc_web_run(
         }
     }
     // Clean teardown: ask every still-tracked worker to terminate, then reap.
-    for &(pid, _) in &children {
+    // Close any leftover boot-pipe read fds so they do not leak.
+    for &(pid, rd, _) in &children {
         unsafe { libc::kill(pid, libc::SIGTERM); }
+        if let Some(rd) = rd {
+            unsafe { libc::close(rd); }
+        }
     }
-    for &(pid, _) in &children {
+    for &(pid, _, _) in &children {
         let mut status = 0;
         unsafe { libc::waitpid(pid, &mut status, 0); }
     }
     0
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Builds a `waitpid` status word for a normal exit with `code`. Both
-    /// supported unix families (Linux and macOS) encode a normal exit as
-    /// `code << 8` with zeroed low bits, which is what `WIFEXITED`/`WEXITSTATUS`
-    /// decode.
-    fn exited_status(code: i32) -> libc::c_int {
-        (code & 0xff) << 8
+/// Classifies a worker death as a startup crash (counts toward
+/// `MAX_FAST_DEATHS`) or a runtime crash (resets the counter, immediate
+/// respawn).
+///
+/// For worker mode (`boot_pipe_rd` is `Some`): if the boot-signal pipe had data,
+/// the child reached `elephc_web_worker_register` and the crash is a runtime
+/// crash; if the pipe had no data, boot never completed and it is a startup
+/// crash.
+///
+/// For classic mode (`boot_pipe_rd` is `None`): fall back to the timing
+/// heuristic — a death within `FAST_DEATH` of spawn is a startup crash.
+fn classify_crash(boot_pipe_rd: Option<i32>, spawned_at: Instant) -> bool {
+    match boot_pipe_rd {
+        // Worker mode: pipe-based boot signal. The read fd is still open here
+        // (closed right after this call returns); check whether the child wrote
+        // the boot byte before dying. A readable pipe means boot completed.
+        Some(rd) => {
+            // SAFETY: poll(2) on the read fd with a zero timeout to check for
+            // pending data without blocking. The fd is owned by the master.
+            let mut pfd = libc::pollfd { fd: rd, events: libc::POLLIN, revents: 0 };
+            let n = unsafe { libc::poll(&mut pfd as *mut _, 1, 0) };
+            // n > 0 and POLLIN set means there is data to read → boot completed.
+            let booted = n > 0 && (pfd.revents & libc::POLLIN) != 0;
+            !booted
+        }
+        // Classic mode: no boot pipe, so use the timing heuristic.
+        None => spawned_at.elapsed() < FAST_DEATH,
     }
+}
 
-    /// A normal exit with the recycle code must be classified as a planned
-    /// recycle so the crash-loop guard skips it (regression for issue #516:
-    /// sustained traffic with a small --max-requests shut the server down).
-    #[test]
-    fn recycle_exit_is_planned() {
-        assert!(is_planned_recycle(exited_status(worker::RECYCLE_EXIT_CODE)));
+impl Clone for WorkerKind {
+    fn clone(&self) -> Self {
+        match self {
+            WorkerKind::Classic { handler } => WorkerKind::Classic { handler: *handler },
+            WorkerKind::Worker { boot } => WorkerKind::Worker { boot: *boot },
+            WorkerKind::Script { handler } => WorkerKind::Script { handler: *handler },
+            WorkerKind::WorkerAfterBoot => WorkerKind::WorkerAfterBoot,
+        }
     }
+}
+///
+/// # Safety
+/// `handler` must be the compiler-emitted `_elephc_web_handler` symbol; argv
+/// must point to `argc` valid NUL-terminated C strings.
+#[no_mangle]
+pub extern "C" fn elephc_web_run(
+    argc: i32,
+    argv: *const *const c_char,
+    handler: extern "C" fn(),
+) -> i32 {
+    let args = match parse_args(argc, argv, false) {
+        ParsedArgs::Run(a) => a,
+        ParsedArgs::Exit(code) => return code,
+    };
+    install_signal_handlers();
+    let kind = WorkerKind::Classic { handler };
+    let cfg = args.worker_config();
+    let mut children: Vec<(libc::pid_t, Option<i32>, Instant)> = Vec::new();
+    for _ in 0..args.workers {
+        let (pid, rd) = spawn_worker(&args.listen, kind.clone(), cfg);
+        children.push((pid, rd, Instant::now()));
+    }
+    eprintln!(
+        "elephc-web: listening on http://{} ({} worker{})",
+        args.listen,
+        args.workers,
+        if args.workers == 1 { "" } else { "s" }
+    );
+    supervise(&args.listen, kind, cfg, children)
+}
 
-    /// Clean exits and error exits are NOT planned recycles: they must keep
-    /// feeding the fast-death accounting so real crash loops still trip the guard.
-    #[test]
-    fn other_exit_codes_are_not_planned() {
-        assert!(!is_planned_recycle(exited_status(0)));
-        assert!(!is_planned_recycle(exited_status(1)));
-        assert!(!is_planned_recycle(exited_status(2)));
-    }
+/// Entry point for the `--web-worker` mode: parse args, prefork workers that
+/// each boot the PHP application once and then register a request handler, and
+/// supervise them. Returns an exit code.
+///
+/// `boot_fn` is the compiler-emitted `_elephc_web_handler` symbol: the top-level
+/// PHP body that initializes the app and calls `elephc_web_worker_register` to
+/// store the request handler. In boot-before-fork mode, the boot runs in the
+/// master before any fork; each forked child enters the worker loop directly,
+/// inheriting the boot state via copy-on-write.
+///
+/// # Safety
+/// `boot_fn` must be the compiler-emitted worker boot symbol; argv must point to
+/// `argc` valid NUL-terminated C strings.
+#[no_mangle]
+pub extern "C" fn elephc_web_run_worker(
+    argc: i32,
+    argv: *const *const c_char,
+    boot_fn: extern "C" fn(),
+) -> i32 {
+    let args = match parse_args(argc, argv, true) {
+        ParsedArgs::Run(a) => a,
+        ParsedArgs::Exit(code) => return code,
+    };
+    install_signal_handlers();
+    let cfg = args.worker_config();
 
-    /// A signal death is never a planned recycle, even when the raw status bits
-    /// could coincide numerically: `WIFEXITED` must gate the exit-code check.
-    /// `waitpid` encodes "killed by signal N" as N in the low 7 bits.
-    #[test]
-    fn signal_death_is_not_planned() {
-        assert!(!is_planned_recycle(libc::SIGSEGV));
-        assert!(!is_planned_recycle(libc::SIGKILL));
-        assert!(!is_planned_recycle(libc::SIGTERM));
+    // Boot-after-fork: each worker boots independently with its own heap.
+    // Boot-before-fork is not viable without per-thread heap arenas (ZTS),
+    // because the shared COW heap causes overlapping allocations across workers.
+    let kind = WorkerKind::Worker { boot: boot_fn };
+    let mut children: Vec<(libc::pid_t, Option<i32>, Instant)> = Vec::new();
+    for _ in 0..args.workers {
+        let (pid, rd) = spawn_worker(&args.listen, kind.clone(), cfg);
+        children.push((pid, rd, Instant::now()));
     }
+    eprintln!(
+        "elephc-web: listening on http://{} ({} worker{}, web-worker mode)",
+        args.listen,
+        args.workers,
+        if args.workers == 1 { "" } else { "s" }
+    );
+    supervise(&args.listen, kind, cfg, children)
+}
+
+/// C-ABI entry for `--web-worker=script`: prefork server that runs the compiled
+/// top-level (`handler`) once per request with persistent statics/globals, no
+/// `elephc_worker_register` API. Mirrors `elephc_web_run_worker` but skips the
+/// PHP boot phase — the handler is registered directly in each forked child.
+///
+/// # Safety
+/// `handler` must be the compiler-emitted `_elephc_web_handler` symbol; argv
+/// must point to `argc` valid NUL-terminated C strings.
+#[no_mangle]
+pub extern "C" fn elephc_web_run_script(
+    argc: i32,
+    argv: *const *const c_char,
+    handler: handler::ScriptHandler,
+) -> i32 {
+    let args = match parse_args(argc, argv, true) {
+        ParsedArgs::Run(a) => a,
+        ParsedArgs::Exit(code) => return code,
+    };
+    install_signal_handlers();
+    let kind = WorkerKind::Script { handler };
+    let cfg = args.worker_config();
+    let mut children: Vec<(libc::pid_t, Option<i32>, Instant)> = Vec::new();
+    for _ in 0..args.workers {
+        let (pid, rd) = spawn_worker(&args.listen, kind.clone(), cfg);
+        children.push((pid, rd, Instant::now()));
+    }
+    eprintln!(
+        "elephc-web: listening on http://{} ({} worker{}, web-worker=script mode)",
+        args.listen,
+        args.workers,
+        if args.workers == 1 { "" } else { "s" }
+    );
+    supervise(&args.listen, kind, cfg, children)
 }

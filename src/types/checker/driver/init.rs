@@ -110,6 +110,7 @@ impl Checker {
             packed_classes: HashMap::new(),
             extern_globals: HashMap::new(),
             required_libraries: Vec::new(),
+            worker_register_call_span: None,
             top_level_env: HashMap::new(),
             active_ref_params: HashSet::new(),
             active_globals: HashSet::new(),

@@ -1000,6 +1000,22 @@ statics, and static class properties all reset between requests). Run it with
   graceful `SIGINT`/`SIGTERM` shutdown (forward to workers, reap, exit 0), worker
   respawn on unexpected death, and a 30s header-read timeout bounding slow/idle
   keep-alive connections. Out of v1 scope: cookies, sessions, TLS, HTTP/2–3, multipart.
+- [x] **Phase 5** — worker mode (`--web-worker`): the top-level boots once per
+  worker and registers a request handler via `elephc_worker_register(callable)`
+  instead of re-running the program per request (FrankenPHP / RoadRunner model).
+  The Rust `elephc-web` bridge drives the HTTP accept loop, invoking the
+  compiled trampoline per request. State persistence: function `static` locals,
+  static class properties, and globals persist across requests within a worker;
+  request superglobals — including `$_ENV` — are rebuilt fresh per request by
+  the worker trampoline. The trampoline catches `\Throwable` → HTTP 500 so an
+  uncaught exception does not crash the worker. `--max-requests` defaults to
+  1000 in worker mode (vs 0 in classic) and `--worker-gc-interval` runs the
+  cycle collector after each handler
+  (default 1). A macOS C-ABI alias (`___rt_gc_collect_cycles`) is emitted so the
+  Rust bridge's `extern "C"` call to the runtime collector resolves. Per-request
+  superglobal population runs in the worker trampoline through six per-superglobal
+  fill functions (server → get → post → cookie → request → env) ahead of the
+  handler invocation.
 
 ## v0.27.x — Shared and static libraries (C ABI)
 

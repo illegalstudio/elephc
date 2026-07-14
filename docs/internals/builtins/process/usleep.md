@@ -21,7 +21,8 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_getenv`
+- `__rt_exit`
+- `__rt_stdout_write`
 
 ## Signature summary
 

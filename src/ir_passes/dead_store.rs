@@ -211,7 +211,7 @@ fn op_is_value_only_consumer(op: Op) -> bool {
             // Output operations consume their operand by value.
             | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR | Warn
             // Stores copy the value into other storage; they never alias the source slot.
-            | StoreLocal | StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal
+            | StoreLocal | StoreGlobal | StoreGlobalReleasing | StoreStaticLocal | StoreStaticProperty | InitStaticLocal
             | StoreRefCell | ExternGlobalStore
             // Value-level ownership/refcount bookkeeping.
             | Acquire | Release | Move | Borrow | EnsureOwned

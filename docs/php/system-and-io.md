@@ -9,8 +9,8 @@ sidebar:
 
 | Function | Signature | Description |
 |---|---|---|
-| `exit()` | `exit($code = 0): void` | Terminate program |
-| `die()` | `die($code = 0): void` | Alias for `exit()` |
+| `exit()` | `exit(int\|string $status = 0): void` | End program/request; string arg is printed |
+| `die()` | `die(int\|string $status = 0): void` | Alias for `exit()` |
 | `time()` | `time(): int` | Unix timestamp |
 | `microtime()` | `microtime($as_float = false): string\|float` | Current time with microsecond precision. Returns the `"0.NNNNNNNN SSSSSSSSSS"` string (fractional microseconds as 8 digits, a space, then Unix seconds) by default or when `$as_float` is `false`; returns seconds as a `float` when `$as_float` is `true`. A non-literal flag yields `string\|float` (boxed `Mixed`), resolved at runtime. |
 | `hrtime()` | `hrtime($as_number = false): array\|int` | High-resolution monotonic time (`CLOCK_MONOTONIC`). Returns `[seconds, nanoseconds]`, or the total nanoseconds as an int when `$as_number` is true — for benchmarking elapsed time. |

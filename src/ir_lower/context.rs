@@ -155,6 +155,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     eval_scope_write_names: HashSet<String>,
     eval_scope_flush_names: BTreeSet<String>,
     source_path: Option<String>,
+    static_persisted_types: HashMap<String, PhpType>,
 }
 
 impl<'m, 'f> LoweringContext<'m, 'f> {
@@ -232,7 +233,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             eval_scope_write_names: HashSet::new(),
             eval_scope_flush_names: BTreeSet::new(),
             source_path,
+            static_persisted_types: HashMap::new(),
         }
+    }
+
+    /// Records the persisted slot type for a `static` local that is later
+    /// whole-variable-reassigned, so the slot can be widened to Mixed.
+    pub(crate) fn set_static_persisted_type(&mut self, name: &str, ty: PhpType) {
+        self.static_persisted_types.insert(name.to_string(), ty);
+    }
+
+    /// Returns the persisted slot type recorded for a `static` local, if the
+    /// pre-scan found one.
+    pub(crate) fn static_persisted_type(&self, name: &str) -> Option<PhpType> {
+        self.static_persisted_types.get(name).cloned()
     }
 
     /// Returns the canonical PHP source path associated with this lowered body, if known.

@@ -98,6 +98,50 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     abi::emit_return(emitter);
 }
 
+/// Declares `.comm` storage for every superglobal so the reset routines' loads
+/// resolve even when usage-gating never stored one.
+pub(crate) fn declare_superglobal_storage(data: &mut DataSection) {
+    let size = superglobals::superglobal_type().codegen_repr().stack_size().max(8);
+    for name in superglobals::SUPERGLOBALS {
+        data.add_comm(ir_global_symbol(name), size);
+    }
+}
+
+/// Emits the `__rt_web_worker_request_reset` routine for `--web-worker` builds.
+/// Only resets request superglobals and concat offset; statics/globals persist.
+pub(crate) fn emit_web_worker_request_reset(
+    emitter: &mut Emitter,
+    _module: &Module,
+    _data: &DataSection,
+    env_persistent: bool,
+) {
+    if emitter.target.arch == Arch::AArch64 {
+        emitter.raw(".align 2");
+    }
+    emitter.blank();
+    emitter.comment("--- runtime: web worker per-request state reset ---");
+    emitter.label_global("__rt_web_worker_request_reset");
+    abi::emit_frame_prologue(emitter, RESET_FRAME_SIZE);
+    let mut labels = LabelGen::new();
+    for name in superglobals::SUPERGLOBALS {
+        if env_persistent && *name == "_ENV" {
+            continue;
+        }
+        emit_superglobal_reset(emitter, &ir_global_symbol(name), &mut labels);
+    }
+    emit_concat_offset_reset(emitter);
+    abi::emit_frame_restore(emitter, RESET_FRAME_SIZE);
+    abi::emit_return(emitter);
+    // macOS C-ABI alias: ___rt_web_worker_request_reset -> __rt_web_worker_request_reset
+    if emitter.platform == crate::codegen::platform::Platform::MacOS {
+        emitter.blank();
+        emitter.raw(".align 2");
+        emitter.comment("-- macOS C-ABI alias: ___rt_web_worker_request_reset -> __rt_web_worker_request_reset --");
+        emitter.label_global("___rt_web_worker_request_reset");
+        emitter.instruction("b __rt_web_worker_request_reset");
+    }
+}
+
 /// Resets one function static local: skips uninitialized slots, releases any
 /// owned refcounted value, then zeroes the 16-byte value and the init marker so
 /// the static's initializer re-runs on the next request.

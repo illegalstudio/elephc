@@ -996,3 +996,37 @@ fn ensure_arg_count_between(
         inst.operands.len()
     )))
 }
+
+/// Lowers `elephc_worker_register($handler)`.
+///
+/// In `--web-worker` (handler) mode: stores the callable handler argument into
+/// the process-static global `$__elephc_worker_handler`, then calls the Rust
+/// bridge `elephc_web_worker_register` which stores the handler and returns. In
+/// boot-before-fork mode the master calls the boot (which calls this), then
+/// forks workers; each worker enters the accept loop directly.
+///
+/// In CLI and `--web` modes: the call is a no-op — the handler is stored into the
+/// global (harmless) but the bridge call is skipped (the bridge symbol is not
+/// linked in non-worker builds). This lets the same PHP file run unmodified
+/// under `php-cli`, `elephc` CLI, and `elephc --web-worker`.
+pub(crate) fn lower_elephc_worker_register(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "elephc_worker_register", 1)?;
+    let handler = expect_operand(inst, 0)?;
+    let handler_ty = ctx.load_value_to_result(handler)?;
+    let global_symbol = crate::names::ir_global_symbol("__elephc_worker_handler");
+    ctx.data
+        .add_comm(global_symbol.clone(), handler_ty.codegen_repr().stack_size().max(8));
+    abi::emit_store_result_to_symbol(ctx.emitter, &global_symbol, &handler_ty, false);
+    if !ctx.web_worker {
+        return Ok(());
+    }
+    let trampoline_symbol = crate::names::function_symbol("elephc_worker_handle_request");
+    let target = ctx.emitter.target;
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 0), &trampoline_symbol);
+    let bridge = target.extern_symbol("elephc_web_worker_register");
+    abi::emit_call_label(ctx.emitter, &bridge);
+    Ok(())
+}

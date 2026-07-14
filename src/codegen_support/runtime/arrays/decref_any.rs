@@ -48,6 +48,10 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     // -- inspect the full kind word so collector-only flags stay visible --
     emitter.instruction("ldr x11, [x0, #-8]");                                  // load the full 64-bit kind word from the heap header
 
+    // -- skip immortal (boot-phase) blocks: their refcount is never decremented --
+    emitter.instruction("tst x11, #0x40");                                      // is this an immortal (boot-phase) block?
+    emitter.instruction("b.ne __rt_decref_any_done");                           // immortal blocks are never released by decref
+
     // -- during cycle collection, skip unreachable refcounted children because they will be freed directly --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_gc_collecting");
     emitter.instruction("ldr x12, [x12]");                                      // load the collector-active flag
@@ -75,6 +79,8 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_decref_any_object");                         // release objects through __rt_decref_object
     emitter.instruction("cmp x11, #5");                                         // is this a boxed mixed value?
     emitter.instruction("b.eq __rt_decref_any_mixed");                          // release mixed cells through __rt_decref_mixed
+    emitter.instruction("cmp x11, #6");                                         // is this a compact Throwable payload?
+    emitter.instruction("b.eq __rt_decref_any_object");                         // throwables release through the object path (refcount + deep free)
     emitter.instruction("ret");                                                 // unknown/raw kinds need no release
 
     emitter.label("__rt_decref_any_string");
@@ -118,6 +124,8 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, r11");                                        // is the candidate pointer outside the live heap window?
     emitter.instruction("jae __rt_decref_any_done");                            // non-heap values above the managed heap own no runtime storage
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
+    emitter.instruction("test r10, 0x40");                                      // is this an immortal (boot-phase) block?
+    emitter.instruction("jnz __rt_decref_any_done");                            // immortal blocks are never released by decref
     emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word before isolating the ownership marker
     emitter.instruction("shr r11, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
     emitter.instruction(&format!("cmp r11d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that the payload belongs to the x86_64 heap wrapper before dispatching a release helper
@@ -133,6 +141,8 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_decref_any_object");                           // objects release through the x86_64 object decref helper
     emitter.instruction("cmp r10, 5");                                          // does this heap-backed payload point at a boxed mixed cell?
     emitter.instruction("je __rt_decref_any_mixed");                            // mixed cells release through the x86_64 mixed decref helper
+    emitter.instruction("cmp r10, 6");                                          // does this heap-backed payload point at a compact Throwable?
+    emitter.instruction("je __rt_decref_any_object");                           // throwables release through the object path (refcount + deep free)
     emitter.instruction("jmp __rt_decref_any_done");                            // unknown/raw heap kinds need no release work in the current x86_64 bootstrap runtime
 
     emitter.label("__rt_decref_any_string");

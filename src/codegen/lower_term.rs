@@ -11,7 +11,7 @@
 //! - Generator suspension remains an explicit unsupported Phase 04 path.
 
 use crate::codegen::platform::Arch;
-use crate::ir::{BlockId, DataId, IrType, SwitchCase, Terminator, ValueId};
+use crate::ir::{BlockId, DataId, Function, Immediate, IrType, Op, SwitchCase, Terminator, ValueId};
 use crate::types::PhpType;
 
 use crate::codegen::abi;
@@ -109,7 +109,15 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
 }
 
 /// Lowers a throw value by publishing it to the runtime exception slot and unwinding.
+///
+/// `throw` moves the reference into `_exc_value` (a transfer): a freshly constructed
+/// or call-returned exception carries its own reference and nothing else releases it.
+/// The one exception is a re-raise of a cleanup-tracked local (`throw $e`): that slot's
+/// reference is still owned by the frame, and the frame's unwind cleanup callback (or
+/// epilogue) will release it while the same pointer is in flight in `_exc_value`. In
+/// that case we retain an extra reference so the caught object survives the release.
 pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let rethrows_tracked_local = throw_value_rethrows_tracked_local(ctx.function, value);
     let ty = ctx.load_value_to_result(value)?;
     if !matches!(ty.codegen_repr(), PhpType::Object(_)) {
         return Err(CodegenIrError::unsupported(format!(
@@ -117,9 +125,32 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
             ty
         )));
     }
+    if rethrows_tracked_local {
+        ctx.emitter
+            .comment("retain the re-raised local exception so its frame's owned-local release cannot free it");
+        abi::emit_incref_if_refcounted(ctx.emitter, &ty.codegen_repr());
+    }
     abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
     abi::emit_call_label(ctx.emitter, "__rt_throw_current");
     Ok(())
+}
+
+/// Returns whether `value` is a direct `LoadLocal` of a cleanup-tracked local slot,
+/// i.e. a `throw $e` re-raise of a caught-and-bound exception the frame still owns.
+///
+/// Only such loads need the retain in `lower_throw_value`: every other throw source
+/// (constructor temporaries, call results, property loads, the `catch_current`
+/// fall-through re-raise) transfers a reference that no frame-local release will free.
+fn throw_value_rethrows_tracked_local(function: &Function, value: ValueId) -> bool {
+    function
+        .instructions
+        .iter()
+        .find(|def| def.result == Some(value))
+        .and_then(|def| match (def.op, &def.immediate) {
+            (Op::LoadLocal, Some(Immediate::LocalSlot(slot))) => Some(*slot),
+            _ => None,
+        })
+        .is_some_and(|slot| frame::slot_is_cleanup_tracked(function, slot))
 }
 
 /// Lowers an unconditional branch and copies any target block parameters.

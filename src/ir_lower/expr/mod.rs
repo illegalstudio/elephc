@@ -8998,7 +8998,7 @@ fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr
     result
 }
 
-/// Releases an owned source whose string result cannot alias the original storage.
+/// Releases an owning temporary when stringification cannot alias its source storage.
 fn release_stringified_source_if_owned(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
@@ -9008,7 +9008,22 @@ fn release_stringified_source_if_owned(
         return;
     }
     match ctx.builder.value_php_type(source.value).codegen_repr() {
-        PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
+        // Boxed Mixed sources are safe to release here as well: the backend
+        // lowers `cast Mixed -> Str` through `__rt_mixed_cast_string`. String
+        // payloads are persisted into an independent allocation; scalar and
+        // null payloads return source-independent conversion storage. The
+        // produced string therefore never aliases the released Mixed cell.
+        // Skipping Mixed leaked every owned boxed temporary that flowed into a
+        // string coercion — e.g. `echo $row[1] . "\n"` inside a by-value
+        // `foreach` leaked the `$row[1]` element box each iteration (issue
+        // #527). `release_if_owned` only type-gates the EIR Release; backend
+        // ownership filtering releases Owned/MaybeOwned and skips NonHeap,
+        // Borrowed, Persistent, and Moved. Non-null unions such as int|string
+        // codegen-repr to Mixed; tagged nullable-int unions bypass this arm.
+        PhpType::Object(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Mixed => {
             crate::ir_lower::ownership::release_if_owned(ctx, source, span);
         }
         _ => {}

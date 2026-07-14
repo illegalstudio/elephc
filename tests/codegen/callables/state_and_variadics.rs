@@ -176,6 +176,123 @@ b();
     assert_eq!(out, "110220");
 }
 
+/// Regression test for null-initialized static persistence: `static $c = null;` guarded by
+/// `if ($c === null) { $c = [...]; }` must build the array once and persist mutations across
+/// calls. This pattern previously reset the static every call (`1 1 1`) because the null-sentinel
+/// initializer sized the slot as void.
+#[test]
+fn test_static_null_guard_array_persists() {
+    let out = compile_and_run(
+        r#"<?php
+function container() {
+    static $c = null;
+    if ($c === null) {
+        $c = ['calls' => 0];
+    }
+    $c['calls']++;
+    echo $c['calls'], " ";
+}
+container();
+container();
+container();
+"#,
+    );
+    assert_eq!(out, "1 2 3 ");
+}
+
+/// Regression test for null-initialized static persistence: a `static $s = null;` string that is
+/// initialized once then appended to must accumulate across calls rather than reset each time.
+#[test]
+fn test_static_null_guard_string_grows() {
+    let out = compile_and_run(
+        r#"<?php
+function grow() {
+    static $s = null;
+    if ($s === null) {
+        $s = "x";
+    } else {
+        $s = $s . "x";
+    }
+    echo $s, " ";
+}
+grow();
+grow();
+grow();
+"#,
+    );
+    assert_eq!(out, "x xx xxx ");
+}
+
+/// Regression test for null-initialized static persistence: a `static $v = null;` int memoized
+/// once then incremented must persist across calls. This pattern was previously a hard compile
+/// error, so the test also guards against that regression.
+#[test]
+fn test_static_null_guard_int_memo() {
+    let out = compile_and_run(
+        r#"<?php
+function memo() {
+    static $v = null;
+    if ($v === null) {
+        $v = 41;
+    }
+    $v++;
+    echo $v, " ";
+}
+memo();
+memo();
+memo();
+"#,
+    );
+    assert_eq!(out, "42 43 44 ");
+}
+
+/// Regression test for null-initialized static persistence: a `static $f = null;` float seeded
+/// once then accumulated with `+=` must persist its running total across calls.
+#[test]
+fn test_static_null_guard_float_accumulates() {
+    let out = compile_and_run(
+        r#"<?php
+function fx() {
+    static $f = null;
+    if ($f === null) {
+        $f = 1.5;
+    }
+    $f += 0.5;
+    echo $f, " ";
+}
+fx();
+fx();
+fx();
+"#,
+    );
+    assert_eq!(out, "2 2.5 3 ");
+}
+
+/// Regression test for null-initialized static persistence: a `static $o = null;` object created
+/// once then mutated must persist the same instance (and its property state) across calls.
+#[test]
+fn test_static_null_guard_object_persists() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public int $n = 0;
+}
+function b() {
+    static $o = null;
+    if ($o === null) {
+        $o = new Box();
+    }
+    $o->n++;
+    echo $o->n, " ";
+}
+b();
+b();
+b();
+"#,
+    );
+    assert_eq!(out, "1 2 3 ");
+}
+
 // --- Pass by reference ---
 
 /// Verifies that a `&$var` parameter increments the caller's variable in place.

@@ -20,6 +20,12 @@ use crate::types::TypeEnv;
 
 use super::super::Checker;
 
+// Re-exported so the call-form `array_push`/`array_unshift` hook in
+// `crate::types::checker::inference::expr::effects` can reuse the same
+// element-type merge logic as the `$array[] = $value` push assignment path,
+// without widening the visibility of the `arrays` submodule itself.
+pub(crate) use arrays::merge_pushed_element_type;
+
 impl Checker {
     /// Returns true when `name` is bound as a `foreach` loop key in the current
     /// scope. A foreach key is a boxed `Mixed` cell at runtime even when the

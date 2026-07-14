@@ -40,6 +40,8 @@ pub(crate) struct CliConfig {
     pub(crate) extra_frameworks: Vec<String>,
     pub(crate) defines: HashSet<String>,
     pub(crate) web: bool,
+    pub(crate) web_worker: bool,
+    pub(crate) web_worker_script: bool,
     /// Bridge crates the user force-enabled with `--with-<crate>` (short flag
     /// names such as `"pdo"`). Each one force-links the matching staticlib and,
     /// for crates with a PHP-surface prelude, forces that prelude's injection so
@@ -72,6 +74,8 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut extra_frameworks: Vec<String> = Vec::new();
     let mut defines: HashSet<String> = HashSet::new();
     let mut web = false;
+    let mut web_worker = false;
+    let mut web_worker_script = false;
     let mut with_crates: HashSet<String> = HashSet::new();
     let mut null_repr = match std::env::var("ELEPHC_NULL_REPR").as_deref() {
         Ok("tagged") => crate::codegen::NullRepr::Tagged,
@@ -167,6 +171,12 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             ));
         } else if arg == "--web" {
             web = true;
+        } else if arg == "--web-worker" || arg == "--web-worker=handler" {
+            web = true;
+            web_worker = true;
+        } else if arg == "--web-worker=script" {
+            web = true;
+            web_worker_script = true;
         } else if let Some(name) = arg.strip_prefix("--with-") {
             // `--with-web` aliases the full `--web` mode (it owns the program
             // entry point); every other known crate is recorded for force-link
@@ -236,6 +246,8 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         extra_frameworks,
         defines,
         web,
+        web_worker,
+        web_worker_script,
         with_crates,
     }
 }

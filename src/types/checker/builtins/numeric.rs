@@ -53,9 +53,14 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "exit() takes 0 or 1 arguments"));
             }
             if let Some(arg) = args.first() {
+                // PHP: an integer argument is the process/exit status; a string
+                // argument is printed (as if echo'd) before exiting with status 0.
                 let ty = checker.infer_type(arg, env)?;
-                if ty != PhpType::Int {
-                    return Err(CompileError::new(span, "exit() argument must be integer"));
+                if !matches!(ty, PhpType::Int | PhpType::Bool | PhpType::Str) {
+                    return Err(CompileError::new(
+                        span,
+                        "exit() argument must be an integer status or a string message",
+                    ));
                 }
             }
             Ok(Some(PhpType::Void))
