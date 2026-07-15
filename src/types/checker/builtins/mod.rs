@@ -23,7 +23,8 @@ use super::Checker;
 
 pub(crate) use catalog::{
     canonical_builtin_function_name, is_php_visible_builtin_function,
-    is_supported_builtin_function, supported_builtin_function_names,
+    is_supported_builtin_function, strict_php_hidden_builtin,
+    supported_builtin_function_names,
 };
 pub(crate) use callables::{
     array_element_type, array_filter_callback_dummy_args, callback_supports_complex_descriptor_env,
@@ -66,6 +67,14 @@ impl Checker {
         // eagerly inferred by argument normalization. Their handlers inspect the
         // raw operands directly.
         let builtin_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        // `--strict-php` hides extension builtins entirely: the call must fall
+        // through to user-function resolution and the standard undefined-function
+        // diagnostics, mirroring PHP where these names do not exist. This must
+        // run before argument normalization so the hidden builtin's signature is
+        // never applied to the call.
+        if catalog::strict_php_hidden_builtin(&builtin_key) {
+            return Ok(None);
+        }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
         let normalized_args;
         let args = if let Some(sig) =
