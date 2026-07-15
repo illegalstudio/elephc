@@ -15,6 +15,7 @@ mod namespaces;
 mod null_sentinel;
 mod case_insensitive_symbols;
 mod cli;
+mod strict_php;
 mod benchmarks;
 mod echo_vars;
 mod eval;
