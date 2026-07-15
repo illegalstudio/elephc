@@ -1157,6 +1157,10 @@ fn lower_fiber_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
                 "fiber_constructor",
             )?;
             move_fiber_callable_result_to_arg(ctx, callable_arg);
+        } else if callable_ty == PhpType::Callable {
+            ctx.load_value_to_result(callable)?;
+            callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
+            move_fiber_callable_result_to_arg(ctx, callable_arg);
         } else {
             ctx.load_value_to_reg(callable, callable_arg)?;
         }
@@ -5713,7 +5717,9 @@ fn load_property_store_value_to_result(
         abi::emit_call_label(ctx.emitter, "__rt_str_persist");
         return Ok(());
     }
-    if slot_ty.codegen_repr().is_refcounted() {
+    if matches!(slot_ty.codegen_repr(), PhpType::Callable) {
+        callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
+    } else if slot_ty.codegen_repr().is_refcounted() {
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty.codegen_repr());
     }
     Ok(())

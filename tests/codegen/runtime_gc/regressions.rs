@@ -1166,6 +1166,108 @@ echo $t;
     );
 }
 
+/// Regression test for issue #540: a fresh object passed directly to a constructor
+/// is an owning argument temporary. `ObjectNew` must release the caller's reference
+/// after the constructor returns, even when the constructor ignores the argument.
+#[test]
+fn test_object_new_releases_owned_nested_object_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ObjectNewNestedPayload {}
+class ObjectNewNestedSink {
+    public function __construct(ObjectNewNestedPayload $payload) {}
+}
+for ($i = 0; $i < 100; $i++) {
+    $sink = new ObjectNewNestedSink(new ObjectNewNestedPayload());
+}
+echo "ok";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #540: an inline array passed to a constructor owns
+/// its array payload and boxed Mixed elements. All of those temporary allocations
+/// must be released after the constructor has consumed the argument.
+#[test]
+fn test_object_new_releases_owned_inline_array_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ObjectNewArraySink {
+    public function __construct(array $items) {}
+}
+for ($i = 0; $i < 100; $i++) {
+    $sink = new ObjectNewArraySink([$i, $i + 1, $i + 2]);
+}
+echo "ok";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #540: a Mixed container read is an owned temporary
+/// before it is materialized for a typed constructor parameter.
+/// `ObjectNew` must release that temporary after the constructor returns.
+#[test]
+fn test_object_new_releases_owned_mixed_container_read_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ObjectNewStringSink {
+    public function __construct(string $value) {}
+}
+$source = ["value" => "payload", "other" => 1];
+for ($i = 0; $i < 100; $i++) {
+    $sink = new ObjectNewStringSink((string) $source["value"]);
+}
+unset($sink);
+echo "ok";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies that constructor argument cleanup does not release borrowed by-reference
+/// array storage. The constructor must still mutate the caller's array, and both the
+/// caller and object lifetimes must finish with a clean heap.
+#[test]
+fn test_object_new_argument_cleanup_preserves_by_ref_array_alias() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ObjectNewArrayMutator {
+    public function __construct(array &$items) { $items[] = 3; }
+}
+$items = [1, 2];
+$mutator = new ObjectNewArrayMutator($items);
+echo count($items) . ":" . $items[2];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3:3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for the array-to-string echo fix: echoing an owned temporary array
 /// stringifies to "Array" and releases the temporary, keeping GC allocs and frees balanced
 /// (no leak from the discarded array, no premature/double free).
