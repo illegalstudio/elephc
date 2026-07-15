@@ -864,6 +864,9 @@ fn lower_body_into_function(
     // Final storage types are now known: erase deferred loop-store releases that
     // guard slots which never widened to lifetime-tracked storage (issue #534).
     ctx.builder.prune_untracked_release_local_slot_ops();
+    // Likewise, erase provisional releases for concrete local loads unless a
+    // later store widened their final frame slot to Mixed (issue #538).
+    ctx.builder.prune_borrowed_local_load_release_ops();
     ctx.into_closures()
 }
 

@@ -145,3 +145,30 @@ echo $alias;
         );
     }
 }
+
+/// Verifies issue #538 releases boxed COW generations with EIR optimization on and off.
+#[test]
+fn test_regression_538_hash_promotion_is_heap_clean_in_both_modes() {
+    let source = r#"<?php
+function buildSet(int $count): array {
+    $set = [];
+    for ($i = 0; $i < $count; $i++) {
+        $key = 'k' . $i;
+        $set[$key] = true;
+    }
+    return $set;
+}
+
+$set = buildSet(75);
+echo count($set);
+"#;
+
+    for ir_opt in [false, true] {
+        let (stdout, stderr) = run_release_fixture(source, ir_opt);
+        assert_eq!(stdout, "75");
+        assert!(
+            stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "expected issue #538 to leave a clean heap with ir_opt={ir_opt}, got: {stderr}"
+        );
+    }
+}

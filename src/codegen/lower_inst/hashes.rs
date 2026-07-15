@@ -96,6 +96,9 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
     let source_local = source_load_local_slot(ctx, hash)?;
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, hash)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_hash_set_aarch64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
         Arch::X86_64 => lower_hash_set_x86_64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
@@ -121,6 +124,9 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let hash_ty = ctx.value_php_type(hash)?;
     require_hash(hash_ty.clone(), inst)?;
     let source_local = source_load_local_slot(ctx, hash)?;
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, hash)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             materialize_hash_key_aarch64(ctx, key)?;
@@ -153,6 +159,9 @@ pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
     let source_local = source_load_local_slot(ctx, hash)?;
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, hash)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_hash_append_aarch64(ctx, hash, value, &value_ty, &storage_value_ty)?,
         Arch::X86_64 => lower_hash_append_x86_64(ctx, hash, value, &value_ty, &storage_value_ty)?,
@@ -220,6 +229,9 @@ pub(super) fn lower_hash_spread(ctx: &mut FunctionContext<'_>, inst: &Instructio
     require_hash(ctx.value_php_type(dest)?, inst)?;
     require_hash(ctx.value_php_type(source)?, inst)?;
     let source_local = source_load_local_slot(ctx, dest)?;
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, dest)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(dest, "x0")?;

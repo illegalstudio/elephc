@@ -1275,6 +1275,206 @@ echo "done";
     );
 }
 
+/// Regression test for issue #538: growing one function-local array from indexed
+/// `[]` storage into a string-keyed hash must release every replaced COW generation.
+#[test]
+fn test_regression_538_function_local_hash_promotion_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function buildSet(int $count): array {
+    $set = [];
+    for ($i = 0; $i < $count; $i++) {
+        $key = 'k' . $i;
+        $set[$key] = true;
+    }
+    return $set;
+}
+
+$set = buildSet(75);
+echo count($set);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "75");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap (issue #538), got: {}",
+        out.stderr
+    );
+    let allocs = out
+        .stderr
+        .lines()
+        .find(|line| line.starts_with("HEAP DEBUG: allocs="))
+        .and_then(|line| line.split("allocs=").nth(1))
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("missing heap-debug allocation count: {}", out.stderr));
+    assert!(
+        allocs < 350,
+        "expected in-place growth without one COW clone per write (issue #538), got {allocs} allocations: {}",
+        out.stderr
+    );
+}
+
+/// Verifies issue #538 without loop-flow widening: consecutive string-key writes
+/// to one function-local promoted hash must replace storage without leaking.
+#[test]
+fn test_regression_538_function_local_direct_hash_writes_do_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function buildPair(): array {
+    $set = [];
+    $set['first'] = true;
+    $set['second'] = true;
+    return $set;
+}
+
+$set = buildPair();
+echo count($set);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected direct hash writes to leave a clean heap (issue #538), got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies issue #538 when a concrete load is consumed before a later write
+/// widens the same function-local frame slot to boxed Mixed storage.
+#[test]
+fn test_regression_538_early_consumer_before_hash_promotion_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function inspectBeforePromotion(): int {
+    $set = [];
+    $before = count($set);
+    $set['later'] = true;
+    return $before + count($set);
+}
+
+echo inspectBeforePromotion();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected an early consumer of the later-widened slot to remain clean (issue #538), got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies issue #538 for method-local storage whose final path consumes the
+/// promoted hash but returns a scalar instead of transferring the hash owner.
+#[test]
+fn test_regression_538_method_local_hash_promotion_scalar_return_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class SetBuilder {
+    public function countKeys(int $count): int {
+        $set = [];
+        for ($i = 0; $i < $count; $i++) {
+            $key = 'k' . $i;
+            $set[$key] = true;
+        }
+        return count($set);
+    }
+}
+
+$builder = new SetBuilder();
+echo $builder->countKeys(75);
+unset($builder);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "75");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected method-local hash promotion to leave a clean heap (issue #538), got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies issue #538 preserves COW aliasing while replacing a boxed local hash:
+/// mutating the original after assignment must not change or free the snapshot.
+#[test]
+fn test_regression_538_hash_promotion_preserves_cow_alias_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function compareSnapshot(): string {
+    $set = [];
+    for ($i = 0; $i < 5; $i++) {
+        $key = 'k' . $i;
+        $set[$key] = true;
+    }
+    $snapshot = $set;
+    $set['later'] = true;
+    return count($snapshot) . ':' . count($set);
+}
+
+echo compareSnapshot();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "5:6");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected COW aliases to remain valid and heap-clean (issue #538), got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies issue #538 when a COW snapshot is assigned before the original
+/// local is later widened from indexed-array to hash-backed Mixed storage.
+#[test]
+fn test_regression_538_early_cow_alias_before_hash_promotion_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function compareEarlySnapshot(): string {
+    $set = [];
+    $snapshot = $set;
+    $set['later'] = true;
+    return count($snapshot) . ':' . count($set);
+}
+
+echo compareEarlySnapshot();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0:1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected an early COW alias to remain valid and clean (issue #538), got: {}",
+        out.stderr
+    );
+}
+
+/// Keeps the top-level equivalent of issue #538 as a clean control so the fix
+/// remains scoped to boxed function/method-local replacement ownership.
+#[test]
+fn test_regression_538_top_level_hash_growth_remains_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$set = [];
+for ($i = 0; $i < 75; $i++) {
+    $key = 'k' . $i;
+    $set[$key] = true;
+}
+echo count($set);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "75");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the top-level control to remain heap-clean (issue #538), got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for issue #534: a refcounted local assigned inside a NESTED
 /// inner loop must not leak one block per OUTER iteration. The inner counter's
 /// re-initialization (`$k = 0`) is lowered while the slot still looks like an
