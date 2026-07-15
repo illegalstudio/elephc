@@ -8565,11 +8565,7 @@ fn lower_array_access_from_value(
         _ => Op::RuntimeCall,
     };
     let result_type = array_access_result_type(ctx, array_value.value, op, expr);
-    let release_receiver = ctx.value_is_owned_index_read_temp(array_value);
-    let release_owned_mixed_temp_receiver = op == Op::RuntimeCall
-        && ctx.builder.value_php_type(array_value.value).codegen_repr() == PhpType::Mixed
-        && ctx.value_is_owned_temp_load(array_value.value);
-    let mut result = ctx.emit_value(
+    let result = ctx.emit_value(
         op,
         vec![array_value.value, index_value.value],
         None,
@@ -8577,50 +8573,11 @@ fn lower_array_access_from_value(
         op.default_effects(),
         Some(expr.span),
     );
-    // A chained subscript read (`$a[$i][$j]`) consumes the inner read's result
-    // directly as its receiver. That intermediate carries a +1 reference (the
-    // get emitters incref refcounted payloads and box Mixed cells), and unlike
-    // the hoisted form `$inner = $a[$i]; $inner[$j]` no local-slot release
-    // machinery ever drops it. Typed string reads borrow their bytes from that
-    // receiver, so stabilize the leaf before releasing the receiver: a later
-    // expression can otherwise drop the parent's last reference and leave the
-    // extracted string dangling. Mixed reads already return independent owned
-    // cells and do not need this copy.
-    if release_receiver && result.ir_type == IrType::Str {
-        result = ctx.emit_value(
-            Op::StrPersist,
-            vec![result.value],
-            None,
-            PhpType::Str,
-            Op::StrPersist.default_effects(),
-            Some(expr.span),
-        );
-    }
-    if release_receiver {
-        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(expr.span));
-    }
-    // A receiver materialized through a one-shot hidden owned temp (e.g. the
-    // merge temp `lower_nullable_array_access` uses for a chained `?array`
-    // read) carries an owned reference that nothing else releases anymore:
-    // `take_owned_temp` already cleared the backing slot, so this read is the
-    // temp value's last consuming use. The exact-Mixed guard keeps this path on
-    // `__rt_mixed_array_get`; `Op::RuntimeCall` also represents `ArrayAccess`
-    // object dispatch and is broader than this ownership proof. Drop the temp's
-    // reference here exactly once, on the loaded SSA value itself, so both
-    // merge results are freed — the populated container from the non-null path
-    // and the boxed Mixed null from the null path. `release_if_owned` only
-    // type-gates EIR emission; the `OwnedTemp` load predicate establishes the
-    // ownership transfer at this call site.
-    //
-    // `__rt_mixed_array_get` returns an owned, independent cell (string
-    // payloads are persisted and child heap pointers retained), so releasing
-    // the receiver cannot invalidate the result; typed reads (`ArrayGet`,
-    // `StrCharAt`, ...) can return payloads that still borrow from the
-    // receiver's storage and must keep it alive.
-    if release_owned_mixed_temp_receiver {
-        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(expr.span));
-    }
-    result
+    // Array access consumes an owning receiver produced by an earlier read,
+    // call, or one-shot temp. Preserve borrowed string/callable payloads before
+    // dropping that receiver; boxed and retained container reads are already
+    // independent and must not be acquired twice.
+    stabilize_borrowed_result_and_release_receiver(ctx, array_value, result, expr.span)
 }
 
 /// Lowers nullable receiver indexing without evaluating the index on a null receiver.
@@ -10417,14 +10374,15 @@ fn lower_property_get_from_value(
     }
     let data = ctx.intern_string(property);
     let result_type = property_get_result_type(ctx, object.value, property, op, expr);
-    ctx.emit_value(
+    let result = ctx.emit_value(
         op,
         vec![object.value],
         Some(Immediate::Data(data)),
         result_type,
         op.default_effects(),
         Some(expr.span),
-    )
+    );
+    stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
 }
 
 /// Returns true when value metadata proves the runtime value is PHP null.
@@ -10627,14 +10585,15 @@ fn lower_dynamic_property_get_from_value(
 ) -> LoweredValue {
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
     let property = lower_expr(ctx, property);
-    ctx.emit_value(
+    let result = ctx.emit_value(
         Op::DynamicPropGet,
         vec![object.value, property.value],
         None,
         result_type,
         Op::DynamicPropGet.default_effects(),
         Some(expr.span),
-    )
+    );
+    stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
 }
 
 /// Returns precise metadata for dynamic property reads when class slots are statically known.
@@ -13592,6 +13551,31 @@ fn call_result_may_alias_arg(
         (PhpType::Buffer(_), PhpType::Buffer(_)) => true,
         _ => arg_ty == result_ty,
     }
+}
+
+/// Makes a borrowed read result independent from an owning receiver before releasing it.
+///
+/// Property and indexed reads can return strings, arrays, objects, or callables
+/// borrowed from the receiver. When that receiver is an owned temporary — notably
+/// an object retained while unboxing a Mixed local — releasing it first could
+/// destroy the result payload. Reads that already materialize an independent owned
+/// value must not be acquired a second time.
+fn stabilize_borrowed_result_and_release_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    result: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if !ctx.value_is_owning_temporary(receiver) {
+        return result;
+    }
+    let result = if ctx.value_is_owning_temporary(result) {
+        result
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, result, Some(span))
+    };
+    crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
+    result
 }
 
 /// Releases the receiver of a method call when it was an owning temporary.

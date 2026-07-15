@@ -357,13 +357,21 @@ fn guard_nullsafe_chain_receiver(
         Some(expr.span),
     );
     let continue_block = ctx.builder.create_named_block("nullsafe.chain.cont", Vec::new());
+    let cleanup_block = ctx
+        .value_is_owning_temporary(current)
+        .then(|| ctx.builder.create_named_block("nullsafe.chain.cleanup", Vec::new()));
     ctx.builder.terminate(Terminator::CondBr {
         cond: is_null.value,
-        then_target: null_block,
+        then_target: cleanup_block.unwrap_or(null_block),
         then_args: Vec::new(),
         else_target: continue_block,
         else_args: Vec::new(),
     });
+    if let Some(cleanup_block) = cleanup_block {
+        ctx.builder.position_at_end(cleanup_block);
+        crate::ir_lower::ownership::release_if_owned(ctx, current, Some(expr.span));
+        branch_to(ctx, null_block);
+    }
     ctx.builder.position_at_end(continue_block);
     true
 }

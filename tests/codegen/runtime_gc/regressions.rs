@@ -2349,3 +2349,161 @@ echo $acc;
         out.stderr
     );
 }
+
+/// Regression for issue #540 root cause 4: narrowing a Mixed-backed local to an
+/// object makes each property receiver load retain the unboxed object. Named,
+/// dynamic, and nullsafe reads must all release that temporary receiver retain.
+#[test]
+fn test_regression_540_property_reads_release_owned_mixed_local_receivers() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Paste {
+    public string $named = "named";
+    public string $dynamic = "dynamic";
+    public string $safe = "safe";
+    public int $count = 1;
+}
+
+$named_result = "";
+$dynamic_result = null;
+$safe_result = null;
+$safe_dynamic_result = null;
+$property = "dynamic";
+$safe_property = "safe";
+$paste = null;
+for ($i = 0; $i < 40; $i++) {
+    $paste = new Paste();
+    $named_result = $paste->named;
+    $dynamic_result = $paste->{$property};
+    $safe_result = $paste?->safe;
+    $safe_dynamic_result = $paste?->{$safe_property};
+}
+echo $named_result;
+echo ":";
+echo $dynamic_result;
+echo ":";
+echo $safe_result;
+echo ":";
+echo $safe_dynamic_result;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "named:dynamic:safe:safe");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected property receiver retains to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies issue #540's receiver cleanup preserves typed property payloads from
+/// temporary objects. String and nested-object reads must not become dangling,
+/// while an extracted array must remain independently mutable and heap-clean.
+#[test]
+fn test_regression_540_temporary_property_results_survive_receiver_cleanup() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Leaf {
+    public string $name = "leaf";
+}
+
+class Holder {
+    public Leaf $leaf;
+    public array $items = ["one"];
+
+    public function __construct() {
+        $this->leaf = new Leaf();
+    }
+}
+
+function make_holder(): Holder {
+    return new Holder();
+}
+
+$name = make_holder()->leaf->name;
+$items = make_holder()->items;
+$items[] = "two";
+echo $name;
+echo ":";
+echo count($items);
+echo ":";
+echo $items[0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "leaf:2:one");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected temporary property results to remain valid and clean, got: {}",
+        out.stderr
+    );
+}
+
+/// Ensures issue #540's cleanup does not release an ordinary borrowed receiver.
+/// Reading an array property into a local must retain normal PHP COW behavior:
+/// mutating the copy leaves the object's property unchanged.
+#[test]
+fn test_regression_540_borrowed_property_receiver_preserves_cow() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Bag {
+    public array $items = ["original"];
+}
+
+$bag = new Bag();
+$copy = $bag->items;
+$copy[] = "copy";
+echo count($bag->items);
+echo ":";
+echo count($copy);
+echo ":";
+echo $bag->items[0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:2:original");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected borrowed receiver and COW ownership to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a nullsafe property read releases an owning nullable call result on
+/// both branches. In particular, a boxed null receiver must not leak when `?->`
+/// short-circuits before the property read.
+#[test]
+fn test_regression_540_nullsafe_property_releases_null_receiver() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class MaybeBox {
+    public string $value = "present";
+}
+
+function maybe_box(bool $present): ?MaybeBox {
+    if ($present) {
+        return new MaybeBox();
+    }
+    return null;
+}
+
+$missing = null;
+for ($i = 0; $i < 40; $i++) {
+    $missing = maybe_box(false)?->value;
+}
+$present = maybe_box(true)?->value;
+if (is_null($missing)) {
+    echo "null";
+}
+echo ":";
+echo $present;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "null:present");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected both nullsafe receiver branches to be clean, got: {}",
+        out.stderr
+    );
+}

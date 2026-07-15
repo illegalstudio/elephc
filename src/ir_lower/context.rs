@@ -1549,6 +1549,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owning_container_read(value.value) {
             return true;
         }
+        if self.value_is_owned_index_read_temp(value) {
+            return true;
+        }
         if matches!(
             self.builder.value_defining_op(value.value),
             Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
