@@ -21,8 +21,8 @@ use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_m
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
 use crate::span::Span;
 use crate::types::{
-    ClassInfo, EnumInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
-    ThrowAccessInfo, TypeEnv,
+    array_storage_conversion, join_array_storage_conversion, ClassInfo, EnumInfo, ExternFunctionSig,
+    FunctionSig, InterfaceInfo, PackedClassInfo, PhpType, ThrowAccessInfo, TypeEnv,
 };
 
 /// Value returned by expression lowering with its PHP metadata.
@@ -90,12 +90,12 @@ pub(crate) struct ClosureCapture {
 
 /// Complete rollback point for a speculative lowering.
 ///
-/// A loop body must be lowered ONCE against a local-type environment the back edge cannot
-/// invalidate, so `stmt::lower_loop_at_type_fixpoint` first lowers it speculatively to discover
-/// which locals it widens, then throws that lowering away and re-lowers against the widened
-/// environment. Everything the discovery pass could have mutated is captured here; a field that
-/// is captured but not restored is a silent miscompile, so `LoweringContext::snapshot`
-/// destructures the context exhaustively to make a forgotten field a compile error.
+/// A region must be lowered ONCE against a local-type environment nothing inside it can
+/// invalidate, so `stmt::repr_fixpoint` first lowers it speculatively to discover which locals it
+/// converts, then throws that lowering away and re-lowers against the converted environment.
+/// Everything the discovery pass could have mutated is captured here; a field that is captured but
+/// not restored is a silent miscompile, so `LoweringContext::snapshot` destructures the context
+/// exhaustively to make a forgotten field a compile error.
 pub(crate) struct LoweringSnapshot {
     function: Function,
     insertion_block: Option<BlockId>,
@@ -112,7 +112,8 @@ pub(crate) struct LoweringSnapshot {
     ref_bound_locals: HashSet<String>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
     foreach_int_key_locals: HashSet<String>,
-    widened_indexed_arrays: HashSet<String>,
+    array_conversions: HashMap<String, PhpType>,
+    speculating: bool,
     closure_count: usize,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
@@ -199,17 +200,29 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// still promoting for keys that may be strings (generic `Array(Mixed)`,
     /// `AssocArray`, `Mixed`, `Union` sources).
     foreach_int_key_locals: HashSet<String>,
-    /// Locals an already-lowered element write has widened from a concretely-typed indexed array
-    /// to `Array(Mixed)`, at ANY point in the body lowered so far.
+    /// Storage representation an already-lowered op has CONVERTED a local array to, for every
+    /// local converted at ANY point in the body lowered so far.
     ///
-    /// The record has to be sticky because the widening's only other trace — the local's current
-    /// type fact — is rolled back at every `if` arm split, and a widening arm that `continue`s or
-    /// `break`s contributes no edge to the arm join either. A loop that only widens on such a path
-    /// would then look, from its body-exit environment, as if it never widened at all, and its
-    /// preheader would skip the pre-widening the body was lowered against. Membership is only ever
-    /// used to pre-widen MORE arrays than strictly necessary, which is a pessimization (a Mixed
-    /// array is semantically identical), never a miscompile.
-    pub widened_indexed_arrays: HashSet<String>,
+    /// The record has to be sticky because the conversion's only other trace — the local's current
+    /// type fact — is rolled back at every `if` arm split, and a converting arm that `continue`s or
+    /// `break`s contributes no edge to the arm join either. A region that only converts on such a
+    /// path would then look, from its exit environment, as if it never converted at all, and its
+    /// entry would skip the canonicalization the region's body was already lowered against.
+    ///
+    /// The recorded value is the JOIN of every conversion of that local (`join_array_conversion`),
+    /// not the last one: a region whose arms convert the same local along DIFFERENT axes — one arm
+    /// to `Array(Mixed)`, another to a hash — must be entered with the array in the one
+    /// representation that satisfies both, or the arm lowered against the other axis writes through
+    /// the wrong storage.
+    array_conversions: HashMap<String, PhpType>,
+    /// `true` while a region is being lowered speculatively, only to discover which locals it
+    /// converts (`stmt::repr_fixpoint`).
+    ///
+    /// Nested regions do not run their own discovery while this is set: the discovery pass needs
+    /// nothing from them but the conversion records, which a plain lowering already leaves behind,
+    /// and re-entering the fixpoint per nesting level would make the lowering cost exponential in
+    /// nesting depth instead of linear.
+    speculating: bool,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
@@ -276,7 +289,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ref_bound_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
-            widened_indexed_arrays: HashSet::new(),
+            array_conversions: HashMap::new(),
+            speculating: false,
             return_type,
             return_php_type,
             by_ref_return: false,
@@ -325,7 +339,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ref_bound_locals,
             ref_cell_owner_locals,
             foreach_int_key_locals,
-            widened_indexed_arrays,
+            array_conversions,
+            speculating,
             return_type: _,
             return_php_type: _,
             by_ref_return: _,
@@ -353,7 +368,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ref_bound_locals: ref_bound_locals.clone(),
             ref_cell_owner_locals: ref_cell_owner_locals.clone(),
             foreach_int_key_locals: foreach_int_key_locals.clone(),
-            widened_indexed_arrays: widened_indexed_arrays.clone(),
+            array_conversions: array_conversions.clone(),
+            speculating: *speculating,
             closure_count: closures.len(),
             pending_static_callable_result: pending_static_callable_result.clone(),
             closure_counter: *closure_counter,
@@ -385,7 +401,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ref_bound_locals,
             ref_cell_owner_locals,
             foreach_int_key_locals,
-            widened_indexed_arrays,
+            array_conversions,
+            speculating,
             closure_count,
             pending_static_callable_result,
             closure_counter,
@@ -406,7 +423,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.ref_bound_locals = ref_bound_locals;
         self.ref_cell_owner_locals = ref_cell_owner_locals;
         self.foreach_int_key_locals = foreach_int_key_locals;
-        self.widened_indexed_arrays = widened_indexed_arrays;
+        self.array_conversions = array_conversions;
+        self.speculating = speculating;
         self.closures.truncate(closure_count);
         self.pending_static_callable_result = pending_static_callable_result;
         self.closure_counter = closure_counter;
@@ -564,13 +582,45 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if let Some(slot) = self.local_slots.get(name).copied() {
             self.builder.widen_local_storage_type(slot, ty.clone());
         }
-        // This is the single funnel every indexed-array element widening flows through, so it is
-        // the only place the fact can be recorded before the type env that carries it is rolled
-        // back at an `if` arm split (see `widened_indexed_arrays`).
-        if indexed_array_widens_to_mixed(self.local_types.get(name), &ty) {
-            self.widened_indexed_arrays.insert(name.to_string());
+        // This is the single funnel every array storage conversion flows through, so it is the only
+        // place the fact can be recorded before the type env that carries it is rolled back at an
+        // `if` arm split (see `array_conversions`).
+        if let Some(target) = array_storage_conversion(self.local_types.get(name), &ty) {
+            let joined = match self.array_conversions.get(name) {
+                Some(previous) => join_array_storage_conversion(previous, &target),
+                None => target,
+            };
+            self.array_conversions.insert(name.to_string(), joined);
         }
         self.local_types.insert(name.to_string(), ty);
+    }
+
+    /// Returns the representation a region has already converted `name`'s array storage to.
+    pub(crate) fn array_conversion(&self, name: &str) -> Option<&PhpType> {
+        self.array_conversions.get(name)
+    }
+
+    /// Drops the conversion records for `names`, so what a region records from here on is exactly
+    /// what THAT region converts.
+    ///
+    /// The records are function-scoped and nothing else removes from them, so a region entered
+    /// after an earlier one already converted the same local would otherwise re-read the earlier
+    /// region's record and hoist a conversion of its own that nothing in it performs. Called only
+    /// under a `snapshot`, whose `restore` puts the dropped records back.
+    pub(crate) fn forget_array_conversions(&mut self, names: &[String]) {
+        for name in names {
+            self.array_conversions.remove(name);
+        }
+    }
+
+    /// Returns true while a region is being lowered only to discover the conversions it performs.
+    pub(crate) fn is_speculating(&self) -> bool {
+        self.speculating
+    }
+
+    /// Marks the lowering as speculative; the caller must restore the previous value.
+    pub(crate) fn set_speculating(&mut self, speculating: bool) -> bool {
+        std::mem::replace(&mut self.speculating, speculating)
     }
 
     /// Updates only the flow-sensitive PHP type fact for a local.
@@ -669,6 +719,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// array conversions in `stmt` — must gate on this set rather than on the type fact alone.
     pub(crate) fn initialized_slots_snapshot(&self) -> HashSet<LocalSlotId> {
         self.initialized_slots.clone()
+    }
+
+    /// Returns true when `slot` is definitely initialized at the current program point.
+    ///
+    /// The borrowing accessor exists so the per-statement candidate scan in `stmt::repr_fixpoint`
+    /// does not have to clone the whole set once per statement just to test a handful of locals.
+    pub(crate) fn slot_is_initialized(&self, slot: LocalSlotId) -> bool {
+        self.initialized_slots.contains(&slot)
     }
 
     /// Replaces the definitely-initialized local set after branch lowering or merge analysis.
@@ -1816,23 +1874,6 @@ fn ref_cell_needs_mixed_array_conversion(cell_ty: &PhpType, value_ty: &PhpType) 
             .is_some_and(|elem| !matches!(elem, PhpType::Mixed | PhpType::Never))
 }
 
-/// Returns true when a local's type transition is an indexed array being widened to boxed-Mixed
-/// element slots — the transition `Op::ArrayToMixed` implements at runtime.
-///
-/// A local with no previous type fact is not a widening: there was no concrete element
-/// representation for the earlier code to have been compiled against.
-fn indexed_array_widens_to_mixed(previous: Option<&PhpType>, next: &PhpType) -> bool {
-    let Some(previous) = previous else {
-        return false;
-    };
-    let PhpType::Array(previous_elem) = previous.codegen_repr() else {
-        return false;
-    };
-    let PhpType::Array(next_elem) = next.codegen_repr() else {
-        return false;
-    };
-    previous_elem.codegen_repr() != PhpType::Mixed && next_elem.codegen_repr() == PhpType::Mixed
-}
 
 /// Returns the element type of an array-shaped PHP type (indexed or associative), if any.
 fn ref_cell_array_element_type(ty: &PhpType) -> Option<PhpType> {

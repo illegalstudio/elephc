@@ -2254,13 +2254,11 @@ e(0);
     assert_eq!(out.stdout, "1\ns\n");
 }
 
-/// KNOWN STILL BROKEN — `switch` has the same defect and the `if` arm-tail join does NOT fix it.
-/// Every case body is lowered against one shared, forward-leaking environment, and PHP fall-through
-/// gives each case TWO predecessors (its own `case` edge and the previous body's fall-through), so
-/// the reconciliation a `switch` needs is a join at each case HEAD, not one at a single merge.
-/// That is strictly bigger than the `if` fix and is deliberately left out of it.
+/// `switch` case bodies share ONE forward-leaking environment and PHP fall-through gives each case
+/// head two predecessors, so no exit-edge join can reconcile them. The statement-level fixed point
+/// does: the whole `switch` is one region, its conversion is hoisted to the statement's entry (which
+/// dominates and precedes every case), and the bodies are re-lowered against the converted array.
 #[test]
-#[ignore = "switch case bodies share one env and each case head has two predecessors; needs a per-case-head join"]
 fn test_switch_case_array_widening_does_not_leak_into_later_cases() {
     let out = compile_and_run_capture(
         r#"<?php
@@ -2280,12 +2278,71 @@ s(0);
     assert_eq!(out.stdout, "1\n0\n");
 }
 
-/// KNOWN STILL BROKEN — `try`/`catch` has the same defect and an exit-edge join cannot fix it. The
-/// handler is lowered against the try body's EXIT environment, but a handler is reachable from
-/// EVERY point inside the try, including from above the widening write. Making it correct requires
-/// pre-widening at the try's ENTRY (the same trick the loop preheader uses), not a tail join.
+/// A widening case that FALLS THROUGH into the next one: the fall-through case body was lowered
+/// against the boxed representation the previous body left in the environment, but on its own `case`
+/// edge the array was never converted, so `$m[1]` dereferenced a raw integer as a cell pointer and
+/// the program died with SIGSEGV on `p(2)`.
 #[test]
-#[ignore = "catch is lowered against the try body's exit env but is reachable from every point in the try; needs try-entry pre-widening"]
+fn test_switch_fallthrough_case_reads_array_at_one_representation() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function p(int $c): void {
+    $m = [$c, 20, 30];
+    switch ($c) {
+        case 1: $m[0] = "widened"; echo "case1 ", $m[1], "\n";
+        case 2: echo "case2 ", $m[1], "\n"; break;
+        default: echo "def ", $m[1], "\n";
+    }
+    echo "after ", $m[1], "\n";
+}
+p(1);
+p(2);
+p(9);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "case1 20\ncase2 20\nafter 20\ncase2 20\nafter 20\ndef 20\nafter 20\n"
+    );
+}
+
+/// The OTHER conversion axis, and the one that fails silently: a string-keyed write promotes the
+/// packed array to a HASH (`Op::ArrayToHash`). Every read lowered against the packed layout then
+/// looks up a hash table as if it were a vector — and a hash miss returns nothing instead of
+/// faulting, so the values simply VANISHED and the program still exited 0.
+///
+/// The region entry must therefore emit the conversion the region actually performs: hoisting
+/// `Op::ArrayToMixed` here would box the slots of an array the rest of the region reads as a hash.
+#[test]
+fn test_switch_case_string_key_promotion_does_not_lose_the_other_cases_values() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function a1(int $c): void {
+    $m = [$c, 20, 30];
+    switch ($c) {
+        case 1: $m["k"] = 5; echo "one\n"; break;
+        case 2: echo "two ", $m[1], "\n"; break;
+        default: echo "def ", $m[1], "\n";
+    }
+    echo "after ", $m[1], "\n";
+}
+a1(2);
+a1(1);
+a1(9);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "two 20\nafter 20\none\nafter 20\ndef 20\nafter 20\n"
+    );
+}
+
+/// `try`/`catch`: the handler is lowered against the try body's EXIT environment, but it is
+/// reachable from EVERY point inside the try — including from ABOVE the widening write — so no
+/// exit-edge join can fix it. Only converting at the statement's entry can.
+#[test]
 fn test_try_body_array_widening_does_not_leak_into_the_catch_handler() {
     let out = compile_and_run_capture(
         r#"<?php
@@ -2305,4 +2362,139 @@ t(0);
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "1\n1\n0\n");
+}
+
+/// A ternary — no loop, no `if`, no `switch`, no `match`. The then-arm's element write re-typed `$m`
+/// for everything lowered after it, but at runtime the conversion only ran when the condition was
+/// true, so `t(0)` read raw slots through boxed loads and produced NO OUTPUT AT ALL (exit 0).
+///
+/// The conversion cannot be hoisted to the ternary's own entry — a sibling operand of the enclosing
+/// expression would already hold the array pointer — so it is hoisted to the STATEMENT's entry,
+/// where nothing has been emitted yet.
+#[test]
+fn test_ternary_arm_array_widening_runs_on_every_path() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function t(int $c): void {
+    $m = [$c, 2, 3];
+    $x = ($c === 1) ? ($m[0] = "s") : "n";
+    echo $m[1], "|", $x, "\n";
+}
+t(0);
+t(1);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2|n\n2|s\n");
+}
+
+/// The same defect behind a short-circuit `&&`: the right operand is only evaluated when the left is
+/// true, so its element write is exactly as conditional as a ternary arm's — and it used to SIGSEGV.
+#[test]
+fn test_short_circuit_operand_array_widening_runs_on_every_path() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function u(int $c): void {
+    $m = [$c, 2, 3];
+    $b = ($c === 1) && (($m[0] = "s") === "s");
+    echo $m[1], "|", $b ? "y" : "n", "\n";
+}
+u(0);
+u(1);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2|n\n2|y\n");
+}
+
+/// A `match` arm is a conditionally-evaluated expression like a ternary arm, and fails the same way.
+#[test]
+fn test_match_arm_array_widening_runs_on_every_path() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function mm(int $c): void {
+    $m = [$c, 2, 3];
+    $r = match ($c) {
+        1 => $m[0] = "s",
+        default => "d",
+    };
+    echo $m[1], "|", $r, "\n";
+}
+mm(0);
+mm(1);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2|d\n2|s\n");
+}
+
+/// ANTI-REGRESSION for the fix itself, and the reason the region is the STATEMENT and not the
+/// construct. Argument 0 is emitted BEFORE `match` is lowered and holds the array pointer with no
+/// refcount protection, and `__rt_array_to_mixed` rewrites the slots IN PLACE at refcount 1 — so
+/// converting at the MATCH's entry would run the conversion on the `default` path (where it does not
+/// run today) and corrupt an argument that is already correct. `g(0)` is right before the fix and
+/// must stay right after it.
+///
+/// Hoisting to the statement's entry keeps it right because argument 0 is then RE-LOWERED against
+/// the converted array — and the checker follows the same conversion predicate, so the callee is
+/// specialized for `array<mixed>` instead of being handed boxed slots it would read as scalars.
+#[test]
+fn test_call_argument_beside_a_widening_match_arm_stays_correct() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function h(array $a, string $s): void { echo $a[0], "/", $a[1], "/", $s, "\n"; }
+function g(int $c): void {
+    $m = [$c, 2, 3];
+    h($m, match ($c) { 1 => $m[0] = "s", default => "d" });
+}
+g(0);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0/2/d\n");
+}
+
+/// A loop with a STRAIGHT-LINE body — no `if`, no inner branching — that reads the array ABOVE the
+/// widening write. The read (`echo $a[0]`) is compiled once, at loop entry, against `Array(Int)`;
+/// on iteration 2 the write has already re-boxed every slot, so without pre-widening in the
+/// preheader the read dereferences a boxed cell pointer as a raw integer. The compile-time gate that
+/// skips straight-line STATEMENTS must NOT skip a loop body, whose back edge is itself the hazard.
+#[test]
+fn test_loop_with_straight_line_widening_body_pre_widens_in_preheader() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function w(int $c): void {
+    $a = [$c, 2, 3];
+    $i = 0;
+    while ($i < 3) { echo $a[0], " "; $a[0] = "s"; $i++; }
+    echo "\n";
+    $b = [$c, 2, 3];
+    foreach ([0, 1, 2] as $k) { echo $b[0], " "; $b[0] = "t"; }
+    echo "\n";
+}
+w(1);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1 s s \n1 t t \n");
+}
+
+/// The array is created in the `for` INIT and widened by a STRAIGHT-LINE body. At the `for`
+/// statement's entry the local does not exist yet, so it cannot be pre-widened there; the conversion
+/// has to be hoisted into the preheader BELOW the init (`lower_for_body_at_type_fixpoint`). With the
+/// body straight-line, the region still needs the fixpoint because a loop body is a hiding context.
+#[test]
+fn test_for_init_created_array_with_straight_line_widening_body() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function f(int $c): void {
+    $i = 0;
+    for ($a = [$c, 2, 3]; $i < 3; $i++) { echo $a[0], " "; $a[0] = "s"; }
+    echo "\n";
+}
+f(1);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1 s s \n");
 }

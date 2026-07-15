@@ -38,6 +38,12 @@ impl Checker {
     ///   in the left branch from leaking into the right branch (PHP semantics).
     /// - Ternary, null coalesce, and match clone the environment per branch; the result type is
     ///   the wider of all branch types via `wider_type_syntactic`.
+    /// - A branch's ARRAY STORAGE conversions are merged back out of the clone
+    ///   (`merge_array_storage_effects`): the branch's other bindings are conditional and must not
+    ///   leak, but a conversion rewrites the array in place and the lowering hoists it to the
+    ///   statement's entry, so it happens on EVERY path. Dropping it here compiles the callee of
+    ///   `h($m, match ($c) { 1 => $m[0] = "s", default => "d" })` for `array<int>` while the caller
+    ///   hands it boxed slots.
     /// - `preg_replace_callback` argument at index 1 is skipped (special handling for capture groups).
     pub(crate) fn infer_type_with_assignment_effects(
         &mut self,
@@ -82,6 +88,7 @@ impl Checker {
                 if matches!(op, BinOp::And | BinOp::Or) {
                     let mut right_env = env.clone();
                     self.infer_type_with_assignment_effects(right, &mut right_env)?;
+                    merge_array_storage_effects(env, &right_env);
                     Ok(PhpType::Bool)
                 } else {
                     self.infer_type_with_assignment_effects(right, env)?;
@@ -94,7 +101,10 @@ impl Checker {
                     self.infer_type_with_assignment_effects(default, env)?
                 } else {
                     let mut default_env = env.clone();
-                    self.infer_type_with_assignment_effects(default, &mut default_env)?
+                    let default_ty =
+                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    merge_array_storage_effects(env, &default_env);
+                    default_ty
                 };
                 if Self::union_contains_void(&value_ty) {
                     Ok(wider_type_syntactic(
@@ -111,7 +121,10 @@ impl Checker {
                     self.infer_type_with_assignment_effects(default, env)?
                 } else {
                     let mut default_env = env.clone();
-                    self.infer_type_with_assignment_effects(default, &mut default_env)?
+                    let default_ty =
+                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    merge_array_storage_effects(env, &default_env);
+                    default_ty
                 };
                 Ok(wider_type_syntactic(&value_ty, &default_ty))
             }
@@ -123,8 +136,13 @@ impl Checker {
                 self.infer_type_with_assignment_effects(condition, env)?;
                 let mut then_env = env.clone();
                 let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
+                // Merged BEFORE the else arm is cloned, mirroring the lowering: it lowers the arms
+                // in source order against ONE local-type environment, so the else arm already sees
+                // the representation the then arm converted the array to.
+                merge_array_storage_effects(env, &then_env);
                 let mut else_env = env.clone();
                 let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                merge_array_storage_effects(env, &else_env);
                 Ok(wider_type_syntactic(&then_ty, &else_ty))
             }
             ExprKind::ArrayLiteral(elems) => {
@@ -153,6 +171,7 @@ impl Checker {
                         self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
                     }
                     let arm_ty = self.infer_type_with_assignment_effects(result, &mut arm_env)?;
+                    merge_array_storage_effects(env, &arm_env);
                     result_ty = Some(match result_ty {
                         Some(current) => wider_type_syntactic(&current, &arm_ty),
                         None => arm_ty,
@@ -162,6 +181,7 @@ impl Checker {
                     let mut default_env = env.clone();
                     let default_ty =
                         self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    merge_array_storage_effects(env, &default_env);
                     result_ty = Some(match result_ty {
                         Some(current) => wider_type_syntactic(&current, &default_ty),
                         None => default_ty,
@@ -322,6 +342,35 @@ impl Checker {
         self.first_class_callable_targets
             .get(var_name)
             .is_some_and(callable_target_is_preg_replace_callback)
+    }
+}
+
+/// Merges the array storage-representation conversions performed inside a conditionally-evaluated
+/// branch back into the environment the branch was cloned from.
+///
+/// Every OTHER binding a branch makes is conditional and correctly dropped with the clone. A storage
+/// conversion is not: `Op::ArrayToMixed` and `Op::ArrayToHash` rewrite the array the local already
+/// points at, and the lowering hoists both to the enclosing STATEMENT's entry — precisely so no op
+/// inside can execute against a representation another op replaced — so by the time the statement
+/// finishes, the conversion has run on every path through it, taken branch or not.
+///
+/// If the checker drops the fact, it keeps typing the local as a raw indexed array and specializes
+/// any callee it is passed to for raw scalar slots, while the lowering hands that callee boxed cell
+/// pointers. Only the conversions the lowering can actually perform are merged
+/// (`array_storage_conversion`), so the two views cannot drift apart in either direction.
+///
+/// A name bound only inside the branch (not present in `env`) stays branch-local: it is not a
+/// conversion of anything the outer scope can see.
+fn merge_array_storage_effects(env: &mut TypeEnv, branch_env: &TypeEnv) {
+    let converted = branch_env
+        .iter()
+        .filter_map(|(name, branch_ty)| {
+            let converted = crate::types::array_storage_conversion(env.get(name), branch_ty)?;
+            Some((name.clone(), converted))
+        })
+        .collect::<Vec<_>>();
+    for (name, converted) in converted {
+        env.insert(name, converted);
     }
 }
 

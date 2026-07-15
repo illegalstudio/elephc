@@ -31,12 +31,25 @@ use crate::span::Span;
 use crate::types::{PhpType, ThrowAccessKind, TypeEnv};
 
 mod nested_append;
+mod repr_fixpoint;
 
 /// Lowers one AST statement into the current EIR insertion block.
+///
+/// Every statement goes through the representation fixed point first: a statement that converts a
+/// local array's storage mid-lowering has to be entered with that array ALREADY converted, or the
+/// ops it lowered against the old representation misread the new one (`repr_fixpoint`).
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
+    repr_fixpoint::lower_stmt_at_type_fixpoint(ctx, stmt);
+}
+
+/// Lowers one AST statement exactly once, against the local types holding at entry.
+///
+/// Callable more than once on the same statement: `repr_fixpoint` lowers a statement speculatively,
+/// rolls the lowering back, and lowers it again.
+fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     lower_statement_concat_reset(ctx, stmt.span);
     match &stmt.kind {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
@@ -674,100 +687,6 @@ fn lower_ifdef(
     ctx.clear_static_callable_locals();
 }
 
-/// Maximum number of preheader pre-widening rounds before a loop is lowered for good.
-///
-/// The indexed-array element lattice a loop body can climb has height 2 — a concretely typed
-/// `Array(T)` widens to `Array(Mixed)` and stops — so one round normally reaches the fixed point
-/// and the second only confirms it. The cap exists so a lowering that somehow keeps discovering
-/// new widenings cannot spin: it commits the last lowering (exactly the code today's compiler
-/// emits) instead of looping forever.
-const MAX_LOOP_PREWIDEN_ROUNDS: usize = 2;
-
-/// Lowers a loop at a local-type FIXED POINT, so no instruction in the body is ever compiled
-/// against a runtime representation the back edge invalidates.
-///
-/// A loop body is lowered once, against the types that hold at loop ENTRY. But an element write
-/// whose value type does not fit the array's element type re-types the local to `Array(Mixed)` and
-/// emits `Op::ArrayToMixed`, which at runtime REPLACES every element slot with a boxed Mixed cell.
-/// Everything lowered ABOVE that write in the same body was already compiled against the old,
-/// unboxed representation — correct on iteration 1, reading cell pointers as raw scalars from
-/// iteration 2 on. (Straight-line code and `if` branches are safe: nothing re-executes the ops
-/// lowered before the widening point.)
-///
-/// So: lower the body speculatively to DISCOVER which locals it widens — the decision is a pure
-/// function of already-lowered value types, so it cannot be re-derived from the AST without
-/// duplicating (and eventually desynchronizing from) the lowering that makes it — then roll that
-/// lowering back completely, convert the discovered locals in the PREHEADER, and lower again
-/// against the widened entry environment. The pre-widened array also fixes the zero-trip case:
-/// code after the loop was already being compiled against `Array(Mixed)`, even on the path where
-/// the body never ran to convert it.
-///
-/// `lower_once` must be re-runnable: it is called up to `MAX_LOOP_PREWIDEN_ROUNDS + 1` times and
-/// every effect of a discarded call is undone by `LoweringContext::restore`.
-fn lower_loop_at_type_fixpoint(
-    ctx: &mut LoweringContext<'_, '_>,
-    span: Span,
-    lower_once: impl Fn(&mut LoweringContext<'_, '_>),
-) {
-    for _ in 0..MAX_LOOP_PREWIDEN_ROUNDS {
-        // Fast path: with no loop-carried, concretely-typed indexed array in scope there is
-        // nothing the body could widen, so skip the snapshot and the speculative lowering
-        // entirely. This is the overwhelmingly common case.
-        let candidates = prewidenable_indexed_array_locals(ctx);
-        if candidates.is_empty() {
-            break;
-        }
-        let snapshot = ctx.snapshot();
-        lower_once(ctx);
-        // Read the STICKY widening record, not the body's exit type environment, and read it
-        // BEFORE the rollback discards it. A body whose widening write sits in an `if` arm that
-        // `continue`s (or `break`s) leaves no trace in the exit environment: the arm is terminated,
-        // so it contributes no edge to the arm join and the arm split rolls its type fact back. The
-        // discovery would go blind on exactly that program, and the body — already lowered against
-        // the widened array — would run without the preheader conversion it assumes.
-        let widened = candidates
-            .into_iter()
-            .filter(|name| ctx.widened_indexed_arrays.contains(name))
-            .collect::<Vec<_>>();
-        if widened.is_empty() {
-            return;
-        }
-        ctx.restore(snapshot);
-        widen_indexed_arrays_to_mixed(ctx, &widened, span);
-    }
-    lower_once(ctx);
-}
-
-/// Returns the locals whose loop-entry type is a concretely-typed indexed array, in a
-/// deterministic order.
-///
-/// These are exactly the locals a body write can widen to `Array(Mixed)`; every other local is
-/// either already Mixed-element (nothing to convert) or not an indexed array at all. Locals bound
-/// by reference are excluded because the write path deliberately keeps their caller-visible
-/// element type (`ref_bound_mixed_indexed_array_write`), and locals that are not definitely
-/// initialized are excluded because pre-widening DEREFERENCES the slot in the preheader, which
-/// would fault on a path where the array was never assigned (`local_types` is not path-sensitive,
-/// so an `Array` fact can survive an `if` branch that did not run).
-fn prewidenable_indexed_array_locals(ctx: &LoweringContext<'_, '_>) -> Vec<String> {
-    let initialized = ctx.initialized_slots_snapshot();
-    let mut names = ctx
-        .local_types
-        .iter()
-        .filter(|(name, php_type)| {
-            local_slot_is_convertible(ctx, name, &initialized)
-                && matches!(
-                    php_type.codegen_repr(),
-                    PhpType::Array(elem) if elem.codegen_repr() != PhpType::Mixed
-                )
-        })
-        .map(|(name, _)| name.clone())
-        .collect::<Vec<_>>();
-    // `local_types` is a HashMap: sort so the pre-widening instructions are emitted in a stable
-    // order regardless of hash seed.
-    names.sort();
-    names
-}
-
 /// Returns true when a local's storage can be converted in place at a program point whose
 /// definitely-initialized set is `initialized`.
 ///
@@ -778,39 +697,39 @@ fn prewidenable_indexed_array_locals(ctx: &LoweringContext<'_, '_>) -> Vec<Strin
 /// `Array` fact can survive an `if` branch that did not run). A local backed by program-global
 /// storage is excluded because what a load of it yields is the boxed cell, not the array.
 ///
-/// The initialized set is passed in rather than read from the context because the two callers need
-/// it at different points: a loop preheader converts against the CURRENT set, while an `if` arm
-/// tail converts against the set that arm left behind.
+/// The initialized set is passed in rather than read from the context because an `if` arm tail
+/// converts against the set that arm left behind, not against the one holding now.
 fn local_slot_is_convertible(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
     initialized: &HashSet<LocalSlotId>,
 ) -> bool {
-    matches!(
-        ctx.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal),
-        LocalKind::PhpLocal | LocalKind::StaticLocal
-    ) && ctx
-        .local_slots
-        .get(name)
-        .is_some_and(|slot| initialized.contains(slot))
-        && !ctx.is_ref_bound_local(name)
-        && !ctx.local_uses_global_storage(name)
+    repr_fixpoint::local_slot_kind_is_convertible(ctx, name)
+        && ctx
+            .local_slots
+            .get(name)
+            .is_some_and(|slot| initialized.contains(slot))
+}
+
+/// Returns true when a local's storage can be converted in place at the CURRENT program point.
+fn local_slot_is_convertible_here(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    repr_fixpoint::local_slot_kind_is_convertible(ctx, name)
+        && ctx
+            .local_slots
+            .get(name)
+            .is_some_and(|slot| ctx.slot_is_initialized(*slot))
 }
 
 /// Converts indexed arrays to boxed-Mixed slots at the current insertion point.
 ///
 /// This is the same conversion `finish_indexed_array_local_write` performs when an element write
 /// widens an array (`Op::ArrayToMixed` + storeback), emitted where control flow needs it instead of
-/// where the write happens. It has two callers, and both need it for the same reason — an op must
-/// never execute against a representation different from the one it was compiled for:
+/// where the write happens: on an `if` ARM TAIL, so every edge into the merge agrees with the single
+/// element type the merge records for the local. (The other placement — a region ENTRY, which must
+/// also pick between the two conversion axes — is `repr_fixpoint::canonicalize_array_locals`.)
 ///
-/// - a LOOP PREHEADER, so the body (already lowered against the widened array) is entered with the
-///   array actually boxed, on iteration 1 and on the zero-trip path alike;
-/// - an `if` ARM TAIL, so every edge into the merge agrees with the single element type the merge
-///   records for the local.
-///
-/// `__rt_array_to_mixed` re-stamps an already-Mixed array without re-boxing its slots, so a
-/// preheader nested inside an outer loop stays correct on every outer iteration.
+/// `__rt_array_to_mixed` re-stamps an already-Mixed array without re-boxing its slots, so converting
+/// on an arm inside a loop stays correct on every iteration.
 fn widen_indexed_arrays_to_mixed(ctx: &mut LoweringContext<'_, '_>, names: &[String], span: Span) {
     let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
     for name in names {
@@ -828,8 +747,15 @@ fn widen_indexed_arrays_to_mixed(ctx: &mut LoweringContext<'_, '_>, names: &[Str
 }
 
 /// Lowers a `while` loop.
-fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt], span: Span) {
-    lower_loop_at_type_fixpoint(ctx, span, |ctx| lower_while_once(ctx, condition, body));
+///
+/// A loop is the region for which the whole fixed point exists — its back edge re-executes ops
+/// lowered ABOVE a conversion — but it needs no machinery of its own: the loop IS a statement, and
+/// `repr_fixpoint` has already entered it with every array the body converts converted, so the body
+/// below is lowered against a representation nothing in it can invalidate. The conversion lands in
+/// the preheader, which both dominates and precedes the header, and that also fixes the zero-trip
+/// path: code after the loop is compiled against the converted array even when the body never ran.
+fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt], _span: Span) {
+    lower_while_once(ctx, condition, body);
 }
 
 /// Emits the blocks and body of a `while` loop exactly once.
@@ -864,9 +790,9 @@ fn lower_while_once(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &
     ctx.clear_static_callable_locals();
 }
 
-/// Lowers a `do while` loop.
-fn lower_do_while(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], condition: &Expr, span: Span) {
-    lower_loop_at_type_fixpoint(ctx, span, |ctx| lower_do_while_once(ctx, body, condition));
+/// Lowers a `do while` loop. See `lower_while` for why the back edge needs no fixed point here.
+fn lower_do_while(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], condition: &Expr, _span: Span) {
+    lower_do_while_once(ctx, body, condition);
 }
 
 /// Emits the blocks and body of a `do while` loop exactly once.
@@ -903,10 +829,10 @@ fn lower_do_while_once(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], conditi
 
 /// Lowers a `for` loop.
 ///
-/// The init statement is lowered BEFORE the fixed-point driver, so it is not part of the
-/// speculative region: `for ($a = [1, 2]; ...)` would otherwise re-establish `$a`'s concrete
-/// element type on every round and the pre-widening could never converge. Lowered here, it simply
-/// becomes part of the preheader the pre-widening is appended to.
+/// The loop takes a fixed-point region of its OWN, below the init: an array the init creates
+/// (`for ($a = [1, 2]; ...)`) does not exist at the `for` statement's entry, so the statement-level
+/// fixed point cannot hoist the conversion the body performs on it. Below the init it is an
+/// ordinary loop-carried array again.
 fn lower_for(
     ctx: &mut LoweringContext<'_, '_>,
     init: Option<&Stmt>,
@@ -921,7 +847,9 @@ fn lower_for(
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
-    lower_loop_at_type_fixpoint(ctx, span, |ctx| lower_for_once(ctx, condition, update, body));
+    repr_fixpoint::lower_for_body_at_type_fixpoint(ctx, span, condition, update, body, |ctx| {
+        lower_for_once(ctx, condition, update, body);
+    });
 }
 
 /// Emits the blocks, body and update of a `for` loop exactly once.
@@ -1467,6 +1395,10 @@ fn coerce_typed_assign_value(
 }
 
 /// Lowers a `foreach` loop using high-level iterator opcodes.
+///
+/// See `lower_while`: the statement-level fixed point has already converted every array the body
+/// converts, so the source expression below sees the converted element type and `Op::IterStart` is
+/// emitted for the representation the body was lowered against.
 fn lower_foreach(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
@@ -1474,17 +1406,12 @@ fn lower_foreach(
     value_var: &str,
     value_by_ref: bool,
     body: &[Stmt],
-    span: Span,
+    _span: Span,
 ) {
-    lower_loop_at_type_fixpoint(ctx, span, |ctx| {
-        lower_foreach_once(ctx, array, key_var, value_var, value_by_ref, body)
-    });
+    lower_foreach_once(ctx, array, key_var, value_var, value_by_ref, body);
 }
 
 /// Emits the iterator, blocks and body of a `foreach` loop exactly once.
-///
-/// The source expression is lowered inside the speculative region on purpose: when the iterated
-/// array is itself pre-widened, `Op::IterStart` must see the widened element type.
 fn lower_foreach_once(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
