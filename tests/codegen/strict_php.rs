@@ -201,3 +201,116 @@ fn test_strict_php_composes_with_check_mode() {
         "unexpected stderr: {stderr}",
     );
 }
+
+/// Compiles `source` with `--strict-php`, runs the binary expecting a runtime
+/// failure, and returns its combined stdout+stderr for message assertions.
+fn compile_strict_cli_and_run_expect_failure(source: &str) -> String {
+    let dir = make_cli_test_dir("elephc_cli_strict_rt");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).unwrap();
+
+    let compile_out = elephc_cli_command(&dir)
+        .arg("--strict-php")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI");
+    assert!(
+        compile_out.status.success(),
+        "elephc --strict-php failed: {}",
+        String::from_utf8_lossy(&compile_out.stderr)
+    );
+
+    let bin_path = dir.join("main");
+    let output = run_binary(&bin_path, &dir);
+    assert!(
+        !output.status.success(),
+        "expected the strict binary to fail at runtime"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+/// Verifies dynamic (runtime-string) eval hides extension builtins under
+/// strict mode: the call behaves like any unknown function in eval'd code.
+#[test]
+fn test_strict_php_dynamic_eval_hides_extension_builtins() {
+    let out = compile_strict_cli_and_run_expect_failure(
+        r#"<?php
+$code = '$b = buffer_new(' . $argc . '); return buffer_len($b);';
+echo eval($code);
+"#,
+    );
+    assert!(
+        out.contains("eval() fragment uses an unsupported construct"),
+        "unexpected output: {out}",
+    );
+}
+
+/// Verifies a literal eval fragment calling an extension builtin fails the
+/// same way under strict mode instead of dispatching through the bridge.
+#[test]
+fn test_strict_php_literal_eval_hides_extension_builtins() {
+    let out = compile_strict_cli_and_run_expect_failure(
+        r#"<?php
+echo eval('$b = buffer_new(4); return buffer_len($b);');
+"#,
+    );
+    assert!(
+        out.contains("eval() fragment uses an unsupported construct"),
+        "unexpected output: {out}",
+    );
+}
+
+/// Verifies introspection inside dynamic eval agrees with the AOT surface
+/// under strict mode: extension builtins report as missing, PHP builtins stay.
+#[test]
+fn test_strict_php_eval_introspection_matches_aot_surface() {
+    let out = compile_strict_cli_and_run(
+        r#"<?php
+$code = '$n = ' . $argc . ';
+$r = function_exists("buffer_new") ? "bufnew-yes" : "bufnew-no";
+$r .= function_exists("strlen") ? "+strlen" : "-strlen";
+$r .= is_callable("ptr_get") ? "+ptrcallable" : "-ptrcallable";
+return $r . ":" . $n;';
+echo eval($code);
+"#,
+    );
+    assert_eq!(out, "bufnew-no+strlen-ptrcallable:1");
+}
+
+/// Verifies the same probes keep reporting the extension builtins without the
+/// flag, so the eval gating is strictly opt-in.
+#[test]
+fn test_default_mode_eval_introspection_keeps_extensions() {
+    let out = compile_cli_file_and_run(
+        r#"<?php
+$code = '$n = ' . $argc . ';
+$r = function_exists("buffer_new") ? "bufnew-yes" : "bufnew-no";
+$r .= is_callable("ptr_get") ? "+ptrcallable" : "-ptrcallable";
+return $r . ":" . $n;';
+echo eval($code);
+"#,
+        &[],
+    );
+    assert_eq!(out, "bufnew-yes+ptrcallable:1");
+}
+
+/// Verifies a user function shadowing an extension builtin name stays callable
+/// from dynamic eval under strict mode: magician hides the builtin and falls
+/// through to the AOT native-function table, matching the PHP interpreter.
+#[test]
+fn test_strict_php_eval_calls_user_shadowed_extension_name() {
+    let out = compile_strict_cli_and_run(
+        r#"<?php
+function ptr_get(int $x): int { return $x + 1; }
+$code = 'return ptr_get(' . (40 + $argc) . ');';
+echo eval($code);
+"#,
+    );
+    assert_eq!(out, "42");
+}
