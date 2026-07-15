@@ -34,6 +34,30 @@ pub fn php_visible_builtin_names() -> &'static [&'static str] {
     })
 }
 
+/// Returns the compiler's PHP-visible extension builtin names (elephc-only
+/// builtins hidden by `--strict-php`), in stable sorted order. Reads the
+/// registry's `extension` flags directly — never the strict-filtered catalog —
+/// so the snapshot is independent of the thread's strict-mode state. Includes
+/// the catalog-name-only `buffer_new` entry.
+pub fn extension_builtin_names() -> &'static [&'static str] {
+    static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    NAMES
+        .get_or_init(|| {
+            let mut names: Vec<&'static str> = vec!["buffer_new"];
+            for name in crate::builtins::registry::names() {
+                let Some(def) = crate::builtins::registry::lookup(name) else {
+                    continue;
+                };
+                if def.spec.extension && !def.spec.internal {
+                    names.push(def.name);
+                }
+            }
+            names.sort_unstable();
+            names
+        })
+        .as_slice()
+}
+
 /// Returns comparison metadata for one builtin signature, when the compiler tracks it.
 pub fn builtin_signature_metadata(name: &str) -> Option<BuiltinSignatureMetadata> {
     let canonical = crate::names::php_symbol_key(name.trim_start_matches('\\'));

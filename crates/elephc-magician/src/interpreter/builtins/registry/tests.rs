@@ -16,5 +16,6 @@ mod metadata_misc;
 mod metadata_regex;
 mod metadata_streams;
 mod metadata_time_and_env;
+mod strict_mode;
 
 use super::*;
