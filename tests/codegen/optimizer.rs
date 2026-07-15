@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for constant folding, constant propagation, dead-code elimination, EIR identity arithmetic folding, EIR peephole patterns, EIR dead instruction elimination, EIR dead store elimination, EIR branch simplification, EIR constant folding, EIR common-subexpression elimination, EIR loop-invariant code motion, and memory-model-aware propagation hazards.
+//! - Submodules group focused fixtures for constant folding, constant propagation, dead-code elimination, EIR identity arithmetic folding, EIR peephole patterns, EIR dead instruction elimination, EIR dead store elimination, EIR branch simplification, EIR constant folding, EIR common-subexpression elimination, EIR loop-invariant code motion, ownership cleanup, and memory-model-aware propagation hazards.
 
 use crate::support::*;
 
@@ -31,6 +31,8 @@ mod eir_licm;
 mod identity_arithmetic;
 #[path = "optimizer/peephole.rs"]
 mod peephole;
+#[path = "optimizer/property_receiver_ownership.rs"]
+mod property_receiver_ownership;
 #[path = "optimizer/release_local_slot.rs"]
 mod release_local_slot;
 #[path = "optimizer/inline.rs"]
