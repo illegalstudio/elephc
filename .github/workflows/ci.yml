@@ -93,39 +93,31 @@ jobs:
     name: Build & Archive Tests (linux-x86_64)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # Every Linux job runs inside the prebuilt CI image (multi-arch, built by
+    # ci-image.yml from .github/docker/ci.Dockerfile): the native deps, the
+    # pinned Rust toolchain, and cargo-nextest are baked in, replacing the
+    # per-job apt-get/rustup/nextest install steps that cost ~150s per job on
+    # the arm runners.
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust build state
         uses: actions/cache@v4
         with:
+          # The toolchain lives at /usr/local/cargo (CARGO_HOME) inside the CI
+          # image, not under $HOME.
           path: |
-            ~/.cargo/git
-            ~/.cargo/registry
+            /usr/local/cargo/git
+            /usr/local/cargo/registry
             target
-          key: rust-linux-x86_64-${{ hashFiles('Cargo.lock') }}
+          key: rust-container-linux-x86_64-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            rust-linux-x86_64-
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install native test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            binutils \
-            build-essential \
-            file \
-            libbz2-dev \
-            libpcre2-dev \
-            libssl-dev \
-            pkg-config \
-            tzdata \
-            zlib1g-dev
+            rust-container-linux-x86_64-
 
       - name: Check (no warnings)
         shell: bash
@@ -165,39 +157,26 @@ jobs:
     name: Build & Archive Tests (linux-aarch64)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust build state
         uses: actions/cache@v4
         with:
+          # The toolchain lives at /usr/local/cargo (CARGO_HOME) inside the CI
+          # image, not under $HOME.
           path: |
-            ~/.cargo/git
-            ~/.cargo/registry
+            /usr/local/cargo/git
+            /usr/local/cargo/registry
             target
-          key: rust-linux-aarch64-${{ hashFiles('Cargo.lock') }}
+          key: rust-container-linux-aarch64-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            rust-linux-aarch64-
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install native test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            binutils \
-            build-essential \
-            file \
-            libbz2-dev \
-            libpcre2-dev \
-            libssl-dev \
-            pkg-config \
-            tzdata \
-            zlib1g-dev
+            rust-container-linux-aarch64-
 
       - name: Check (no warnings)
         shell: bash
@@ -267,25 +246,13 @@ jobs:
     needs: build-archive-linux-x86_64
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install native test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            binutils \
-            build-essential \
-            file \
-            libbz2-dev \
-            libpcre2-dev \
-            libssl-dev \
-            pkg-config \
-            tzdata \
-            zlib1g-dev
 
       - name: Download test archive
         uses: actions/download-artifact@v4
@@ -307,25 +274,13 @@ jobs:
     needs: build-archive-linux-aarch64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install native test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            binutils \
-            build-essential \
-            file \
-            libbz2-dev \
-            libpcre2-dev \
-            libssl-dev \
-            pkg-config \
-            tzdata \
-            zlib1g-dev
 
       - name: Download test archive
         uses: actions/download-artifact@v4
@@ -384,29 +339,17 @@ jobs:
     needs: build-archive-linux-x86_64
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install native test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            binutils \
-            build-essential \
-            file \
-            libbz2-dev \
-            libpcre2-dev \
-            libssl-dev \
-            pkg-config \
-            tzdata \
-            zlib1g-dev
 
       - name: Download test archive
         uses: actions/download-artifact@v4
@@ -432,29 +375,17 @@ jobs:
     needs: build-archive-linux-aarch64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install native test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            binutils \
-            build-essential \
-            file \
-            libbz2-dev \
-            libpcre2-dev \
-            libssl-dev \
-            pkg-config \
-            tzdata \
-            zlib1g-dev
 
       - name: Download test archive
         uses: actions/download-artifact@v4
@@ -520,29 +451,17 @@ jobs:
     needs: build-archive-linux-x86_64
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install native test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            binutils \
-            build-essential \
-            file \
-            libbz2-dev \
-            libpcre2-dev \
-            libssl-dev \
-            pkg-config \
-            tzdata \
-            zlib1g-dev
 
       - name: Download test archive
         uses: actions/download-artifact@v4
@@ -568,29 +487,17 @@ jobs:
     needs: build-archive-linux-aarch64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install native test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            binutils \
-            build-essential \
-            file \
-            libbz2-dev \
-            libpcre2-dev \
-            libssl-dev \
-            pkg-config \
-            tzdata \
-            zlib1g-dev
 
       - name: Download test archive
         uses: actions/download-artifact@v4
