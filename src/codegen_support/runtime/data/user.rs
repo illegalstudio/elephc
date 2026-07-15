@@ -850,8 +850,8 @@ pub(crate) fn emit_runtime_data_user(
                         PhpType::TaggedScalar => {
                             unreachable!("nullable scalar properties use the boxed Mixed representation")
                         }
-                        PhpType::Callable
-                        | PhpType::Pointer(_)
+                        PhpType::Callable => 10,
+                        PhpType::Pointer(_)
                         | PhpType::Buffer(_)
                         | PhpType::Packed(_)
                         | PhpType::Never
@@ -2349,7 +2349,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use crate::parser::ast::Visibility;
-    use crate::types::ClassInfo;
+    use crate::types::{ClassInfo, PhpType};
 
     use super::emit_runtime_data_user;
 
@@ -2495,5 +2495,40 @@ mod tests {
         assert!(asm.contains("_class_parent_ids:\n    .quad -1\n    .quad -1\n    .quad -1\n    .quad -1\n"));
         assert!(asm.contains("_class_vtable_ptrs:\n    .quad _class_vtable_missing\n    .quad _class_vtable_1\n    .quad _class_vtable_2\n    .quad _class_vtable_3\n"));
         assert!(asm.contains("_class_static_vtable_ptrs:\n    .quad _class_static_vtable_missing\n    .quad _class_static_vtable_1\n    .quad _class_static_vtable_2\n    .quad _class_static_vtable_3\n"));
+    }
+
+    /// Verifies that callable properties carry the descriptor tag required for
+    /// capture-aware release during object destruction.
+    #[test]
+    fn test_emit_runtime_data_user_tags_callable_properties_for_gc() {
+        let mut class_info = empty_class_info(1, "run");
+        class_info
+            .properties
+            .push(("callback".to_string(), PhpType::Callable));
+        class_info
+            .property_offsets
+            .insert("callback".to_string(), 8);
+
+        let mut classes = HashMap::new();
+        classes.insert("CallableOwner".to_string(), class_info);
+
+        let asm = emit_runtime_data_user(
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &classes,
+            &HashMap::new(),
+            None,
+            false,
+            None,
+        );
+
+        assert!(asm.contains("_class_gc_desc_1:\n    .byte 10\n"));
     }
 }
