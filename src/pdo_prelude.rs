@@ -251,6 +251,28 @@ function pdo_drivers(): array {
     return ["mysql", "pgsql", "sqlite"];
 }
 
+// Maps a SQLSTATE to the human-readable class description PDO interpolates into a
+// driver-error message — e.g. "General error" for HY000, so a failed sqlite query
+// reads "SQLSTATE[HY000]: General error: 1 no such table: t" exactly like php-src.
+// Mirrors php-src `pdo_sqlstate_state_to_description` (ext/pdo/pdo_sqlstate.c) for
+// every state the sqlite/pgsql/mysql bridges emit; an unknown state degrades to
+// php-src's own "<<Unknown error>>" fallback rather than an empty string.
+function __elephc_pdo_sqlstate_description(string $state): string {
+    if ($state === "HY000") { return "General error"; }
+    if ($state === "23000") { return "Integrity constraint violation"; }
+    if ($state === "42S02") { return "Base table or view not found"; }
+    if ($state === "42S22") { return "Column not found"; }
+    if ($state === "42000") { return "Syntax error or access violation"; }
+    if ($state === "22001") { return "String data, right truncated"; }
+    if ($state === "01002") { return "Disconnect error"; }
+    if ($state === "08006") { return "Connection failure"; }
+    if ($state === "HY093") { return "Invalid parameter number"; }
+    if ($state === "HYC00") { return "Optional feature not implemented"; }
+    if ($state === "IM001") { return "Driver does not support this function"; }
+    if ($state === "00000") { return ""; }
+    return "<<Unknown error>>";
+}
+
 class PDOException extends RuntimeException {
     // PHP surfaces the [SQLSTATE, driver-specific code, message] triple here;
     // frameworks (Doctrine, Laravel) read $e->errorInfo[0] for the SQLSTATE. Typed
@@ -856,11 +878,15 @@ class PDO {
             return;
         }
         $_sqlstate = elephc_pdo_sqlstate($this->conn);
+        $_native = elephc_pdo_errcode($this->conn);
+        // php-src pdo_handle_error builds "SQLSTATE[%s]: %s: %d %s" (state,
+        // description, native code, driver message); errorInfo keeps the raw
+        // [state, native, message] triple frameworks read via $e->errorInfo.
+        $_full = "SQLSTATE[" . $_sqlstate . "]: " . __elephc_pdo_sqlstate_description($_sqlstate) . ": " . $_native . " " . $message;
         if ($this->errMode == 2) {
-            $_native = elephc_pdo_errcode($this->conn);
-            throw new PDOException("SQLSTATE[" . $_sqlstate . "]: " . $message, [$_sqlstate, $_native, $message]);
+            throw new PDOException($_full, [$_sqlstate, $_native, $message]);
         }
-        fwrite(STDERR, "PDO error: SQLSTATE[" . $_sqlstate . "]: " . $message . "\n");
+        fwrite(STDERR, "PDO error: " . $_full . "\n");
     }
 
     // F-CORE-04/F-CORE-05: a SYNTHETIC (non-driver) connection-level error, mirroring
@@ -1819,11 +1845,15 @@ class PDOStatement implements Iterator {
             return;
         }
         $_sqlstate = elephc_pdo_stmt_sqlstate($this->stmt);
+        $_native = elephc_pdo_stmt_errcode($this->stmt);
+        // php-src pdo_handle_error builds "SQLSTATE[%s]: %s: %d %s" (state,
+        // description, native code, driver message); errorInfo keeps the raw
+        // [state, native, message] triple frameworks read via $e->errorInfo.
+        $_full = "SQLSTATE[" . $_sqlstate . "]: " . __elephc_pdo_sqlstate_description($_sqlstate) . ": " . $_native . " " . $message;
         if ($this->errMode == 2) {
-            $_native = elephc_pdo_stmt_errcode($this->stmt);
-            throw new PDOException("SQLSTATE[" . $_sqlstate . "]: " . $message, [$_sqlstate, $_native, $message]);
+            throw new PDOException($_full, [$_sqlstate, $_native, $message]);
         }
-        fwrite(STDERR, "PDO error: SQLSTATE[" . $_sqlstate . "]: " . $message . "\n");
+        fwrite(STDERR, "PDO error: " . $_full . "\n");
     }
 
     // A synthetic (non-driver) statement-level error, e.g. IM001 "driver doesn't

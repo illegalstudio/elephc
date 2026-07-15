@@ -3807,6 +3807,32 @@ try {
     assert_eq!(out, "prefixed,HY000,null,has-message");
 }
 
+/// A driver error's `getMessage()` carries the php-src "SQLSTATE[%s]: %s: %d %s"
+/// shape — the SQLSTATE class DESCRIPTION ("General error", "Integrity constraint
+/// violation") and the native driver code, not just the raw driver message.
+/// Verified byte-for-byte against a real PHP 8.4 CLI + pdo_sqlite. errorInfo keeps
+/// the raw [state, native, message] triple, unchanged.
+#[test]
+fn test_pdo_driver_error_message_has_description_and_native_code() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+$db->exec("CREATE TABLE t (id INT PRIMARY KEY)");
+$db->exec("INSERT INTO t VALUES (1)");
+try { $db->query("SELECT * FROM nope"); } catch (PDOException $e) { echo $e->getMessage(), "\n"; }
+try { $db->exec("INSERT INTO t VALUES (1)"); }
+catch (PDOException $e) { echo $e->getMessage(), "|", $e->errorInfo[0], "|", $e->errorInfo[1], "|", $e->errorInfo[2]; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "SQLSTATE[HY000]: General error: 1 no such table: nope\n\
+         SQLSTATE[23000]: Integrity constraint violation: 19 UNIQUE constraint failed: t.id\
+         |23000|19|UNIQUE constraint failed: t.id"
+    );
+}
+
 /// P1-4 (unrecognized-driver case, kept distinct from a known-driver connect
 /// failure): `new PDO("bogus:...")` still throws PHP's bare "could not find
 /// driver" shape — no `SQLSTATE[...]` prefix — because no driver ever attempted
