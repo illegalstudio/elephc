@@ -128,7 +128,9 @@ generation, so unused branches are never compiled.
 
 ### `--define` / `--define=`
 
-Defines a compile-time symbol. Repeatable.
+Defines a compile-time symbol. Repeatable. Cannot be combined with
+[`--strict-php`](cli-reference.md#strict-php-mode), which rejects the `ifdef`
+extension outright.
 
 ```bash
 elephc --define DEBUG app.php
