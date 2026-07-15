@@ -21,8 +21,11 @@ ARG NEXTEST_VERSION=0.9.140
 
 # The apt list mirrors what the CI jobs previously installed per job, plus:
 # ca-certificates/curl (rustup and nextest downloads below), git (without it
-# actions/checkout inside a container falls back to a tarball download), and
-# zstd (lets actions/cache use zstd instead of the slower gzip fallback).
+# actions/checkout inside a container falls back to a tarball download), zstd
+# (lets actions/cache use zstd instead of the slower gzip fallback), and
+# netbase (/etc/protocols + /etc/services — present on the runner VMs but not
+# in the ubuntu base image; the compiled runtime and the magician interpreter
+# read them for getprotobyname()/getservbyname() and friends).
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         binutils \
         build-essential \
@@ -33,6 +36,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         libbz2-dev \
         libpcre2-dev \
         libssl-dev \
+        netbase \
         pkg-config \
         tzdata \
         zlib1g-dev \
