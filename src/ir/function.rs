@@ -177,6 +177,8 @@ pub enum LocalKind {
     StaticLocal,
     RefCell,
     HiddenTemp,
+    /// Non-owning slot introduced by an EIR transform, excluded from epilogue cleanup.
+    BorrowedTemp,
     OwnedTemp,
     TryHandler,
     ClosureCapture,
