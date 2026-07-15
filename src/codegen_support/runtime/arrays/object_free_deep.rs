@@ -215,6 +215,8 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // objects always release through the uniform helper
     emitter.instruction("cmp x15, #7");                                         // is this a compile-time mixed property?
     emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // mixed payloads may or may not be heap-backed, but decref_any handles both safely
+    emitter.instruction("cmp x15, #10");                                        // is this a compile-time callable descriptor property?
+    emitter.instruction("b.eq __rt_object_free_deep_release_callable");         // callable descriptors require capture-aware release
     emitter.instruction("b __rt_object_free_deep_next");                        // scalars and nulls need no cleanup
 
     emitter.label("__rt_object_free_deep_release_runtime");
@@ -222,6 +224,13 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("str x12, [sp, #24]");                                  // preserve the property index across the helper call
     emitter.instruction("bl __rt_decref_any");                                  // release the heap-backed property payload if needed
     emitter.instruction("ldr x12, [sp, #24]");                                  // restore the property index after the helper call
+    emitter.instruction("b __rt_object_free_deep_next");                        // callable descriptors use a separate release helper
+
+    emitter.label("__rt_object_free_deep_release_callable");
+    emitter.instruction("mov x0, x14");                                         // pass the stored callable descriptor to its capture-aware release helper
+    emitter.instruction("str x12, [sp, #24]");                                  // preserve the property index across descriptor cleanup
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // release the callable descriptor owned by this property
+    emitter.instruction("ldr x12, [sp, #24]");                                  // restore the property index after descriptor cleanup
 
     emitter.label("__rt_object_free_deep_next");
     emitter.instruction("add x12, x12, #1");                                    // advance to the next property slot
@@ -428,10 +437,16 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_object_free_deep_release_runtime");            // objects release through the uniform x86_64 decref_any helper
     emitter.instruction("cmp r8, 7");                                           // does the property hold a boxed mixed pointer?
     emitter.instruction("je __rt_object_free_deep_release_runtime");            // mixed cells release through the uniform x86_64 decref_any helper
+    emitter.instruction("cmp r8, 10");                                          // does the property hold a callable descriptor pointer?
+    emitter.instruction("je __rt_object_free_deep_release_callable");           // callable descriptors require capture-aware release on x86_64
     emitter.instruction("jmp __rt_object_free_deep_next");                      // scalar, float, and null property slots need no heap cleanup
 
     emitter.label("__rt_object_free_deep_release_runtime");
     emitter.instruction("call __rt_decref_any");                                // release the heap-backed property payload if the current property slot owns one
+    emitter.instruction("jmp __rt_object_free_deep_next");                      // callable descriptors use a separate release helper
+
+    emitter.label("__rt_object_free_deep_release_callable");
+    emitter.instruction("call __rt_callable_descriptor_release");               // release the callable descriptor owned by the current property
 
     emitter.label("__rt_object_free_deep_next");
     emitter.instruction("add QWORD PTR [rbp - 32], 1");                         // advance the property index to the next slot in the object layout
@@ -595,4 +610,38 @@ fn emit_generator_coroutine_release_x86_64(emitter: &mut Emitter) {
     emit_generator_mixed_field_release_x86_64(emitter, coro::GEN_LAST_KEY_OFFSET as usize, "last_key");
     emit_generator_mixed_field_release_x86_64(emitter, coro::GEN_LAST_VALUE_OFFSET as usize, "last_value");
     emit_generator_mixed_field_release_x86_64(emitter, coro::GEN_RETURN_VALUE_OFFSET as usize, "return_value");
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies that ARM64 object destruction dispatches callable properties to
+    /// the descriptor-aware release helper instead of the generic heap decref.
+    #[test]
+    fn test_object_free_deep_releases_callable_properties_aarch64() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_object_free_deep(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("cmp x15, #10\n"));
+        assert!(asm.contains("__rt_object_free_deep_release_callable:\n"));
+        assert!(asm.contains("bl __rt_callable_descriptor_release\n"));
+    }
+
+    /// Verifies that x86_64 object destruction dispatches callable properties
+    /// to the descriptor-aware release helper instead of the generic heap decref.
+    #[test]
+    fn test_object_free_deep_releases_callable_properties_x86_64() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_object_free_deep(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("cmp r8, 10\n"));
+        assert!(asm.contains("__rt_object_free_deep_release_callable:\n"));
+        assert!(asm.contains("call __rt_callable_descriptor_release\n"));
+    }
 }

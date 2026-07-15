@@ -9984,43 +9984,19 @@ fn lower_new_object(
     if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionclass" {
         if let Some(operands) = lower_reflection_class_constructor_operands(ctx, args) {
             let php_type = PhpType::Object(class_name.as_str().to_string());
-            let data = ctx.intern_class_name(class_name.as_str());
-            return ctx.emit_value(
-                Op::ObjectNew,
-                operands,
-                Some(Immediate::Data(data)),
-                php_type,
-                Op::ObjectNew.default_effects(),
-                Some(expr.span),
-            );
+            return emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
         }
     }
     if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionparameter" {
         if let Some(operands) = lower_reflection_parameter_constructor_operands(ctx, args) {
             let php_type = PhpType::Object(class_name.as_str().to_string());
-            let data = ctx.intern_class_name(class_name.as_str());
-            return ctx.emit_value(
-                Op::ObjectNew,
-                operands,
-                Some(Immediate::Data(data)),
-                php_type,
-                Op::ObjectNew.default_effects(),
-                Some(expr.span),
-            );
+            return emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
         }
     }
     if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionmethod" {
         if let Some(operands) = lower_reflection_method_constructor_operands(ctx, args) {
             let php_type = PhpType::Object(class_name.as_str().to_string());
-            let data = ctx.intern_class_name(class_name.as_str());
-            return ctx.emit_value(
-                Op::ObjectNew,
-                operands,
-                Some(Immediate::Data(data)),
-                php_type,
-                Op::ObjectNew.default_effects(),
-                Some(expr.span),
-            );
+            return emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
         }
     }
     if ctx.has_eval_barrier()
@@ -10041,15 +10017,32 @@ fn lower_new_object(
     let sig = constructor_signature(ctx, class_name).cloned();
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let php_type = PhpType::Object(class_name.as_str().to_string());
-    let data = ctx.intern_class_name(class_name.as_str());
-    ctx.emit_value(
+    emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span)
+}
+
+/// Emits fixed-class object construction and releases owned constructor argument temporaries.
+///
+/// A newly allocated object cannot alias a constructor argument. The constructor has already
+/// retained or copied every argument it keeps by the time `ObjectNew` returns, so the caller's
+/// owning temporary references can be dropped without the general call-result alias guard.
+fn emit_fixed_object_new(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    operands: Vec<ValueId>,
+    php_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let data = ctx.intern_class_name(class_name);
+    let object = ctx.emit_value(
         Op::ObjectNew,
-        operands,
+        operands.clone(),
         Some(Immediate::Data(data)),
         php_type,
         Op::ObjectNew.default_effects(),
-        Some(expr.span),
-    )
+        Some(span),
+    );
+    release_owned_call_arg_temporaries(ctx, &operands, None, span);
+    object
 }
 
 /// Lowers `ReflectionClass(object)` while preserving object operands for runtime class metadata.
@@ -14337,14 +14330,12 @@ fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticR
     let name = static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
     let sig = constructor_signature(ctx, &Name::from(name.clone())).cloned();
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
-    let data = ctx.intern_class_name(&name);
-    ctx.emit_value(
-        Op::ObjectNew,
+    emit_fixed_object_new(
+        ctx,
+        &name,
         operands,
-        Some(Immediate::Data(data)),
-        PhpType::Object(name),
-        Op::ObjectNew.default_effects(),
-        Some(expr.span),
+        PhpType::Object(name.clone()),
+        expr.span,
     )
 }
 
