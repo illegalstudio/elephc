@@ -88,6 +88,14 @@ filter = 'test(test_eval_declared_inherited_property_redeclaration_contracts)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.default.overrides]]
+filter = 'test(test_eval_declared_interface_property_hook_contracts)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_declared_interface_property_hook_contracts)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
 filter = 'test(test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
