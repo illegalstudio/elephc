@@ -326,8 +326,8 @@ Fields must appear in this canonical order; optional fields (marked `?`) may be
 omitted:
 
 `name`, `area`, `params`, `variadic?`, `min_args?`, `max_args?`, `arity_error?`,
-`returns`, `by_ref_return?`, `check?`, `lazy_check?`, `lower`, `summary`, `examples?`,
-`php_manual?`, `deprecation?`, `internal?`.
+`returns`, `returns_fresh_storage?`, `by_ref_return?`, `check?`, `lazy_check?`, `lower`,
+`summary`, `examples?`, `php_manual?`, `deprecation?`, `internal?`.
 
 - **`params`** — `[name: TypeSpec, name: TypeSpec = DefaultSpec::Variant, ...]`. A
   parameter with `= DefaultSpec::…` is optional; without it, required. Prefix a
@@ -339,6 +339,10 @@ omitted:
   `Float`, `Str`, `Bool`, `Mixed`, `Null`, `Void`. Non-scalar shapes (arrays, unions,
   resources) are declared as `Mixed`; supply the precise type from a `check` hook when
   it matters (see the note in step 3).
+- **`returns_fresh_storage: true`** — declare this when every refcounted return
+  variant is freshly allocated for the caller. EIR ownership lowering can then release
+  the result after a retaining consumer has copied or retained it. Omit it for borrowed
+  results that can alias an argument or runtime-owned storage.
 - **`DefaultSpec`** — full path form: `DefaultSpec::Null`, `DefaultSpec::Int(0)`,
   `DefaultSpec::Bool(false)`, `DefaultSpec::Float(1.5)`, `DefaultSpec::Str("…")`,
   `DefaultSpec::IntMax`, `DefaultSpec::IntMin`, `DefaultSpec::EmptyArray`.

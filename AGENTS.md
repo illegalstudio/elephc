@@ -247,6 +247,10 @@ Key invariants:
   separately in `call_return_type` (`src/ir_lower/expr/mod.rs`); a `returns: Mixed` +
   precise-`check` builtin also needs a matching EIR return-type arm, or the checker and
   EIR disagree on the value's type.
+- **Fresh result ownership belongs in the registry.** Set
+  `returns_fresh_storage: true` only when every refcounted result variant is newly
+  allocated for the caller. Leave it unset for borrowed results that can alias argument
+  or runtime storage.
 - **Separate surfaces still need hand-wiring** when relevant: the EIR emitter/runtime
   routine, optimizer effects (`src/optimize/effects/builtins.rs`), and the
   runtime-callable wrapper exclusion (`src/codegen/callable_dispatch.rs`).

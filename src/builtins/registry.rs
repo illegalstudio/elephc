@@ -44,6 +44,8 @@ pub struct BuiltinDef {
     pub variadic: Option<String>,
     /// The PHP-level return type, derived from the spec's `TypeSpec` via `type_spec_to_php`.
     pub return_type: PhpType,
+    /// Whether refcounted result variants are freshly allocated for the caller.
+    pub returns_fresh_storage: bool,
     /// Whether this function returns by reference.
     pub by_ref_return: bool,
     /// Reference back to the original static `BuiltinSpec` for hooks and metadata.
@@ -101,6 +103,7 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
             ref_params,
             variadic: spec.variadic.map(str::to_string),
             return_type: type_spec_to_php(&spec.returns),
+            returns_fresh_storage: spec.returns_fresh_storage,
             by_ref_return: spec.by_ref_return,
             spec,
         };
@@ -128,6 +131,11 @@ pub fn lookup(name: &str) -> Option<&'static BuiltinDef> {
 /// Returns `true` if the given name is a known PHP builtin.
 pub fn is_supported(name: &str) -> bool {
     lookup(name).is_some()
+}
+
+/// Returns whether a builtin declares fresh caller-owned refcounted result storage.
+pub fn returns_fresh_storage(name: &str) -> bool {
+    lookup(name).is_some_and(|def| def.returns_fresh_storage)
 }
 
 /// Returns an iterator over all registered canonical builtin names in sorted order.
@@ -365,6 +373,17 @@ mod tests {
     }
 
     builtin! {
+        name: "__registry_probe_owned",
+        area: Internal,
+        params: [],
+        returns: Mixed,
+        returns_fresh_storage: true,
+        lower: noop_lower,
+        summary: "registry owned-result probe",
+        internal: true,
+    }
+
+    builtin! {
         name: "__registry_probe_variadic",
         area: Internal,
         params: [fmt: Str],
@@ -445,6 +464,15 @@ mod tests {
     fn lookup_is_case_insensitive() {
         assert!(lookup("__MACRO_PROBE").is_some());
         assert!(lookup("__Macro_Probe").is_some());
+    }
+
+    /// Verifies fresh-result ownership metadata is available through case-insensitive lookup.
+    #[test]
+    fn fresh_result_storage_metadata_is_queryable() {
+        assert!(returns_fresh_storage("__REGISTRY_PROBE_OWNED"));
+        assert!(!returns_fresh_storage("__registry_probe_opt"));
+        assert!(!returns_fresh_storage("__registry_probe_variadic"));
+        assert!(!returns_fresh_storage("__not_a_real_builtin_xyz"));
     }
 
     /// Verifies `is_supported` returns true for registered builtins.

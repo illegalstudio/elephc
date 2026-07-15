@@ -493,6 +493,63 @@ echo $wad->name;
     assert_eq!(out, "PLAYPAL");
 }
 
+/// Regression test for issue #540: each successful `file_get_contents()` call
+/// returns an owned Mixed box containing an owned string. A retaining string cast
+/// must release that source value instead of leaking two blocks per call.
+#[test]
+fn test_file_get_contents_owned_success_result_is_released_after_string_cast() {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("elephc_fgc_owned_success_{}.txt", id));
+    fs::write(&path, b"payload").unwrap();
+
+    let source = format!(
+        r#"<?php
+for ($i = 0; $i < 100; $i++) {{
+    $contents = (string) file_get_contents("{path}");
+}}
+echo $contents;
+"#,
+        path = path.display()
+    );
+    let out = compile_and_run_with_heap_debug(&source);
+    let _ = fs::remove_file(&path);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "payload");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #540: the failure branch of `file_get_contents()`
+/// returns a fresh boxed `false`. Casting repeated failures to string must release
+/// each source box while preserving PHP's empty-string result.
+#[test]
+fn test_file_get_contents_owned_false_result_is_released_after_string_cast() {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("elephc_fgc_owned_missing_{}.txt", id));
+    let _ = fs::remove_file(&path);
+
+    let source = format!(
+        r#"<?php
+for ($i = 0; $i < 100; $i++) {{
+    $contents = (string) @file_get_contents("{path}");
+}}
+echo strlen($contents);
+"#,
+        path = path.display()
+    );
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test: an object returned from a function carries a property built
 /// via a loop that accumulates string characters. Verifies that the property built
 /// inside the loop (`$name .= $ch`) is correctly preserved on the returned object.

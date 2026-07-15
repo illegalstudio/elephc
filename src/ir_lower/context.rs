@@ -2083,8 +2083,13 @@ fn local_kind_uses_plain_store_cleanup(kind: LocalKind) -> bool {
 /// helpers return a pointer into a live argument array); releasing such a result would
 /// free storage still owned by the caller and corrupt the heap.
 fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
+    let name = php_symbol_key(name.trim_start_matches('\\'));
+    if crate::builtins::registry::returns_fresh_storage(&name) {
+        return true;
+    }
     matches!(
-        php_symbol_key(name.trim_start_matches('\\')).as_str(),
+        name.as_str(),
+        // Legacy classifications that have not yet migrated into BuiltinSpec metadata.
         // Array/mixed-returning builtins that allocate fresh result storage.
         "array_chunk"
             | "array_column"

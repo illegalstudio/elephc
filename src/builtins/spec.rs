@@ -1,6 +1,6 @@
 //! Purpose:
 //! Defines the `BuiltinSpec` type that describes a single PHP builtin function:
-//! its name, arity, type signature, purity, and codegen lowering hook.
+//! its name, arity, type signature, result-storage ownership, and codegen lowering hook.
 //!
 //! Called from:
 //! - `crate::builtins::registry` (collected via `inventory`).
@@ -193,6 +193,13 @@ pub struct BuiltinSpec {
     /// matching EIR return-type arm, or the checker and EIR will disagree on the
     /// value's type at the use site.
     pub returns: TypeSpec,
+    /// Whether every refcounted result variant is freshly allocated for the caller.
+    ///
+    /// EIR ownership lowering uses this contract to release a builtin result after a
+    /// retaining consumer has copied or retained it. Leave this `false` for borrowed
+    /// results that can alias argument or runtime storage; releasing those would corrupt
+    /// their original owner. Non-refcounted result variants are unaffected.
+    pub returns_fresh_storage: bool,
     /// Whether the function returns by reference.
     pub by_ref_return: bool,
     /// An optional type-checking hook for builtins whose return type depends
@@ -235,11 +242,21 @@ mod macro_tests {
     fn lower(_c: &mut crate::codegen::context::FunctionContext, _i: &crate::ir::Instruction)
         -> Result<(), crate::codegen::CodegenIrError> { Ok(()) }
     builtin! { name: "__macro_probe", area: Internal, params: [x: Int], returns: Int, lower: lower, summary: "probe", internal: true }
+    builtin! { name: "__macro_owned_probe", area: Internal, params: [], returns: Mixed, returns_fresh_storage: true, lower: lower, summary: "owned probe", internal: true }
 
-    /// Verifies a builtin! declaration is collected by inventory.
+    /// Verifies macro registration and the default/explicit fresh-storage metadata values.
     #[test]
     fn macro_registers_builtin() {
-        assert!(inventory::iter::<BuiltinSpec>.into_iter().any(|s| s.name == "__macro_probe"));
+        let default_spec = inventory::iter::<BuiltinSpec>
+            .into_iter()
+            .find(|s| s.name == "__macro_probe")
+            .expect("macro probe must be registered");
+        let owned_spec = inventory::iter::<BuiltinSpec>
+            .into_iter()
+            .find(|s| s.name == "__macro_owned_probe")
+            .expect("owned macro probe must be registered");
+        assert!(!default_spec.returns_fresh_storage);
+        assert!(owned_spec.returns_fresh_storage);
     }
 }
 
@@ -254,12 +271,14 @@ mod tests {
         const S: BuiltinSpec = BuiltinSpec {
             name: "strlen", area: Area::String, params: P, variadic: None,
             max_args: None, min_args: None, arity_error: None,
-            returns: TypeSpec::Int, by_ref_return: false, check: None, lazy_check: false,
+            returns: TypeSpec::Int, returns_fresh_storage: false,
+            by_ref_return: false, check: None, lazy_check: false,
             lower: noop_lower, summary: "len", examples: &[], php_manual: None,
             deprecation: None, internal: false,
         };
         assert_eq!(S.name, "strlen");
         assert_eq!(S.params.len(), 1);
+        assert!(!S.returns_fresh_storage);
     }
     /// No-op `LowerFn` used to satisfy the `BuiltinSpec` struct literal in this test module.
     fn noop_lower(_c: &mut crate::codegen::context::FunctionContext, _i: &crate::ir::Instruction)

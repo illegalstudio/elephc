@@ -18,8 +18,9 @@
 //! - A trailing comma after the last field is optional.
 //!
 //! Canonical field order:
-//!   name, area, params, variadic?, min_args?, max_args?, arity_error?, returns, by_ref_return?,
-//!   check?, lower, summary, examples?, php_manual?, deprecation?, internal?
+//!   name, area, params, variadic?, min_args?, max_args?, arity_error?, returns,
+//!   returns_fresh_storage?, by_ref_return?, check?, lower, summary, examples?, php_manual?,
+//!   deprecation?, internal?
 //!
 //! Example:
 //! ```ignore
@@ -38,13 +39,17 @@
 ///
 /// Fields must appear in canonical order (optional fields may be omitted):
 /// `name`, `area`, `params`, `variadic`?, `min_args`?, `max_args`?, `arity_error`?,
-/// `returns`, `by_ref_return`?, `check`?, `lower`, `summary`, `examples`?, `php_manual`?,
-/// `deprecation`?, `internal`?
+/// `returns`, `returns_fresh_storage`?, `by_ref_return`?, `check`?, `lower`, `summary`,
+/// `examples`?, `php_manual`?, `deprecation`?, `internal`?
 ///
 /// `max_args` (optional `usize`) caps the maximum argument count enforced by the
 /// registry's `check_arity` only; it does not affect `function_sig` or the parity gate.
 /// `min_args` (optional `usize`) raises the enforced minimum in `check_arity` only.
 /// `arity_error` (optional `&'static str`) overrides the standard arity error message.
+/// `returns_fresh_storage` (optional `bool`, default `false`) declares that every
+/// refcounted result variant is freshly allocated for the caller and can be released
+/// after a retaining consumer has copied or retained it. Never set it for borrowed
+/// results that can alias argument or runtime storage.
 /// `lazy_check` (optional `bool`, default `false`) skips the registry's standard pre-inference
 /// loop before calling the `check` hook. Use when the check hook must control argument
 /// inference order (e.g., to pass object-element type hints to an unannotated closure before
@@ -72,6 +77,7 @@ macro_rules! builtin {
         $(max_args: $max_args:expr,)?
         $(arity_error: $arity_error:expr,)?
         returns: $returns:ident,
+        $(returns_fresh_storage: $returns_fresh_storage:expr,)?
         $(by_ref_return: $by_ref_return:expr,)?
         $(check: $check:expr,)?
         $(lazy_check: $lazy_check:expr,)?
@@ -97,6 +103,7 @@ macro_rules! builtin {
                 min_args: builtin!(@opt_usize $($min_args)?),
                 arity_error: builtin!(@opt_str $($arity_error)?),
                 returns: $crate::builtins::spec::TypeSpec::$returns,
+                returns_fresh_storage: builtin!(@opt_bool $($returns_fresh_storage)?),
                 by_ref_return: builtin!(@opt_bool $($by_ref_return)?),
                 check: builtin!(@opt_fn $($check)?),
                 lazy_check: builtin!(@opt_bool $($lazy_check)?),
